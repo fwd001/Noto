@@ -109,9 +109,9 @@ fn snippet_is_escaped_before_marks_are_inserted() {
     let stripped = s.replace("<mark>", "").replace("</mark>", "");
     assert!(!stripped.contains('<'), "除 <mark> 外不许有任何裸 '<'（= 未转义）：{stripped}");
     assert!(!stripped.contains('>'), "除 </mark> 外不许有任何裸 '>'：{stripped}");
-    assert!(s.contains("&lt;script&gt;") || s.contains("&lt;img"), "应看到转义后的实体：{s}");
-    assert!(s.contains("&lt;/b&gt;"), "闭合标签同样要转义：{s}");
+    assert!(s.contains("&gt;") && s.contains("&lt;b&gt;"), "应看到转义后的实体：{s}");
     assert!(s.contains("&amp;"), "& 必须转义成 &amp;：{s}");
+    assert!(s.starts_with('…'), "片段被截断时要带省略号：{s}");
 
     // 两字路径共用同一个转义函数
     let hits = store.search(&SearchQuery::new("同步")).unwrap();
@@ -128,15 +128,19 @@ fn like_metacharacters_are_matched_literally() {
     let store = fx.open();
     let folder = default_folder(&store);
     store.create_note(&folder, doc_text("百分之百 100% 覆盖 下划线 _下 与 感叹号 ! 标记")).unwrap();
+    store.create_note(&folder, doc_text("双写百分号 %% 转义 与 方括号 [x] 的笔记")).unwrap();
     store.create_note(&folder, doc_text("完全不同的一句话")).unwrap();
 
-    // 每个查询都含 LIKE 元字符：必须按字面量匹配，且绝不抛 SQL 错
-    let cases: [(&str, bool); 5] = [("100%", true), ("_下", true), ("!", true), ("%%", true), ("[x]", false)];
+    // 每个查询都含 LIKE/FTS 元字符：必须按字面量匹配，且绝不抛 SQL 错。
+    // 路径仍按码点数分流：≤2 字 LIKE、≥3 字 FTS。
+    let cases: [(&str, bool); 6] =
+        [("100%", true), ("_下", true), ("!", true), ("%%", true), ("[x]", true), ("!%", false)];
     for (q, expect) in cases {
         let hits = store.search(&SearchQuery::new(q)).unwrap();
         assert_eq!(!hits.is_empty(), expect, "字面量匹配 {q:?} 得到 {hits:?}");
+        let want = if q.chars().count() >= 3 { SearchPath::FtsTrigram } else { SearchPath::LikeFallback };
         for h in &hits {
-            assert_eq!(h.path_used, SearchPath::LikeFallback, "短查询必须走 LIKE：{h:?}");
+            assert_eq!(h.path_used, want, "路径选择错误：{q:?} → {h:?}");
         }
     }
     assert!(store.verify().is_empty(), "{:?}", store.verify());

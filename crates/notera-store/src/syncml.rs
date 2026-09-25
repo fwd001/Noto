@@ -560,7 +560,7 @@ impl Store {
                        (account_id, dedupe_key, entity_type, entity_id, op, payload_rev, sha256, state, attempts, created_at, updated_at)
                      VALUES (?1,?2,'attachment',?3,'download',NULL,?3,'pending',0,?4,?4)
                      ON CONFLICT(dedupe_key) DO UPDATE SET state='pending', updated_at=excluded.updated_at",
-                    params![account, format!("attachment:{sha}:download:-"), sha.as_str(), now],
+                    params![account, format!("{account}:attachment:{sha}:download:-"), sha.as_str(), now],
                 )?;
             }
             Ok(())

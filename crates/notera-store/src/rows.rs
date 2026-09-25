@@ -181,6 +181,19 @@ pub(crate) fn read_folder(conn: &Connection, id: &EntityId) -> Result<Option<Fol
 pub(crate) const ATTACHMENT_COLS: &str = "sha256, size, media_type, filename, width, height, \
      duration_ms, local_state, remote_state, created_at, verified_at, deleted_at";
 
+/// 同一批列，但带表别名前缀。
+///
+/// `attachments` 与 `note_attachments` 都有 `sha256` 列，联表时用裸列清单会直接
+/// 报 `ambiguous column name: sha256`（实测踩过）。单表读用 `ATTACHMENT_COLS`，
+/// 联表读必须用本函数。
+pub(crate) fn attachment_cols(alias: &str) -> String {
+    ATTACHMENT_COLS
+        .split(", ")
+        .map(|c| format!("{alias}.{}", c.trim()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 pub(crate) fn attachment_from_row(row: &Row) -> rusqlite::Result<Attachment> {
     Ok(Attachment {
         sha256: row.get(0)?,
@@ -255,18 +268,33 @@ pub(crate) fn enabled_accounts(conn: &Connection) -> Result<Vec<String>, StoreEr
 
 /// 待办要写给**所有**账户（含未启用的哨兵账户）：
 /// "提交即入 outbox，不等网络"（DATA-MODEL §12）+ I8；是否取件由同步侧决定。
+/// 参与 outbox 扇出的账户。
+///
+/// 规则：已启用的账户 + **本地哨兵账户**。哨兵是 `enabled=0` 的（未配置真实远端时
+/// 待办只落库不外发，作为本地写入的留痕，见 store.rs 初始化），所以不能按
+/// `enabled = 1` 一刀切过滤掉它。
+/// 真正该排除的是"用户后来禁用的真实账户" —— 否则引擎永不消费它，
+/// 它的 outbox 行会无界堆积。
 pub(crate) fn all_accounts(conn: &Connection) -> Result<Vec<String>, StoreError> {
-    let mut stmt = conn.prepare("SELECT id FROM sync_accounts ORDER BY id")?;
+    let mut stmt = conn.prepare(
+        "SELECT id FROM sync_accounts WHERE enabled = 1 OR id = ?1 ORDER BY id",
+    )?;
+    let sentinel = crate::types::LOCAL_ACCOUNT_ID;
     let v = stmt
-        .query_map([], |r| r.get::<_, String>(0))?
+        .query_map([sentinel], |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(v)
 }
 
-/// `dedupe_key` = 实体 + 动作 + 载荷 rev（DATA-MODEL §5.2 注释）。
-pub(crate) fn dedupe_key(kind: EntityKind, id: &str, op: OpKind, rev: Option<Rev>) -> String {
+/// `dedupe_key` = **账户** + 实体 + 动作 + 载荷 rev。
+///
+/// 账户必须在键里。`sync_operations.dedupe_key` 是唯一索引，而 outbox 按账户扇出：
+/// 少了 account，第二个账户的 INSERT 会撞上第一个账户已建的同一个键、被
+/// `ON CONFLICT DO UPDATE` 吸收掉，那一行仍属于第一个账户 —— 结果是
+/// "本地写入只同步到其中一台服务器"，且完全静默（本仓库实测踩过）。
+pub(crate) fn dedupe_key(account: &str, kind: EntityKind, id: &str, op: OpKind, rev: Option<Rev>) -> String {
     let r = rev.map(|r| r.to_string()).unwrap_or_else(|| "-".to_string());
-    format!("{}:{id}:{}:{r}", kind_tag(kind), op.as_str())
+    format!("{account}:{}:{id}:{}:{r}", kind_tag(kind), op.as_str())
 }
 
 /// 入队一条待办（UUID 键实体：note / folder）。
@@ -305,7 +333,7 @@ pub(crate) fn enqueue_key(
                 params![account, now, kind_tag(kind), entity_key, op.as_str(), rev.get() as i64],
             )?;
         }
-        let key = dedupe_key(kind, entity_key, op, payload_rev);
+        let key = dedupe_key(&account, kind, entity_key, op, payload_rev);
         conn.execute(
             "INSERT INTO sync_operations
                (account_id, dedupe_key, entity_type, entity_id, op, payload_rev, sha256,

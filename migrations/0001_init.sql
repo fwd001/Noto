@@ -92,7 +92,10 @@ CREATE TABLE note_revisions (
 ) WITHOUT ROWID;
 
 CREATE TABLE attachments (
-  sha256       TEXT PRIMARY KEY CHECK (sha256 GLOB '[0-9a-f][0-9a-f]'),  -- 完整 64hex
+  sha256       TEXT PRIMARY KEY
+               -- 必须是 64 位小写十六进制。注意 GLOB 匹配的是**整个**值：
+               -- 写 '[0-9a-f][0-9a-f]' 会把长度限成恰好 2 字符，真实 sha256 全部插不进去。
+               CHECK (length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'),
   size         INTEGER NOT NULL CHECK (size >= 0),
   media_type   TEXT NOT NULL,
   filename     TEXT,

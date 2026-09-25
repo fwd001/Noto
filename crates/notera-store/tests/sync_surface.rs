@@ -56,44 +56,107 @@ fn dirty_entities_is_exactly_rev_ne_sync_rev() {
 }
 
 #[test]
-fn every_write_enqueues_one_outbox_row_per_account_and_supersedes_old_rev() {
+fn every_write_enqueues_one_outbox_row_per_enabled_account_and_supersedes_old_rev() {
     let fx = Fix::new();
     let store = fx.open();
     let folder = default_folder(&store);
     let acct = notera_store::LOCAL_ACCOUNT_ID;
-    store.register_account("acct-a", "内网", "https://dav.internal/notes").unwrap();
-    store.set_account_enabled(acct, false).unwrap();
-
     let n = create(&store, &folder, "第一版");
-    // 两个账户各一行（默认本 + 笔记 → 3 行）
-    let pending = store.outbox_len(acct, &[OpState::Pending]).unwrap();
-    assert_eq!(pending, 2, "本地写入必须落待办，且按账户扇出：{pending}");
-    assert_eq!(store.outbox_len("acct-a", &[OpState::Pending]).unwrap(), 2);
 
-    let taken = store.outbox_take(acct, 10).unwrap();
-    assert_eq!(taken.len(), 2);
-    assert!(taken.iter().all(|t| t.state == OpState::Inflight && t.attempts == 1));
-    assert_eq!(store.outbox_take(acct, 10).unwrap().len(), 0, "inflight 不得重复取");
+    // outbox 是"写入那一刻的队列"，不是历史重放：注册第二台服务器不倒灌旧待办。
+    store.register_account("acct-b", "内网", "https://dav.internal/notes").unwrap();
+    assert_eq!(store.outbox_len("acct-b", &[OpState::Pending]).unwrap(), 0, "注册不得凭空造出旧待办");
 
-    for op in &taken {
-        store.outbox_state(op.id, OpState::Done, None, None).unwrap();
+    // 新建一条笔记在 local 名下产生 **2** 行：默认本（开库时入队）+ 笔记。
+    // 默认本必须被公告，否则另一台设备会自己再造一个默认本，笔记就分家了。
+    assert_eq!(
+        store.outbox_len(acct, &[OpState::Pending]).unwrap() as usize,
+        2,
+        "本地账户：默认本 + 笔记各一行"
+    );
+
+    // ---- 扇出：注册之后的一次本地写必须给**每个**账户各一行 ----
+    // `dedupe_key` 若不含 account_id，第二个账户的 INSERT 会被 `ON CONFLICT DO UPDATE`
+    // 吸收成第一账户的行 —— 表现为"本地编辑只同步到其中一台服务器"，且完全静默。
+    let v1 = store.get_note(&n.id).unwrap().unwrap();
+    let v2 = store.edit_note(&n.id, doc_text("第二版"), v1.rev).unwrap();
+    let mut note_keys: Vec<String> = Vec::new();
+    // local 还带着开库时入队的默认本那一行，所以取到 2 行；acct-b 只有笔记这 1 行。
+    for (a, want) in [(acct, 2usize), ("acct-b", 1usize)] {
+        let taken = store.outbox_take(a, 10).unwrap();
+        assert_eq!(taken.len(), want, "{a} 取到的行数不对（笔记那一行塌成 0 = 静默漏同步一台服务器）：{taken:?}");
+        let note_row = taken.iter().find(|t| t.kind == EntityKind::Note).expect("必须有笔记那一行");
+        assert_eq!(note_row.payload_rev, Some(v2.rev));
+        assert_eq!(note_row.op, OpKind::Upsert);
+        assert_eq!(note_row.state, OpState::Inflight);
+        assert_eq!(note_row.attempts, 1);
+        assert!(
+            note_row.dedupe_key.starts_with(&format!("{a}:")),
+            "dedupe_key 必须以账户开头：{}",
+            note_row.dedupe_key
+        );
+        note_keys.push(note_row.dedupe_key.clone());
+        for op in &taken {
+            store.outbox_state(op.id, OpState::Done, None, None).unwrap();
+        }
     }
-    assert_eq!(store.outbox_len(acct, &[OpState::Done]).unwrap(), 2);
+    assert_eq!(
+        note_keys[0].split_once(':').map(|t| t.1),
+        note_keys[1].split_once(':').map(|t| t.1),
+        "去掉账户前缀后键体必须一致 —— 差异只允许出现在账户段"
+    );
+    assert_ne!(note_keys[0], note_keys[1], "两个账户的 dedupe_key 必须不同，否则唯一索引让它们互相吸收");
+    assert_eq!(store.outbox_take(acct, 10).unwrap().len(), 0, "inflight 不得重复取");
+    assert_eq!(store.outbox_len(acct, &[OpState::Done]).unwrap(), 2, "默认本 + 笔记都已确认");
+    assert_eq!(store.outbox_len(acct, &[OpState::Pending]).unwrap(), 0);
 
-    // 再编辑：同实体更早的 pending 被 superseded（远端只需最终态）
-    let before = store.outbox_len(acct, &[OpState::Pending]).unwrap();
-    let e1 = store.edit_note(&n.id, doc_text("第二版"), n.rev).unwrap();
-    assert_eq!(store.outbox_len(acct, &[OpState::Pending]).unwrap(), before + 1);
-    let _ = store.edit_note(&n.id, doc_text("第三版"), e1.rev).unwrap();
+    // ---- 再编辑：同实体更早的 pending 被 superseded（远端只需最终态）----
+    let e1 = store.edit_note(&n.id, doc_text("第三版"), v2.rev).unwrap();
+    let e2 = store.edit_note(&n.id, doc_text("第四版"), e1.rev).unwrap();
+    assert_eq!(
+        store.outbox_len(acct, &[OpState::Pending]).unwrap(),
+        1,
+        "只留本笔记最新的一行"
+    );
     let pend = store.outbox_take(acct, 10).unwrap();
     assert_eq!(pend.len(), 1, "同一笔记的连续编辑只留最新一条 pending：{pend:?}");
-    assert_eq!(pend[0].payload_rev, Some(Rev(4)));
-    assert_eq!(pend[0].op, OpKind::Upsert);
+    assert_eq!(pend[0].kind, EntityKind::Note);
+    assert_eq!(pend[0].payload_rev, Some(e2.rev), "留下的必须是最新 rev，旧的应被 supersede");
     assert!(pend[0].dedupe_key.contains(&n.id.to_string()));
-    // 失败重试：failed + next_retry_at 到期后可再取
-    store.outbox_state(pend[0].id, OpState::Failed, Some("offline"), Some("2000-01-01T00:00:00.000Z")).unwrap();
+    assert_eq!(
+        store.outbox_len(acct, &[OpState::Superseded]).unwrap(),
+        2,
+        "被超越的行留痕不删除：rev1（被 rev2 超越）+ rev3（被 rev4 超越）"
+    );
+
+    // 失败重试：退避未到期不得取件，到期后必须可重试
+    store
+        .outbox_state(pend[0].id, OpState::Failed, Some("offline"), Some("2099-01-01T00:00:00.000Z"))
+        .unwrap();
+    assert_eq!(store.outbox_take(acct, 10).unwrap().len(), 0, "退避未到期的 failed 不得取件");
+    store
+        .outbox_state(pend[0].id, OpState::Failed, Some("offline"), Some("2000-01-01T00:00:00.000Z"))
+        .unwrap();
     assert_eq!(store.outbox_take(acct, 10).unwrap().len(), 1, "退避到期的 failed 必须可重试");
-    assert!(store.verify().is_empty());
+
+    // 禁用账户不得继续排队，否则它的 outbox 会无界增长（引擎永不消费它）
+    store.set_account_enabled("acct-b", false).unwrap();
+    let a_before = store
+        .outbox_len("acct-b", &[OpState::Pending, OpState::Inflight, OpState::Failed])
+        .unwrap();
+    let _ = store.create_note(&folder, doc_text("禁用之后的写入")).unwrap();
+    assert_eq!(
+        store
+            .outbox_len("acct-b", &[OpState::Pending, OpState::Inflight, OpState::Failed])
+            .unwrap(),
+        a_before,
+        "已禁用账户不应再收到 outbox 行"
+    );
+    // 而本地哨兵账户（enabled=0）必须继续留痕：它是"本地写入不依赖网络"的记账
+    assert!(
+        store.outbox_len(acct, &[OpState::Pending]).unwrap() >= 1,
+        "local 哨兵账户即使 enabled=0 也必须留痕"
+    );
 }
 
 #[test]

@@ -1060,7 +1060,7 @@ fn attachment_for(conn: &Connection, note_id: &EntityId, sha: &str) -> Result<At
         "SELECT {}, na.note_id, na.block_id, na.role, na.position
            FROM attachments a JOIN note_attachments na ON na.sha256 = a.sha256
           WHERE a.sha256 = ?1 AND na.note_id = ?2",
-        rows::ATTACHMENT_COLS
+        rows::attachment_cols("a")
     );
     conn.query_row(&sql, params![sha, note_id.as_str()], rows::attachment_from_row)
         .optional()?
