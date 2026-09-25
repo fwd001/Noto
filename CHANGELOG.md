@@ -2,6 +2,40 @@
 
 遵循 [SemVer](https://semver.org/lang/zh-CN/)。同步协议发生破坏性变更时，`SYNC_PROTOCOL_VERSION` 与版本号同步升级（见 CI-CD.md §版本与单一版本源）。
 
+## 0.1.0 — Phase 1–4（实现进行中）· 未发布
+
+当前测试基线（本机 GNU 工具链实测）：Rust 268 通过（`notera-store` 58，`core/config/crypto/richtext/sync/net/test-webdav` 合计 210），前端 64 通过 8 个测试文件；`scripts/arch-check.mjs` 18 条中 17 通过；`scripts/verify-diagram.mjs` 59 条全通过；`vue-tsc --noEmit` 无错误，生产包 189 KB（gzip 65 KB）。
+
+### 新增
+
+- **存储层** `notera-store`：11 张表 + FTS5（trigram）迁移 0001…0005、写连接单写者 + 只读连接池、tombstone、outbox、冲突收件箱、附件内容寻址、偏好读写与记录 wire 出口
+- **同步引擎** `notera-sync`：清单两段式解析与压实、`P1..P18` 判定表、退避重试、CAS 提交与恢复阶梯；端口化（`LocalPort`/`RemotePort`），10 个引擎级集成测试跑真 `run_round`
+- **网络出口** `notera-net`：全系统唯一 HTTP 出口，代理四档、TLS 策略、分层超时、退避、`RouteProof` 脱敏审计（13 测试）
+- **测试基建** `notera-test-webdav`：真 TCP/HTTP 的 WebDAV 子集 + `/_control/*` 能力开关与故障注入 + `/_fs/dump`
+- **前端** `apps/desktop`：三栏 UI、独立富文本模型映射、四态同步徽标、design token 与对比度契约测试、Tauri 单命令通道及其契约测试
+- **诊断入口** `notera-cli`：`serve`（dev 桥，落真实 Store）、`verify`、`conflicts`、`sync-once`、`net-probe`、`export`；退出码 0=PASS / 1=ASSERT_FAIL / 2=BLOCKED
+- **ADR-0018**：单一活跃同步账户约束（多服务器推迟到"按账户确认点"）
+- **架构适应度检查** `scripts/arch-check.mjs`：18 条机器可判定的层次约束（依赖边、唯一出口、SQL 只出现在 store、前端无协议词汇、端口边越界引用…）
+- **端到端等价** `scripts/verify-app.mjs`：Playwright 驱动同一份前端 + 同一份 Rust 核心的 14 步 UAT
+
+### 修复（都是会静默丢数据或静默错的那些，不是整理）
+
+- 同步轮次在"本地有改动 + 远端 304"路径上不公告变更 → 改动永不上传
+- `dedupe_key` 不含账户，导致本地编辑只同步到其中一台服务器
+- 只读连接借出前不确认 autocommit，WAL 下把旧快照钉住（同一 `COUNT(*)` 两次结果不同）
+- 附件 `CHECK (sha256 GLOB '[0-9a-f][0-9a-f]')` 把长度限成 2 字符，任何真实哈希都插不进
+- `ProxyProfile` 的 `#[derive(Default)]` 与 serde 默认值不一致（`resolve_remote_dns`）
+- dev 桥的 Origin 校验用前缀匹配，`http://127.0.0.1.evil.example` 可通过
+- `Tauri` 壳配置里 `bundle.targets` 含协议外的取值，构建脚本直接失败
+
+### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
+
+- devserver 本地 HTTP 桥尚未关进 `debug_assertions`（`arch-check` 现在诚实报红）
+- 两台服务器同时启用不支持，见 ADR-0018
+- macOS/Android/iOS 产物、签名与真机后台同步预算未在本机验证（`[BLOCKED]` 需要对应硬件与证书）
+- `ARCHITECTURE-REVIEW.md` §14 的 D1–D10 仍待人工决定
+
+
 ## 0.0.0 — Phase 0（架构）· 未发布
 
 本阶段**不产出可运行软件**，只产出未来不易被推翻的工程蓝图。
