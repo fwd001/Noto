@@ -1,0 +1,20 @@
+[package]
+name = "notera-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 引擎只依赖端口 trait，因此这里刻意**不**依赖 store / webdav / config：
+# 具体实现由 notera-host 在装配时适配。这让 P1..P18 判定与清单 CAS
+# 能在毫秒级单测里跑满分支，也避免同步层与存储层互相牵制编译。
+[dependencies]
+notera-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }

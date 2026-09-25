@@ -1,0 +1,616 @@
+//! notera-sync —— 同步引擎。
+//!
+//! 规范：docs/SYNC-PROTOCOL.md（本文所有分支都对应其小节）。
+//!
+//! ## 为什么用端口（trait）而不是直接依赖 store / webdav
+//!
+//! 同步引擎的正确性与"底层是 SQLite 还是别的"无关。把它对世界的全部依赖收敛成
+//! 两个 trait，收益是决定性的：
+//! * P1..P18 判定、清单 CAS、崩溃点恢复、退避节奏都能在**毫秒级单测**里跑满分支；
+//! * 引擎不再可能在"网络等待中持有写锁"，因为 `LocalPort` 的方法全是本地操作；
+//! * 集成时由 `notera-host` 把真实 store / webdav 适配进来，接口不匹配会在
+//!   一处（适配层）暴露，而不是散落在引擎里。
+
+pub mod manifest;
+pub mod plan;
+
+use manifest::{EntryRef, Manifest, ManifestError};
+use plan::{Action, Decision, LocalView, Plan, RemoteView};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::time::Duration;
+
+pub use manifest::PROTOCOL as SYNC_PROTOCOL_VERSION;
+
+// ------------------------------------------------------------------ 端口 ---
+
+/// 本地存储侧能力。**全部是本地操作，实现者不得在其中等待网络**（I8/P1）。
+pub trait LocalPort: Send + Sync {
+    fn account_id(&self) -> String;
+    fn device_id(&self) -> String;
+    fn now(&self) -> String;
+    /// 本地视图（含 dirty 判定所需的 rev/sync_rev/hash）
+    fn local_views(&self) -> Result<Vec<LocalView>, LocalError>;
+    /// 已缓存的远端索引（清单的本地投影）
+    fn cached_remote(&self) -> Result<Vec<RemoteView>, LocalError>;
+    fn cached_segment_hashes(&self) -> BTreeMap<String, String>;
+    fn seq_applied(&self) -> u64;
+    /// 取某笔记在某 rev 的内容（三方合并的 base，DATA-MODEL §4.4 保证存在）
+    fn revision_json(&self, id: &str, rev: u64) -> Result<Option<serde_json::Value>, LocalError>;
+    /// 待上传实体的 wire 字节（信封 JSON）
+    fn envelope_wire(&self, kind: &str, id: &str) -> Result<Option<Vec<u8>>, LocalError>;
+    /// 应用远端结果：单事务
+    fn apply(&self, ops: Vec<ApplyOp>) -> Result<ApplyReport, LocalError>;
+    /// 记录冲突（保留双方）
+    fn record_conflict(&self, d: &Decision, local: &LocalView, remote: &RemoteView) -> Result<(), LocalError>;
+    fn outbox_take(&self, limit: usize) -> Result<Vec<OutboxItem>, LocalError>;
+    fn outbox_state(&self, dedupe_key: &str, st: OutboxState, retry_at: Option<&str>) -> Result<(), LocalError>;
+    /// 上一轮已应用并成功提交的清单字节。
+    ///
+    /// 304（远端未变）时引擎手里**没有**清单正文，但本地若有改动仍必须追加公告 ——
+    /// 没有这个缓存，"改了却没人看得见"就是静默同步失败。
+    fn cached_manifest(&self) -> Option<Vec<u8>>;
+}
+
+/// 远端能力。实现者（webdav 适配层）负责重试/代理/TLS，本 crate 只做**决策**。
+#[async_trait::async_trait]
+pub trait RemotePort: Send + Sync {
+    /// GET manifest/index.json，带 If-None-Match。None = 304 未变。
+    async fn fetch_manifest(&self, etag: Option<&str>) -> Result<Option<(Vec<u8>, Option<String>)>, RemoteError>;
+    async fn fetch_segment(&self, name: &str) -> Result<Vec<EntryRef>, RemoteError>;
+    async fn fetch_record(&self, kind: &str, id: &str) -> Result<Option<Vec<u8>>, RemoteError>;
+    /// 写实体记录（内部按 cap_mask 选 S1/S2/S3 并回读校验）
+    async fn put_record(&self, kind: &str, id: &str, wire: &[u8], if_match: Option<&str>) -> Result<Commit, RemoteError>;
+    /// CAS 提交清单（先写 prev，再提交 index）
+    async fn commit_manifest(&self, wire: &[u8], cas_etag: Option<&str>) -> Result<Option<String>, RemoteError>;
+    async fn put_segment(&self, name: &str, wire: &[u8]) -> Result<(), RemoteError>;
+    async fn probe_record_etag(&self, kind: &str, id: &str) -> Result<Option<String>, RemoteError>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Commit {
+    pub etag: Option<String>,
+    pub verified: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ApplyOp {
+    Upsert { kind: String, id: String, wire: Vec<u8> },
+    SetRemote { kind: String, id: String, rev: u64, hash12: String },
+    MarkSynced { kind: String, id: String, rev: u64 },
+    Delete { kind: String, id: String, rev: u64 },
+    Purge { kind: String, id: String },
+    Tombstone { kind: String, id: String, rev: u64, deleted_at: Option<String>, purged: bool },
+    /// 提交成功后把清单正文与 etag 缓存下来，供下一轮 304 路径使用
+    StoreManifest { wire: Vec<u8>, etag: Option<String>, seq: u64 },
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ApplyReport {
+    pub applied: usize,
+    pub rejected: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutboxItem {
+    pub dedupe_key: String,
+    pub kind: String,
+    pub id: String,
+    pub rev: u64,
+    pub op: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutboxState {
+    Pending,
+    Inflight,
+    Done,
+    Failed,
+    Superseded,
+    Blocked,
+}
+
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+pub enum LocalError {
+    #[error("本地存储失败: {0}")]
+    Storage(String),
+    #[error("库版本过新，已只读")]
+    ReadOnly,
+}
+
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+pub enum RemoteError {
+    #[error("离线")]
+    Offline,
+    #[error("需要凭据")]
+    Auth,
+    #[error("无权限")]
+    Forbidden,
+    #[error("空间不足")]
+    Quota,
+    #[error("服务器不可用")]
+    Server,
+    #[error("前置条件失败（并发），需重算计划")]
+    Precondition,
+    #[error("记录不存在")]
+    NotFound,
+    #[error("协议/校验失败: {0}")]
+    Protocol(String),
+    #[error("已取消")]
+    Cancelled,
+}
+
+impl RemoteError {
+    /// 该错误是否值得本轮之后尽快重试（SYNC-PROTOCOL §12）。
+    pub fn retryable(&self) -> bool {
+        matches!(self, RemoteError::Offline | RemoteError::Server | RemoteError::Quota | RemoteError::Precondition)
+    }
+    /// 是否应停止继续本轮（避免对着坏链路刷请求）。
+    pub fn halts_round(&self) -> bool {
+        matches!(self, RemoteError::Auth | RemoteError::Forbidden | RemoteError::Cancelled | RemoteError::Protocol(_))
+    }
+}
+
+// ---------------------------------------------------------------- 轮次 ---
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Phase {
+    Unconfigured,
+    Provisioning,
+    BootstrapPull,
+    BootstrapPush,
+    Online,
+    ReadOnly,
+    NeedsCredentials,
+    Error,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoundStats {
+    pub requests: u32,
+    pub bytes_up: u64,
+    pub bytes_down: u64,
+    pub pushed: usize,
+    pub pulled: usize,
+    pub conflicts: usize,
+    pub cas_retries: u8,
+    pub outcome: RoundOutcome,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RoundOutcome {
+    NoOp,
+    Converged,
+    Partial,
+    Failed,
+}
+
+/// 引擎对外的唯一事件面。host 把它折叠成 UI 的四态徽标 —— **协议细节不出本 crate**。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SyncEvent {
+    Phase(Phase),
+    Progress { done: u32, total: u32 },
+    NeedsConflictAttention,
+    Completed(RoundOutcome),
+    Failed { retryable: bool, message_key: &'static str },
+}
+
+#[derive(Clone, Debug)]
+pub struct EngineConfig {
+    pub max_cas_retries: u8,
+    pub round_request_cap: u32,
+    pub pull_concurrency: usize,
+    pub bootstrap_batch: usize,
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self { max_cas_retries: 3, round_request_cap: 200, pull_concurrency: 8, bootstrap_batch: 500 }
+    }
+}
+
+pub struct SyncEngine<L: LocalPort, R: RemotePort> {
+    local: L,
+    remote: R,
+    cfg: EngineConfig,
+}
+
+impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
+    pub fn new(local: L, remote: R, cfg: EngineConfig) -> Self {
+        Self { local, remote, cfg }
+    }
+    pub fn local(&self) -> &L {
+        &self.local
+    }
+    pub fn remote(&self) -> &R {
+        &self.remote
+    }
+
+    /// 一轮同步。空轮必须是 1 请求 0 字节正文（SYNC-PROTOCOL §6.3）。
+    pub async fn run_round(&self, etag: Option<&str>) -> (RoundStats, Vec<SyncEvent>) {
+        let mut st = RoundStats {
+            requests: 0,
+            bytes_up: 0,
+            bytes_down: 0,
+            pushed: 0,
+            pulled: 0,
+            conflicts: 0,
+            cas_retries: 0,
+            outcome: RoundOutcome::NoOp,
+        };
+        let mut events = Vec::new();
+
+        // ① 读清单
+        let (manifest, mut new_etag) = match self.remote.fetch_manifest(etag).await {
+            Ok(None) => {
+                // 304：远端未变。仍有本地脏才继续，否则空轮结束。
+                let dirty = self.local.local_views().map(|v| v.iter().any(|l| l.dirty())).unwrap_or(false);
+                if !dirty {
+                    st.requests += 1;
+                    return (st, vec![SyncEvent::Completed(RoundOutcome::NoOp)]);
+                }
+                (None, etag.map(str::to_string))
+            }
+            Ok(Some((bytes, e))) => {
+                st.requests += 1;
+                st.bytes_down += bytes.len() as u64;
+                match Manifest::parse(&bytes) {
+                    Ok(m) => (Some(m), e),
+                    // D1/D2：清单不可信 → 绝不"以空清单继续"（那等于清空用户库）
+                    Err(ManifestError::Protocol { .. }) => {
+                        return (
+                            RoundStats { outcome: RoundOutcome::Failed, ..st },
+                            vec![SyncEvent::Failed { retryable: false, message_key: "sync.protocol_mismatch" }],
+                        );
+                    }
+                    Err(_) => {
+                        return (
+                            RoundStats { outcome: RoundOutcome::Failed, ..st },
+                            vec![SyncEvent::Failed { retryable: true, message_key: "sync.corrupt_record" }],
+                        );
+                    }
+                }
+            }
+            Err(e) => return (RoundStats { outcome: RoundOutcome::Failed, ..st }, vec![self.fail_event(&e)]),
+        };
+
+        // ② 生成计划
+        let locals = match self.local.local_views() {
+            Ok(v) => v,
+            Err(_) => return (RoundStats { outcome: RoundOutcome::Failed, ..st }, vec![]),
+        };
+        let remotes: Vec<RemoteView> = match &manifest {
+            Some(m) => {
+                let mut out = self.local.cached_remote().unwrap_or_default();
+                // 落后超过窗口 → 拉变化分段（SYNC-PROTOCOL §6.2 第三档）
+                let window_covers = m.window.complete
+                    && self.local.seq_applied() >= m.window.since_seq;
+                if !window_covers {
+                    for name in m.segments_needed_for(&self.local.cached_segment_hashes()) {
+                        if st.requests >= self.cfg.round_request_cap {
+                            break;
+                        }
+                        match self.remote.fetch_segment(&name).await {
+                            Ok(entries) => {
+                                st.requests += 1;
+                                out.retain(|r| !entries.iter().any(|e| e.key() == (r.kind.clone(), r.id.clone())));
+                                for e in entries {
+                                    out.push(RemoteView {
+                                        kind: e.t,
+                                        id: e.i,
+                                        rev: e.r,
+                                        hash: Some(e.h),
+                                        deleted_at: e.d,
+                                        purged: e.p != 0,
+                                    });
+                                }
+                            }
+                            Err(_) => st.outcome = RoundOutcome::Partial,
+                        }
+                    }
+                }
+                if window_covers || manifest.is_some() {
+                    for e in &m.window.entries {
+                        out.retain(|r| r.key() != e.key());
+                        out.push(RemoteView {
+                            kind: e.t.clone(),
+                            id: e.i.clone(),
+                            rev: e.r,
+                            hash: Some(e.h.clone()),
+                            deleted_at: e.d.clone(),
+                            purged: e.p != 0,
+                        });
+                    }
+                }
+                out
+            }
+            None => self.local.cached_remote().unwrap_or_default(),
+        };
+        let plan = Plan::build(&locals, &remotes);
+
+        // ③ push 本地变更（先实体，后清单 —— R2）
+        let mut written: Vec<EntryRef> = Vec::new();
+        let mut lmap: BTreeMap<(String, String), &LocalView> =
+            locals.iter().map(|l| (l.key(), l)).collect();
+        for d in plan.pushes() {
+            if st.requests >= self.cfg.round_request_cap {
+                st.outcome = RoundOutcome::Partial;
+                break;
+            }
+            let Some(l) = lmap.get(&d.key) else { continue };
+            let wire = match self.local.envelope_wire(&l.kind, &l.id) {
+                Ok(Some(w)) => w,
+                Ok(None) => continue,
+                Err(_) => continue,
+            };
+            let known_etag = self.remote.probe_record_etag(&l.kind, &l.id).await.ok().flatten();
+            st.requests += 1;
+            match self.remote.put_record(&l.kind, &l.id, &wire, known_etag.as_deref()).await {
+                Ok(c) if c.verified => {
+                    st.requests += 1;
+                    st.bytes_up += wire.len() as u64;
+                    st.pushed += 1;
+                    written.push(plan::entry_of(l, wire.len() as u64));
+                    let _ = self.local.apply(vec![ApplyOp::MarkSynced {
+                        kind: l.kind.clone(),
+                        id: l.id.clone(),
+                        rev: l.rev,
+                    }]);
+                    let _ = self.local.outbox_state(&d.key.1, OutboxState::Done, None);
+                }
+                Ok(_) => {
+                    // 写未通过复验：不得记为已提交（webdav 层契约）
+                    let _ = self.local.outbox_state(&d.key.1, OutboxState::Failed, None);
+                }
+                Err(RemoteError::Precondition) => {
+                    // 有人先写了：本轮该实体让路，重算在下轮
+                    let _ = self.local.outbox_state(&d.key.1, OutboxState::Pending, None);
+                    st.outcome = RoundOutcome::Partial;
+                }
+                Err(e) => {
+                    let _ = self.local.outbox_state(&d.key.1, OutboxState::Failed, None);
+                    if e.halts_round() {
+                        return (RoundStats { outcome: RoundOutcome::Failed, ..st }, vec![self.fail_event(&e)]);
+                    }
+                }
+            }
+            events.push(SyncEvent::Progress { done: st.pushed as u32, total: plan.pushes().len() as u32 });
+        }
+
+        // ④ pull 远端变更
+        for d in plan.pulls() {
+            if st.requests >= self.cfg.round_request_cap {
+                st.outcome = RoundOutcome::Partial;
+                break;
+            }
+            let (kind, id) = d.key.clone();
+            match self.remote.fetch_record(&kind, &id).await {
+                Ok(Some(wire)) => {
+                    st.requests += 1;
+                    st.bytes_down += wire.len() as u64;
+                    let rep = self.local.apply(vec![ApplyOp::Upsert { kind, id, wire }]).unwrap_or_default();
+                    if rep.applied == 1 {
+                        st.pulled += 1;
+                    } else {
+                        st.conflicts += 0; // 校验失败已在 store 侧丢弃（I6）
+                    }
+                }
+                Ok(None) => {
+                    // 清单说有、记录 404 → §10：记 missing，**不删本地**
+                    st.outcome = RoundOutcome::Partial;
+                }
+                Err(e) if e.halts_round() => {
+                    return (RoundStats { outcome: RoundOutcome::Failed, ..st }, vec![self.fail_event(&e)])
+                }
+                Err(_) => st.outcome = RoundOutcome::Partial,
+            }
+        }
+
+        // ⑤ 墓碑与删除应用（不产生新写入的分支）
+        let mut tombstone_ops = Vec::new();
+        for d in &plan.decisions {
+            match &d.action {
+                Action::ApplyRemoteDelete | Action::ApplyRemotePurge => {
+                    let purged = matches!(d.action, Action::ApplyRemotePurge);
+                    let rev = remotes.iter().find(|r| r.key() == d.key).map(|r| r.rev).unwrap_or(0);
+                    let deleted_at = remotes.iter().find(|r| r.key() == d.key).and_then(|r| r.deleted_at.clone());
+                    tombstone_ops.push(ApplyOp::Tombstone {
+                        kind: d.key.0.clone(),
+                        id: d.key.1.clone(),
+                        rev,
+                        deleted_at,
+                        purged,
+                    });
+                }
+                Action::Conflict(_) => {
+                    if let (Some(l), Some(r)) = (lmap.get(&d.key), remotes.iter().find(|x| x.key() == d.key)) {
+                        let _ = self.local.record_conflict(d, l, r);
+                        st.conflicts += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !tombstone_ops.is_empty() {
+            let _ = self.local.apply(tombstone_ops);
+        }
+
+        // ⑥ CAS 提交清单（本轮最后一步 —— R2）
+        // 304 轮次手里没有清单正文：回落到上一轮缓存，否则本地变更将永远无法公告。
+        let mut manifest = manifest;
+        if manifest.is_none() && !written.is_empty() {
+            manifest = self.local.cached_manifest().and_then(|b| Manifest::parse(&b).ok());
+            if manifest.is_none() {
+                // 缓存也没有（首次或缓存丢失）：以本轮变更新建一份，宁可多一次全量公告，
+                // 也不能丢掉变更。seq 从 1 起由服务器 CAS 仲裁。
+                manifest = Some(Manifest::initial("", &self.local.device_id(), &self.local.now(), "notera"));
+            }
+        }
+        if !written.is_empty() {
+            if let Some(m) = manifest.as_ref() {
+                let mut next = m.with_commit(&self.local.device_id(), &self.local.now(), &written, &[]);
+                let mut tries = 0u8;
+                loop {
+                    st.requests += 1;
+                    st.bytes_up += next.to_wire().len() as u64;
+                    match self.remote.commit_manifest(&next.to_wire(), new_etag.as_deref()).await {
+                        Ok(e) => {
+                            let _ = self.local.apply(vec![
+                                ApplyOp::StoreManifest { wire: next.to_wire(), etag: e.clone(), seq: next.seq },
+                                ApplyOp::SetRemote {
+                                    kind: "manifest".into(),
+                                    id: "index".into(),
+                                    rev: next.seq,
+                                    hash12: e.unwrap_or_default(),
+                                },
+                            ]);
+                            st.cas_retries = tries;
+                            break;
+                        }
+                        Err(RemoteError::Precondition) if tries < self.cfg.max_cas_retries => {
+                            tries += 1;
+                            st.cas_retries = tries;
+                            // 重读 → 重新合并 → 重试（清单是公告板，不丢数据）
+                            match self.remote.fetch_manifest(None).await {
+                                Ok(Some((bytes, e2))) => match Manifest::parse(&bytes) {
+                                    Ok(fresh) => {
+                                        next = fresh.with_commit(&self.local.device_id(), &self.local.now(), &written, &[]);
+                                        new_etag = e2;
+                                    }
+                                    Err(_) => break,
+                                },
+                                _ => break,
+                            }
+                        }
+                        Err(_) => {
+                            st.outcome = RoundOutcome::Partial;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(m) = manifest.as_ref() {
+            let _ = self.local.apply(vec![ApplyOp::SetRemote {
+                kind: "seq".into(),
+                id: "applied".into(),
+                rev: m.seq,
+                hash12: String::new(),
+            }]);
+        }
+
+        if st.outcome == RoundOutcome::NoOp {
+            st.outcome = if st.pushed + st.pulled > 0 { RoundOutcome::Converged } else { RoundOutcome::NoOp };
+        }
+        if st.conflicts > 0 {
+            events.push(SyncEvent::NeedsConflictAttention);
+        }
+        events.push(SyncEvent::Completed(st.outcome));
+        (st, events)
+    }
+
+    fn fail_event(&self, e: &RemoteError) -> SyncEvent {
+        SyncEvent::Failed {
+            retryable: e.retryable(),
+            message_key: match e {
+                RemoteError::Offline => "sync.offline",
+                RemoteError::Auth => "sync.auth_required",
+                RemoteError::Forbidden => "sync.forbidden",
+                RemoteError::Quota => "sync.quota_full",
+                RemoteError::Server => "sync.server_unavailable",
+                RemoteError::Precondition => "sync.precondition",
+                RemoteError::NotFound => "sync.failed",
+                RemoteError::Protocol(_) => "sync.corrupt_record",
+                RemoteError::Cancelled => "sync.cancelled",
+            },
+        }
+    }
+}
+
+// ---------------------------------------------------------------- 退避 ---
+
+/// `delay = min(max, base × factor^n) × (1 ± jitter)`，实测节奏见 PROXY.md §7。
+#[derive(Clone, Debug)]
+pub struct Backoff {
+    pub base: Duration,
+    pub factor: f64,
+    pub max: Duration,
+    pub jitter: f64,
+}
+
+impl Default for Backoff {
+    fn default() -> Self {
+        Self { base: Duration::from_secs(2), factor: 1.85, max: Duration::from_secs(900), jitter: 0.2 }
+    }
+}
+
+impl Backoff {
+    /// `rand01` 由调用方提供（测试注入固定值即可断言精确区间）。
+    pub fn delay_for(&self, attempt: u32, rand01: f64) -> Duration {
+        let raw = self.base.as_secs_f64() * self.factor.powi(attempt.min(40) as i32);
+        let capped = raw.min(self.max.as_secs_f64());
+        let signed = (rand01.clamp(0.0, 1.0) * 2.0 - 1.0) * self.jitter;
+        Duration::from_secs_f64((capped * (1.0 + signed)).max(0.05))
+    }
+
+    /// 尊重服务器 `Retry-After`（取较大者，避免比服务器要求更激进）。
+    pub fn with_retry_after(&self, attempt: u32, rand01: f64, retry_after: Option<Duration>) -> Duration {
+        let d = self.delay_for(attempt, rand01);
+        match retry_after {
+            Some(ra) => d.max(ra),
+            None => d,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_grows_monotonically_and_caps() {
+        let b = Backoff::default();
+        let mid = |n: u32| b.delay_for(n, 0.5); // rand01=0.5 → 无偏移
+        assert_eq!(mid(0), Duration::from_secs(2));
+        assert_eq!(mid(1), Duration::from_secs_f64(2.0 * 1.85));
+        assert!(mid(2) > mid(1) && mid(3) > mid(2), "必须单调递增");
+        assert_eq!(mid(60), Duration::from_secs(900), "必须封顶 15min");
+    }
+
+    #[test]
+    fn backoff_jitter_stays_in_band() {
+        let b = Backoff::default();
+        let lo = b.delay_for(3, 0.0);
+        let hi = b.delay_for(3, 1.0);
+        let mid = b.delay_for(3, 0.5);
+        assert!(lo < mid && mid < hi);
+        assert!((hi.as_secs_f64() / lo.as_secs_f64()) < 1.6, "±20% jitter 区间不应过宽");
+    }
+
+    #[test]
+    fn retry_after_is_never_more_aggressive_than_server_asks() {
+        let b = Backoff::default();
+        let d = b.with_retry_after(0, 0.5, Some(Duration::from_secs(30)));
+        assert_eq!(d, Duration::from_secs(30));
+        let d2 = b.with_retry_after(6, 0.5, Some(Duration::from_secs(1)));
+        assert!(d2 > Duration::from_secs(1), "退避已大于 Retry-After 时不得缩短");
+    }
+
+    #[test]
+    fn error_classification_matches_protocol() {
+        assert!(RemoteError::Server.retryable());
+        assert!(RemoteError::Quota.retryable());
+        assert!(!RemoteError::Auth.retryable());
+        assert!(RemoteError::Auth.halts_round(), "认证失败必须停轮，不能刷请求");
+        assert!(RemoteError::Protocol("x".into()).halts_round());
+        assert!(!RemoteError::Offline.halts_round(), "离线可继续下一轮，不是终止态");
+    }
+
+    #[test]
+    fn phase_enum_is_serializable_for_diagnostics() {
+        let p = Phase::NeedsCredentials;
+        let j = serde_json::to_string(&p).unwrap();
+        assert_eq!(serde_json::from_str::<Phase>(&j).unwrap(), p);
+    }
+}
