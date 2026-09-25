@@ -3,8 +3,8 @@
  * 不是假数据。每一步要么 PASS 要么 FAIL，没有"应该没问题"这一档。
  *
  * 前置（脚本不管，由调用方起）：
- *   notera-cli serve --addr 127.0.0.1:17323 --data <空目录>
- *   npm --prefix apps/desktop run dev            # 5173
+ *   cargo run -p notera-cli -- --data <空目录> serve --port 17323
+ *   npm --prefix apps/desktop run dev                      # 5173
  *
  *   node scripts/verify-app.mjs
  */
