@@ -55,3 +55,6 @@ secrets.*
 # Local toolchain overrides
 /rustup-toolchain
 .qoder/scratch/
+
+# 本地验证日志（不参与版本控制）
+.logs/
