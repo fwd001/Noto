@@ -1,0 +1,28 @@
+[package]
+name = "notera-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+notera-core = { workspace = true }
+notera-host = { workspace = true }
+notera-store = { workspace = true }
+notera-sync = { workspace = true }
+notera-webdav = { workspace = true }
+notera-net = { workspace = true }
+notera-config = { workspace = true }
+notera-test-webdav = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+notera-test-webdav = { workspace = true }
+tokio = { workspace = true }
+
+[lib]
+name = "notera_cli"
+path = "src/lib.rs"

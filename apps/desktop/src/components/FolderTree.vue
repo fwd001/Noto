@@ -1,0 +1,293 @@
+<script setup lang="ts">
+/** 文件夹树：新建 / 重命名 / 移动 / 删除。删除文件夹不级联删笔记（由本地核心保证）。 */
+import { computed, nextTick, ref } from 'vue';
+import { useFolderStore, type FlatFolder } from '../stores/folders';
+import { useNoteStore } from '../stores/notes';
+import { useShellStore } from '../stores/shell';
+import { t } from '../i18n';
+import type { FolderNode } from '../api/types';
+
+defineOptions({ name: 'FolderTree' });
+
+const props = withDefaults(defineProps<{ nodes?: readonly FolderNode[]; depth?: number }>(), { nodes: undefined, depth: 0 });
+
+const folders = useFolderStore();
+const notes = useNoteStore();
+const shell = useShellStore();
+
+const editingId = ref<string | null>(null);
+const creatingUnder = ref<string | null>(null);
+const nameDraft = ref('');
+const movingId = ref<string | null>(null);
+const confirmingDelete = ref<string | null>(null);
+const inputEl = ref<HTMLInputElement | null>(null);
+
+const visibleNodes = computed<readonly FolderNode[]>(() => (props.depth === 0 ? folders.nodes : (props.nodes ?? [])));
+const padLeft = computed(() => `calc(var(--space-2) + ${props.depth} * var(--space-4))`);
+
+const moveTargets = computed<FlatFolder[]>(() => folders.flat.filter((entry) => entry.node.id !== movingId.value && !isUnderMoving(entry)));
+
+function isUnderMoving(entry: FlatFolder): boolean {
+  const moving = movingId.value;
+  if (!moving) return false;
+  let node: FlatFolder | undefined = entry;
+  const seen = new Set<string>();
+  while (node && !seen.has(node.node.id)) {
+    if (node.node.id === moving) return true;
+    seen.add(node.node.id);
+    const parentId: string | null = node.node.parentId ?? null;
+    node = parentId === null ? undefined : folders.byId.get(parentId);
+  }
+  return false;
+}
+
+async function beginRename(id: string, current: string): Promise<void> {
+  editingId.value = id;
+  confirmingDelete.value = null;
+  movingId.value = null;
+  nameDraft.value = current;
+  await nextTick();
+  inputEl.value?.focus();
+  inputEl.value?.select();
+}
+
+async function beginCreate(parentId: string | null): Promise<void> {
+  creatingUnder.value = parentId ?? '__root__';
+  nameDraft.value = '';
+  await nextTick();
+  inputEl.value?.focus();
+}
+
+async function commitCreate(): Promise<void> {
+  const name = nameDraft.value.trim();
+  const raw = creatingUnder.value;
+  creatingUnder.value = null;
+  nameDraft.value = '';
+  if (name.length === 0 || raw === null) return;
+  await folders.create(raw === '__root__' ? null : raw, name);
+  await notes.load();
+}
+
+async function commitRename(id: string): Promise<void> {
+  if (editingId.value !== id) return;
+  const name = nameDraft.value.trim();
+  editingId.value = null;
+  if (name.length === 0) return;
+  await folders.rename(id, name);
+}
+
+async function moveTo(id: string, target: string | null): Promise<void> {
+  movingId.value = null;
+  await folders.move(id, target);
+  await notes.load();
+}
+
+async function removeFolder(id: string): Promise<void> {
+  confirmingDelete.value = null;
+  await folders.remove(id);
+  if (notes.mode.kind === 'folder' && notes.mode.folderId === id) await notes.setMode({ kind: 'all' });
+  else await notes.load();
+}
+
+function openFolder(id: string | null): void {
+  void notes.setMode(id === null ? { kind: 'all' } : { kind: 'folder', folderId: id });
+  if (shell.isCompact) shell.backToList();
+  else shell.closeDrawer();
+}
+
+function isActive(id: string | null): boolean {
+  if (notes.mode.kind !== 'folder') return false;
+  return notes.mode.folderId === id;
+}
+</script>
+
+<template>
+  <ul class="tree" role="group">
+    <li v-for="node in visibleNodes" :key="node.id" class="tree__item">
+      <div class="tree__row" :data-active="isActive(node.id) ? 'true' : 'false'" :style="{ paddingLeft: padLeft }">
+        <button type="button" class="tree__name" :data-testid="`folder-${node.id}`" @click="openFolder(node.id)">
+          <span class="tree__label">{{ node.name }}</span>
+          <span v-if="typeof node.noteCount === 'number'" class="tree__count">{{ node.noteCount }}</span>
+        </button>
+
+        <div class="tree__tools">
+          <button type="button" class="btn btn--quiet btn--icon" :title="t('sidebar.rename')" :aria-label="t('sidebar.rename')" @click="beginRename(node.id, node.name)">
+            ✎
+          </button>
+          <button type="button" class="btn btn--quiet btn--icon" :title="t('sidebar.newSubfolder')" :aria-label="t('sidebar.newSubfolder')" @click="beginCreate(node.id)">
+            ＋
+          </button>
+          <button
+            type="button"
+            class="btn btn--quiet btn--icon"
+            :aria-expanded="movingId === node.id ? 'true' : 'false'"
+            :title="t('sidebar.moveTo')"
+            :aria-label="t('sidebar.moveTo')"
+            @click="movingId = movingId === node.id ? null : node.id"
+          >
+            ⇄
+          </button>
+          <button
+            type="button"
+            class="btn btn--quiet btn--icon"
+            :title="t('sidebar.deleteFolder')"
+            :aria-label="t('sidebar.deleteFolder')"
+            @click="confirmingDelete = confirmingDelete === node.id ? null : node.id"
+          >
+            ⌫
+          </button>
+        </div>
+      </div>
+
+      <input
+        v-if="editingId === node.id"
+        ref="inputEl"
+        v-model="nameDraft"
+        class="input tree__input"
+        type="text"
+        :aria-label="t('sidebar.rename')"
+        @keydown.enter.prevent="commitRename(node.id)"
+        @keydown.escape.prevent="editingId = null"
+        @blur="commitRename(node.id)"
+      />
+
+      <div v-if="movingId === node.id" class="tree__popover">
+        <button type="button" class="btn btn--block" @click="moveTo(node.id, null)">{{ t('sidebar.root') }}</button>
+        <button v-for="target in moveTargets" :key="target.node.id" type="button" class="btn btn--block" @click="moveTo(node.id, target.node.id)">
+          {{ target.path.join(' / ') }}
+        </button>
+      </div>
+
+      <p v-if="confirmingDelete === node.id" class="tree__confirm">
+        <span>{{ t('sidebar.deleteFolderHint') }}</span>
+        <button type="button" class="btn btn--danger" data-testid="folder-delete-confirm" @click="removeFolder(node.id)">{{ t('list.confirm') }}</button>
+        <button type="button" class="btn btn--quiet" @click="confirmingDelete = null">{{ t('list.cancel') }}</button>
+      </p>
+
+      <div v-if="creatingUnder === node.id" class="tree__create">
+        <input
+          v-model="nameDraft"
+          class="input"
+          type="text"
+          :aria-label="t('sidebar.newSubfolder')"
+          :placeholder="t('sidebar.newSubfolder')"
+          @keydown.enter.prevent="commitCreate"
+          @keydown.escape.prevent="creatingUnder = null"
+          @blur="commitCreate"
+        />
+      </div>
+
+      <FolderTree v-if="node.children && node.children.length > 0" :nodes="node.children" :depth="props.depth + 1" />
+    </li>
+
+    <li v-if="props.depth === 0 && folders.nodes.length === 0" class="tree__empty text-sm text-muted">{{ t('sidebar.folders') }}：0</li>
+
+    <li v-if="creatingUnder === '__root__'" class="tree__create">
+      <input
+        v-model="nameDraft"
+        class="input"
+        type="text"
+        :aria-label="t('sidebar.newFolder')"
+        :placeholder="t('sidebar.newFolder')"
+        @keydown.enter.prevent="commitCreate"
+        @keydown.escape.prevent="creatingUnder = null"
+        @blur="commitCreate"
+      />
+    </li>
+  </ul>
+</template>
+
+<style scoped>
+.tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tree__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--touch-min);
+  padding-right: var(--space-2);
+}
+
+.tree__row:hover {
+  background: var(--bg-hover);
+}
+
+.tree__row[data-active='true'] {
+  background: var(--accent-soft);
+}
+
+.tree__name {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--touch-min);
+  text-align: left;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-1);
+  color: var(--text-primary);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.tree__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree__count {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.tree__tools {
+  display: flex;
+  align-items: center;
+  opacity: 0;
+}
+
+.tree__row:hover .tree__tools,
+.tree__row:focus-within .tree__tools {
+  opacity: 1;
+}
+
+.tree__input,
+.tree__create .input {
+  margin: var(--space-1) var(--space-3);
+  width: calc(100% - var(--space-6));
+}
+
+.tree__popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-1) var(--space-3);
+  padding: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-2);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-2);
+  max-height: 260px;
+  overflow: auto;
+}
+
+.tree__confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  background: var(--bg-sunken);
+}
+
+.tree__empty {
+  padding: var(--space-2) var(--space-3);
+}
+</style>

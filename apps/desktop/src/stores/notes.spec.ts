@@ -1,0 +1,165 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
+import { noteFixture, stubLocalService } from '../testing/http';
+import { useNoteStore } from './notes';
+import { useFolderStore } from './folders';
+
+function row(id: string, title: string, pinned = false): Record<string, unknown> {
+  return { id, title, summary: `${title} 的摘要`, pinned, charCount: 12, hasAttachment: false, updatedAt: '2026-01-02T00:00:00Z', deletedAt: null };
+}
+
+beforeEach(() => {
+  setActivePinia(createPinia());
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('即时搜索', () => {
+  it('连续输入只在停止 200ms 后打一次请求', async () => {
+    const service = stubLocalService({
+      search: () => [{ noteId: 'note-1', score: 1, titleHit: true, snippetHtml: '<b>甲</b>乙' }],
+      list_notes: () => [],
+    });
+    const notes = useNoteStore();
+    notes.requestSearch('甲');
+    notes.requestSearch('甲乙');
+    notes.requestSearch('甲乙丙');
+    await vi.advanceTimersByTimeAsync(80);
+    notes.requestSearch('甲乙丙丁');
+    expect(service.callsOf('search')).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(220);
+    expect(service.callsOf('search')).toHaveLength(1);
+    expect(service.lastArgsOf('search')).toEqual({ text: '甲乙丙丁', limit: 80 });
+    expect(notes.searching).toBe(false);
+  });
+
+  it('空查询不发请求，并清掉结果', async () => {
+    const service = stubLocalService({ search: () => [], list_notes: () => [] });
+    const notes = useNoteStore();
+    notes.requestSearch('内容');
+    await vi.advanceTimersByTimeAsync(220);
+    expect(service.callsOf('search')).toHaveLength(1);
+    notes.requestSearch('   ');
+    await vi.advanceTimersByTimeAsync(500);
+    expect(service.callsOf('search')).toHaveLength(1);
+    expect(notes.hits).toBeNull();
+    expect(notes.query).toBe('');
+    expect(notes.searching).toBe(false);
+  });
+
+  it('一个字、emoji、超长查询都不报错，超长会被裁剪', async () => {
+    const service = stubLocalService({ search: () => [], list_notes: () => [] });
+    const notes = useNoteStore();
+    notes.requestSearch('甲');
+    await vi.advanceTimersByTimeAsync(220);
+    notes.requestSearch('🙂');
+    await vi.advanceTimersByTimeAsync(220);
+    notes.requestSearch('长'.repeat(600));
+    await vi.advanceTimersByTimeAsync(220);
+    const args = service.callsOf('search').map((call) => String((call.args as { text: string }).text));
+    expect(args[1]).toBe('🙂');
+    expect((args[2] ?? '').length).toBe(200);
+    expect(notes.searchErrorKey).toBeNull();
+  });
+
+  it('后端报错时给出文案键，不显示原始码', async () => {
+    stubLocalService({
+      search: () => ({ ok: false, error: { code: 'server_unavailable', messageKey: 'server_unavailable' } }),
+      list_notes: () => [],
+    });
+    const notes = useNoteStore();
+    notes.requestSearch('任何词');
+    await vi.advanceTimersByTimeAsync(220);
+    expect(notes.searchErrorKey).toBe('server_unavailable');
+    expect(notes.hits).toEqual([]);
+    expect(notes.searching).toBe(false);
+  });
+
+  it('搜索中/无结果两态可区分', async () => {
+    stubLocalService({ search: () => [], list_notes: () => [] });
+    const notes = useNoteStore();
+    notes.requestSearch('不存在');
+    expect(notes.searching).toBe(true);
+    await vi.advanceTimersByTimeAsync(220);
+    expect(notes.searching).toBe(false);
+    expect(notes.hits).toEqual([]);
+  });
+});
+
+describe('列表与回收站', () => {
+  it('列表只取行数据，不发文档体请求', async () => {
+    const service = stubLocalService({ list_notes: () => [row('note-1', '甲', true), row('note-2', '乙')] });
+    const notes = useNoteStore();
+    await notes.load();
+    expect(notes.rows).toHaveLength(2);
+    expect(notes.pinnedRows.map((item) => item.id)).toEqual(['note-1']);
+    expect(service.callsOf('list_notes')[0]?.args).toEqual({ limit: 200, offset: 0, trash: false });
+    expect(service.callsOf('get_note')).toHaveLength(0);
+  });
+
+  it('回收站视图带 trash 标记，恢复/彻底删除走对应命令', async () => {
+    const service = stubLocalService({ list_notes: () => [row('note-9', '被删的')] });
+    const notes = useNoteStore();
+    await notes.setMode({ kind: 'trash' });
+    expect(service.callsOf('list_notes')[0]?.args).toEqual({ limit: 200, offset: 0, trash: true });
+    await notes.restore('note-9');
+    await notes.purge('note-9');
+    expect(service.callsOf('restore_note')[0]?.args).toEqual({ id: 'note-9' });
+    expect(service.callsOf('purge_note')[0]?.args).toEqual({ id: 'note-9' });
+  });
+
+  it('新建笔记后自动选中', async () => {
+    const service = stubLocalService({ create_note: (args) => noteFixture({ id: 'new-1', title: '无标题', doc: args.doc }), list_notes: () => [] });
+    const notes = useNoteStore();
+    const created = await notes.create('folder-1');
+    expect(created?.id).toBe('new-1');
+    expect(notes.selectedId).toBe('new-1');
+    const args = service.lastArgsOf('create_note') as { folderId: string; doc: { v: number; content: unknown[] } };
+    expect(args.folderId).toBe('folder-1');
+    expect(args.doc.v).toBe(1);
+    expect(args.doc.content).toHaveLength(1);
+  });
+
+  it('移动与固定命令使用契约字段名', async () => {
+    const service = stubLocalService({
+      set_note_folder: () => noteFixture({ folderId: 'folder-2' }),
+      set_note_pinned: () => noteFixture({ pinned: true }),
+      list_notes: () => [],
+    });
+    const notes = useNoteStore();
+    await notes.moveTo('note-1', 'folder-2');
+    await notes.setPinned('note-1', true);
+    expect(service.lastArgsOf('set_note_folder')).toEqual({ id: 'note-1', folderId: 'folder-2' });
+    expect(service.lastArgsOf('set_note_pinned')).toEqual({ id: 'note-1', pinned: true });
+    expect(notes.rowById('note-1')?.pinned).toBe(true);
+  });
+
+  it('本地服务不可用时列表进入错误态而不是抛异常', async () => {
+    const notes = useNoteStore();
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    await expect(notes.load()).resolves.toBeUndefined();
+    expect(notes.errorKey).toBe('link.unreachable');
+    expect(notes.rows).toEqual([]);
+    expect(notes.loading).toBe(false);
+  });
+
+  it('文件夹树支持平铺输入（后端给哪种都能用）', async () => {
+    stubLocalService({
+      list_folders: () => [
+        { id: 'f1', parentId: null, name: '工作' },
+        { id: 'f2', parentId: 'f1', name: '项目' },
+        { id: 'f3', parentId: 'f2', name: '细节' },
+      ],
+    });
+    const folders = useFolderStore();
+    await folders.load();
+    expect(folders.nodes[0]?.name).toBe('工作');
+    expect(folders.nodes[0]?.children[0]?.children[0]?.name).toBe('细节');
+    expect(folders.flat.map((entry) => entry.node.name)).toEqual(['工作', '项目', '细节']);
+  });
+});

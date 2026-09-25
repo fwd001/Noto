@@ -1,0 +1,21 @@
+[package]
+name = "notera-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+notera-core = { workspace = true }
+notera-config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+bytes = "1"
+tracing = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+notera-test-webdav = { workspace = true }
+tokio = { workspace = true }

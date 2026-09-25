@@ -1,0 +1,22 @@
+[package]
+name = "notera-webdav"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+notera-core = { workspace = true }
+notera-net = { workspace = true }
+notera-crypto = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+bytes = "1"
+quick-xml = "0.37"
+async-trait = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+notera-test-webdav = { workspace = true }
+tokio = { workspace = true }

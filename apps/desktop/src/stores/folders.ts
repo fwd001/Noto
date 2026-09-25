@@ -1,0 +1,138 @@
+/** 文件夹树：新建 / 重命名 / 移动 / 删除（删除不级联删笔记，由后端保证）。 */
+import { defineStore } from 'pinia';
+import { computed, ref } from 'vue';
+import { callCommand } from '../api/bridge';
+import { Commands, type Folder, type FolderNode } from '../api/types';
+import { asBridgeError } from '../util/errors';
+
+export interface FlatFolder {
+  node: FolderNode;
+  depth: number;
+  path: string[];
+}
+
+function ensureNode(value: unknown): FolderNode | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const raw = value as Record<string, unknown> & Partial<FolderNode>;
+  if (typeof raw.id !== 'string' || raw.id.length === 0) return null;
+  return {
+    id: raw.id,
+    parentId: typeof raw.parentId === 'string' ? raw.parentId : null,
+    name: typeof raw.name === 'string' && raw.name.length > 0 ? raw.name : '未命名',
+    children: Array.isArray(raw.children) ? raw.children.filter((c): c is FolderNode => typeof c === 'object' && c !== null) : [],
+    ...(typeof raw.noteCount === 'number' ? { noteCount: raw.noteCount } : {}),
+    ...(typeof raw.sortOrder === 'number' ? { sortOrder: raw.sortOrder } : {}),
+    ...(typeof raw.color === 'string' ? { color: raw.color } : {}),
+  };
+}
+
+/** 后端可能给树（FolderNode[]）也可能给平铺（Folder[]）；两种都能用。 */
+export function buildTree(value: unknown): FolderNode[] {
+  const list = Array.isArray(value) ? value : [];
+  const nodes = list.map(ensureNode).filter((node): node is FolderNode => node !== null);
+  if (nodes.length === 0) return [];
+  const byId = new Map<string, FolderNode>();
+  for (const node of nodes) {
+    node.children = [];
+    byId.set(node.id, node);
+  }
+  const roots: FolderNode[] = [];
+  for (const node of nodes) {
+    const parent = node.parentId ? byId.get(node.parentId) : undefined;
+    if (parent && parent.id !== node.id) parent.children = [...(parent.children ?? []), node];
+    else roots.push(node);
+  }
+  const sortRecursively = (list2: FolderNode[]) => {
+    list2.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name, 'zh-CN'));
+    for (const child of list2) sortRecursively(child.children ?? []);
+  };
+  sortRecursively(roots);
+  return roots;
+}
+
+export function flattenTree(roots: readonly FolderNode[], limit = 64): FlatFolder[] {
+  const out: FlatFolder[] = [];
+  const walk = (nodes: readonly FolderNode[], depth: number, path: string[]) => {
+    for (const node of nodes) {
+      if (out.length >= limit) return;
+      out.push({ node, depth, path: [...path, node.name] });
+      walk(node.children ?? [], depth + 1, [...path, node.name]);
+    }
+  };
+  walk(roots, 0, []);
+  return out;
+}
+
+export const useFolderStore = defineStore('folders', () => {
+  const nodes = ref<FolderNode[]>([]);
+  const loading = ref(false);
+  const errorKey = ref<string | null>(null);
+  const flat = computed<FlatFolder[]>(() => flattenTree(nodes.value));
+  const byId = computed(() => new Map(flat.value.map((entry) => [entry.node.id, entry])));
+
+  async function load(): Promise<void> {
+    loading.value = true;
+    errorKey.value = null;
+    try {
+      nodes.value = buildTree(await callCommand<unknown>(Commands.listFolders, {}));
+    } catch (error) {
+      errorKey.value = asBridgeError(error).messageKey;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  function replaceNode(node: FolderNode | null): void {
+    if (!node) return;
+    const walk = (list: FolderNode[]): FolderNode[] =>
+      list.map((item) => (item.id === node.id ? { ...item, ...node, children: item.children } : { ...item, children: walk(item.children ?? []) }));
+    const updated = walk(nodes.value);
+    const stillThere = flattenTree(updated).some((entry) => entry.node.id === node.id);
+    nodes.value = stillThere ? updated : buildTree([...flattenTree(updated).map((entry) => entry.node), node]);
+  }
+
+  async function create(parentId: string | null, name: string): Promise<Folder | null> {
+    try {
+      const created = await callCommand<Folder>(Commands.createFolder, { parentId, name: name.trim() });
+      await load();
+      return created;
+    } catch (error) {
+      errorKey.value = asBridgeError(error).messageKey;
+      return null;
+    }
+  }
+
+  async function rename(id: string, name: string): Promise<void> {
+    try {
+      replaceNode((await callCommand<Folder>(Commands.renameFolder, { id, name: name.trim() })) as unknown as FolderNode);
+      await load();
+    } catch (error) {
+      errorKey.value = asBridgeError(error).messageKey;
+    }
+  }
+
+  async function move(id: string, parentId: string | null): Promise<void> {
+    try {
+      replaceNode((await callCommand<Folder>(Commands.moveFolder, { id, parentId })) as unknown as FolderNode);
+      await load();
+    } catch (error) {
+      errorKey.value = asBridgeError(error).messageKey;
+    }
+  }
+
+  async function remove(id: string): Promise<void> {
+    try {
+      await callCommand<null>(Commands.deleteFolder, { id });
+      await load();
+    } catch (error) {
+      errorKey.value = asBridgeError(error).messageKey;
+    }
+  }
+
+  function nameOf(id: string | null | undefined): string {
+    if (!id) return '';
+    return byId.value.get(id)?.node.name ?? '';
+  }
+
+  return { nodes, flat, byId, loading, errorKey, load, create, rename, move, remove, nameOf };
+});

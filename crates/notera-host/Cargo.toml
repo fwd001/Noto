@@ -1,0 +1,27 @@
+[package]
+name = "notera-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+notera-core = { workspace = true }
+notera-richtext = { workspace = true }
+notera-crypto = { workspace = true }
+notera-store = { workspace = true }
+notera-sync = { workspace = true }
+notera-config = { workspace = true }
+notera-importer = { workspace = true }
+notera-webdav = { workspace = true }
+notera-net = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+notera-test-webdav = { workspace = true }
+tokio = { workspace = true }

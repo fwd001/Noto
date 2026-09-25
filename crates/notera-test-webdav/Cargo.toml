@@ -1,0 +1,22 @@
+[package]
+name = "notera-test-webdav"
+description = "真实 TCP 的 HTTP/1.1 + WebDAV 子集测试服务器，带确定性故障注入（仅测试基建）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+notera-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+bytes = "1"
+quick-xml = "0.37"
+tracing = { workspace = true }
+sha2 = { workspace = true }
+percent-encoding = "2"
+
+[dev-dependencies]
+notera-test-webdav = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync", "fs"] }

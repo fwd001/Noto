@@ -1,0 +1,21 @@
+[package]
+name = "notera-importer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+notera-core = { workspace = true }
+notera-richtext = { workspace = true }
+notera-crypto = { workspace = true }
+notera-store = { workspace = true }
+notera-sync = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tokio = { workspace = true }
+
+[dev-dependencies]
+notera-test-webdav = { workspace = true }
+tokio = { workspace = true }

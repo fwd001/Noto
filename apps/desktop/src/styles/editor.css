@@ -1,0 +1,277 @@
+/* =========================================================================
+   编辑器外观：块、行内样式、清单、代码、未知块只读框、附件卡片。
+   字号缩放走 --editor-font-scale（0.85–1.6），缩放后不得出现横向滚动。
+   ========================================================================= */
+
+.editor-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--space-5) var(--space-5) var(--space-8);
+  overscroll-behavior: contain;
+}
+
+.editor-doc {
+  max-width: var(--editor-measure);
+  margin: 0 auto;
+  font-size: calc(var(--text-md) * var(--editor-font-scale));
+  line-height: var(--leading-body);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.nb-block {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  border-radius: var(--radius-1);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.nb-block + .nb-block {
+  margin-top: calc(var(--space-1) * var(--editor-font-scale));
+}
+
+.nb-block:hover {
+  background: var(--bg-sunken);
+}
+
+.nb-content {
+  flex: 1;
+  min-width: 0;
+  outline: none;
+  white-space: pre-wrap;
+  word-break: normal;
+  padding: calc(var(--space-1) * var(--editor-font-scale)) 0;
+  min-height: calc(var(--touch-min) * 0.8);
+}
+
+.nb-content:focus-visible {
+  outline: none;
+  box-shadow: inset 2px 0 0 var(--border-focus);
+  border-radius: var(--radius-1);
+}
+
+.nb-content[data-empty='true']::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.nb-block[data-type='heading'] .nb-content {
+  font-weight: 700;
+  line-height: var(--leading-tight);
+  letter-spacing: -0.015em;
+}
+
+.nb-block[data-level='1'] .nb-content {
+  font-size: calc(1.6em * var(--editor-font-scale));
+  margin-top: var(--space-5);
+}
+
+.nb-block[data-level='2'] .nb-content {
+  font-size: calc(1.32em * var(--editor-font-scale));
+  margin-top: var(--space-4);
+}
+
+.nb-block[data-level='3'] .nb-content {
+  font-size: calc(1.14em * var(--editor-font-scale));
+  margin-top: var(--space-4);
+}
+
+.nb-block[data-type='blockquote'] {
+  border-left: 3px solid var(--border-strong);
+  padding-left: var(--space-3);
+  color: var(--text-secondary);
+  margin-left: var(--space-1);
+}
+
+.nb-block[data-type='codeBlock'] {
+  background: var(--bg-code);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-2);
+  padding: 0 var(--space-3);
+}
+
+.nb-block[data-type='codeBlock'] .nb-content {
+  font-family: var(--font-mono);
+  font-size: calc(0.92em * var(--editor-font-scale));
+  tab-size: 2;
+}
+
+.nb-gutter {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  min-width: 1.9em;
+  color: var(--text-muted);
+  font-size: calc(0.92em * var(--editor-font-scale));
+  font-variant-numeric: tabular-nums;
+  padding-top: calc(var(--space-1) * var(--editor-font-scale));
+  user-select: none;
+}
+
+.nb-check {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  width: var(--touch-min);
+  height: var(--touch-min);
+  margin: calc((1em - var(--touch-min)) / 2) 0 0 calc(var(--space-2) * -1);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  border-radius: var(--radius-1);
+}
+
+.nb-check__box {
+  width: 1.05em;
+  height: 1.05em;
+  border: 2px solid var(--border-strong);
+  border-radius: var(--radius-1);
+  display: grid;
+  place-items: center;
+  font-size: calc(1rem * var(--editor-font-scale));
+  color: transparent;
+  background: var(--bg-raised);
+}
+
+.nb-check[aria-checked='true'] .nb-check__box {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.nb-check[aria-checked='true'] + .nb-content {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.nb-block[data-checked='true'] .nb-content {
+  color: var(--text-muted);
+}
+
+.nb-rule {
+  flex: 1;
+  border-top: 1px solid var(--border-strong);
+  margin: var(--space-4) 0;
+  min-height: var(--space-5);
+}
+
+.nb-media {
+  flex: 1;
+  min-width: 0;
+  margin: var(--space-2) 0;
+}
+
+.nb-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-2);
+  border: 1px solid var(--border-subtle);
+}
+
+.nb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--touch-min);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--bg-sunken);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+
+.nb-chip__glyph {
+  font-size: var(--text-md);
+}
+
+.nb-chip__meta {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.nb-chip--missing {
+  border-color: var(--warn);
+  background: var(--bg-highlight);
+}
+
+.nb-unknown {
+  flex: 1;
+  min-width: 0;
+  border: 1px dashed var(--border-strong);
+  background: var(--bg-unknown);
+  border-radius: var(--radius-2);
+  padding: var(--space-3);
+  margin: var(--space-2) 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.nb-unknown__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 650;
+  color: var(--text-primary);
+  margin-bottom: var(--space-2);
+}
+
+.nb-unknown__type {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+}
+
+.nb-unknown__json {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+}
+
+.nb-block[data-readonly='true'] .nb-content {
+  cursor: default;
+}
+
+.nb-flag {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  padding: 0 var(--space-1);
+}
+
+.nb-block[data-conflict='true'] {
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+mark[data-mark='highlight'] {
+  background: var(--bg-highlight);
+  color: var(--text-primary);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+code[data-mark='code'] {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--bg-code);
+  border-radius: var(--radius-1);
+  padding: 0.1em 0.35em;
+}
+
+.nb-content a {
+  color: var(--text-link);
+}
