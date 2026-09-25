@@ -1,0 +1,18 @@
+const pw = await import(process.env.PW_CORE || 'file:///C:/Users/lhcz-fu/node_modules/playwright-core/index.js');
+const { chromium } = pw.default ?? pw;
+const b = await chromium.launch({ executablePath: process.env.CHROME || 'C:/Users/lhcz-fu/AppData/Local/ms-playwright/chromium-1243/chrome-win64/chrome.exe' });
+const p = await b.newPage({ viewport: { width: 1920, height: 1200 }, deviceScaleFactor: 1.4 });
+await p.goto('file:///D:/code/Notes/docs/diagram/architecture.html');
+await p.waitForTimeout(900);
+await p.locator('#canvas').screenshot({ path: 'D:/code/Notes/docs/evidence/canvas-default.png' });
+await p.locator('.card[data-id="sync"]').click();
+await p.waitForTimeout(500);
+await p.locator('#canvas').screenshot({ path: 'D:/code/Notes/docs/evidence/canvas-sync-selected.png' });
+await p.locator('button[data-flow="sync"]').click();
+await p.waitForTimeout(500);
+await p.locator('#canvas').screenshot({ path: 'D:/code/Notes/docs/evidence/canvas-sync-flow.png' });
+await p.setViewportSize({ width: 420, height: 900 });
+await p.waitForTimeout(500);
+await p.screenshot({ path: 'D:/code/Notes/docs/evidence/canvas-mobile.png' });
+await b.close();
+console.log('captured');

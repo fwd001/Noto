@@ -1,0 +1,1071 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notera · 系统边界与契约架构图 (Phase 0)</title>
+<style>
+:root[data-theme="dark"]{
+  --bg:#0d1016; --panel:#161b24; --chip:#1e2531; --line:#2a3444; --line-soft:#222a37;
+  --fg:#e9eef7; --muted:#9fb0c8;
+  --c-cmd:#5aa2ff; --c-data:#4ade9b; --c-evt:#ffb454; --c-io:#b78bff; --c-dep:#7f8ea6; --c-bad:#ff7a7a;
+  --shadow:0 1px 2px rgba(0,0,0,.5);
+}
+:root[data-theme="light"]{
+  --bg:#f4f6fa; --panel:#ffffff; --chip:#eef1f7; --line:#cdd5e2; --line-soft:#dde3ed;
+  --fg:#101725; --muted:#4c5b73;
+  --c-cmd:#1266d6; --c-data:#0a7d47; --c-evt:#8a5200; --c-io:#6a3fd0; --c-dep:#63718a; --c-bad:#c02b2b;
+  --shadow:0 1px 2px rgba(16,23,37,.08);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--fg); line-height:1.55;
+  font:15px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro SC","Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  -webkit-text-size-adjust:100%;
+}
+code,.mono{font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,"Liberation Mono",monospace;font-size:.92em}
+
+header{position:sticky;top:0;z-index:40;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.hd{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;padding:12px 18px}
+h1{font-size:17px;margin:0;font-weight:650;letter-spacing:.2px}
+h1 span{color:var(--muted);font-weight:400;font-size:13px;margin-left:8px}
+.spacer{flex:1 1 40px}
+.search{display:flex;align-items:center;gap:6px;background:var(--chip);border:1px solid var(--line);border-radius:8px;padding:0 10px;min-height:44px}
+.search input{background:transparent;border:0;outline:0;color:var(--fg);font:inherit;min-width:150px;width:100%}
+.toolbar{display:flex;flex-wrap:wrap;gap:6px;padding:0 18px 12px}
+button{font:inherit;color:var(--fg);background:var(--chip);border:1px solid var(--line);border-radius:8px;min-height:44px;padding:0 12px;cursor:pointer;transition:border-color .15s,background .15s}
+button:hover{border-color:var(--c-cmd)}
+button[aria-pressed="true"]{background:var(--c-cmd);border-color:var(--c-cmd);color:#fff;font-weight:600}
+:root[data-theme="light"] button[aria-pressed="true"]{color:#fff}
+button:focus-visible{outline:2px solid var(--c-cmd);outline-offset:2px}
+
+main{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(320px,1fr);gap:0;align-items:start}
+@media (max-width:1000px){main{grid-template-columns:1fr}.side{position:static!important;max-height:none!important;border-left:0;border-top:1px solid var(--line)}}
+.canvas{position:relative;padding:18px;overflow:auto}
+.stage{position:relative;width:max-content;min-width:640px;padding-right:150px}
+svg.wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+
+.layer{margin:0 0 46px;position:relative;z-index:2}
+.layer-h{display:flex;align-items:baseline;gap:10px;margin:0 0 8px;padding:2px 6px;position:relative;z-index:3;background:var(--bg);border-radius:5px}
+.layer-h b{font-size:12.5px;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+.layer-h i{font-style:normal;font-size:11.5px;color:var(--muted);opacity:.85}
+.layer-h:after{content:"";flex:1;height:1px;background:var(--line-soft)}
+.row{display:flex;flex-wrap:nowrap;gap:10px}
+
+.card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:10px 12px 11px;min-height:44px;cursor:pointer;box-shadow:var(--shadow);flex:0 0 236px;width:236px;transition:border-color .15s,transform .15s,opacity .2s}
+.card:hover{border-color:var(--c-cmd);transform:translateY(-1px)}
+.card.ext{border-style:dashed}
+.card.test{border-style:dashed}
+.card.sel{border-color:var(--c-cmd);box-shadow:0 0 0 2px color-mix(in srgb,var(--c-cmd) 35%,transparent)}
+.card.dim{opacity:.32}
+.card.hitmatch{border-color:var(--c-evt);box-shadow:0 0 0 2px color-mix(in srgb,var(--c-evt) 30%,transparent)}
+.card .nm{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;font-weight:650;letter-spacing:-.2px}
+.card .ttl{font-size:12px;color:var(--muted);margin-top:1px}
+.card .tag{position:absolute;top:-8px;right:9px;font-size:10px;padding:1px 6px;border-radius:20px;background:var(--chip);border:1px solid var(--line);color:var(--muted)}
+.card .peek{display:none;margin:7px 0 0;padding:7px 0 0;border-top:1px solid var(--line-soft);font-size:12px;color:var(--muted)}
+.card.open .peek{display:block}
+.card .peek li{margin:0 0 3px;list-style:none;padding-left:12px;position:relative}
+.card .peek li:before{content:"›";position:absolute;left:0;color:var(--c-cmd)}
+.hit{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;margin-top:7px;color:var(--muted)}
+.hit b{width:8px;height:8px;border-radius:2px;display:inline-block}
+
+.side{position:sticky;top:112px;max-height:calc(100vh - 128px);overflow:auto;border-left:1px solid var(--line);background:var(--panel);padding:16px 18px 26px}
+.side h2{font-size:15px;margin:0 0 2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.side h2 .k{font-size:10.5px;font-weight:500;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:1px 8px}
+.path{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--muted);word-break:break-all;margin:0 0 12px}
+.sec{margin:16px 0 0}
+.sec>h3{font-size:11.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);margin:0 0 7px;display:flex;gap:7px;align-items:center}
+.sec>h3:before{content:"";width:3px;height:12px;border-radius:2px;background:var(--c-cmd)}
+.sec.io-in>h3:before{background:var(--c-data)}
+.sec.io-out>h3:before{background:var(--c-evt)}
+.sec.rules>h3:before{background:var(--c-bad)}
+ul.plain{margin:0;padding:0;list-style:none}
+ul.plain li{padding:5px 0;border-bottom:1px solid var(--line-soft);font-size:13.5px}
+ul.plain li:last-child{border-bottom:0}
+table{width:100%;border-collapse:collapse;font-size:12.5px;table-layout:fixed}
+th,td{text-align:left;padding:6px 7px;border-bottom:1px solid var(--line-soft);vertical-align:top;word-break:break-word;overflow-wrap:anywhere}
+.sec table td:first-child{width:74px}
+.sec table td:nth-child(2){width:34%}
+th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}
+td.t{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--c-data)}
+.peer{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--c-cmd);white-space:nowrap}
+.st{margin:0 0 9px;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.st>div{naming:normal;padding:7px 9px}
+.st .n{font-family:ui-monospace,Consolas,monospace;font-size:12px;font-weight:650;background:var(--chip);border-bottom:1px solid var(--line)}
+.st .f{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--muted);line-height:1.65;word-break:break-word}
+.hint{font-size:13px;color:var(--muted);background:var(--chip);border:1px solid var(--line);border-radius:10px;padding:11px 12px}
+.hint b{color:var(--fg)}
+mark{background:color-mix(in srgb,var(--c-evt) 40%,transparent);color:inherit;border-radius:3px;padding:0 2px}
+footer{padding:16px 18px 34px;color:var(--muted);font-size:12px;border-top:1px solid var(--line)}
+footer code{color:var(--fg)}
+.legend{display:flex;flex-wrap:wrap;gap:12px;margin:0 0 10px}
+.legend div{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.legend i{width:18px;height:2px;border-radius:2px;display:inline-block}
+.legend i.dash{background:repeating-linear-gradient(90deg,currentColor 0 4px,transparent 4px 8px);height:2px}
+.matrix{width:100%;font-size:12px}
+.matrix th:first-child{position:sticky;left:0;background:var(--panel)}
+.matrix td{border-bottom:1px solid var(--line-soft)}
+.badge{font-size:10.5px;padding:1px 7px;border-radius:20px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.arrow-hl{stroke-width:2.4!important;opacity:1!important}
+</style>
+</head>
+<body>
+<header>
+  <div class="hd">
+    <h1>Notera · 系统边界与契约<span>Phase 0 架构闸门产物 — 定义"谁依赖谁、传什么、不许做什么"</span></h1>
+    <div class="spacer"></div>
+    <label class="search" for="q">
+      <span aria-hidden="true">🔍</span>
+      <input id="q" type="search" placeholder="搜字段/类型，如 content_hash" autocomplete="off">
+    </label>
+    <button id="theme" type="button" title="切换配色">◐ 配色</button>
+  </div>
+  <div class="toolbar" role="group" aria-label="视图与链路筛选">
+    <button id="v-graph" aria-pressed="true">分层架构图</button>
+    <button id="v-matrix" aria-pressed="false">契约总表</button>
+    <span class="spacer"></span>
+    <button data-flow="all" aria-pressed="true">全部依赖</button>
+    <button data-flow="write" aria-pressed="false">① 本地写入路径</button>
+    <button data-flow="sync" aria-pressed="false">② 同步穿透路径</button>
+    <button data-flow="evt" aria-pressed="false">③ 事件回流</button>
+    <button data-flow="net" aria-pressed="false">④ 网络与代理出口</button>
+  </div>
+</header>
+
+<main>
+  <section class="canvas" id="canvas">
+    <div class="stage" id="stage">
+      <svg class="wires" id="wires" aria-hidden="true"></svg>
+      <div id="layers"></div>
+    </div>
+  </section>
+  <aside class="side" id="side" aria-live="polite"></aside>
+</main>
+
+<footer>
+  <div class="legend">
+    <div><i style="background:var(--c-cmd)"></i>命令/调用（写意图，向下）</div>
+    <div><i style="background:var(--c-data)"></i>数据读取（向下）</div>
+    <div><i style="background:var(--c-evt)"></i>事件回流（向上一侧，异步）</div>
+    <div><i style="background:var(--c-io)"></i>外部 I/O（磁盘/网络/钥匙串）</div>
+    <div><i class="dash" style="background:var(--c-dep)"></i>类型/内核依赖（编译期）</div>
+  </div>
+  <p>
+    <b>阅读规则：</b>箭头方向即依赖方向。<b>任何向上箭头都是架构违规</b>——本图中不存在"被调用方反向调用调用方"，事件一律经 <code>notera-host</code> 的事件总线路出，故回流以 <span style="color:var(--c-evt)">橙色</span> 显式标注。
+    <b>铁律：</b>UI 不得触碰 WebDAV/同步协议；所有网络出口唯一收敛于 <code>notera-net</code>；<code>notera-core</code> 零 I/O 零 async。
+  </p>
+  <p>
+    本文件为单 HTML、内联 CSS/JS，<b>不引用任何 CDN 或外部字体</b>（开发机不可达外网，必须可离线打开）。配色对比度实测（WCAG 相对亮度比）：正文 <code>#e9eef7/#0d1016 = 16.36:1</code>，次要文字 <code>#9fb0c8/#0d1016 = 8.63:1</code>，蓝 <code>7.30:1</code>，绿 <code>11.07:1</code>，橙 <code>10.80:1</code>，紫 <code>7.39:1</code>，最弱灰 <code>5.73:1</code> —— 全部 ≥ 4.5:1（AA），主要文字达 AAA。可点击元素命中高度 ≥ 44px。
+  </p>
+  <p>与文档的关系：本页字段清单与 <code>docs/DATA-MODEL.md</code>、<code>docs/SYNC-PROTOCOL.md</code>、<code>docs/ARCHITECTURE-MAP.md</code> 同源；冲突时以 DATA-MODEL/SYNC-PROTOCOL 为准并回填本图。</p>
+</footer>
+
+<script>
+/* ============================================================
+   单一事实源：模块契约。渲染、高亮、穿透面板全部由此驱动。
+   ============================================================ */
+const LAYERS = [
+  {id:'L0', name:'用户与平台层', sub:'用户唯一能看见的东西；同步细节全部封死在下面'},
+  {id:'L1', name:'应用与装配层', sub:'用例编排 · 先出 UI 再启同步 · 生命周期'},
+  {id:'L2', name:'领域服务层', sub:'业务不变式的所有者：同步/富文本/导入导出/配置'},
+  {id:'L3', name:'基础设施层', sub:'把世界的不确定性挡在这里：磁盘、HTTP、密码学'},
+  {id:'L4', name:'内核层', sub:'纯类型与不变式，零 I/O、零 async、零依赖'},
+  {id:'L5', name:'外部世界', sub:'用户自有服务器 / 操作系统能力 / 磁盘文件'},
+];
+
+const MODULES = [
+/* ------------------------------------------------------------------ L0 */
+{id:'ui', layer:'L0', name:'apps/desktop/src', ttl:'UI 层 · Vue 3 + TypeScript + Vite', tag:'前端',
+ duties:[
+  '三栏信息架构：侧栏(文件夹) / 列表(派生列，不读正文) / 编辑器',
+  '富文本编辑器仅作为 Document 的一个 View：编辑态 ↔ Document 双向映射',
+  '乐观更新：命令发出即改本地视图，等事件回流校正',
+  '同步状态只渲染 4 个徽标，绝不渲染协议概念',
+  'design token 驱动主题/间距/字号；触摸目标 ≥44px；深色/浅色跟随系统'
+ ],
+ inputs:[
+  {peer:'host', data:'ViewModel（列表/编辑/搜索结果）', types:'NoteListDTO[], EditorDTO, SearchHitDTO[]'},
+  {peer:'host', data:'同步与进度事件', types:'SyncBadge, SyncProgressDTO, ConflictCardDTO, ToastDTO'},
+  {peer:'platform', data:'外观与窗口环境', types:'SystemTheme, WindowMetrics, PlatformCapsDTO'}
+ ],
+ outputs:[
+  {peer:'host', data:'命令 DTO（全部写意图）', types:'CreateNoteCmd, EditNoteCmd, DeleteNoteCmd, RestoreNoteCmd, MoveNoteCmd, CreateFolderCmd, RenameFolderCmd, SearchQuery, AttachCmd, SyncNowCmd, ConfigureAccountCmd'}
+ ],
+ structs:[
+  {n:'EditorDTO', f:'id:Uuid · doc:DocumentRef · rev:u64 · dirty:bool · readOnlyReason:Option<DocTooNew> · title:string · updatedAt:Rfc3339'},
+  {n:'NoteListDTO', f:'id:Uuid · title:string · summary:string · folderName:string · pinned:bool · charCount:u32 · hasAttachment:bool · updatedAt:Rfc3339 · deletedAt:Option'},
+  {n:'SyncBadge', f:'enum { Synced, Syncing{percent:u8}, Offline, Failed{reason:UserReason} }  ← 用户可见的全部同步语义，共 4 态'},
+  {n:'ConflictCardDTO', f:'conflictId:i64 · noteTitle:string · localPreview:string · remotePreview:string · copyNoteId:Option<Uuid> · createdAt'}
+ ],
+ rules:[
+  '禁止出现 WebDAV / Revision / Manifest / Tombstone / ETag / Pull / Push / Merge 等词——UI 层 grep 闸门',
+  '禁止自行比较时间戳决定新旧；显示用 updatedAt，判定用 host 给的结构',
+  '禁止在渲染路径等待网络：任何 await 网络结果的 UI 阻塞都是 P0'
+ ],
+ phase:'Phase 4（桌面外观与外壳）/ 编辑体验 Phase 1 起逐步可用'},
+
+{id:'platform', layer:'L0', name:'platform/*', ttl:'平台适配层 · Windows/macOS/Android/iOS 原生片段', tag:'原生', ext:false,
+ duties:[
+  '窗口/标题栏/托盘/系统菜单/全局快捷键/通知',
+  '生命周期回调（启动、前后台、退出前 flush 请求）',
+  '后台任务注册：Desktop 定时器 · Android WorkManager · iOS BGAppRefreshTask',
+  '系统分享收件/发件、文件选择器、安全区、动态字体、系统钥匙串',
+  '网络可达性监听（供 host 触发同步）'
+ ],
+ inputs:[
+  {peer:'host', data:'能力请求', types:'NotificationRequest, TraySpec, MenuSpec, BackgroundTaskRequest, SharePayload, KeychainWrite'},
+ ],
+ outputs:[
+  {peer:'host', data:'生命周期与环境事件', types:'LifecycleEvent{Launch|Foreground|Background|TerminateRequest}, SystemTheme, NetworkState{online,kind}, NativeMenuAction, ShareInbound{files,text,url}, KeychainRead'},
+  {peer:'ui', data:'外观与布局度量', types:'SystemTheme, WindowMetrics{safeArea,titleBarHeight}, PlatformCapsDTO'}
+ ],
+ structs:[
+  {n:'LifecycleEvent', f:'kind:enum · at:Rfc3339 · flushBudgetMs:u32  (TerminateRequest 时给 host 关闭窗口，桌面 1500ms)'},
+  {n:'BackgroundTaskRequest', f:'kind:enum{DesktopTimer,WorkManager,BGAppRefresh} · periodSec:u32(桌面 25 / 移动 ≥900) · flexSec:u32 · requiresNetwork:bool · requiresCharging:bool'},
+  {n:'PlatformCaps', f:'tray:bool · globalShortcuts:bool · bgTask:BgTaskKind · shareSheet:bool · keychain:KeychainKind · filePicker:Native|Web · biometric:bool'},
+  {n:'ShareInbound', f:'files:LocalPath[] · text:Option<string> · url:Option<string> · sourceAppId:Option<string>'}
+ ],
+ rules:[
+  '平台差异只允许出现在这一层与 host 的能力协商里，不得渗进 sync/store/richtext',
+  'iOS 无 tray/globalShortcuts → 能力用 PlatformCaps 声明，UI 按能力渲染，禁止按"是不是 iPhone"写分支',
+  '移动端不得假设 App 常驻：后台任务可能被系统拒绝，host 必须容忍"这一轮没跑"'
+ ],
+ phase:'Phase 4（桌面）/ Phase 5（移动）；iOS 仅架构预留'},
+/* ------------------------------------------------------------------ L1 */
+{id:'host', layer:'L1', name:'notera-host', ttl:'装配根 · 用例编排 · 调度 · 事件总线 · Tauri Commands', tag:'crate',
+ duties:[
+  '组装依赖图（store/sync/net/config/crypto/…）并持有 AppCtx',
+  '启动铁律：开 SQLite → 读最近数据 → 立即出 UI → 后台才启同步引擎（同步永不阻塞首帧）',
+  '命令层：校验 DTO、映射为用例调用、把领域错误翻译成用户语言',
+  '同步调度：保存 debounce 2.5s / 前台回归 / 网络恢复 / 周期 25s / 退出前 flush；移动后台任务预算适配',
+  '事件总线：向 UI 与 platform 广播，是唯一允许"向上"的通道',
+  '启动自检：outbox inflight 归位、FTS 与权威表一致性、DB 版本闸门（过新→只读）'
+ ],
+ inputs:[
+  {peer:'ui', data:'命令 DTO', types:'CreateNoteCmd … ConfigureAccountCmd（见 UI 输出清单）'},
+  {peer:'platform', data:'生命周期与环境', types:'LifecycleEvent, NetworkState, NativeMenuAction, ShareInbound, KeychainRead'},
+  {peer:'sync', data:'同步进度与结论', types:'SyncEvent{PhaseChanged,Progress,Completed,NeedsAttention,Failed}'},
+  {peer:'store', data:'查询结果', types:'NoteListRow, SearchHit, StoreStats, ConflictRow[]'}
+ ],
+ outputs:[
+  {peer:'store', data:'写用例（唯一入口）', types:'EditCommand, DeleteCommand, PurgeCommand, FolderCommand, AttachmentCommand'},
+  {peer:'richtext', data:'待派生/合并的文档', types:'Document, MergeArgs{base,local,remote}'},
+  {peer:'sync', data:'触发与配置', types:'Trigger{AppLaunch|Resume|DebounceSave|NetworkAvailable|Timer|Manual|FlushExit}, AccountConfig, ProxyProfile'},
+  {peer:'config', data:'读写设置与凭据引用', types:'SettingsPatch, AccountDraft'},
+  {peer:'importer', data:'导出/导入/备份/恢复请求', types:'ExportRequest, ImportRequest{mode}, BackupRequest'},
+  {peer:'platform', data:'能力调用', types:'NotificationRequest, MenuSpec, BackgroundTaskRequest, KeychainWrite'},
+  {peer:'ui', data:'ViewModel + 事件', types:'NoteListDTO[], EditorDTO, SearchHitDTO[], SyncBadge, ConflictCardDTO'}
+ ],
+ structs:[
+  {n:'AppCtx', f:'store:Store · sync:SyncHandle · richtext · crypto · net:NetPool · config:ConfigService · scheduler:Scheduler · bus:EventBus · clock:Clock · device:DeviceId'},
+  {n:'EditCommand', f:'noteId:Uuid · doc:Document · expectedRev:u64 · folderId:Uuid · pinned:bool · color:Option · origin:EditOrigin · device:DeviceId'},
+  {n:'SchedulerPolicy', f:'debounce:2500ms · period:25000ms · jitter:0.15 · exitFlushBudget:1500ms · maxConcurrentRounds:1 · mobile:{period:900s, requiresNetwork:true}'},
+  {n:'SyncBadge(派生)', f:'由 SyncEvent 折叠成 4 态：任何内部错误码都必须先映射成 UserReason 才能出 host'},
+  {n:'CommandResult', f:'ok:bool · payload:Option<T> · error:Option<UserFacingError{id, messageKey, retryable, action}> · traceId:Uuid'}
+ ],
+ rules:[
+  'Tauri Command 只做 DTO ↔ 用例转换，不写业务规则；业务规则在领域层，否则 Rust 测试覆盖不到',
+  '禁止在命令处理器里 await 网络：需要网络的一律 enqueue 给 sync 后由事件回流',
+  'expectedRev 乐观并发：不匹配即返回 Conflict 结果，UI 重载最新，绝不静默覆盖',
+  '退出前 flush 只等待已有 outbox，不承诺网络成功（超预算即放弃，下次启动继续）'
+ ],
+ phase:'Phase 1（无 GUI 时以 lib 形式装配）起，Phase 4 接桌面窗口'},
+
+{id:'cli', layer:'L1', name:'notera-cli', ttl:'诊断与测试驱动 · 不出产品的内部工具', tag:'crate',
+ duties:[
+  'sync-once：跑完整一轮同步并打印 plan/stats/不变式检查结果（多设备 E2E 的驱动）',
+  'net probe：证明流量真的走/不走代理（差分验证）',
+  'dav probe：服务器能力探测（If-Match / Overwrite:F / ETag / 断点）',
+  'manifest dump·verify、store verify、export/import、kill-point 配合器'
+ ],
+ inputs:[
+  {peer:'人工/CI', data:'argv + 环境变量', types:'NOTERA_DATA_DIR, NOTERA_ACCOUNT, --json, --scenario <toml>'},
+  {peer:'host', data:'复用装配根', types:'AppCtx（同一份代码，避免 CLI 与 App 行为漂移）'}
+ ],
+ outputs:[
+  {peer:'CI / 人工', data:'人类可读 + --json 机器可读报告', types:'VerifyReport{invariants:Vec<(name,bool,detail)>, requests:u32, bytesIn:u64, bytesOut:u64, plan:SyncPlan}'},
+  {peer:'tests/*', data:'退出码语义', types:'0=PASS · 1=ASSERT_FAIL · 2=BLOCKED(环境不满足，不得当 PASS)'},
+  {peer:'webdav', data:'真实 WebDAV 请求', types:'同 sync 的出口，经 net'}
+ ],
+ structs:[
+  {n:'SyncOnceArgs', f:'account:Id · forceRelist:bool · offline:bool · maxRounds:u8 · killAfter:Option<KillPoint>'},
+  {n:'KillPoint', f:'phase:RoundPhase · afterRequests:u16 · mode:SIGKILL|abort() —— L4 崩溃测试的注入坐标'}
+ ],
+ rules:[
+  'CLI 必须与 App 走同一套 crate（禁止重实现逻辑），否则测出的绿灯无意义',
+  '退出码 2 (BLOCKED) 不得被 CI 解释为通过；workflow 必须显式区分'
+ ],
+ phase:'Phase 2 起（与同步引擎同期）'},
+/* ------------------------------------------------------------------ L2 */
+{id:'sync', layer:'L2', name:'notera-sync', ttl:'同步引擎 · 状态机 · 计划 · 冲突 · outbox · 幂等', tag:'crate',
+ duties:[
+  '一轮同步状态机：lease → 读清单(index/segments) → 生成 plan → push 实体 → pull 实体 → 本地 apply → CAS 提交清单 → 记账',
+  'plan 生成：比对 (rev, sync_rev, remote_rev, content_hash, sync_hash) 得出 push/pull/conflict/noop',
+  '清单解析与提交：seq 单调、两段式 index+segments、12hex 提示 + 权威全量哈希二次校验',
+  '冲突求解：委派 richtext 块级三方合并；失败则"保留双方 + 冲突副本"，永不静默覆盖',
+  '删除/永久删除传播（tombstone 语义）；远端缺失 → missing_remote，绝不删本地',
+  'outbox 消费与幂等重放（dedupe_key）；错误分类 → 退避与重试；租约与 CAS 并发保护'
+ ],
+ inputs:[
+  {peer:'host', data:'触发与策略', types:'Trigger, SchedulerPolicy, AccountConfig'},
+  {peer:'store', data:'脏集合与本地权威状态', types:'DirtyEntity{kind,id,rev,contentHash,syncRev}[], TombstoneRow[], RemoteIndexEntry[]'},
+  {peer:'store', data:'base 文档（三方合并祖先）', types:'Document @ note_revisions.rev = sync_rev'},
+  {peer:'webdav', data:'远端事实', types:'Envelope, Listing, CapMask, DavResponse{etag,length}'},
+  {peer:'richtext', data:'合并结论', types:'MergeOutcome'},
+  {peer:'crypto', data:'信封 seal/open 与校验', types:'EnvelopeSealed, Verification'}
+ ],
+ outputs:[
+  {peer:'webdav', data:'写请求意图', types:'EntityWrite{path, envelopeJson, ifMatch:Option<Etag>, mode:CreateOnly|Overwrite}, ManifestCommit{indexJson, segments[], seq, casEtag}, Delete{path}'},
+  {peer:'webdav', data:'读请求意图', types:'EntityFetch{path, ifNoneMatch}, SegmentFetch{name}, Relist{prefix, depth}'},
+  {peer:'store', data:'应用指令', types:'ApplyOp{Upsert{kind,id,envelope}|MarkDeleted|Purge|SetSynced{kind,rev}|SetRemote{kind,remoteRev,hash12}|ConflictRow}, RemoteIndexWrite'},
+  {peer:'host', data:'事件与结论', types:'SyncEvent{PhaseChanged, Progress{done,total,bytes}, Completed{RoundStats}, NeedsAttention{ConflictRow}, Failed{UserReason}}'},
+  {peer:'store', data:'outbox 状态推进', types:'OpStateDelta{pending|inflight|done|failed|superseded|blocked, nextRetryAt}'}
+ ],
+ structs:[
+  {n:'SyncPlan', f:'push:EntityWrite[] · pull:EntityFetch[] · apply:ApplyOp[] · conflicts:ConflictProbe[] · relist:bool · estRequests:u16 · estBytes:u32 · skippedReasons:Vec'},
+  {n:'Manifest（远端 index.json）', f:'protocol:u16 · root_id:Uuid · seq:u64 · generated_at · generated_by:DeviceId · software:string · counts:Map<kind,u32> · window:{sinceSeq, entries:EntryRef[], segments:ChangedSeg[]} · segments:SegRef{name,coverPrefix,minId,maxId,count,hash12,gzipLen} · checksum'},
+  {n:'EntryRef（88B/条实测）', f:'i:Uuid · r:rev · h:hash12 · s:size · t:kindTag(n|f|a) · d:Option<deletedAt> · p:Option<purged>'},
+  {n:'RoundStats', f:'roundId:Uuid · phase · requests:u16 · bytesIn/Out:u64 · pushed:u16 · pulled:u16 · conflicts:u8 · autoMerged:u8 · elapsedMs:u32 · casRetries:u8 · outcome:enum{Converged,NoOp,Partial{retryAt},Failed{code}}'},
+  {n:'Lease', f:'token:Uuid · device:DeviceId · expiresAt:Rfc3339 · renewAt —— 尽力而为，不作为正确性依赖'},
+  {n:'ConvergenceProof', f:'appliedSeq:u64 · localMatchesRemote:bool · dangling:Entity[] · inflightDrained:bool —— 测试断言收敛的凭据'}
+ ],
+ rules:[
+  '正确性来源是记录文件本身；清单是索引与公告。先写实体、后提交清单，因此清单落后无害，清单领先实体 = 记为 missing 并补传，绝不删本地',
+  '禁止用 mtime 判定新旧（违反 I4）；判定只用 rev + hash',
+  '禁止在 apply 事务中途等待网络；apply 必须是本地单事务',
+  '每一轮请求数与字节必须受预算约束（空轮 = 1 请求 304，0 字节正文）',
+  '校验失败的远端数据一律丢弃并记 Failed{Protocol}，不得写库（I6）'
+ ],
+ phase:'Phase 2'},
+
+{id:'richtext', layer:'L2', name:'notera-richtext', ttl:'富文本模型 · canonical 序列化 · 三方合并', tag:'crate',
+ duties:[
+  'Document AST 定义与 normalize / validate',
+  'canonical JSON（键按码点升序、整数不写成浮点、无冗余空白）→ 供哈希',
+  '派生抽取：title / plain_text / summary / char_count / block_count / has_attachment',
+  '块级三方合并 merge(base, local, remote)（纯函数，可测）',
+  '未知节点与属性 preserve-unknown；doc.v 过高 → 只读闸门',
+  'doc_format vN → vN+1 迁移（版本演进唯一入口）'
+ ],
+ inputs:[
+  {peer:'host / store', data:'编辑后的文档', types:'Document, doc_format:u16'},
+  {peer:'sync', data:'三方合并参数', types:'MergeArgs{base:Document, local:Document, remote:Document}'},
+  {peer:'webdav / importer', data:'远端或备份中的 payload', types:'raw_json:&str（不可信输入，必先 validate）'},
+  {peer:'ui', data:'编辑器序列化结果', types:'Document'}
+ ],
+ outputs:[
+  {peer:'store', data:'派生列内容', types:'ExtractedText{title, plainText, summary, charCount, blockCount, hasAttachment}'},
+  {peer:'crypto / store', data:'canonical 字节（哈希输入）', types:'Vec<u8>（UTF-8, 稳定）'},
+  {peer:'sync', data:'合并结论', types:'MergeOutcome'},
+  {peer:'ui', data:'渲染输入', types:'Document（原样，未识别节点保留）'},
+  {peer:'importer', data:'导出用的规范化文档', types:'Document'}
+ ],
+ structs:[
+  {n:'Document', f:'v:u16 · content:Block[]'},
+  {n:'Block', f:'id:String(8..32, 文档内唯一) · type:BlockType · attrs:Map<String,Value> · content:Inline[]? · unknown:bool'},
+  {n:'BlockType', f:'paragraph|heading|blockquote|codeBlock|orderedList|bulletList|checklistItem|image|attachment|horizontalRule|table|tableRow|tableCell|unknown:*'},
+  {n:'Inline', f:'text:String · marks:Mark[]'},
+  {n:'Mark', f:'kind:bold|italic|underline|strike|code|highlight|link|fontSize|color|attachmentRef · attrs:Map'},
+  {n:'MergeOutcome', f:'Converged | AutoMerged{doc, takenLocalBlocks:u16, takenRemoteBlocks:u16} | Conflict{reason:enum, baseHead, localHead, remoteHead, conflictingBlockIds} | ReadOnly{because:DocTooNew}'},
+  {n:'MergeArgs', f:'base, local, remote: Document · blockAnchoring: ById（id 缺失时回退 ByIndex 并标记低置信）'}
+ ],
+ rules:[
+  '纯函数，零 I/O：合并必须可在单测里用固定输入跑出确定结论',
+  '同 id 同 hash 块 → 任取；同 id 异 hash 且两侧都改 → 该块判冲突，不得逐字符猜合',
+  '合并失败必须返回 Conflict 且带 conflictingBlockIds，供 UI 精确高亮',
+  '禁止在此层做任何"哪个设备更新"的时间判定（时间不可信）'
+ ],
+ phase:'Phase 1（模型/派生/canonical）· Phase 2（合并）'},
+
+{id:'importer', layer:'L2', name:'notera-importer', ttl:'导出 · 导入 · 备份 · 恢复', tag:'crate',
+ duties:[
+  '导出自描述 ZIP：manifest.json + records/<kind>/<id>.json + attachments/<sha> + tombstones.json',
+  '导入：IntoEmpty 直落；Merge 模式逐条走 sync 的 plan/冲突求解',
+  'ID 相同内容不同 → 生成副本并记 sync_conflicts，绝不覆盖',
+  '备份用 SQLite Online Backup API（不复制活动 WAL），产物带 sha256 与 user_version',
+  '恢复：校验哈希 → 校验版本(≤支持值) → 原子替换 → 启动自检'
+ ],
+ inputs:[
+  {peer:'host', data:'用户请求', types:'ExportRequest{folderIds[], includeAttachments, includeTrash} · ImportRequest{path, mode} · BackupRequest · RestoreRequest{path}'},
+  {peer:'store', data:'权威内容与删除事实', types:'Note[], Folder[], Document, TombstoneRow[], attachment blobs(LocalPath)'},
+  {peer:'crypto', data:'校验和', types:'sha256:Digest'}
+ ],
+ outputs:[
+  {peer:'store', data:'落库指令（单事务）', types:'ImportedEntity{kind,id,doc,rev,contentHash,deletedAt,purged}[], AttachmentSeed{sha,size,mediaType,path}'},
+  {peer:'host / UI', data:'结果与报告', types:'ExportArtifact{path, sha256, counts} · ImportReport{created, merged, conflicts, skipped, restoredAttachments, abortedReason}'},
+  {peer:'磁盘', data:'文件', types:'ZIP / .sqlite 备份'}
+ ],
+ structs:[
+  {n:'ExportManifest', f:'exported_at · app_version:SemVer · protocol:u16 · db_version:u32 · counts:Map<kind,u32> · checksums:Map<file,sha256> · retainsTombstones:bool'},
+  {n:'ImportReport', f:'created:u32 · merged:u32 · conflicts:ConflictRow[] · skipped:SkippedItem{why}[] · restoredAttachments:u32 · integrity:Verification'},
+  {n:'RestoreSafety', f:'backupBeforeRestore:Path · verifiedSha:bool · versionOk:bool · swappedAtomically:bool'}
+ ],
+ rules:[
+  '导出必须包含删除事实，否则"导出→清空→导入"会让已删笔记复活（违反 §10 反复活要求）',
+  '导入任何一步完整性校验失败 → 整体中止并回滚，禁止部分成功',
+  '恢复前必须先自动备份当前库（不可选）'
+ ],
+ phase:'Phase 7'},
+
+{id:'config', layer:'L2', name:'notera-config', ttl:'配置 · 账户 · 代理 · 凭据引用', tag:'crate',
+ duties:[
+  '设置读写，作用域 global / ui / device / account（device+ui 永不上传）',
+  '账户 CRUD 与校验（URL 合法性、root_prefix 规范化、防目录穿越）',
+  '代理 profile 解析：Direct/System/HTTP/HTTPS/SOCKS5 + bypass 列表',
+  '凭据只存"引用"，真实值走系统钥匙串',
+  '配置版本化与默认值演进（老配置升级不炸）'
+ ],
+ inputs:[
+  {peer:'host / UI', data:'变更请求', types:'SettingsPatch{key, scope, accountId, value:Json} · AccountDraft'},
+  {peer:'platform', data:'系统信息', types:'KeychainRead/Write · SystemProxyInfo（PAC 结果或手工值）'},
+  {peer:'store', data:'settings/meta 表', types:'settings(key,scope,account_id,value,updated_at)'}
+ ],
+ outputs:[
+  {peer:'host', data:'生效配置', types:'AppConfig{accounts[], activeAccount, syncBudget, ui:UiPrefs}'},
+  {peer:'net', data:'出口与 TLS 策略', types:'ProxyProfile{mode, host, port, usernameRef, passwordRef, bypass[], systemFallback} · TlsPolicy{strict|pin(fp[]), ca_bundle(pem), insecure_local}'},
+  {peer:'sync', data:'账户与预算', types:'AccountConfig{id, baseUrl, rootPrefix, authKind, tlsPolicy, proxy, enabled} · RoundBudget'},
+  {peer:'platform', data:'凭据读写', types:'CredentialWrite{service,account,secretRef}'}
+ ],
+ structs:[
+  {n:'ProxyMode', f:'Direct | System | Http | Https | Socks5'},
+  {n:'ProxyProfile', f:'mode · host:string? · port:u16? · usernameRef:CredentialRef? · passwordRef:CredentialRef? · bypass:string[]（host/CIDR/*.domain） · resolveSystem:bool'},
+  {n:'AppConfig', f:'accounts:AccountConfig[] · activeAccountId · sync{enabled, periodSec:25, debounceMs:2500, mobilePeriodSec:900} · ui{theme, fontScale, density} · attach{autoUpload, wifiOnly, maxInlineBytes}'},
+  {n:'CredentialRef', f:'kind:Keychain|Env|None · service:"app.notera.webdav" · account:string —— 无明文值字段'}
+ ],
+ rules:[
+  '禁止任何明文密码/token 落 SQLite 或落盘；导出配置时必须剔除凭据字段并显式告警',
+  'insecure_local 仅允许 localhost/内网显式勾选，且 UI 必须有醒目告警',
+  'device 作用域项一旦被判为"需同步"，必须走 ADR 而不是偷偷改 scope（I 类风险）'
+ ],
+ phase:'Phase 1（骨架）· Phase 3（代理完整）'},
+/* ------------------------------------------------------------------ L3 */
+{id:'store', layer:'L3', name:'notera-store', ttl:'SQLite 仓储 · 迁移 · FTS · outbox · 事务', tag:'crate',
+ duties:[
+  '连接与 PRAGMA：WAL · synchronous=FULL · foreign_keys=ON · busy_timeout=5000 · 单写者 + 读池',
+  '迁移运行器：forward-only，user_version，迁移前物理备份，拒绝未知未来版本（→只读）',
+  '唯一写入口：commit_note_edit() 在一个事务里写 notes + note_revisions + 派生列 + FTS + outbox',
+  '检索分层：≥3 字走 FTS5 trigram MATCH（实测 p95 1.4ms/5000 条）；≤2 字走 content 表 LIKE（实测 ≈4ms，MATCH 会静默返 0）',
+  'tombstone / remote index / sync_operations 的持久化；启动自检与 inflight 归位',
+  '附件 blob 存储与引用计数派生（tmp + rename 原子写）'
+ ],
+ inputs:[
+  {peer:'host', data:'写命令', types:'EditCommand, DeleteCommand, PurgeCommand, FolderCommand, AttachmentCommand'},
+  {peer:'host', data:'读查询', types:'NoteQuery{folderId,trash,pinned,limit,offset,sort} · SearchQuery{text,filters,limit}'},
+  {peer:'sync', data:'应用指令', types:'ApplyOp[] · RemoteIndexWrite · OpStateDelta · MarkSynced'},
+  {peer:'richtext', data:'派生内容', types:'ExtractedText, canonical:Vec<u8>, contentHash'},
+  {peer:'core', data:'不变式类型', types:'EntityId, Rev, ContentHash, Timestamp, DeviceId'}
+ ],
+ outputs:[
+  {peer:'host', data:'视图模型原料', types:'Note, NoteListRow[], Folder[], FolderNode[], SearchHit{noteId,score,snippetHtml}, StoreStats'},
+  {peer:'sync', data:'脏集合与历史', types:'DirtyEntity[], TombstoneRow[], RevisionDoc{rev,doc,contentHash}（按 sync_rev 取 base）, OutboxOp[]'},
+  {peer:'importer', data:'导出/导入原语', types:'全量实体流 + 备份句柄'},
+  {peer:'磁盘', data:'主库文件', types:'notera.sqlite（+ -wal / -shm）, attachments/xx/<sha>'}
+ ],
+ structs:[
+  {n:'Note（行映射）', f:'id:Uuid · folderId · doc:Document · docFormat:u16 · title · plainText · summary · charCount · blockCount · hasAttachment · pinned · color · rev:u64 · syncRev:u64 · syncHash:Option · remoteRev:u64 · contentHash · createdAt · updatedAt · deletedAt:Option · purgedAt:Option · createdDevice · updatedDevice'},
+  {n:'DirtyEntity', f:'kind:EntityKind · id · rev · contentHash · syncRev · dirtyBecause:enum{NeverPushed,Edited,Deleted,Purged}'},
+  {n:'SyncOperation（outbox 行）', f:'id:i64 · accountId · dedupeKey:unique · entityType · entityId · op:upsert|delete|purge|upload|download · payloadRev? · sha256? · state:pending|inflight|done|failed|superseded|blocked · attempts · nextRetryAt · lastError · createdAt · updatedAt'},
+  {n:'SearchHit', f:'noteId · score:f32 · titleHit:bool · snippetHtml:SafeString（已转义） · matchStarts:u32[]'},
+  {n:'MigrationPlan', f:'from:u32 · to:u32 · steps:MigrationStep{name,sql,needsRebuild,noTransaction} · backupPath'},
+  {n:'StoreStats', f:'notes:u32 · notesInTrash:u32 · folders:u32 · attachments:u32 · ftsEntries:u32 · dbBytes:u64 · searchGeneration:u64 · inflightOps:u32'}
+ ],
+ rules:[
+  '禁止绕过 commit_* 直接 UPDATE 权威列（架构测试 grep 更新语句归属）',
+  '禁止运行时 ALTER TABLE；禁止把 FTS 当权威表——它必须可从 notes 全量重建',
+  'snippetHtml 必须由 store 侧转义后产出，UI 直接 v-html 也不得引入注入面',
+  '列表查询禁止 SELECT doc（避免正文溢出页拖慢），需要正文只能按 id 单取'
+ ],
+ phase:'Phase 1'},
+
+{id:'crypto', layer:'L3', name:'notera-crypto', ttl:'信封加解密 · 摘要 · KDF · 完整性', tag:'crate',
+ duties:[
+  '记录信封 seal/open：alg=none（passthrough）与 aes-256-gcm-siv 同一路径，Phase 0 已定 v1 预留',
+  '内容摘要 sha256（权威 64hex，清单内截 12hex）',
+  '附件完整性校验（读盘后重算哈希比对）',
+  'argon2id 主密钥派生（实测 19MiB/2it/1p ≈ 370-400ms → 只能后台）',
+  'nonce 生成与唯一性约束；密钥句柄管理（密钥不进 SQLite、不进日志）'
+ ],
+ inputs:[
+  {peer:'sync', data:'明文信封 + 加密开关', types:'EnvelopePlain{kind,id,rev,syncRev,hash,updatedAt,device,deletedAt,purged,payload} · EncPolicy{alg, keyRef}'},
+  {peer:'store', data:'待校验/待摘要字节', types:'canonical:Vec<u8> · blob bytes stream · expectedSha256'},
+  {peer:'net', data:'凭据保护口令', types:'PassphraseRef（仅 E2EE 或钥匙串不可用时）'}
+ ],
+ outputs:[
+  {peer:'sync', data:'待上传字节与打开结果', types:'EnvelopeWire{…enc,ct/payload} · Opened{plainJson, Verification}'},
+  {peer:'store / sync', data:'摘要与校验', types:'Digest:ContentHash · Verification{ok:bool, expected, actual, at}'},
+  {peer:'net', data:'派生密钥（可选 E2EE）', types:'Key(32B) · KeyId:u32'}
+ ],
+ structs:[
+  {n:'Envelope', f:'protocol:u16 · kind:EntityKind · id:Uuid · rev:u64 · syncRev:u64 · hash:"sha256:<64hex>" · updatedAt:Rfc3339 · device:DeviceId · deletedAt:Option · purged:bool · enc:EncMeta · payload:Option<Json> · ct:Option<base64>'},
+  {n:'EncMeta', f:'alg:enum{None, Aes256GcmSiv} · kid:Option<u32> · nonce:Option<base64(12B)> · hashAlg:enum{sha256, hmacSha256}'},
+  {n:'Verification', f:'ok:bool · expected:Digest · actual:Digest · bytes:u64 · elapsedMs:u32'},
+  {n:'CipherParams（实测）', f:'nonce=12B · tag 开销固定 16B · 篡改必被拒（aead::Error）'}
+ ],
+ rules:[
+  'payload 与 ct 严格互斥：两者同时非空或同时为空 = 协议错误，立即拒绝',
+  '启用 E2EE 后 hash 必须换成 keyed hash（hmacSha256），否则会泄露明文等价指纹',
+  '禁止在信封里放任何 UI 状态（I 类：同步字段先归类）',
+  'nonce 禁止复用；同一 key 下 nonce 由随机 12B 生成并随信封存储'
+ ],
+ phase:'Phase 2（none passthrough）· Phase 7（真加密，可选）'},
+
+{id:'webdav', layer:'L3', name:'notera-webdav', ttl:'WebDAV 客户端 · 能力探测 · 原子写 · 路径安全', tag:'crate',
+ duties:[
+  '动词映射：OPTIONS/PROPFIND(Depth)/GET/HEAD/PUT/DELETE/MOVE(Destination,Overwrite)/COPY/MKCOL',
+  '服务器能力探测 cap_mask，据此选写入策略 S1/S2/S3（不同服务器行为差异是真实存在的）',
+  '原子写：tmp 唯一名 → 校验 GET 哈希 → MOVE 提交；失败残留由维护轮清理',
+  '路径构造与编码：root_prefix + kind + id，杜绝 ".." 与编码绕过（目录穿越即安全事故）',
+  'Range 断点下载、流式上传（附件）、半上传检测（长度/ETag 不符即重传）'
+ ],
+ inputs:[
+  {peer:'sync', data:'读写意图', types:'EntityWrite · ManifestCommit · EntityFetch · Delete · Listing · Probe'},
+  {peer:'config', data:'端点与策略', types:'baseUrl, rootPrefix, TlsPolicy（经 host 传入）'},
+  {peer:'net', data:'实际出口', types:'Response{status, headers, bodyBytes, elapsed, route:RouteProof}'}
+ ],
+ outputs:[
+  {peer:'sync', data:'远端事实', types:'DavResponse{status, etag:Option<Etag>, length, body:Bytes} · Listing · CapMask · CommitProof{path,etag,hashVerified} · RemoteEntry'},
+  {peer:'net', data:'请求规格（唯一出口）', types:'RequestSpec{method, url, headers, body, ifMatch, ifNoneMatch, timeout, idempotencyKey}'}
+ ],
+ structs:[
+  {n:'CapMask', f:'conditionalPutIfMatch:bool · overwriteFalseMove:bool · strongEtag:bool · depthInfinity:bool · ranges:bool · chunked:bool · moveCreatesDirs:bool · probedAt:Rfc3339'},
+  {n:'WriteStrategy', f:'ConditionalPut（支持 If-Match，412→重算 plan） | TmpMoveVerify（支持 Overwrite:F） | BlindPutVerify（都不支持：PUT 后 GET 复算哈希，检出被覆盖则重算）'},
+  {n:'CommitProof', f:'path · etag · verifiedSha:Option<Digest> · method:WriteStrategy · elapsedMs'},
+  {n:'RemotePath', f:'rootPrefix:string · kind:EntityKind · id:Uuid | "manifest/index.json" | "attachments/<2hex>/<sha64>" · tmpSuffix:Option<string>'},
+  {n:'DavError', f:'kind:enum{Unauthorized,Forbidden,NotFound,MethodNotAllowed,Precondition,InsufficientStorage,ServerUnavailable,RedirectCrossOrigin,MalformedXml,Transport(NetError)}'}
+ ],
+ rules:[
+  '禁止使用 LOCK 作为正确性依赖（多数服务器实现残缺）→ 用 CAS + cap_mask + 幂等重放',
+  '禁止跟随跨源重定向携带凭据（防凭据外泄），检出即 Failed{RedirectCrossOrigin}',
+  '所有写必须返回 CommitProof 或明确失败；无 proof 的写不得被 sync 记为已提交',
+  'XML 解析必须限深限量（恶意/异常响应不得导致 OOM）'
+ ],
+ phase:'Phase 2'},
+
+{id:'net', layer:'L3', name:'notera-net', ttl:'统一网络出口 · 代理 · TLS · 超时 · 退避', tag:'crate',
+ duties:[
+  '全应用唯一 HTTP 出口（架构 grep 闸门：其他 crate 出现客户端构造即失败）',
+  '代理解析：Direct/System/HTTP/HTTPS/SOCKS5 + bypass（host/CIDR/*.domain），App 级不改系统设置',
+  'TLS：系统信任库 + 自签 CA bundle + 可选指纹 pin；内网 HTTP 需显式 insecure_local',
+  '超时分层：connect / read / write / 总预算；取消传播（切后台、退出、新一轮覆盖）',
+  '重试与退避：2s × 1.85 上限 15min + 0.2 jitter + Retry-After 优先；只重试幂等/可判定请求',
+  'RouteProof：每请求记录真实出口，供"代理到底生效没有"的可证伪测试'
+ ],
+ inputs:[
+  {peer:'webdav', data:'请求规格', types:'RequestSpec{method:WebdavMethod, url, headers, body:Option<Bytes>, ifMatch, ifNoneMatch, timeout, idempotencyKey}'},
+  {peer:'config', data:'出口策略', types:'ProxyProfile · TlsPolicy · RetryPolicy · RoundBudget'},
+  {peer:'platform', data:'系统信息', types:'SystemProxyInfo · NetworkState'}
+ ],
+ outputs:[
+  {peer:'webdav', data:'响应', types:'Response{status:u16, headers:Vec<(string,string)>, bodyBytes:Bytes, elapsedMs:u32, route:RouteProof}'},
+  {peer:'host（诊断）', data:'审计与探活', types:'NetAudit{target, proxyUsed, bypassed, dnsMs, tlsMs, totalMs} · ProbeResult'},
+  {peer:'错误上报', data:'分类错误', types:'NetError{kind, retryable:bool, retryAfter:Option<Duration>, detail}'}
+ ],
+ structs:[
+  {n:'RouteProof', f:'mode:Direct|System|Http|Socks5 · endpoint:SocketAddr · bypassed:bool · viaSystem:bool · proxyHasAuth:bool'},
+  {n:'RetryPolicy', f:'base:2s · factor:1.85 · max:15min · jitter:0.2 · attemptsBudget:3/round · respectRetryAfter:true'},
+  {n:'Timeouts', f:'connect:8s · read:20s · write:30s · totalPerRequest:45s · roundBudget:20s'},
+  {n:'NetError.kind', f:'Timeout|Connect|Tls|Dns|Auth(401)|Forbidden(403)|Quota(507)|Precondition(412)|NotFound(404)|Server(5xx)|Protocol|Cancelled'}
+ ],
+ rules:[
+  '不允许任何请求绕过本层（§19：不得出现"有的走代理有的不走而自己不知道"）',
+  'DNS 解析失败与连接失败必须可区分（用户提示不同：内网 DNS vs 服务器宕机）',
+  '取消必须真取消（实测 400ms 预算下 402-416ms 内返回，不挂死）',
+  '凭据只在 Authorization 头，禁止出现在 URL 或日志（脱敏由本层强制）'
+ ],
+ phase:'Phase 2（直连+HTTP）· Phase 3（全代理矩阵）'},
+/* ------------------------------------------------------------------ L4 */
+{id:'core', layer:'L4', name:'notera-core', ttl:'内核 · 类型 · ID · 时钟 · 错误 · 不变式断言', tag:'crate',
+ duties:[
+  '强类型值对象：EntityId/Rev/ContentHash/DeviceId/Timestamp/EntityKind（禁止裸 String 满天飞）',
+  'UUIDv7 生成（跨设备无需协调、单调、文件名安全，实测通过）',
+  'Clock trait 抽象：生产用系统 UTC，测试注入假时钟（崩溃/退避测试的根基）',
+  '错误词表 ErrorCode（用户语言映射的唯一来源）',
+  '不变式断言函数 I1..I8 + canonical JSON 工具'
+ ],
+ inputs:[
+  {peer:'（无）', data:'零依赖：不接收 IO 结果，只接收纯数据', types:'&str, &[u8], u64, DateTime<Utc>'},
+  {peer:'上层', data:'时钟实现注入', types:'SystemClock（实现 Clock trait）'}
+ ],
+ outputs:[
+  {peer:'所有 crate', data:'类型与不变式', types:'EntityId, Rev(u64), ContentHash, DeviceId, Timestamp, EntityKind{Note,Folder,Attachment}, EditKind, OpKind, ErrorCode, InvariantViolation'},
+  {peer:'上层', data:'工具', types:'next_rev(local,remote) → Rev · canonical_json(Value) → Vec<u8> · sha256_hex(&[u8]) · now_ms()'}
+ ],
+ structs:[
+  {n:'Rev', f:'u64 newtype · 仅经 next_rev() 递增（禁止手写 +1）· 支持 max/eq/ord'},
+  {n:'ContentHash', f:'String newtype，构造时校验 GLOB "sha256:[0-9a-f]{64}"；toShort12() 供清单使用'},
+  {n:'EntityId', f:'Uuid v7 newtype · asPathSegment()（校验字符集，防穿越）· asHyphenated()'},
+  {n:'ErrorCode', f:'enum：Offline·AuthRequired·ServerUnavailable·QuotaFull·ProtocolMismatch·DbTooNew·ConflictNeedsAttention·SyncFailed·CorruptRecord·AttachmentMissing·ProxyUnreachable·CertUntrusted —— 每个都有 messageKey + retryable + 建议动作'},
+  {n:'InvariantViolation', f:'id:enum{I1..I8} · subject:EntityId · expected:string · actual:string'}
+ ],
+ rules:[
+  '零 I/O · 零 async · 零 unsafe · 无跨 crate 依赖（依赖图必须保持单向）',
+  '禁止在此层引入任何 WebDAV/同步概念（它是词汇表，不是策略）',
+  '新增 ErrorCode 必须同时提供：用户文案 key、retryable、是否阻塞本地写入 —— 三者缺一不接受合并'
+ ],
+ phase:'Phase 1（最先落地，其他 crate 的地基）'},
+/* ------------------------------------------------------------------ L5 */
+{id:'server', layer:'L5', name:'WebDAV Server', ttl:'用户自有服务器（Nextcloud / nginx-dav / 内网存储 / Apache）', tag:'外部', ext:true,
+ duties:['存不放二进制数据库：只存 JSON 记录、清单分段、附件 blob、临时文件','提供 ETag 与条件请求（能力差异由 cap_mask 吸收）','不承担 Notera 的任何业务语义：服务器"不聪明"是设计目标'],
+ inputs:[{peer:'net', data:'HTTP/WebDAV 请求', types:'PUT/GET/PROPFIND/MOVE/DELETE + If-Match/If-None-Match/Depth/Destination/Overwrite'}],
+ outputs:[{peer:'net', data:'状态码 + ETag + 响应体', types:'2xx/304/401/403/404/405/409/412/500/507 + DAV 头 + XML multistatus'}],
+ structs:[{n:'目录布局（远端）', f:'<root>/.notes/protocol.json · manifest/index.json · manifest/seg-*.json · records/note/<id>.json · records/folder/<id>.json · attachments/<2hex>/<sha64> · tmp-*.json · locks/<device>.json'}],
+ rules:['真实服务器兼容矩阵必须实测（内网自签证书、无 If-Match 实现、无 Overwrite:F 实现都是现实存在的）'],
+ phase:'Phase 2 起用 test-webdav 验证；真实服务器清单待用户提供'},
+
+{id:'os', layer:'L5', name:'OS / 磁盘', ttl:'系统钥匙串 · 应用数据目录 · 全盘加密', tag:'外部', ext:true,
+ duties:['钥匙串：WebDAV 凭据、（E2EE 时）主密钥句柄','数据目录：notera.sqlite(+wal/shm)、attachments/、备份、导出物','依赖 OS 全盘加密保护静态明文（本地静态加密 SQLCipher 为未决项）'],
+ inputs:[{peer:'platform', data:'凭据与文件读写', types:'KeychainWrite{service,account,secretRef} · LocalPath'}],
+ outputs:[{peer:'store / platform', data:'持久化结果', types:'FileHandle · KeychainRead · DiskFull/PermDenied 错误'}],
+ structs:[{n:'数据目录', f:'<data>/notera.sqlite · <data>/notera.sqlite.bak-<ver> · <data>/attachments/xx/<sha64> · <data>/exports/*.zip · <data>/logs/'}],
+ rules:['磁盘满与权限错误必须是可提示、可恢复的用户语言，不得变成"笔记丢了"'],
+ phase:'Phase 1'},
+
+{id:'testwebdav', layer:'L5', name:'notera-test-webdav', ttl:'测试专用 · 真实 HTTP/WebDAV 服务器 + 故障注入', tag:'测试', test:true,
+ duties:['真 TCP HTTP/1.1 实现（禁止 mock HTTP 层）：GET/HEAD/PUT/DELETE/MOVE/COPY/PROPFIND/PROPPATCH/OPTIONS/LOCK/UNLOCK','故障注入：延迟 / 断网 / 超时 / 401 / 403 / 404 / 409 / 412 / 500 / 507 / 半上传 / 清单损坏 / 服务器重启','控制面：start·stop·reset·inspect·inject·dump，让 CI 能真的测同步','两种后端：mem（快）与 fs（跨进程重启后状态仍在，用于验证清单恢复）'],
+ inputs:[{peer:'CI / L1-L4 测试', data:'场景文件与控制指令', types:'ScenarioFile{latencyMs, dropAfterN, timeoutAll, statusFor{"401":[paths]}, corruptManifest, truncateUploadAt, restartAfterSec}'}],
+ outputs:[{peer:'测试断言', data:'请求日志与文件系统快照', types:'RequestLog{seq, method, path, status, bytes, ts} · FsDump{tree, perFileHash}'}, {peer:'notera-webdav', data:'真实（且恶劣的）WebDAV 响应', types:'同 server'}],
+ structs:[{n:'Control API', f:'POST /_control/reset · /_control/inject · /_control/stop · GET /_control/log · GET /_fs/dump · POST /_control/restart（fs 模式保留数据）'}],
+ rules:['服务器必须支持"只允许经代理访问"模式：代理 ON 才成功 → 这就是 §19 要求的可证伪证明','注入必须确定可复现（同一 scenario 两次跑结果一致），否则测试无价值'],
+ phase:'Phase 1 末（先能跑）· Phase 2 完整（同步 E2E）'},
+];
+
+/* 依赖边。from→to 即"from 依赖/调用 to"。flow 标记用于链路筛选。 */
+const EDGES = [
+ {f:'ui',t:'host',k:'cmd',lab:'命令 DTO',core:true,flow:['write']},
+ {f:'host',t:'ui',k:'evt',lab:'ViewModel/事件',core:true,flow:['evt']},
+ {f:'ui',t:'platform',k:'dep',lab:'外观度量',flow:[]},
+ {f:'platform',t:'host',k:'evt',lab:'Lifecycle/Network',core:true,flow:['evt']},
+ {f:'host',t:'platform',k:'cmd',lab:'能力请求',flow:['evt']},
+ {f:'host',t:'store',k:'cmd',lab:'EditCommand',core:true,flow:['write']},
+ {f:'host',t:'store',k:'data',lab:'查询',flow:['write','sync']},
+ {f:'host',t:'richtext',k:'data',lab:'Document',core:true,flow:['write']},
+ {f:'host',t:'sync',k:'cmd',lab:'Trigger',core:true,flow:['sync']},
+ {f:'host',t:'config',k:'cmd',lab:'SettingsPatch',flow:[]},
+ {f:'host',t:'importer',k:'cmd',lab:'Export/Import',flow:[]},
+ {f:'host',t:'cli',k:'dep',lab:'共享 AppCtx',flow:[]},
+ {f:'cli',t:'sync',k:'cmd',lab:'sync-once',flow:['sync']},
+ {f:'sync',t:'store',k:'cmd',lab:'ApplyOp/Dirty',core:true,flow:['sync','write']},
+ {f:'sync',t:'webdav',k:'cmd',lab:'EntityWrite/ManifestCommit',core:true,flow:['sync']},
+ {f:'sync',t:'richtext',k:'data',lab:'merge(base,l,r)',flow:['sync']},
+ {f:'sync',t:'crypto',k:'data',lab:'seal/open',flow:['sync']},
+ {f:'store',t:'richtext',k:'data',lab:'derive/canonical',core:true,flow:['write']},
+ {f:'store',t:'crypto',k:'data',lab:'sha256',flow:['write']},
+ {f:'store',t:'os',k:'io',lab:'sqlite / wal',core:true,flow:['write']},
+ {f:'crypto',t:'os',k:'io',lab:'attachment blob',flow:['write']},
+ {f:'webdav',t:'net',k:'cmd',lab:'RequestSpec',core:true,flow:['net','sync']},
+ {f:'net',t:'webdav',k:'data',lab:'Response/RouteProof',flow:['net']},
+ {f:'net',t:'server',k:'io',lab:'HTTP / WebDAV',core:true,flow:['net','sync']},
+ {f:'net',t:'config',k:'dep',lab:'ProxyProfile/Tls',flow:['net']},
+ {f:'webdav',t:'testwebdav',k:'io',lab:'测试期同址',flow:['sync']},
+ {f:'testwebdav',t:'server',k:'dep',lab:'同一语义面',flow:[]},
+ {f:'config',t:'store',k:'data',lab:'settings 表',flow:[]},
+ {f:'config',t:'platform',k:'io',lab:'凭据引用',flow:[]},
+ {f:'importer',t:'store',k:'cmd',lab:'批量落库',flow:[]},
+ {f:'importer',t:'os',k:'io',lab:'ZIP / 备份',flow:[]},
+ {f:'importer',t:'sync',k:'data',lab:'Merge 计划复用',flow:[]},
+ {f:'platform',t:'os',k:'io',lab:'钥匙串',flow:[]},
+];
+/* core 被所有 crate 依赖：为可读性不画 30 条线，单独以内核带说明 + 一条聚合提示表达 */
+const CORE_NOTE = 'notera-core 被上面所有 crate 依赖（编译期），为可读性不逐一画线';
+
+/* ============================================================ 渲染 ============================================================ */
+const KIND = {
+  cmd:{c:'var(--c-cmd)', label:'命令'},
+  data:{c:'var(--c-data)', label:'数据'},
+  evt:{c:'var(--c-evt)', label:'事件'},
+  io:{c:'var(--c-io)', label:'I/O'},
+  dep:{c:'var(--c-dep)', label:'依赖'},
+};
+const $ = s=>document.querySelector(s);
+const byId = Object.fromEntries(MODULES.map(m=>[m.id,m]));
+let selected=null, flow='all', query='', rawQuery='';
+const cardEls={};
+
+function h(tag, cls, txt){const e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e;}
+
+function buildLayers(){
+  const host=$('#layers'); host.textContent='';
+  LAYERS.forEach(L=>{
+    const sec=h('div','layer');
+    const hd=h('div','layer-h'); hd.append(h('b',null,L.name), h('i',null,L.sub));
+    const row=h('div','row');
+    MODULES.filter(m=>m.layer===L.id).forEach(m=>{
+      const c=h('div','card'+(m.ext?' ext':'')+(m.test?' test':''));
+      c.tabIndex=0; c.setAttribute('role','button');
+      c.setAttribute('aria-label', m.name+' 契约详情');
+      c.dataset.id=m.id;
+      c.append(h('span','tag',m.tag));
+      c.append(h('div','nm',m.name));
+      c.append(h('div','ttl',m.ttl));
+      const peek=h('ul','peek'); m.duties.slice(0,3).forEach(d=>peek.append(h('li',null,d)));
+      c.append(peek);
+      const hit=h('span','hit');
+      const inn=h('b',null), out=h('b',null);
+      inn.style.background='var(--c-data)'; out.style.background='var(--c-evt)';
+      hit.append(inn, h('span',null,' 输入 '+m.inputs.length+' · '), out, h('span',null,' 输出 '+m.outputs.length+' · 结构 '+m.structs.length));
+      c.append(hit);
+      c.addEventListener('click',e=>{ if(e.detail===2||true){ toggle(m.id); } });
+      c.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){e.preventDefault();toggle(m.id);} });
+      cardEls[m.id]=c; row.append(c);
+    });
+    if(L.id==='L4'){
+      const note=h('div','card'); note.style.cssText='flex:1 1 210px;max-width:330px;cursor:default;border-style:dotted';
+      note.append(h('div','nm','依赖方向'), h('div','ttl',CORE_NOTE));
+      row.append(note);
+    }
+    sec.append(hd,row); host.append(sec);
+  });
+}
+
+function toggle(id){
+  const c=cardEls[id];
+  if(selected===id){ c.classList.remove('open','sel'); selected=null; renderSide(); drawWires(); return; }
+  if(selected){ cardEls[selected].classList.remove('open','sel'); }
+  selected=id; c.classList.add('open','sel');
+  c.scrollIntoView({block:'nearest',behavior:'smooth'});
+  renderSide(); drawWires();
+}
+
+/* 契约搜索：SQL 侧是 content_hash，Rust/TS 侧是 contentHash，
+   必须互相搜得到 —— 归一化匹配 + 允许分隔符的正则高亮。 */
+const norm = s => String(s).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, '');
+function hlRegex(q){
+  const chars=[...norm(q).replace(/[-_]/g,'')].map(s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
+  if(!chars.length) return null;
+  // 允许字符之间出现可选的 _ 或 -：contenthash 同时命中 content_hash(SQL 列) 与 contentHash(Rust 字段)
+  return new RegExp(chars.join('[-_]?'),'gi');
+}
+let hlRe=null;
+function match(v){ if(!query) return false; const n=norm(v); return n.includes(query); }
+function moduleHits(m){ return match(JSON.stringify(m)); }
+
+function renderSide(){
+  const side=$('#side'); side.textContent='';
+  if(!selected){
+    const hint=h('div','hint');
+    hint.append(
+      h('b',null,'点击任意模块'),
+      h('div',null,'查看它的职责穿透、输入 / 输出契约与关键数据结构字段。也可切到上方「契约总表」一览全部模块，或用搜索框按字段名跨模块定位边界。'),
+      h('div',null,'搜索不区分命名风格：content_hash 与 contentHash 互为同义词（SQL 列名 / Rust 字段名）。'),
+      h('div',null,'筛选链路：① 本地写入（离线也要能写） ② 同步穿透（远端发生什么） ③ 事件回流（进度怎么回 UI） ④ 网络出口（代理在哪收敛）')
+    );
+    side.append(hint);
+    drawWires(); return;
+  }
+  const m=byId[selected];
+  if(query){
+    const hits=MODULES.filter(moduleHits);
+    const bar=h('div','hint');
+    bar.append(h('b',null,`「${rawQuery}」命中 ${hits.length} 个模块的契约`));
+    if(hits.length){
+      const wrap=h('div'); wrap.style.cssText='display:flex;flex-wrap:wrap;gap:6px;margin-top:8px';
+      hits.forEach(x=>{const b=h('button',null,x.name); b.style.minHeight='44px'; b.style.fontSize='12px'; b.onclick=()=>toggle(x.id); wrap.append(b)});
+      bar.append(wrap);
+    }
+    side.append(bar);
+  }
+  side.append(h('h2',null).appendChild(document.createTextNode('')));
+  side.textContent='';
+  const h2=h('h2'); h2.append(document.createTextNode(m.name));
+  const k=h('span','k', m.ext?'外部实体':m.test?'测试专用':'Rust crate'); h2.append(k);
+  side.append(h2);
+  side.append(h('p','path', m.ttl));
+  if(m.phase) side.append(h('p','path','落地阶段：'+m.phase));
+
+  const secD=h('div','sec'); secD.append(h('h3',null,'内部职责（穿透）'));
+  const ulD=h('ul','plain'); m.duties.forEach(d=>{const li=h('li'); li.textContent=d; secField(li,d,ulD)}); secD.append(ulD); side.append(secD);
+
+  side.append(ioSection('输入 · input', m.inputs, 'io-in', '来源'));
+  side.append(ioSection('输出 · output', m.outputs, 'io-out', '去向'));
+
+  const secS=h('div','sec'); secS.append(h('h3',null,'数据结构 · 关键字段'));
+  m.structs.forEach(s=>{
+    const b=h('div','st'); b.append(h('div','n',s.n));
+    const f=h('div','f'); secField(f,s.f,b); b.append(f); secS.append(b);
+  });
+  side.append(secS);
+
+  if(m.rules?.length){
+    const secR=h('div','sec rules'); secR.append(h('h3',null,'铁律 / 禁止事项'));
+    const ul=h('ul','plain'); m.rules.forEach(r=>{const li=h('li'); secField(li,r,ul)}); secR.append(ul); side.append(secR);
+  }
+  const nav=h('div','sec'); const t=h('h3',null,'相邻模块');
+  const nb=[...new Set(EDGES.filter(e=>e.f===m.id||e.t===m.id).map(e=>e.f===m.id?e.t:e.f))];
+  const wrap=h('div','row'); wrap.style.cssText='display:flex;flex-wrap:wrap;gap:6px';
+  nb.filter(x=>byId[x]).forEach(x=>{const b=h('button',null,x); b.style.minHeight='44px'; b.style.fontSize='12px'; b.onclick=()=>toggle(x); wrap.append(b)});
+  nav.append(t,wrap); side.append(nav);
+  drawWires();
+}
+
+/* 搜索命中时在面板里高亮（正则允许 [-_] 分隔符） */
+function secField(el, text, parent){
+  const s=String(text);
+  if(hlRe){
+    hlRe.lastIndex=0;
+    if(hlRe.test(s)){
+      hlRe.lastIndex=0;
+      let i=0, m;
+      while((m=hlRe.exec(s))){
+        el.append(document.createTextNode(s.slice(i,m.index)));
+        const mk=document.createElement('mark'); mk.textContent=m[0]; el.append(mk);
+        i=m.index+m[0].length;
+        if(m.index===hlRe.lastIndex) hlRe.lastIndex++;
+      }
+      el.append(document.createTextNode(s.slice(i)));
+      return el;
+    }
+  }
+  el.textContent=s;
+  return el;
+}
+
+function ioSection(title, rows, cls, peerCol){
+  const sec=h('div','sec '+cls); sec.append(h('h3',null,title));
+  const tb=document.createElement('table');
+  const thead=document.createElement('thead'); const tr=document.createElement('tr');
+  [peerCol,'数据','类型'].forEach(x=>tr.append(h('th',null,x))); thead.append(tr); tb.append(thead);
+  const tbody=document.createElement('tbody');
+  rows.forEach(r=>{
+    const tr=document.createElement('tr');
+    const p=h('td'); p.append(h('span','peer', r.peer)); tr.append(p);
+    const w=h('td'); secField(w,r.data,w); tr.append(w);
+    const t=h('td','t'); secField(t,r.types,t); tr.append(t);
+    tbody.append(tr);
+  });
+  tb.append(tbody); sec.append(tb); return sec;
+}
+
+function visible(e){
+  if(flow==='all') return true;
+  return e.flow.includes(flow);
+}
+function dimCards(){
+  const flowActive = flow!=='all';
+  const searched = !!query;
+  if(!flowActive && !searched && !selected){ Object.values(cardEls).forEach(c=>c.classList.remove('dim')); return; }
+  const touched=new Set();
+  if(flowActive) EDGES.filter(visible).forEach(e=>{touched.add(e.f);touched.add(e.t)});
+  if(selected){ touched.add(selected); EDGES.filter(e=>e.f===selected||e.t===selected).forEach(e=>{touched.add(e.f);touched.add(e.t)}); }
+  Object.entries(cardEls).forEach(([id,c])=>{
+    const m=byId[id];
+    let keep = true;
+    if(flowActive||selected) keep = touched.has(id);
+    if(searched && m) keep = keep && moduleHits(m);
+    c.classList.toggle('dim', !keep);
+    c.classList.toggle('hitmatch', searched && !!m && moduleHits(m));
+  });
+}
+
+function edgeSet(){
+  // 选中模块 -> 只画它的邻边（穿透模式）；链路筛选 -> 只画该链路；默认 -> 只画主干
+  if(selected) return EDGES.filter(e=>e.f===selected||e.t===selected);
+  if(flow!=='all') return EDGES.filter(visible);
+  return EDGES.filter(e=>e.core);
+}
+const LIDX = Object.fromEntries(LAYERS.map((L,i)=>[L.id,i]));
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag,attrs) => { const n=document.createElementNS(NS,tag); for(const k in attrs) n.setAttribute(k,attrs[k]); return n; };
+
+function drawWires(){
+  const svg=$('#wires'), stage=$('#stage');
+  svg.textContent='';
+  const sr=stage.getBoundingClientRect();
+  // 坐标一律相对 .stage（position:relative），与 SVG 的 inset:0 同系，且不受 .canvas 滚动影响
+  const rect=n=>{
+    const r=n.getBoundingClientRect();
+    return {t:r.top-sr.top, b:r.bottom-sr.top, cx:(r.left+r.right)/2-sr.left};
+  };
+
+  const defs=el('defs',{});
+  Object.entries(KIND).forEach(([k,v])=>{
+    const mk=el('marker',{id:'ah-'+k,viewBox:'0 0 10 10',refX:'9',refY:'5',markerWidth:'5',markerHeight:'5',orient:'auto-start-reverse'});
+    mk.append(el('path',{d:'M0,0 L10,5 L0,10 z',fill:v.c}));
+    defs.append(mk);
+  });
+  svg.append(defs);
+  dimCards();
+
+  const set=edgeSet();
+  const labelJobs=[];
+  // 每层的实际上下边界 + 层标题位置：水平段只允许放在"卡片底部与下一层标题之间"的净空带，
+  // 否则跨多层的线（及其标签）会压在中间层的卡片或层标题文字上。
+  const bounds={}, headTop={};
+  Object.entries(cardEls).forEach(([id,c])=>{
+    const li=LIDX[byId[id].layer], r=rect(c);
+    if(!bounds[li]) bounds[li]={t:r.t, b:r.b};
+    else { bounds[li].t=Math.min(bounds[li].t,r.t); bounds[li].b=Math.max(bounds[li].b,r.b); }
+  });
+  document.querySelectorAll('.layer').forEach((el2,i)=>{
+    const hh=el2.querySelector('.layer-h'); if(!hh) return;
+    const r=hh.getBoundingClientRect();
+    headTop[LIDX[LAYERS[i].id]] = r.top-sr.top;
+  });
+  const GUT = sr.width - 132;   // 右侧预留路由带（.stage padding-right:150px）
+  // 净空带：源层卡片底 → 目标层标题顶
+  const bandOf=(la,lb)=>{
+    const down=la<lb;
+    const t = down ? bounds[la].b : bounds[lb].b;
+    const b = down ? (headTop[lb] ?? (bounds[lb].t-4)) : (headTop[la] ?? (bounds[la].t-4));
+    return {t:t+5, b:Math.max(t+9, b-5), down};
+  };
+
+  const lanes=new Map();
+  set.forEach(e=>{
+    if(!cardEls[e.f]||!cardEls[e.t]) return;
+    const la=LIDX[byId[e.f].layer], lb=LIDX[byId[e.t].layer];
+    const key = la===lb ? 'same-'+la : (Math.abs(lb-la)===1 ? 'band-'+Math.min(la,lb) : 'gutter');
+    lanes.set(key, (lanes.get(key)||[]).concat([e]));
+  });
+  [...lanes.values()].forEach(arr=>arr.forEach((e,i)=>{ e._lane=i; e._lanes=arr.length; }));
+
+  set.forEach(e=>{
+    const A=cardEls[e.f], B=cardEls[e.t]; if(!A||!B) return;
+    const a=rect(A), b=rect(B);
+    const la=LIDX[byId[e.f].layer], lb=LIDX[byId[e.t].layer];
+    const K=KIND[e.k];
+    const n=Math.max(1,e._lanes||1), i=e._lane||0;
+    const frac=(i+1)/(n+1);
+    let d, lx, ly;
+    if(la===lb){
+      const y=Math.max(a.b,b.b)+12+(i%4)*8, sgn=b.cx>a.cx?1:-1;
+      d=`M${a.cx},${a.b} L${a.cx},${y-7} Q${a.cx},${y} ${a.cx+sgn*7},${y} L${b.cx-sgn*7},${y} Q${b.cx},${y} ${b.cx},${y-7} L${b.cx},${b.b}`;
+      lx=(a.cx+b.cx)/2; ly=y;
+    } else if(Math.abs(lb-la)===1){
+      const down=la<lb;
+      const band = bandOf(Math.min(la,lb), Math.max(la,lb));
+      // 同一间隙内的边按槽位统一分配 y（方向只决定进出端，否则上/下行会撞在同一 y）
+      const midY = band.t + (band.b-band.t)*frac;
+      const y1=down?a.b:a.t, y2=down?b.t:b.b, vert=down?1:-1;
+      if(Math.abs(b.cx-a.cx)<3){ d=`M${a.cx},${y1} L${b.cx},${y2}`; }
+      else {
+        const sgn=b.cx>a.cx?1:-1;
+        d=`M${a.cx},${y1} L${a.cx},${midY-vert*7} Q${a.cx},${midY} ${a.cx+sgn*7},${midY} L${b.cx-sgn*7},${midY} Q${b.cx},${midY} ${b.cx},${midY+vert*7} L${b.cx},${y2}`;
+      }
+      lx=(a.cx+b.cx)/2; ly=midY;
+    } else {
+      // 跨多层：走右侧空带，绝不穿过任何卡片
+      const down=la<lb;
+      const gx=GUT + (i%6)*11;
+      const y1=down?a.b:a.t, y2=down?b.t:b.b;
+      const outBand = down ? bandOf(la,la+1) : bandOf(la-1,la);
+      const inBand  = down ? bandOf(lb-1,lb) : bandOf(lb,lb+1);
+      const bandY1 = down ? outBand.t + (i%4)*4 : outBand.b - (i%4)*4;
+      const bandY2 = down ? inBand.b - (i%4)*4 : inBand.t + (i%4)*4;
+      d=`M${a.cx},${y1} L${a.cx},${bandY1} L${gx},${bandY1} L${gx},${bandY2} L${b.cx},${bandY2} L${b.cx},${y2}`;
+      // 标签竖排在右侧空带的垂直段上：那里保证没有卡片，也不会压到层标题
+      lx=gx+9; ly=(bandY1+bandY2)/2; e._rot=true;
+    }
+    svg.append(el('path',{d, stroke:K.c, fill:'none', 'data-f':e.f, 'data-t':e.t,
+      'stroke-width': (selected&&(e.f===selected||e.t===selected))?'2.4':'1.5',
+      opacity: selected?'0.95':'0.82',
+      'stroke-linejoin':'round',
+      'stroke-dasharray': e.k==='dep' ? '5 5' : 'none',
+      'marker-end':`url(#ah-${e.k})`}));
+    if(e.lab && (e.k!=='evt' || selected || flow==='evt')){
+      labelJobs.push({x:lx, y:e._rot?ly:ly-5, text:e.lab, color:K.c, rot:!!e._rot, key:e.f+'>'+e.t});
+    }
+  });
+
+  // 标签防重叠：同一条间隙里可能挤进 5+ 条边，按 x 排序后逐个向下/向上让位
+  const placed=[];
+  const W = t => t.length*6.2, H = 12;
+  labelJobs.sort((a,b)=>a.x-b.x).forEach(j=>{
+    const w = j.rot ? H : W(j.text), h = j.rot ? W(j.text) : H;
+    let {x,y}=j, tries=0;
+    const hit = (px,py) => placed.some(q => Math.min(px+w/2,q.x+w/2)-Math.max(px-w/2,q.x-q.w/2) > 2
+                                          && Math.min(py+h/2,q.y+h/2)-Math.max(py-h/2,q.y-q.h/2) > 2);
+    while(hit(x,y) && tries<8){ tries++; y += (tries%2 ? 12*(Math.ceil(tries/2)) : -12*(Math.ceil(tries/2))); }
+    placed.push({x,y,w,h});
+    const t=el('text',{x, y:j.rot?y:y-1, 'text-anchor':j.rot?'start':'middle', fill:j.color, 'font-size':'10'});
+    t.setAttribute('data-e', j.key);
+    if(j.rot){ t.setAttribute('transform',`rotate(-90 ${x} ${y})`); t.setAttribute('dominant-baseline','central'); }
+    t.setAttribute('style','paint-order:stroke;stroke:var(--bg);stroke-width:4.5px;stroke-linejoin:round;font-family:ui-monospace,Consolas,monospace');
+    t.textContent=j.text;
+    svg.append(t);
+  });
+  svg.setAttribute('width', stage.scrollWidth);
+  svg.setAttribute('height', stage.scrollHeight);
+}
+
+/* 契约总表 */
+function renderMatrix(){
+  const host=$('#layers'); host.textContent='';
+  const wrap=h('div'); wrap.style.cssText='min-width:760px;overflow:auto';
+  const tb=h('table','matrix');
+  const thead=document.createElement('thead'); const tr=document.createElement('tr');
+  ['模块','职责要点','输入（来源 · 类型）','输出（去向 · 类型）','关键数据结构'].forEach(x=>tr.append(h('th',null,x)));
+  thead.append(tr); tb.append(thead);
+  const tbody=document.createElement('tbody');
+  const shown = MODULES.filter(m=>!query||moduleHits(m));
+  shown.forEach(m=>{
+    const r=document.createElement('tr');
+    const c0=h('td'); c0.append(h('div','nm',m.name)); c0.append(h('div','ttl',m.ttl)); c0.style.minWidth='180px';
+    const c1=h('td',null,m.duties.slice(0,3).join('； '));
+    const ci=h('td'); ci.innerHTML=m.inputs.map(x=>`<div style="margin:0 0 4px"><span class="peer">${x.peer}</span> <span class="t">${esc(x.data)}</span><br><span class="t">${esc(x.types)}</span></div>`).join('');
+    const co=h('td'); co.innerHTML=m.outputs.map(x=>`<div style="margin:0 0 4px"><span class="peer">${x.peer}</span> <span class="t">${esc(x.data)}</span><br><span class="t">${esc(x.types)}</span></div>`).join('');
+    const cs=h('td'); cs.innerHTML=m.structs.map(s=>`<div style="margin:0 0 5px"><span class="t" style="font-weight:650">${esc(s.n)}</span><br><span class="t">${esc(s.f)}</span></div>`).join('');
+    [c0,c1,ci,co,cs].forEach(c=>r.append(c));
+    r.style.cursor='pointer'; r.onclick=()=>{setView('graph'); toggle(m.id);};
+    tbody.append(r);
+  });
+  tb.append(tbody); wrap.append(tb);
+  const note=h('p','hint','共 '+MODULES.length+' 个模块 / ' + EDGES.length + ' 条依赖边。点任意行可跳回架构图并展开该模块。');
+  host.append(note, wrap);
+  $('#wires').textContent='';
+}
+function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+let view='graph';
+function setView(v){
+  view=v;
+  $('#v-graph').setAttribute('aria-pressed', String(v==='graph'));
+  $('#v-matrix').setAttribute('aria-pressed', String(v==='matrix'));
+  if(v==='graph'){ buildLayers(); renderSide(); requestAnimationFrame(drawWires); }
+  else renderMatrix();
+}
+
+/* 交互装配 */
+document.querySelectorAll('[data-flow]').forEach(b=>{
+  b.addEventListener('click',()=>{
+    flow=b.dataset.flow;
+    // 选中态优先显示邻边，会让链路筛选看起来"没反应" —— 切链路时清除选中
+    if(selected&&cardEls[selected]){ cardEls[selected].classList.remove('open','sel'); selected=null; }
+    document.querySelectorAll('[data-flow]').forEach(x=>x.setAttribute('aria-pressed', String(x===b)));
+    renderSide(); drawWires();
+  });
+});
+$('#v-graph').onclick=()=>setView('graph');
+$('#v-matrix').onclick=()=>setView('matrix');
+$('#q').addEventListener('input',e=>{
+  const raw=e.target.value.trim();
+  query=norm(raw); rawQuery=raw;
+  hlRe=raw.length>=2?hlRegex(raw):null;
+  if(view==='graph'){
+    // 搜索即定位：当前面板不含该字段时，跳到第一个命中的模块
+    if(query && (!selected || !moduleHits(byId[selected]))){
+      const hit=MODULES.find(m=>moduleHits(m));
+      if(hit) forceSelect(hit.id);
+    }
+    renderSide(); drawWires();
+  } else renderMatrix();
+});
+function forceSelect(id){
+  if(selected&&cardEls[selected]) cardEls[selected].classList.remove('open','sel');
+  selected=id;
+  const c=cardEls[id];
+  if(c){ c.classList.add('open','sel'); c.scrollIntoView({block:'nearest'}); }
+}
+$('#theme').onclick=()=>{
+  const cur=document.documentElement.dataset.theme;
+  document.documentElement.dataset.theme = cur==='dark'?'light':'dark';
+  requestAnimationFrame(drawWires);
+};
+new ResizeObserver(()=>{ if(view==='graph') drawWires(); }).observe($('#stage'));
+window.addEventListener('resize',()=>{ if(view==='graph') drawWires(); });
+$('#canvas').addEventListener('scroll',()=>{ if(view==='graph') drawWires(); });
+buildLayers(); renderSide();
+requestAnimationFrame(()=>requestAnimationFrame(drawWires));
+</script>
+</body>
+</html>
