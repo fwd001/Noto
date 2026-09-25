@@ -1,0 +1,43 @@
+# ADR-0009: 附件内容寻址与独立队列
+
+## 状态
+日期：2026-09-25
+状态：Accepted
+
+## 背景
+需求硬约束："大附件不得阻塞文本同步"。这决定附件不能与笔记记录共用一次写、同一条队列；同时附件的"身份"必须是自证的——半上传、服务器截断、跨笔记重复这类情形，都要能在不询问用户的前提下判定。
+
+## 决策
+- `sha256(content)` 即身份；远端路径 `attachments/<2hex>/<sha256>`，一旦存在即**不可变**；本地落盘同规则（`<data>/attachments/xx/<sha>`，tmp + rename 原子写）。
+- `<2hex>` = sha256 前两个十六进制字符，用于摊平单目录文件数。
+- 上传前先查清单：清单已含该 sha → 直接标 `present`，零上传（去重）。
+- 上传 / 下载各自独立队列（独立 tokio 任务），与文本轮次解耦；**文本同步轮次必须能在附件全部失败时正常完成**。
+- 上传后 `GET Range: bytes=0-0` 复验，下载后校验 sha256 再原子 rename；未完成不入 `available`。
+- 引用计数由 `note_attachments` 派生，**不存 `ref_count` 缓存列**。
+- blob 物理删除条件：引用计数为 0 **且** 该 sha 无 `pending/inflight` 上传 **且** 不被回收站引用。
+
+## 备选方案与被否决的原因
+- 附件内联进笔记 JSON（base64）：每次编辑文本都要重传大附件，直接违反"大附件不阻塞文本"；且 base64 使记录体积膨胀约 33%。
+- 按 note-id 目录存附件（`attachments/<note-id>/...`）：同一张图片插进两篇笔记就上传两份，去重不可能；删除语义要跨笔记判断归属，困难且易错。
+- 存 `ref_count` 列：缓存与真实引用会漂移（崩溃、并发写、导入路径），而删除判定一旦基于错的计数就是丢数据。派生计数慢一点但不会说谎。
+
+## 后果
+正面：内容相同即同一附件，跨笔记天然去重；半上传可用哈希一眼判定；不可变路径使 CDN/服务器缓存与幂等重放都成立。
+代价：
+- 需要 sha256 全量校验开销（大文件读两遍），用流式哈希缓解，但首次插入仍有一次完整读取。
+- 密文寻址与明文寻址在启用 E2EE 后需要双索引（`sha256(ciphertext)` 作远端名 + 明文 sha 作本地去重），当前**未决**，见 SYNC-PROTOCOL §16 U5。
+- 单轮附件预算（≤4 文件 / ≤64 MiB）意味着大附件跨轮完成，UI 要表达"未上传"占位而不是错误。
+
+## 验证方式
+- 单文件专项用例：`FAIL(latency|abort|status=500,target=attachments/**)` 只让附件端点失败，断言文本轮仍成功且 ≤25 s 到达对端（PERF-11、CP-06）。
+- 半上传用例：`FAIL(partial-write)` / 人为截断 body → 断言 sha256 校验失败、该对象被删除重传、**不进入 `available`**（C8 判定）。
+- 去重断言：同一图片插入两篇笔记，`STATS` 中 `PUT attachments/**` 计数 = 1；两篇笔记的附件引用指向同一 sha。
+- 删除安全用例：笔记进回收站 → 断言 blob 未被物理删除；引用为 0 且无 pending 上传后才允许删（构造"最后引用已删但上传仍 pending"，断言不删）。
+- 下载校验：删本地 blob、远端 `present` → 入 download 队列，`.part` 未完成不入 `available`（C9）。
+
+## 关联
+- SYNC-PROTOCOL.md §13 附件队列、§11.3 C8/C9 崩溃点、§16 U5（E2EE 寻址未决）
+- DATA-MODEL.md §8 附件生命周期（引用计数派生、物理删除条件、回收站窗口）
+- ARCHITECTURE.md §4.3 附件数据流
+- 实测：`docs/evidence/probe-windows-gnu.txt` 的 `sha256-known-answer`（3/3 vectors match）、`timeout-and-cancel`
+- ADR-0003（`attachments/<2hex>/<sha>` 与不可变语义）· ADR-0002（E2EE 预留）· ADR-0006（回收站引用保 blob）· ADR-0010（附件请求同样必经 notera-net）

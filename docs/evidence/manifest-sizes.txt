@@ -1,0 +1,28 @@
+== 清单条目编码方案对比（5000 条） ==
+  full sha256 hex + size             5000条 raw   653.5 KiB gzip   337.6 KiB (133 B/条) | 20000条 gzip  1348.3 KiB
+  12hex + kind tag（选定）               5000条 raw   438.7 KiB gzip   186.0 KiB (89 B/条) | 20000条 gzip   741.7 KiB
+  base64url(43) + deleted/purged     5000条 raw   643.8 KiB gzip   334.2 KiB (131 B/条) | 20000条 gzip  1335.9 KiB
+
+== 选定形态 {i,r,h,s,t} 的规模曲线 ==
+  n=   500  raw     44.1 KiB  gzip     19.1 KiB
+  n=  2000  raw    175.6 KiB  gzip     74.7 KiB
+  n=  5000  raw    438.7 KiB  gzip    185.8 KiB
+  n= 20000  raw   1754.1 KiB  gzip    741.6 KiB
+  n= 50000  raw   4385.1 KiB  gzip   1854.2 KiB
+
+== 两段式：变更窗口 与 基线分段 ==
+  窗口  100 条   raw    9.0 KiB  gzip    4.0 KiB
+  窗口  200 条   raw   17.7 KiB  gzip    7.8 KiB
+  窗口  500 条   raw   44.0 KiB  gzip   19.1 KiB
+  分段 1000 条  raw   87.9 KiB  gzip   37.6 KiB
+  分段 2000 条  raw  175.6 KiB  gzip   74.7 KiB
+  分段 4000 条  raw  351.0 KiB  gzip  148.8 KiB
+
+== 单条记录信封（含 500 字中文正文的笔记） ==
+  raw 1128 B  gzip 405 B
+
+== 结论 ==
+  1. 全量清单每轮重写不可接受：5000 条 gzip 182 KiB，且随库线性增长
+  2. 两段式后每轮重写量 = 窗口 200 条 ≈ 7.5 KiB gzip，与库规模解耦
+  3. hash 截到 12 hex 比 base64url(43) 压缩后更小（hex 更规则），故清单内用 12hex，记录内存全量
+  4. 单条笔记记录 gzip 后数百字节量级，是改动轮的主要上行成本

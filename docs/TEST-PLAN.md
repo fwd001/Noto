@@ -242,8 +242,8 @@
 | SY-INT-06 | `.tmp-*` 残留 | `FAIL(abort,target=.notes/records/**)` 于 PUT 中途 | `DUMP` 检查 → `A sync` | 正式路径无残缺对象；`.tmp-*` 不计入有效状态；新一轮使用不同 tmp 名成功、不覆盖不冲突。INV-09 | L1,L3 | P5 |
 | SY-INT-07 | 服务端重启（fs 模式） | `RESTART` | `A sync` → `B sync` | 收敛结果与重启前一致（ETag/manifest 均从磁盘恢复）；客户端不依赖服务端内存态、无"看起来同步了但实际丢失"。INV-05,09 | L1,L3 | P4 |
 | SY-INT-08 | duplicate push（幂等） | 对同一实体连发 2 次 `A sync`（人为阻止本地 last-pushed 缓存 / 重复执行同 payload） | `A sync` ×2 | 第 2 次请求 `DUMP` 前后 hash 相同、服务端对象不变；客户端不把重复成功当作新 rev（本地 rev 不变）；无冲突副本产生。INV-07,12 | L1,L3 | P4 |
-| SY-INT-09 | 大 manifest 分片 | 预置 5000 实体（manifest ≈395 KiB raw / **182 KiB gzip**，实测） | `B sync`（首次全量） | 分片 `manifest/seg-*.json` 全部拉齐；条目数 = 5000；`index.json` 引用的每个 seg 都存在（无部分应用状态）；本轮传输字节 ≤ 实测 gzip 之和 + 5%（回归容差）。INV-08,09 | L3 | P7 |
-| SY-INT-10 | 落后设备超过变更窗口 | 预置 A 落后：远端已有 200+ 条变更（实测 200-entry 窗口 ≈16 KiB raw / 7.5 KiB gzip），A 的 last-sync rev 早于窗口起点 | `A sync` | 自动降级为"全量 manifest 拉取"（而非静默丢变更）；同步后 A 条目数与 B 完全一致；`notera-cli diag` 报告窗口溢出原因；无实体被跳过。INV-05,08 | L1,L3 | P7 |
+| SY-INT-09 | 大 manifest 分片 | 预置 5000 实体（manifest ≈438.7 KiB raw / **186 KiB gzip**，实测） | `B sync`（首次全量） | 分片 `manifest/seg-*.json` 全部拉齐；条目数 = 5000；`index.json` 引用的每个 seg 都存在（无部分应用状态）；本轮传输字节 ≤ 实测 gzip 之和 + 5%（回归容差）。INV-08,09 | L3 | P7 |
+| SY-INT-10 | 落后设备超过变更窗口 | 预置 A 落后：远端已有 200+ 条变更（实测 200-entry 窗口 ≈16 KiB raw / 7.8 KiB gzip），A 的 last-sync rev 早于窗口起点 | `A sync` | 自动降级为"全量 manifest 拉取"（而非静默丢变更）；同步后 A 条目数与 B 完全一致；`notera-cli diag` 报告窗口溢出原因；无实体被跳过。INV-05,08 | L1,L3 | P7 |
 
 ### 身份 / 时钟 / 顺序类
 
@@ -288,7 +288,7 @@
 | MD-02 | A 编辑 → B 删除同一条 → C 未参与 → 三方同步 | delete+update 策略结果在三方一致（条目数、正文 hash 集合相同）；不出现"C 仍显示而 A/B 已删"的长期分叉（≤2 轮收敛） | L3 | P5 |
 | MD-03 | A 与 B 同时改同一段，C 离线 3 天后上线 | C 上线后一次拉取即达到与 A/B 相同的最终状态（含冲突副本）；C 的 outbox 空；INV-05 | L3 | P5 |
 | MD-04 | 附件：A 插图、B 插同名不同内容图（sha256 不同） | 两个 `attachments/<2hex>/<sha256>` 并存不覆盖（内容寻址、immutable）；三方渲染一致；INV-09 | L3 | P6 |
-| MD-05 | 落后设备超过变更窗口：C 落后 300 条变更后上线（200 条窗口实测 ≈16 KiB raw / 7.5 KiB gzip） | C 走全量拉取路径；最终条目数与 A/B 一致；INV-05,08 | L3 | P7 |
+| MD-05 | 落后设备超过变更窗口：C 落后 300 条变更后上线（200 条窗口实测 ≈16 KiB raw / 7.8 KiB gzip） | C 走全量拉取路径；最终条目数与 A/B 一致；INV-05,08 | L3 | P7 |
 | MD-06 | 服务器中途重启（fs 模式）+ 一轮网络闪断 | 三方最终收敛与 MD-01 相同；无实体丢失；`DUMP` 中无 manifest 回退；INV-05,09 | L3,L4 | P5 |
 
 ### 必测主场景（A 创建 → B 同步 → C 同步 → A 修改 → B 修改 → C 离线 → 恢复网络 → 三方收敛）
@@ -333,8 +333,8 @@
 | PERF-03 | 1–2 字 CJK 查询延迟 | 暂定 ≤15 ms @5000 条 | L1；实测 content 表 `LIKE` **416/5000 → ~4.1 ms**（FTS 列 `LIKE` 5.8 ms，**因此兜底必须走 content 表**） | 已实测 |
 | PERF-04 | FTS 索引体积（5000 条 CJK，trigram） | ≤6.5 MiB | L1 `PRAGMA`/文件大小；实测 6.0 MiB | 已实测 |
 | PERF-05 | no-change 轮：请求数 / 字节 | ≤2 请求、总传输 ≤2 KiB、manifest 返回 304 | L3 `STATS`；PROBE:`precondition-412-plumbing` 证明 304/412 可作为状态被引擎重规划 | 待建基线（机制已实测） |
-| PERF-06 | 单轮变更同步字节（200 条变更窗口） | ≤8 KiB gzip | L3 `STATS`；实测 **16 KiB raw / 7.5 KiB gzip** | 已实测 |
-| PERF-07 | 全量 manifest（5000 条 / 20000 条） | 5000：≤190 KiB gzip；20000：暂定 ≤800 KiB gzip | L3 `STATS`；实测 **88 B/条**、5000 条 **395 KiB raw / 182 KiB gzip**、2000 条 seg **158 KiB raw / 73 KiB gzip**（→ 按 seg 分片外推 20000） | 5000 已实测 / 20000 待建基线 |
+| PERF-06 | 单轮变更同步字节（200 条变更窗口） | ≤8 KiB gzip | L3 `STATS`；实测 **16 KiB raw / 7.8 KiB gzip** | 已实测 |
+| PERF-07 | 全量 manifest（5000 条 / 20000 条） | 5000：≤190 KiB gzip；20000：暂定 ≤800 KiB gzip | L3 `STATS`；实测 **89 B/条**、5000 条 **438.7 KiB raw / 186 KiB gzip**、2000 条 seg **175.6 KiB raw / 74.7 KiB gzip**（→ 按 seg 分片外推 20000） | 5000 已实测 / 20000 待建基线 |
 | PERF-08 | 变更在设备间传播（桌面） | ≤30 s（设计周期 25 s） | L3 端到端时间戳；L5 真机复核 | 已定阈值，待实测 |
 | PERF-09 | argon2id（m=19 MiB / t=2 / p=1） | 单次 ~370–400 ms，且 **UI 线程零占用** | L1：主线程在 KDF 期间每帧阻塞 ≤16 ms（PROBE:`kdf-argon2id` = 19MiB/2it/1p → 400 ms，deterministic=true） | 已实测 |
 | PERF-10 | 内存上限（桌面，20000 条 + 100 附件索引） | 暂定 RSS ≤450 MiB；单轮同步峰值增量 ≤50 MiB | L5 采样（30 min 使用 + 5 轮同步），增长趋势 ≤5%/轮以排除泄漏 | 待建基线 |

@@ -449,7 +449,7 @@ jobs:
 | Rust 无 GUI crate 构建（`notera-core/store/crypto/sync/net/webdav/config/importer`） | 可用 | `[实测]` GNU host 探针 16/16 PASS，含 rusqlite bundled 3.53.2 + FTS5、reqwest 0.13.5 + aws-lc-rs、aes-gcm-siv、argon2、uuid v7 | 已解锁（必须显式 `cargo +stable-x86_64-pc-windows-gnu`） |
 | 默认 msvc host 构建 | **缺失** | `[实测]` `link: extra operand`（Git 的 coreutils `link.exe` 遮蔽 MSVC linker），proc-macro 都编不出 | 安装 VS 2022 Build Tools「C++ 桌面负载」+ 修正 PATH 顺序 |
 | `cargo fmt` / `clippy` 本地跑 | 可用（GNU host 下） | `[假设]` 探针未跑 clippy/fmt，仅推断 rustup 组件可用 → Phase 1 首次本地执行时确认 | 已解锁（结论待实测） |
-| Tauri 桌面窗口启动（本机 L5、L6-win 冒烟） | **缺失** | `[实测]` 无 WebView2（`Microsoft\Edge\Application` 与 `EdgeCore` 均无） | 安装 WebView2 **Evergreen 运行时** |
+| Tauri 桌面窗口启动（本机 L5、L6-win 冒烟） | **可用** | `[实测]` 独立 WebView2 运行时装在 `Microsoft\EdgeWebView\Applicationh.0.4078.105`（含 `msedgewebview2.exe`）。早期判定"缺失"系只查 Edge 浏览器目录所致，已纠正 | 无需解除 |
 | 架构图渲染（`docs` 的本地等价检查） | **缺失** | `[实测]` 无 graphviz `dot` | 装 graphviz 或把该检查只留在 CI（推荐后者） |
 | SQLite CLI 交叉验证 | **缺失** | `[实测]` 无 `sqlite3` CLI | 不需要（一律用 rusqlite 走代码断言），文档需说明 |
 | Android 构建 | **BLOCKED** | `[实测]` 无 JDK / 无 SDK / 无 NDK / 无 `adb` | 本机装 JDK17 + Android SDK/NDK；或只在 `ubuntu-22.04` CI 出包 |
@@ -504,4 +504,4 @@ jobs:
 
 | Phase 1（骨架，本次设计完成后第一件事） | Phase 8（全量） |
 | --- | --- |
-| `.github/workflows/{pr,integration,build,release}.yml` 四个文件成形；`rust-toolchain.toml`；`deny.toml` 最小可用；`scripts/check-versions`、`scripts/no-runtime-ddl`；`migrations` 的 M1/M5；`build-windows`(msvc) + `build-macos-android` 各出一条可下载产物（允许 `-adhoc`/`-unsigned` 后缀）；`docs` 的 markdownlint + `ARCHITECTURE-MAP` 检查 | `crash`(L4)、`e2e-desktop`(L5)、`audit` 全项、`nightly-soak`、M2/M3/M4 升级路径矩阵与校验和白名单、SBOM、`checksums.txt` 复算、三平台签名链、无 WebView2 场景断言、门禁自审 grep、预算表用实测值替换 |
+| `.github/workflows/{pr,integration,build,release}.yml` 四个文件成形；`rust-toolchain.toml`；`deny.toml` 最小可用；`scripts/check-versions`、`scripts/no-runtime-ddl`；`migrations` 的 M1/M5；`build-windows`(msvc) + `build-macos-android` 各出一条可下载产物（允许 `-adhoc`/`-unsigned` 后缀）；`docs` 的 markdownlint + `ARCHITECTURE-MAP` 检查 | `crash`(L4)、`e2e-desktop`(L5)、`audit` 全项、`nightly-soak`、M2/M3/M4 升级路径矩阵与校验和白名单、SBOM、`checksums.txt` 复算、三平台签名链、WebView2 缺失场景断言（需隔离环境）、门禁自审 grep、预算表用实测值替换 |
