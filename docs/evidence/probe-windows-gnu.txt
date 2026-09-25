@@ -1,0 +1,33 @@
+# Phase 0 feasibility evidence — Windows / GNU toolchain
+# captured: 2026-09-25T10:40:24Z
+# host:     Windows 11 x64 (10.0.26200)
+# rustc:    1.98.1 (48a229cea 2026-09-01) host=x86_64-pc-windows-gnu LLVM 22.1.8
+# cc:       MinGW-W64 x86_64-ucrt-posix-seh gcc 16.1.0
+# note:     MSVC Build Tools are NOT installed on this machine; the default rustup
+#           host is x86_64-pc-windows-msvc and its link.exe is shadowed by Git's
+#           coreutils link(1), so MSVC-targeted builds fail (see PROBE-FAIL-001).
+# command:  cargo +stable-x86_64-pc-windows-gnu run -q --manifest-path tools/feasibility-probe/Cargo.toml
+# source:   tools/feasibility-probe/src/main.rs   (16 black-box checks, exit 0 = all pass)
+
+target_hint=x86_64-pc-windows-gnu
+
+CHECK                              RESULT evidence
+sqlite-bundled-compiled            PASS   sqlite 3.53.2, json1=7
+fts5-trigram-cjk                   PASS   3+char MATCH hit=1 negative=0 | 2char: MATCH->0 col-LIKE->0 | 3char: MATCH->1 | whole-table LIKE=0
+fts5-search-5000-notes             PASS   5000 rows: MATCH p50=32us p95=1404us max=1404us index=6.0 MiB | 2char fallback: MATCH->0 (22us, WRONG) fts-column LIKE->416 (5776us) content-table LIKE->416 (4126us)
+wal-tx-atomicity                   PASS   journal=wal foreign_keys=1 rows_after_commit_and_rollback=["kept", "kept2"]
+migration-user_version             PASS   applied=[1, 2, 3] version=3
+sha256-known-answer                PASS   3/3 vectors match
+kdf-argon2id                       PASS   19MiB/2it/1p -> 400ms, deterministic=true
+envelope-aes-256-gcm-siv           PASS   nonce=12B key=32B tag_overhead=16B (ct 30B <- pt 14B)
+envelope-tamper-detected           PASS   rejected: aead::Error
+uuidv7-monotonic-pathsafe          PASS   01a0d826-953b-7065-b8a8-493cb78fe5f4 < 01a0d826-953d-7733-9a28-2f5687ecfdd5 = true
+canonical-json-for-hashing         PASS   {"a":2,"m":{"b":2,"k":1},"z":1}
+https-tls-handshake                PASS   static.crates.io -> 200
+webdav-custom-verbs                PASS   PROPFIND->207 verb_echoed=true depth_forwarded=true MOVE->201
+precondition-412-plumbing          PASS   stale etag -> 412, current etag -> 204 (both arrive as statuses, so the engine can re-plan instead of failing the round)
+proxy-config-actually-honored      PASS   dead-proxy->error=true; no_proxy->HTTP 200 (differential proves routing layer is live)
+timeout-and-cancel                 PASS   stalled response cancelled after 414ms against a 400ms budget (Err("timeout=true error sending request for url (http://127.0.0.1:58823/slow)"))
+
+total=16 failed=0
+exit=0
