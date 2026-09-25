@@ -172,6 +172,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | 0015 | 检索：FTS5 trigram + 短查询 LIKE 双路径（实测驱动） | Accepted |
 | 0016 | 本地静态加密（SQLCipher） | **Proposed**（待内网合规要求确认） |
 | 0017 | 多窗口并发编辑同一条笔记 | **Proposed**（Phase 4 决策） |
+| 0018 | 单一活跃同步账户；多服务器推迟到"按账户确认点"落地 | Accepted |
 
 ---
 
