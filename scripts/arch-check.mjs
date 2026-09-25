@@ -85,7 +85,9 @@ const FORBIDDEN = {
   'notera-crypto': ['notera-store', 'notera-net', 'notera-webdav', 'notera-sync', 'notera-host'],
   'notera-store': ['notera-net', 'notera-webdav', 'notera-sync', 'notera-host', 'notera-config', 'notera-importer'],
   'notera-net': ['notera-store', 'notera-webdav', 'notera-sync', 'notera-host', 'notera-config'],
-  'notera-webdav': ['notera-store', 'notera-sync', 'notera-host'],
+  // webdav→sync 是**端口边**：sync 只暴露 RemotePort/Commit/RemoteError 契约（它自己
+  // 不依赖任何 crate，无环），实现方必须指名它。其余 sync 类型出现即为泄漏。
+  'notera-webdav': ['notera-store', 'notera-host'],
   'notera-config': ['notera-sync', 'notera-webdav', 'notera-net', 'notera-host'],
   'notera-sync': ['notera-host', 'tauri'],
   'notera-importer': ['notera-net', 'notera-webdav', 'notera-host'],
@@ -118,11 +120,25 @@ const uiLeaks = uiFiles.filter((f) => /\b(PROPFIND|PROPPATCH|If-Match|If-None-Ma
 check('layer:ui-protocol-vocab', '主需求 §禁止把 WebDAV 同步逻辑放进前端', uiLeaks,
   `前端出现了同步协议词汇：\n    ${uiLeaks.join('\n    ')}`);
 
+const RAW_SOCKET = /std::net::(TcpListener|TcpStream|UdpSocket)|std::net::\{[^}]*\b(TcpListener|TcpStream|UdpSocket)\b/;
 const rawNet = all.filter(([n]) => n !== 'notera-net' && !n.startsWith('notera-test-'))
   .map(([n]) => [n, sources(join(ROOT, 'crates', n, 'src'), ['.rs'])])
-  .flatMap(([n, files]) => files.filter((f) => /std::net::(TcpListener|TcpStream|UdpSocket)/.test(read(f))).map((f) => rel(f)));
-check('egress:raw-socket', 'PROXY.md §1（唯一出口；devserver 必须 debug-only）', rawNet,
+  .flatMap(([n, files]) => files.filter((f) => RAW_SOCKET.test(read(f))).map((f) => `${rel(f)}  [${n}]`));
+check('egress:raw-socket', 'PROXY.md §1（唯一出口；devserver 必须 debug-only）', rawNet.filter((f) => !f.includes('/devserver.rs')),
   `notera-net 之外直接开 socket：\n    ${rawNet.join('\n    ')}`);
+// webdav→sync 只允许"端口契约"这一条边：越界用到 sync 的内部类型就是把同步逻辑
+// 搬进了传输适配器（那正是本仓库反复强调要避免的那类错误）。
+const PORT_ITEMS = new Set(['RemotePort', 'Commit', 'RemoteError', 'EntryRef']);
+const portLeaks = sources(join(ROOT, 'crates/notera-webdav/src'), ['.rs'])
+  .flatMap((f) => [...read(f).matchAll(/notera_sync::([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))
+  .filter((n) => !PORT_ITEMS.has(n));
+check('edge:webdav-uses-only-ports', 'ARCHITECTURE-MAP §1（webdav 只见 sync 的端口契约）', [...new Set(portLeaks)],
+  `notera-webdav 引用了 notera-sync 的非端口项：${[...new Set(portLeaks)].join(', ')}`);
+
+const hostLib = join(ROOT, 'crates/notera-host/src/lib.rs');const devserverGated = statSafe(hostLib)
+  && /#\[cfg\(debug_assertions\)\]\s*\npub mod devserver/.test(read(hostLib).replace(/\r\n/g, '\n'));
+check('egress:devserver-debug-only', 'devserver.rs 头注释（release 必须关掉本地桥）', devserverGated ? [] : ['devserver 未在 debug_assertions 下门控'],
+  'release 构建仍带 loopback HTTP 桥，可无凭据驱动真实 Store');
 
 const dbOnly = all.filter(([, s]) => s.dependencies.includes('rusqlite')).map(([n]) => n).filter((n) => n !== 'notera-store');
 check('layer:rusqlite-dep', 'ARCHITECTURE-MAP §1（只有 store 会说话给 SQLite）', dbOnly,

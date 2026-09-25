@@ -39,7 +39,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | `notera-crypto` | 信封 seal/open、sha256、argon2id | core | store/net/sync | L0 | 2 |
 | `notera-store` | SQLite、迁移、仓储、FTS、outbox 持久化、tombstone | core, richtext, crypto | net, webdav, sync（**存储层不知道同步**） | L1 | 1 |
 | `notera-net` | 唯一 HTTP 出口：代理、TLS、超时、退避、审计 | core, config | webdav, sync, store | L1 | 2,3 |
-| `notera-webdav` | DAV 语义、能力探测、原子写、路径安全 | core, net, crypto | sync, store | L1,L2 | 2 |
+| `notera-webdav` | DAV 语义、能力探测、原子写、路径安全 | core, net, crypto, sync（**仅端口契约**：`RemotePort`/`Commit`/`RemoteError`/`EntryRef`） | store, host；把同步判定搬进适配器 | L1,L2 | 2 |
 | `notera-sync` | 状态机、plan、push/pull、冲突编排、幂等、租约 | core, richtext, crypto, store, webdav, config | UI、平台 API | L1–L4 | 2 |
 | `notera-config` | 设置、账户、代理 profile、凭据引用 | core, store | sync, webdav | L0,L1 | 1,3 |
 | `notera-importer` | 导出/导入/备份/恢复 | core, richtext, crypto, store, sync | net, webdav（复用 sync，不自己发请求） | L1,L3 | 7 |

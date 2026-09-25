@@ -78,6 +78,7 @@ interface RawErrorShape {
   retryable?: boolean;
   actualRev?: number;
   actual_rev?: number;
+  detail?: { actual?: number; actualRev?: number };
   error?: RawErrorShape | string;
 }
 
@@ -92,7 +93,8 @@ function normalizeError(raw: unknown, httpStatus?: number): BridgeError {
   const code =
     nested.code ?? nested.kind ?? nested.errorCode ?? (typeof shape.error === 'string' ? shape.error : undefined) ??
     (httpStatus !== undefined && httpStatus >= 400 ? 'server_unavailable' : 'sync_failed');
-  const actualRev = typeof nested.actualRev === 'number' ? nested.actualRev : typeof nested.actual_rev === 'number' ? nested.actual_rev : null;
+  const revs = [nested.actualRev, nested.actual_rev, nested.detail?.actualRev, nested.detail?.actual];
+  const actualRev = revs.find((r): r is number => typeof r === 'number') ?? null;
   return new BridgeError({
     code: String(code),
     messageKey: typeof nested.messageKey === 'string' ? nested.messageKey : undefined,
@@ -123,10 +125,13 @@ function unwrap<T>(data: unknown): T {
   return data as T;
 }
 
+/** 壳里只注册了这一个命令；命令名走参数，避免为 30 个命令写 30 个转发函数。 */
+const TAURI_COMMAND = 'notera_command';
+
 async function invokeTauri<T>(name: string, args: Record<string, unknown>): Promise<T> {
   const core = await import('@tauri-apps/api/core');
   try {
-    return unwrap<T>(await core.invoke<T>(name, args));
+    return unwrap<T>(await core.invoke<T>(TAURI_COMMAND, { name, args }));
   } catch (error) {
     throw normalizeError(error);
   }
