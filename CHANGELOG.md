@@ -4,7 +4,7 @@
 
 ## 0.1.0 — Phase 1–4（实现进行中）· 未发布
 
-当前测试基线（本机 GNU 工具链实测）：Rust 268 通过（`notera-store` 58，`core/config/crypto/richtext/sync/net/test-webdav` 合计 210），前端 64 通过 8 个测试文件；`scripts/arch-check.mjs` 18 条中 17 通过；`scripts/verify-diagram.mjs` 59 条全通过；`vue-tsc --noEmit` 无错误，生产包 189 KB（gzip 65 KB）。
+当前测试基线（本机 GNU 工具链实测）：Rust 268 通过（`notera-store` 58，`core/config/crypto/richtext/sync/net/test-webdav` 合计 210），前端 81 通过 9 个测试文件；`scripts/arch-check.mjs` 18 条中 17 通过；`scripts/verify-diagram.mjs` 59 条全通过；`vue-tsc --noEmit` 无错误，生产包 189 KB（gzip 65 KB）。
 
 ### 新增
 

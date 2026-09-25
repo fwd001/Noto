@@ -229,9 +229,18 @@ const MESSAGES: Record<MessageKey, string> = {
   'error.not_found': '这条内容已经不在了。',
   'error.invalid_input': '输入的内容无法保存，请检查后重试。',
   'error.permission_denied': '系统拒绝了这次操作。',
+  'error.no_account': '还没有配置同步服务器。不配置也能继续记笔记。',
+  'error.multi_account_unsupported': '当前版本一台设备只支持一台同步服务器。请先停用现有的，再添加新的。',
+  'error.storage': '本机存储这一步没成功。笔记仍在磁盘上，可以重试。',
+  'error.constraint': '这份内容不符合本地数据的规则，没有被保存。',
+  'error.bad_args': '这一步的参数没被理解，已取消，未改动任何数据。',
+  'error.bad_id': '找不到这条内容的标识，列表可能已经变了。请刷新后重试。',
+  'error.unknown_command': '这个操作在当前版本里不存在。',
+  'error.serialize': '数据没能整理成可保存的形式，已取消，未改动任何数据。',
+  'error.handler_panic': '这一步异常中止了，可以再试一次；本机数据未受影响。',
 };
 
-const TOAST_PREFIXES = ['notera.', 'error.', 'sync.', 'toast.', 'state.', 'note.', 'link.', 'settings.'];
+const TOAST_PREFIXES = ['notera.', 'error.', 'sync.', 'toast.', 'state.', 'note.', 'link.', 'settings.', 'cmd.'];
 
 /** messageKey 归一化：容忍大小写、驼峰、点号前缀等差异。 */
 export function normalizeMessageKey(key: string): string {
