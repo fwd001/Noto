@@ -1,12 +1,12 @@
 [package]
 name = "notera-net"
+description = "全系统唯一 HTTP 出口：代理/TLS 四档/分层超时/退避重试/脱敏审计"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 notera-core = { workspace = true }
-notera-config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

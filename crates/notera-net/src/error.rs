@@ -158,6 +158,3 @@ impl NetError {
         }
     }
 }
-
-/// 已取消的哨兵：`tokio::select!` 里被外部 token 打断时返回。
-pub struct Cancelled;
