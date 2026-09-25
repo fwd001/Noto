@@ -578,7 +578,40 @@ impl Store {
         )? as u32)
     }
 
-    // --------------------------------------------------- 冲突收件箱 -----
+    // ------------------------------------------------- push 侧：记录 wire ---
+
+    /// 笔记记录的 wire 字节（DATA-MODEL §11 / SYNC-PROTOCOL §3）：同步引擎 PUT 的就是这份。
+    ///
+    /// `hash` 取行上的 `content_hash`（= `sha256(canonical(doc))`，I5 保证），所以
+    /// [`Store::apply_remote`] 的 I6 闸门复核的就是同一份字节（往返测试据此钉死）。
+    /// 行不存在（或已 purged）时只可能给出**墓碑公告**（`payload: null`）—— 否则
+    /// "永久删除"永远传不出去，那是静默同步失败（SYNC-PROTOCOL §8）。
+    pub fn note_envelope_wire(&self, id: &EntityId) -> Result<Option<Vec<u8>>, StoreError> {
+        let id = id.clone();
+        let device = self.device.to_string();
+        let env = self.with_read(|conn| -> Result<Option<serde_json::Value>, StoreError> {
+            match rows::read_note(conn, &id)? {
+                Some(n) if n.purged_at.is_none() => Ok(Some(note_wire(&n, &device)?)),
+                _ => tombstone_wire(conn, EntityKind::Note, &id, &device),
+            }
+        })?;
+        env.as_ref().map(wire_bytes).transpose()
+    }
+
+    /// 见 [`Store::note_envelope_wire`]（文件夹版）。
+    pub fn folder_envelope_wire(&self, id: &EntityId) -> Result<Option<Vec<u8>>, StoreError> {
+        let id = id.clone();
+        let device = self.device.to_string();
+        let env = self.with_read(|conn| -> Result<Option<serde_json::Value>, StoreError> {
+            match rows::read_folder(conn, &id)? {
+                Some(f) if f.purged_at.is_none() => Ok(Some(folder_wire(&f, &device))),
+                _ => tombstone_wire(conn, EntityKind::Folder, &id, &device),
+            }
+        })?;
+        env.as_ref().map(wire_bytes).transpose()
+    }
+
+    // ----------------------------------------------------------- 冲突收件箱 -----
 
     pub fn record_conflict(&self, c: &ConflictRecord) -> Result<i64, StoreError> {
         let c = c.clone();
@@ -638,6 +671,134 @@ impl Store {
             Ok(())
         })
     }
+}
+
+// ------------------------------------------------------- 记录信封（§11）---
+
+/// 无正文可哈希时的占位（只用于墓碑公告：`apply` 对 purged 记录不校验 hash）。
+fn null_hash() -> String {
+    format!("sha256:{}", "0".repeat(64))
+}
+
+fn wire_bytes(v: &serde_json::Value) -> Result<Vec<u8>, StoreError> {
+    // 信封本身不参与哈希路径（`hash` 字段才是权威），普通序列化即可；
+    // 但绝不返回"半个 JSON"—— 那会把远端好记录覆盖成垃圾。
+    serde_json::to_vec(v).map_err(|e| StoreError::Constraint(format!("信封无法序列化: {e}")))
+}
+
+/// 信封外壳（DATA-MODEL §11 / SYNC-PROTOCOL §3 的字段集，逐字同名）。
+///
+/// `sync_rev` 是设备态、按 §6 不参与同步判定；带着它只为与规范示例一致，
+/// `apply_remote` 不读该字段。墓碑公告没有行，故省略。
+#[allow(clippy::too_many_arguments)]
+fn envelope(
+    kind: EntityKind,
+    id: &EntityId,
+    rev: Rev,
+    sync_rev: Option<Rev>,
+    hash: &str,
+    updated_at: &str,
+    device: &str,
+    deleted_at: Option<&str>,
+    purged: bool,
+    payload: serde_json::Value,
+) -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    m.insert("protocol".into(), serde_json::json!(1));
+    m.insert("kind".into(), serde_json::json!(kind.dir()));
+    m.insert("id".into(), serde_json::json!(id.as_str()));
+    m.insert("rev".into(), serde_json::json!(rev.get()));
+    if let Some(s) = sync_rev {
+        m.insert("sync_rev".into(), serde_json::json!(s.get()));
+    }
+    m.insert("hash".into(), serde_json::json!(hash));
+    m.insert("updated_at".into(), serde_json::json!(updated_at));
+    m.insert("device".into(), serde_json::json!(device));
+    m.insert("deleted_at".into(), serde_json::json!(deleted_at));
+    m.insert("purged".into(), serde_json::json!(purged));
+    m.insert("enc".into(), serde_json::json!({ "alg": "none", "hash_alg": "sha256" }));
+    m.insert("payload".into(), payload);
+    m.insert("ct".into(), serde_json::Value::Null);
+    serde_json::Value::Object(m)
+}
+
+/// 笔记的 `payload` = canonical doc ⊕ §6 的同步字段（folder_id / pinned / color）。
+///
+/// 这些额外键不影响 `hash`：richtext 的 `Document` 只认 `v`/`content`，归一时丢弃
+/// 未知顶层键，所以 `sha256(canonical(payload)) == notes.content_hash` 仍然成立。
+fn note_wire(n: &Note, device: &str) -> Result<serde_json::Value, StoreError> {
+    let mut payload = n.doc.clone();
+    let Some(map) = payload.as_object_mut() else {
+        return Err(StoreError::Constraint(format!("笔记 {} 的 doc 不是 JSON 对象：拒绝构造残缺记录", n.id)));
+    };
+    map.insert("folder_id".into(), serde_json::json!(n.folder_id.as_str()));
+    map.insert("pinned".into(), serde_json::json!(n.pinned));
+    map.insert("color".into(), serde_json::json!(n.color));
+    Ok(envelope(
+        EntityKind::Note,
+        &n.id,
+        n.rev,
+        Some(n.sync_rev),
+        &n.content_hash,
+        &n.updated_at,
+        device,
+        n.deleted_at.as_deref(),
+        false,
+        payload,
+    ))
+}
+
+/// 文件夹 `payload` 的键集与 `store::folder_hash` 的入参一致 →
+/// `hash == sha256(canonical(payload))` 逐字成立（§3 约束表）。
+fn folder_wire(f: &Folder, device: &str) -> serde_json::Value {
+    let payload = serde_json::json!({
+        "name": f.name,
+        "parent_id": f.parent_id.as_ref().map(|p| p.as_str().to_string()),
+        "color": f.color,
+        "sort_order": f.sort_order,
+        "system_kind": f.system_kind,
+    });
+    envelope(
+        EntityKind::Folder,
+        &f.id,
+        f.rev,
+        Some(f.sync_rev),
+        &f.content_hash,
+        &f.updated_at,
+        device,
+        f.deleted_at.as_deref(),
+        false,
+        payload,
+    )
+}
+
+/// 永久删除的公告记录：`payload: null`（§3 末段）。
+/// 没有 purged 墓碑就没有可上传的东西 —— 返回 None 让引擎跳过，而不是编造一份。
+fn tombstone_wire(
+    conn: &Connection,
+    kind: EntityKind,
+    id: &EntityId,
+    device: &str,
+) -> Result<Option<serde_json::Value>, StoreError> {
+    let Some(t) = Store::tombstone_of(conn, kind, id)? else {
+        return Ok(None);
+    };
+    if !t.purged {
+        return Ok(None);
+    }
+    let hash = t.content_hash.clone().unwrap_or_else(null_hash);
+    Ok(Some(envelope(
+        kind,
+        id,
+        t.rev,
+        None,
+        &hash,
+        &t.deleted_at,
+        device,
+        Some(t.deleted_at.as_str()),
+        true,
+        serde_json::Value::Null,
+    )))
 }
 
 fn conflicts_where(conn: &Connection, cond: &str) -> Result<Vec<ConflictRow>, StoreError> {

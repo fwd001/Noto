@@ -893,6 +893,56 @@ impl Store {
         })
     }
 
+    // ---------------------------------------------------- 偏好（settings） ---
+
+    /// 写一条 UI 偏好到 `settings(key, scope='ui', account_id=NULL)`（DATA-MODEL §4.1）。
+    ///
+    /// 作用域按 §6 归类：UI 态属"永不上传"，因此这里**刻意不碰 outbox**——改个主题色
+    /// 不得触发一轮同步。`value` 以 JSON 文本落列，天然满足 `json_valid` CHECK。
+    pub fn set_pref(&self, key: &str, value: &serde_json::Value) -> Result<(), StoreError> {
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(StoreError::Constraint("settings.key 不能为空".into()));
+        }
+        let value = serde_json::to_string(value)
+            .map_err(|e| StoreError::Constraint(format!("偏好值无法序列化为 JSON: {e}")))?;
+        let key = key.to_string();
+        self.write_tx(|tx, now| {
+            tx.execute(
+                "INSERT INTO settings (key, scope, account_id, value, updated_at)
+                 VALUES (?1,'ui',NULL,?2,?3)
+                 ON CONFLICT(key, scope, COALESCE(account_id,'')) DO UPDATE SET
+                   value = excluded.value, updated_at = excluded.updated_at",
+                params![key, value, now],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// 读本机可见的偏好：`scope ∈ {global,ui,device}` 且未绑定账户。
+    ///
+    /// 同键的优先级 device > ui > global（每设备覆盖项赢），与 §6"设备作用域不跨设备"一致。
+    /// `scope='account'` 需要账户上下文，故不在此返回。
+    pub fn get_prefs(&self) -> Result<serde_json::Value, StoreError> {
+        let conn = self.read()?;
+        let mut stmt = conn.prepare(
+            "SELECT key, value FROM settings
+              WHERE scope IN ('global','ui','device') AND account_id IS NULL
+              ORDER BY CASE scope WHEN 'global' THEN 0 WHEN 'ui' THEN 1 ELSE 2 END, key",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut map = serde_json::Map::new();
+        for (k, raw) in rows {
+            let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+                StoreError::Constraint(format!("settings[{k}] 存的不是合法 JSON（库被外部改写？）: {e}"))
+            })?;
+            map.insert(k, v);
+        }
+        Ok(serde_json::Value::Object(map))
+    }
+
     // ------------------------------------------------------- 搜索索引维护 ---
 
     /// 全量重建 FTS 索引并推进 `meta.search_generation`（DATA-MODEL §7.3）。
