@@ -21,6 +21,8 @@ const PW = process.env.PW_CORE || 'file:///C:/Users/lhcz-fu/node_modules/playwri
 const CHROME = process.env.CHROME || 'C:/Users/lhcz-fu/AppData/Local/ms-playwright/chromium-1243/chrome-win64/chrome.exe';
 const URL_BASE = process.env.APP_URL || 'http://127.0.0.1:5173';
 const SHOT = 'D:/code/Notes/docs/evidence/blackbox.png';
+import fs from 'node:fs';
+import os from 'node:os';
 const pw = await (await import(PW)).default;
 const { chromium } = pw;
 
@@ -163,6 +165,36 @@ await step('刷新（等价于重启 App）之后：列表和正文都还在', a
   const doc = await visible('[data-testid="editor-doc"]');
   if (!doc.includes(title)) throw new Error(`点开之后正文是空的或对不上：${doc.slice(0, 140)}`);
   return doc.slice(0, 24);
+});
+
+await step('插入图片：走那个文件选择器 → 屏幕上真解码出这张图 → 刷新之后还在', async () => {
+  // 这一条整个黑盒里最值得：用户只看得到"图在不在"，看不到 `hasAttachment`。
+  // 判据只有两个屏幕事实 —— `<img>` 真的**解出像素**（naturalWidth>0，光有 src 属性
+  // 不算），以及刷新重开之后还解得出来。全程不读库、不调命令。
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  const file = `${os.tmpdir()}\\notera-blackbox-${Date.now()}.png`;
+  fs.writeFileSync(file, png);
+  await page.locator('[data-testid="editor-doc"]').click();
+  await page.locator('[data-testid="attach-input"]').setInputFiles(file);
+  const img = page.locator('[data-testid="editor-doc"] img.nb-image').last();
+  await img.waitFor({ timeout: 8000 });
+  const shown = await img.evaluate((el) => ({ w: el.naturalWidth, ok: el.complete && el.naturalWidth > 0 }));
+  if (!shown.ok) throw new Error(`那张图没解出像素（naturalWidth=${shown.w}）`);
+  await page.waitForTimeout(1800); // 等自动保存
+  await page.reload();
+  await page.locator('[data-testid="note-list"]').waitFor({ timeout: 8000 });
+  await page.waitForTimeout(1000);
+  await page.locator('[data-testid^="note-row-"]').filter({ hasText: title }).first().click();
+  await page.waitForTimeout(1300);
+  const again = page.locator('[data-testid="editor-doc"] img.nb-image').last();
+  await again.waitFor({ timeout: 8000 });
+  const kept = await again.evaluate((el) => el.complete && el.naturalWidth > 0);
+  fs.rmSync(file, { force: true });
+  if (!kept) throw new Error('刷新后那张图解码不出来了 —— 附件没跟着笔记活下来');
+  return `naturalWidth=${shown.w}，刷新后仍在`;
 });
 
 await step('键盘可达：Esc 与 Tab 不失控，焦点始终在界面里', async () => {

@@ -6,7 +6,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import EditorToolbar from './EditorToolbar.vue';
 import { vEditable, markAsParsed } from '../editor/editableDirective';
-import { applySelection, parseEditable, safeHref, selectionBoxIn, selectionIn } from '../editor/dom';
+import { applySelection, measureEditable, parseEditable, safeHref, selectionBoxIn, selectionIn } from '../editor/dom';
 import { placeBar, type Box } from '../editor/selectionBar';
 import { MARK_BUTTONS } from '../editor/marks';
 import { applySlash, filterSlash, markdownShortcut, slashQuery, type SlashItem } from '../editor/quickInsert';
@@ -487,6 +487,25 @@ watch(
   },
 );
 
+/**
+ * 点在最后一行**下面的空白**：光标送到最后一个文本块的末尾。
+ *
+ * 不接这一句，这次点击会把焦点丢给 `body`（块在文档上半部，空白处不属于任何块），
+ * 于是"点一下空白、马上开始打字"的头几个字直接消失。Apple Notes / AppFlowy 在这
+ * 一处的行为都是"照旧能写"，所以这里补的是原生感，不是装饰。
+ * 焦点与光标仍走 `focusBlock` 那一条唯一的路径，不在这里另写一套选区逻辑。
+ */
+function onBlankClick(ev: MouseEvent): void {
+  if (readOnly.value) return;
+  const target = ev.target as HTMLElement | null;
+  // 落在块里的点击归块自己管（contenteditable + `@click="capture"`），这里不插手
+  if (!target || target.closest('.nb-block')) return;
+  const last = [...blocks.value].reverse().find((block) => block.shape === 'text');
+  const element = last ? elOf(last.id) : null;
+  if (!last || !element) return;
+  void focusBlock(last.id, measureEditable(element).text.length);
+}
+
 function onNative(kind: 'undo' | 'redo'): void {
   const block = currentBlock.value;
   const element = block ? elOf(block.id) : null;
@@ -550,7 +569,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
       @redo="onNative('redo')"
     />
 
-    <div ref="docEl" class="editor-scroll" data-testid="editor-doc">
+    <div ref="docEl" class="editor-scroll" data-testid="editor-doc" @click="onBlankClick">
       <div class="editor-doc" :data-readonly="readOnly ? 'true' : 'false'">
         <div
           v-for="(block, index) in blocks"

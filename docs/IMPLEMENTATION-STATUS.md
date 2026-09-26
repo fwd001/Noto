@@ -49,7 +49,7 @@
 | 移动端（Android） | ✅ | ⬜ | ✅ | ⬜ | ⬜ | ⬜ | ✅ | **BLOCKED** | 前端 390×844 视口与 44pt 已验；APK 构建/真机 = 本机无 NDK/JDK 与设备。原因/影响/解除条件见 CI-CD §L6 |
 | 移动端（iOS / iPadOS） | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **BLOCKED** | 无 macOS/Xcode 与真机（本机 Windows）。总指令 §46 明确这种情况要写 BLOCKED 而非伪装已验 |
 | 发布构建与安装包（`.msi` / `.exe`） | ✅ | ⬜ | ✅ | ✅ | ⬜ | ⬜ | ✅ | **IMPLEMENTING** | **release 产物本身已验通**（`cargo build --release` + 关掉 vite 跑 `verify-tauri-window` 8/8，页面 `http://tauri.localhost/`）；修掉的是"缺 `[features] custom-protocol` → 正式构建开空白窗"这条 P0。**仍未产出安装器**：`@tauri-apps/cli` 不在依赖里 → 跑不了 `pnpm tauri build`（`.msi`/`.exe` 打包、图标嵌入、Updater 骨架都在它身上）。解除条件 = 许可装 `@tauri-apps/cli`（动依赖图，需 §9 点头）或改由 CI 的 Windows lane 出包 |
-| 黑盒 UAT（§23：只许点击/输入/键盘/拖放） | ✅ | ✅ | ⬜ | ⬜ | ✅ | ⬜ | ✅ | **VERIFIED** | `scripts/verify-blackbox.mjs` 9/9：零 `/cmd/*` 调用、断言只看屏幕可见文字；已做反空转（废掉"恢复"按钮即 6/9）。与 `verify-app.mjs`（复核库内状态，非黑盒）并存 |
+| 黑盒 UAT（§23：只许点击/输入/键盘/拖放） | ✅ | ✅ | ⬜ | ⬜ | ✅ | ⬜ | ✅ | **VERIFIED** | `scripts/verify-blackbox.mjs` 10/10：零 `/cmd/*` 调用、断言只看屏幕可见文字（含"插图后 `<img>` 真解出像素、刷新后仍在"）；已做反空转（废掉"恢复"按钮即 6/9）。与 `verify-app.mjs`（复核库内状态，非黑盒）并存。这一层抓到过一条白盒抓不到的：点在最后一行下面的空白会把焦点丢给 `body`，接着敲的字直接消失 |
 | CI/CD 工作流落地 | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **BLOCKED** | 仓库里没有 workflow 文件；推送通道未定（ARCHITECTURE-REVIEW §14 D1–D10）。无 Actions 运行证据时不得声称 CI 已过 |
 | `.enex` 结构化导入 | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **PLANNED** | 需要 XML 依赖，属"要动依赖图"→ §9 人工评审 |
 | 文档 = 代码 = 协议 = 数据模型 = 测试 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | **VERIFIED** | 本轮同步了 CHANGELOG / ARCHITECTURE-MAP / DATA-MODEL / TEST-PLAN（含新增崩溃注入矩阵）；`arch-check` 会盯漂移 |
@@ -61,6 +61,6 @@
 1. **附件分片上传**（§8 里 `upload` 那一侧仍是一次 PUT）。下载续传已完成；上传大附件时中断仍要整份重传。
 2. **安装器**（`.msi`/`.exe`）—— release 产物本身已验通（见上表），但打包要靠 `@tauri-apps/cli`，它不在依赖里。
 3. **托盘 / 原生菜单 / 全局快捷键 / 真通知 / OS 钥匙串**（§15、§47"平台能力完成"）—— 需要 §9 评审点头。
-4. **CI 工作流**（§42 那套门禁要有地方真的跑）。纯黑盒 UAT lane 已落地：BB-01…09。
+4. **CI 工作流**（§42 那套门禁要有地方真的跑）。纯黑盒 UAT lane 已落地：BB-01…10。
 5. **P11 远端版本可见性**的产品决定（§51）。
 6. 真实公网 WebDAV 服务器矩阵、真 Android/iOS/macOS 设备 —— 这些只能交给用户（§49）。
