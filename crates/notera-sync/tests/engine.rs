@@ -28,6 +28,13 @@ struct FakeRemote {
     corrupt_manifest: Arc<AtomicBool>,
     /// 让所有调用返回 401，用于验证"认证失败必须停轮"
     deny_auth: Arc<AtomicBool>,
+    /// §11.4：pretend 别人贴着的租约
+    leases: Arc<Mutex<Vec<PeerLease>>>,
+    /// 本机贴出去的每一租约（token, expires_at）
+    publishes: Arc<Mutex<Vec<(String, String)>>>,
+    fail_publish: Arc<AtomicBool>,
+    /// 读别人的租约直接报错（模拟列目录能力坏掉 / 离线）
+    fail_holders: Arc<AtomicBool>,
 }
 
 #[async_trait]
@@ -87,6 +94,22 @@ impl RemotePort for FakeRemote {
     async fn probe_record_etag(&self, kind: &str, id: &str) -> Result<Option<String>, RemoteError> {
         Ok(self.records.lock().unwrap().contains_key(&path(kind, id)).then(|| format!("\"{id}-v0\"")))
     }
+
+    async fn lease_publish(&self, token: &str, expires_at: &str, _seq: u64) -> Result<(), RemoteError> {
+        self.tick()?;
+        if self.fail_publish.load(Ordering::SeqCst) {
+            return Err(RemoteError::Server);
+        }
+        self.publishes.lock().unwrap().push((token.to_string(), expires_at.to_string()));
+        Ok(())
+    }
+
+    async fn lease_holders(&self, _known: &[String]) -> Result<Vec<PeerLease>, RemoteError> {
+        if self.fail_holders.load(Ordering::SeqCst) {
+            return Err(RemoteError::Server);
+        }
+        Ok(self.leases.lock().unwrap().clone())
+    }
 }
 
 impl FakeRemote {
@@ -127,6 +150,8 @@ struct FakeLocal {
     outbox_states: Arc<Mutex<Vec<(String, OutboxState)>>>,
     cached_manifest: Arc<Mutex<Option<Vec<u8>>>>,
     cached_etag: Arc<Mutex<Option<String>>>,
+    /// §11.4：引擎贴完租约后有没有把状态记到本地
+    leases: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl LocalPort for FakeLocal {
@@ -150,6 +175,10 @@ impl LocalPort for FakeLocal {
     }
     fn seq_applied(&self) -> u64 {
         self.seq.load(Ordering::SeqCst)
+    }
+    fn record_lease(&self, token: &str, expires_at: &str) -> Result<(), LocalError> {
+        self.leases.lock().unwrap().push((token.to_string(), expires_at.to_string()));
+        Ok(())
     }
     fn revision_json(&self, _id: &str, _rev: u64) -> Result<Option<serde_json::Value>, LocalError> {
         Ok(None)
@@ -211,6 +240,23 @@ fn base_manifest() -> Manifest {
 
 async fn run(l: FakeLocal, r: FakeRemote, etag: Option<&str>) -> (RoundStats, Vec<SyncEvent>) {
     SyncEngine::new(l, r, EngineConfig::default()).run_round(etag).await
+}
+async fn run_with(l: FakeLocal, r: FakeRemote, etag: Option<&str>, cfg: EngineConfig) -> (RoundStats, Vec<SyncEvent>) {
+    SyncEngine::new(l, r, cfg).run_round(etag).await
+}
+
+/// §11.4 的开关。FakeLocal 的 now() 固定在 2026-09-25T00:00:00Z，
+/// 所以测试里的"新鲜/过期"都以它为基准，不碰墙上时间。
+fn lease_cfg() -> EngineConfig {
+    EngineConfig {
+        lease: LeasePolicy::On { ttl_ms: 60_000 },
+        ..EngineConfig::default()
+    }
+}
+
+fn dirty_local(l: &FakeLocal, id: &str, rev: u64, hash: &str) {
+    l.locals.lock().unwrap().push(local(id, rev, rev - 1, hash));
+    l.envelopes.lock().unwrap().insert(path("n", id), format!("{{\"rev\":{rev}}}").into_bytes());
 }
 
 // ------------------------------------------------------------------ 用例 ---
@@ -399,4 +445,139 @@ async fn no_push_means_no_manifest_commit() {
     let (st, _) = run(l, r.clone(), etag.as_deref()).await;
     assert_eq!(st.pushed, 0);
     assert_eq!(r.manifest_bytes(), before, "无本地写入时清单必须原样不动");
+}
+
+// ---------------------------------------------------------------- §11.4 租约 ---
+
+#[tokio::test]
+async fn an_enabled_lease_is_published_before_the_round_reads_anything() {
+    let (l, r) = (FakeLocal::default(), FakeRemote::default());
+    r.seed(base_manifest());
+    let etag = r.etag();
+    let (st, _) = run_with(l.clone(), r.clone(), etag.as_deref(), lease_cfg()).await;
+    assert_eq!(r.publishes.lock().unwrap().len(), 1, "开了租约就得贴自己的，否则别人看不见我");
+    let (token, expires) = &r.publishes.lock().unwrap()[0];
+    assert!(!token.is_empty());
+    assert!(expires.ends_with('Z'), "过期时刻得是可解析的时间串：{expires}");
+    assert_eq!(l.leases.lock().unwrap().len(), 1, "贴上的租约要记进本地状态（sync_state 的那两列）");
+    assert_eq!(st.outcome, RoundOutcome::NoOp, "空轮不该因为租约变成别的结论");
+}
+
+#[tokio::test]
+async fn a_fresh_peer_lease_defers_the_announcement_but_keeps_the_upload() {
+    let (l, r) = (FakeLocal::default(), FakeRemote::default());
+    r.seed(base_manifest());
+    dirty_local(&l, "n1", 3, "aaaa");
+    // 别人（不是 dev-1）还新鲜
+    r.leases.lock().unwrap().push(PeerLease {
+        device: "dev-2".into(),
+        expires_at: "2099-01-01T00:00:00.000Z".into(),
+        seq: 1,
+    });
+    let etag = r.etag();
+    let (st, ev) = run_with(l.clone(), r.clone(), etag.as_deref(), lease_cfg()).await;
+
+    assert_eq!(st.pushed, 1, "记录照旧先推上去（清单才是公告板）");
+    let m = Manifest::parse(&r.manifest_bytes()).expect("清单仍要可解析");
+    assert!(!m.window.entries.iter().any(|x| x.i == "n1"), "让路时**不能**提交清单，否则并发公告互相覆盖");
+    assert_eq!(m.seq, 1, "seq 不该前进，实际 {}", m.seq);
+    assert!(
+        !l.applied.lock().unwrap().iter().any(|o| matches!(o, ApplyOp::MarkSynced { .. })),
+        "没公告就不能把改动标成已同步 —— 那会变成静默丢失",
+    );
+    assert!(ev.contains(&SyncEvent::Deferred { device: "dev-2".into() }), "让路必须让用户看得见：{ev:?}");
+    assert_eq!(st.outcome, RoundOutcome::Partial);
+}
+
+#[tokio::test]
+async fn an_expired_or_self_owned_lease_does_not_block_the_announcement() {
+    for (label, lease) in [
+        (
+            "过期了（设备崩溃留下的那份）",
+            PeerLease { device: "dev-2".into(), expires_at: "2020-01-01T00:00:00.000Z".into(), seq: 1 },
+        ),
+        ("是自己的", PeerLease { device: "dev-1".into(), expires_at: "2099-01-01T00:00:00.000Z".into(), seq: 1 }),
+        (
+            "时间读不出来",
+            PeerLease { device: "dev-2".into(), expires_at: "不是时间".into(), seq: 1 },
+        ),
+    ] {
+        let (l, r) = (FakeLocal::default(), FakeRemote::default());
+        r.seed(base_manifest());
+        dirty_local(&l, "n1", 3, "aaaa");
+        r.leases.lock().unwrap().push(lease);
+        let etag = r.etag();
+        let (st, ev) = run_with(l, r.clone(), etag.as_deref(), lease_cfg()).await;
+        assert_eq!(st.pushed, 1, "{label}");
+        let m = Manifest::parse(&r.manifest_bytes()).expect("清单");
+        assert!(m.window.entries.iter().any(|x| x.i == "n1"), "{label}：这类租约不该挡住公告");
+        assert!(!ev.iter().any(|e| matches!(e, SyncEvent::Deferred { .. })), "{label}");
+    }
+}
+
+#[tokio::test]
+async fn an_unreadable_lease_directory_must_not_stop_the_announcement() {
+    // §11.4：读不到别人的租约 = 当作没人持有。这一层坏了绝不能变成"永远不同步"。
+    let (l, r) = (FakeLocal::default(), FakeRemote::default());
+    r.seed(base_manifest());
+    dirty_local(&l, "n1", 3, "aaaa");
+    r.fail_holders.store(true, Ordering::SeqCst);
+    let etag = r.etag();
+    let (st, ev) = run_with(l, r.clone(), etag.as_deref(), lease_cfg()).await;
+    let m = Manifest::parse(&r.manifest_bytes()).expect("清单");
+    assert!(m.window.entries.iter().any(|x| x.i == "n1"), "租约读不出来仍要公告：{st:?} {ev:?}");
+    assert!(!ev.iter().any(|e| matches!(e, SyncEvent::Deferred { .. })));
+}
+
+#[tokio::test]
+async fn a_failed_publish_never_aborts_the_round() {
+    // 贴不上自己的租约 = 别人看不见我；本轮该照做，不能因此不同步。
+    let (l, r) = (FakeLocal::default(), FakeRemote::default());
+    r.seed(base_manifest());
+    dirty_local(&l, "n1", 3, "aaaa");
+    r.fail_publish.store(true, Ordering::SeqCst);
+    let etag = r.etag();
+    let (st, _) = run_with(l.clone(), r.clone(), etag.as_deref(), lease_cfg()).await;
+    assert_eq!(st.pushed, 1, "贴不上租约也要照常上传");
+    let m = Manifest::parse(&r.manifest_bytes()).expect("清单");
+    assert!(m.window.entries.iter().any(|x| x.i == "n1"), "贴不上租约也要照常公告");
+    assert!(r.publishes.lock().unwrap().is_empty());
+    assert!(l.leases.lock().unwrap().is_empty(), "没贴成功就别记本地状态");
+}
+
+#[tokio::test]
+async fn with_the_lease_off_the_round_touches_no_locks_at_all() {
+    let (l, r) = (FakeLocal::default(), FakeRemote::default());
+    r.seed(base_manifest());
+    dirty_local(&l, "n1", 3, "aaaa");
+    r.leases.lock().unwrap().push(PeerLease { device: "dev-2".into(), expires_at: "2099-01-01T00:00:00.000Z".into(), seq: 1 });
+    let etag = r.etag();
+    let (_, ev) = run(l, r.clone(), etag.as_deref()).await;
+    assert!(r.publishes.lock().unwrap().is_empty(), "没开就不要发任何租约请求（省请求，也省一次误判）");
+    let m = Manifest::parse(&r.manifest_bytes()).expect("清单");
+    assert!(m.window.entries.iter().any(|x| x.i == "n1"));
+    assert!(!ev.iter().any(|e| matches!(e, SyncEvent::Deferred { .. })));
+}
+
+#[tokio::test]
+async fn a_failed_manifest_commit_leaves_the_edit_pending_so_the_next_round_replays_it() {
+    // §11.3 C4：记录已提交、清单未提交 → 清单重放。前提是本地**还没**把自己标成已同步，
+    // 否则"重放"无从发生，别的设备就永远看不见这条改动。
+    let (l, r) = (FakeLocal::default(), FakeRemote::default());
+    r.seed(base_manifest());
+    dirty_local(&l, "n1", 3, "aaaa");
+    r.cas_failures.store(99, Ordering::SeqCst);
+    let etag = r.etag();
+    let (st, _) = run(l.clone(), r.clone(), etag.as_deref()).await;
+
+    assert_eq!(st.pushed, 1, "记录该推还是推了");
+    assert!(
+        !l.applied.lock().unwrap().iter().any(|o| matches!(o, ApplyOp::MarkSynced { .. })),
+        "公告没成功就不许标 synced —— 这是这一条测试唯一真正要证的东西",
+    );
+    assert!(
+        !l.applied.lock().unwrap().iter().any(|o| matches!(o, ApplyOp::StoreManifest { .. })),
+        "公告没成功也不该缓存一份新清单"
+    );
+    assert_eq!(st.outcome, RoundOutcome::Partial, "本轮得如实报『没做完』");
 }

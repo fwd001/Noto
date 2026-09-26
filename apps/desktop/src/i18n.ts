@@ -279,6 +279,8 @@ const MESSAGES: Record<MessageKey, string> = {
   // 之前它没登记，"有版本要你决定"的提示会退化成一句通用兜底文案。
   'sync.conflict_attention': '有内容在两台设备上改得不一样，需要你决定保留哪一份。冲突不会自动覆盖任何东西。',
   'sync.probeDeferred': '这次没能完成服务器能力探测，已按最保守的方式继续同步（不会覆盖你的数据），下次启动会再试一次。',
+  // §11.4：让路不是错误，但也不能不说 —— "安静地不下公告"就是安静地不同步。
+  'sync.leaseHeld': '另一台设备正在写入，这一轮先让它。你的改动仍在待同步队列里，稍后会自动继续。',
   // 以下 8 条是核心的错误词表（`notera-core` 的 `ErrorCode::message_key()`）会发出去的键。
   // 它们原先没登记，于是这些提示全部退化成一句"操作没有成功" —— `arch-check` 的
   // hygiene:rust-message-keys-registered 现在守着这条边，漏一个就红。

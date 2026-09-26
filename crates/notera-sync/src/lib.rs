@@ -45,6 +45,11 @@ pub trait LocalPort: Send + Sync {
     fn record_conflict(&self, d: &Decision, local: &LocalView, remote: &RemoteView) -> Result<(), LocalError>;
     fn outbox_take(&self, limit: usize) -> Result<Vec<OutboxItem>, LocalError>;
     fn outbox_state(&self, dedupe_key: &str, st: OutboxState, retry_at: Option<&str>) -> Result<(), LocalError>;
+    /// §11.4：把本轮贴上的租约记进本地状态（诊断用：出问题时能看出"当时我以为谁在写"）。
+    /// 允许空实现 —— 它不丢数据，只少一条线索。
+    fn record_lease(&self, _token: &str, _expires_at: &str) -> Result<(), LocalError> {
+        Ok(())
+    }
     /// 上一轮已应用并成功提交的清单字节。
     ///
     /// 304（远端未变）时引擎手里**没有**清单正文，但本地若有改动仍必须追加公告 ——
@@ -65,6 +70,31 @@ pub trait RemotePort: Send + Sync {
     async fn commit_manifest(&self, wire: &[u8], cas_etag: Option<&str>) -> Result<Option<String>, RemoteError>;
     async fn put_segment(&self, name: &str, wire: &[u8]) -> Result<(), RemoteError>;
     async fn probe_record_etag(&self, kind: &str, id: &str) -> Result<Option<String>, RemoteError>;
+    /// §11.4：贴上/续上本机租约（尽力而为，失败只影响"别人看不看得见我"）。
+    /// 过期时刻由引擎算：它才掌握"这一轮是什么时候"，也便于把同一个值记进本地状态。
+    /// 刻意**不给默认实现**：默认 = 这一层静默空转，而"空转的并发保护"比没有更糟。
+    async fn lease_publish(&self, token: &str, expires_at: &str, seq: u64) -> Result<(), RemoteError>;
+    /// §11.4：读别人的租约。`known` 是清单 `generated_by` 学到的对手设备 id ——
+    /// 服务器列目录能力坏掉时至少还能给它让路。读不出一律按"没人持有"处理。
+    async fn lease_holders(&self, known: &[String]) -> Result<Vec<PeerLease>, RemoteError>;
+}
+
+/// 别人贴着的一份租约（适配器负责从 `locks/<device>.json` 翻译过来）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PeerLease {
+    pub device: String,
+    pub expires_at: String,
+    pub seq: u64,
+}
+
+impl PeerLease {
+    /// 还挡不挡路。时间读不出来按"过期"算 —— 挡不住事小，永久挡住同步是大。
+    pub fn is_fresh(&self, now_ms: i64) -> bool {
+        match notera_core::Timestamp::parse(&self.expires_at).and_then(|t| t.as_millis()) {
+            Some(ms) => ms > now_ms,
+            None => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -191,6 +221,10 @@ pub enum SyncEvent {
     Phase(Phase),
     Progress { done: u32, total: u32 },
     NeedsConflictAttention,
+    /// §11.4：本轮让路给另一台设备（改动仍是 dirty，下一轮会再试）。
+    /// 单独一个事件而不是"失败"：让路是正常协作，报成失败会吓到人，
+    /// 静默不说又等于"看着同步其实没公告"。
+    Deferred { device: String },
     Completed(RoundOutcome),
     Failed { retryable: bool, message_key: &'static str },
 }
@@ -201,11 +235,28 @@ pub struct EngineConfig {
     pub round_request_cap: u32,
     pub pull_concurrency: usize,
     pub bootstrap_batch: usize,
+    /// §11.4 的开关。由 host 按 §5 的探测结果决定：**只在保护缺位时开**
+    /// （写入策略 S3，或探不到强 ETag ⇒ 清单 CAS 不可信）。
+    /// 有 S1/S2 且强 ETag 时服务器自己就拦并发写，开租约只是每轮多两个请求。
+    pub lease: LeasePolicy,
+}
+
+/// 租约策略。默认关：它只在保护缺位时才有意义。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeasePolicy {
+    Off,
+    On { ttl_ms: i64 },
+}
+
+impl Default for LeasePolicy {
+    fn default() -> Self {
+        LeasePolicy::Off
+    }
 }
 
 impl Default for EngineConfig {
     fn default() -> Self {
-        Self { max_cas_retries: 3, round_request_cap: 200, pull_concurrency: 8, bootstrap_batch: 500 }
+        Self { max_cas_retries: 3, round_request_cap: 200, pull_concurrency: 8, bootstrap_batch: 500, lease: LeasePolicy::Off }
     }
 }
 
@@ -239,6 +290,17 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             outcome: RoundOutcome::NoOp,
         };
         let mut events = Vec::new();
+
+        // ⓪ §6.1 的 `acquire_lease?`：先把自己贴上去，再开始读。
+        // 贴不上不拦本轮 —— 那只是"别人看不见我"，正确性仍由 §11.2 前两层兜。
+        if let LeasePolicy::On { ttl_ms } = self.cfg.lease {
+            let now_ms = self.now_ms();
+            let expires_at = notera_core::Timestamp::from_millis(now_ms + ttl_ms).to_string();
+            let token = self.lease_token();
+            if self.remote.lease_publish(&token, &expires_at, self.local.seq_applied()).await.is_ok() {
+                let _ = self.local.record_lease(&token, &expires_at);
+            }
+        }
 
         // ① 读清单
         let (manifest, mut new_etag) = match self.remote.fetch_manifest(etag).await {
@@ -330,6 +392,10 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
 
         // ③ push 本地变更（先实体，后清单 —— R2）
         let mut written: Vec<EntryRef> = Vec::new();
+        // 推成功了但**公告还没提交**的一批：等清单 CAS 成功再落 `MarkSynced`。
+        // 早于公告就标成已同步 = 清单提交一失败（网络抖一下、CAS 让路）这批改动
+        // 再也不会被重新公告，别的设备永远看不见（§11.3 C4 要的正是"清单重放"）。
+        let mut await_announce: Vec<(String, String, u64, String)> = Vec::new();
         let mut lmap: BTreeMap<(String, String), &LocalView> =
             locals.iter().map(|l| (l.key(), l)).collect();
         for d in plan.pushes() {
@@ -351,12 +417,7 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                     st.bytes_up += wire.len() as u64;
                     st.pushed += 1;
                     written.push(plan::entry_of(l, wire.len() as u64));
-                    let _ = self.local.apply(vec![ApplyOp::MarkSynced {
-                        kind: l.kind.clone(),
-                        id: l.id.clone(),
-                        rev: l.rev,
-                    }]);
-                    let _ = self.local.outbox_state(&d.key.1, OutboxState::Done, None);
+                    await_announce.push((l.kind.clone(), l.id.clone(), l.rev, d.key.1.clone()));
                 }
                 Ok(_) => {
                     // 写未通过复验：不得记为已提交（webdav 层契约）
@@ -446,7 +507,32 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 manifest = Some(Manifest::initial("", &self.local.device_id(), &self.local.now(), "notera"));
             }
         }
+        // 本轮是否要让路（让路只跳过"提交清单"这一步，其余收尾照常）
+        let mut yielded: Option<String> = None;
         if !written.is_empty() {
+            // §11.2 第三层：**写清单前**问一次有没有人正占着。让路只是延后一轮 ——
+            // 记录已经推上去了但清单没公告 = 别人暂时看不见，也无害（清单是唯一入口）。
+            if let LeasePolicy::On { .. } = self.cfg.lease {
+                let known: Vec<String> = manifest.as_ref().map(|m| vec![m.generated_by.clone()]).unwrap_or_default();
+                let now_ms = self.now_ms();
+                let me = self.local.device_id();
+                match self.remote.lease_holders(&known).await {
+                    Ok(peers) => {
+                        st.requests += 1;
+                        yielded = peers.into_iter().find(|p| p.device != me && p.is_fresh(now_ms)).map(|p| p.device);
+                    }
+                    // 读不到别人的租约 = 当作没人持有（§11.4：这一层坏了不能变成永不同步）
+                    Err(_) => {
+                        st.requests += 1;
+                    }
+                }
+            }
+        }
+        if let Some(device) = yielded {
+            st.outcome = RoundOutcome::Partial;
+            events.push(SyncEvent::Deferred { device });
+        }
+        if !written.is_empty() && events.iter().all(|e| !matches!(e, SyncEvent::Deferred { .. })) {
             if let Some(m) = manifest.as_ref() {
                 let mut next = m.with_commit(&self.local.device_id(), &self.local.now(), &written, &[]);
                 let mut tries = 0u8;
@@ -455,6 +541,15 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                     st.bytes_up += next.to_wire().len() as u64;
                     match self.remote.commit_manifest(&next.to_wire(), new_etag.as_deref()).await {
                         Ok(e) => {
+                            // 公告成功了，这批才算"已同步"；outbox 也在此刻结清。
+                            for (kind, id, rev, dedupe) in &await_announce {
+                                let _ = self.local.apply(vec![ApplyOp::MarkSynced {
+                                    kind: kind.clone(),
+                                    id: id.clone(),
+                                    rev: *rev,
+                                }]);
+                                let _ = self.local.outbox_state(dedupe, OutboxState::Done, None);
+                            }
                             let _ = self.local.apply(vec![
                                 ApplyOp::StoreManifest { wire: next.to_wire(), etag: e.clone(), seq: next.seq },
                                 ApplyOp::SetRemote {
@@ -508,6 +603,18 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
         }
         events.push(SyncEvent::Completed(st.outcome));
         (st, events)
+    }
+
+    /// 本地时钟的毫秒刻度。读不出来就按 0 —— 方向是"别人的租约都算过期"，
+    /// 也就是不让路，而不是永久挡住自己。
+    fn now_ms(&self) -> i64 {
+        notera_core::Timestamp::parse(&self.local.now()).and_then(|t| t.as_millis()).unwrap_or_default()
+    }
+
+    /// 一轮一份。只用来区分同一台设备的两次运行，不参与任何判定。
+    /// 借 `EntityId` 生成而不是给本 crate 加 uuid 依赖（它的依赖面是刻意最小的）。
+    fn lease_token(&self) -> String {
+        notera_core::EntityId::new().to_string()
     }
 
     fn fail_event(&self, e: &RemoteError) -> SyncEvent {

@@ -177,7 +177,7 @@ check('egress:raw-socket', 'PROXY.md §1（唯一出口；devserver 必须 debug
 // 搬进了传输适配器（那正是本仓库反复强调要避免的那类错误）。
 // `Manifest` 在名单里是因为 CAS 提交要**自校验刚写出去的清单**：解析必须由 schema
 // 属主（notera-sync）来做，适配器自带第二份解析器才是数据风险。
-const PORT_ITEMS = new Set(['RemotePort', 'Commit', 'RemoteError', 'EntryRef', 'Manifest']);
+const PORT_ITEMS = new Set(['RemotePort', 'Commit', 'RemoteError', 'EntryRef', 'Manifest', 'PeerLease']);
 // 判定的是"紧跟在 notera_sync:: 后面的那个类型/模块"，并支持四种写法：
 //   notera_sync::RemoteError   notera_sync::{A, B}   notera_sync::manifest::{A, B}
 //   notera_sync::RemoteError::Variant（变体不算新的引用面）

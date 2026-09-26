@@ -23,6 +23,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// §11.4 租约的有效期。桌面轮次间隔 25s（§14），所以正常在线时一直在续；
+/// 设备崩溃后这份租约最多挡住别人 60s，不需要任何清理进程。
+const LEASE_TTL_MS: i64 = 60_000;
+
 /// UI 能看到的同步语义，一共四态。任何协议细节都必须先折进这四个值。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -908,14 +912,38 @@ impl App {
         self.set_sync_public(Badge::Syncing);
         // §6.3：带上轮的 etag 才可能拿到 304（空轮 1 请求 0 字节正文）
         let etag = self.manifest_etag();
-        let engine = notera_sync::SyncEngine::new(self.local_port(), RemoteBorrow(remote.as_ref()), EngineConfig::default());
+        let engine = notera_sync::SyncEngine::new(self.local_port(), RemoteBorrow(remote.as_ref()), self.engine_config());
         let (st, evs) = engine.run_round(etag.as_deref()).await;
+        let yielded = evs.iter().any(|e| matches!(e, SyncEvent::Deferred { .. }));
         for e in evs {
             self.apply_sync_event(e);
         }
-        self.apply_round_stats(&st);
+        self.apply_round_stats(&st, yielded);
         self.inner.syncing.store(false, Ordering::SeqCst);
         Some(st)
+    }
+
+    /// §11.4 的开关：**只在别的保护缺位时**才花这两次请求。
+    /// * 写入策略 S3（条件写与不覆盖式 MOVE 都没有）→ 记录写全靠复验，让路有意义；
+    /// * 探不到强 ETag → 清单 CAS 形同虚设，公告可能互相覆盖，同样要让路。
+    /// 两者都不成立时（S1/S2 + 强 ETag）服务器自己就拦并发写，开租约只是白多两个请求。
+    fn engine_config(&self) -> EngineConfig {
+        EngineConfig { lease: self.lease_policy(), ..EngineConfig::default() }
+    }
+
+    /// 从 §5 的探测结果推出租约策略。没探过 → 用保守默认（含强 ETag 且有条件写）→ 关。
+    pub fn lease_policy(&self) -> notera_sync::LeasePolicy {
+        let Some(acct) = ConfigRepository::active(&self.config()).cloned() else {
+            return notera_sync::LeasePolicy::Off;
+        };
+        let caps = self.stored_caps(&acct.id);
+        let weak_announcement_cas = !caps.has(notera_webdav::Caps::STRONG_ETAG);
+        let blind_writes = caps.write_strategy() == notera_webdav::WriteStrategy::S3;
+        if weak_announcement_cas || blind_writes {
+            notera_sync::LeasePolicy::On { ttl_ms: LEASE_TTL_MS }
+        } else {
+            notera_sync::LeasePolicy::Off
+        }
     }
 
     /// 按需探测 → 协商 → 跑一轮，返回这一轮的统计（CLI `sync-once` 的落点）。
@@ -1244,7 +1272,7 @@ impl App {
         HostLocalPort(self.clone())
     }
 
-    pub(crate) fn apply_round_stats(&self, st: &RoundStats) {
+    pub(crate) fn apply_round_stats(&self, st: &RoundStats, yielded: bool) {
         // 墙上时间只用于展示（I4/R3）；由 notera-core 的 Clock 统一供给，host 不引 chrono。
         let now = SystemClock.now().to_string();
         self.set_sync(|v| {
@@ -1252,6 +1280,11 @@ impl App {
             match st.outcome {
                 notera_sync::RoundOutcome::Failed => {
                     v.badge = Badge::Failed;
+                }
+                _ if yielded => {
+                    // §11.4：本轮让路了。徽标留在"离线/待重试"，别报成已同步 ——
+                    // 那会让用户以为改动已经公告出去，而它其实还在队列里。
+                    v.badge = Badge::Offline;
                 }
                 _ => {
                     v.badge = Badge::Synced;
@@ -1289,6 +1322,15 @@ impl App {
             SyncEvent::NeedsConflictAttention => {
                 self.emit(BusEvent::Toast { message_key: "sync.conflict_attention".into(), level: "warn".into() })
             }
+            // §11.4：让路不是失败，但必须看得见 —— "安静地不下公告"就是静默不同步。
+            SyncEvent::Deferred { device } => {
+                self.set_sync(|v| {
+                    v.badge = Badge::Offline;
+                    v.message_key = Some("sync.leaseHeld".into());
+                    v.retryable = true;
+                });
+                tracing::info!(%device, "本轮让路给另一台正在写的设备（§11.4）");
+            }
             SyncEvent::Completed(_) => {}
             SyncEvent::Failed { retryable, message_key } => {
                 let key = message_key.to_string();
@@ -1299,6 +1341,22 @@ impl App {
                 });
             }
         }
+    }
+
+    /// 把本轮贴上的租约写进 `sync_state`（那两列自 0002 起就在，此前没人写它们）。
+    /// 失败只记日志：它是诊断线索，不是正确性依赖。
+    pub(crate) fn store_lease(&self, token: &str, expires_at: &str) -> Result<(), LocalError> {
+        let Some(acct) = ConfigRepository::active(&self.config()).cloned() else {
+            return Ok(());
+        };
+        let Ok(Some(mut st)) = self.inner.store.sync_state(&acct.id) else { return Ok(()) };
+        st.lease_token = Some(token.to_string());
+        st.lease_expires_at = Some(expires_at.to_string());
+        self.inner
+            .store
+            .set_sync_state(&st)
+            .map_err(|e| LocalError::Storage(format!("租约状态写不进本地库: {e}")))?;
+        Ok(())
     }
 
     pub(crate) fn set_manifest_cache(&self, wire: Vec<u8>) {
@@ -1644,6 +1702,10 @@ impl LocalPort for HostLocalPort {
         tracing::debug!(key, state = ?st, ?retry_at, "outbox 状态回写未接线（Store 需要按 dedupe_key 定位行）");
         Ok(())
     }
+    /// §11.4：把本轮贴上的租约记进 sync_state 的两列（诊断用）。
+    fn record_lease(&self, token: &str, expires_at: &str) -> Result<(), LocalError> {
+        self.0.store_lease(token, expires_at)
+    }
     fn cached_manifest(&self) -> Option<Vec<u8>> {
         self.0.inner.cached_manifest.lock().unwrap().clone()
     }
@@ -1692,6 +1754,14 @@ impl<R: notera_sync::RemotePort> notera_sync::RemotePort for RemoteBorrow<'_, R>
     }
     async fn probe_record_etag(&self, kind: &str, id: &str) -> Result<Option<String>, notera_sync::RemoteError> {
         self.0.probe_record_etag(kind, id).await
+    }
+    // 这两条必须**显式转发**。漏一条 = 租约静默空转，而"空转的并发保护"比没有更糟：
+    // 界面会以为自己有让路能力。
+    async fn lease_publish(&self, token: &str, expires_at: &str, seq: u64) -> Result<(), notera_sync::RemoteError> {
+        self.0.lease_publish(token, expires_at, seq).await
+    }
+    async fn lease_holders(&self, known: &[String]) -> Result<Vec<notera_sync::PeerLease>, notera_sync::RemoteError> {
+        self.0.lease_holders(known).await
     }
 }
 

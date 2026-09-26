@@ -180,3 +180,82 @@ async fn one_round_carries_a_local_note_to_a_second_device() {
     assert_eq!(b.app.store().account_caps(&b.account_id()).unwrap().map(Caps::from_mask).map(|c| c.write_strategy()), Some(WriteStrategy::S1));
     srv.stop().await;
 }
+
+// ---------------------------------------------------------------- §11.4 租约 ---
+
+/// 清单 index.json 的 sha（内容指纹）。公告了就会变，没公告就不该变。
+fn manifest_sha(srv: &TestServer) -> String {
+    srv.fs_dump()["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|e| e["path"].as_str() == Some("/.notes/manifest/index.json"))
+        .map(|e| e["sha256"].as_str().unwrap_or_default().to_string())
+        .unwrap_or_default()
+}
+
+fn lock_writes(srv: &TestServer) -> Vec<String> {
+    srv.request_log()
+        .iter()
+        .filter(|r| r.method == "PUT" && r.path.contains("/locks/"))
+        .map(|r| r.path.clone())
+        .collect()
+}
+
+/// 让探测认为"这台服务器没有强 ETag"：探测用的那次 GET 永远回 200，不给 304。
+/// 没强 ETag ⇒ 清单 CAS 不可信 ⇒ §11.4 要求启用租约。
+async fn pretend_no_strong_etag(srv: &TestServer) {
+    srv.inject(Injection::status("GET /.notes/probe/etag.json", 200)).await;
+}
+
+#[tokio::test]
+async fn a_weak_server_turns_the_lease_on_and_the_second_device_yields_the_announcement() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    pretend_no_strong_etag(&srv).await;
+
+    let a = Device::boot("lease-a", &url);
+    a.app.create_note(&a.app.default_folder_id().unwrap(), doc("A 的先手")).unwrap();
+    let st_a = a.app.sync_once().await.expect("A 的一轮");
+    assert!(st_a.pushed >= 1, "A 要先推上去：{st_a:?}");
+    assert!(matches!(a.app.lease_policy(), notera_sync::LeasePolicy::On { .. }), "探不到强 ETag 就该开租约");
+    // A 的租约：服务器上有一份、本地 sync_state 里也记了一份
+    let locks_after_a = lock_writes(&srv);
+    assert_eq!(locks_after_a.len(), 1, "弱服务器下必须贴自己的租约：{locks_after_a:?}");
+    let acct_a = a.account_id();
+    let state_a = a.app.store().sync_state(&acct_a).unwrap().expect("同步状态行");
+    assert!(state_a.lease_token.as_deref().unwrap_or_default().starts_with("01"), "租约 token 要落库：{state_a:?}");
+    assert!(state_a.lease_expires_at.as_deref().unwrap_or_default().ends_with('Z'));
+
+    // 第二台设备：它也会贴自己的，然后看见 A 的还新鲜 → 让路
+    let b = Device::boot("lease-b", &url);
+    // 先入伙再改：§2 不许两个"各自有内容"的库并成一个，所以 B 的空库先协商。
+    b.app.sync_once().await.expect("B 先入伙");
+    b.app.create_note(&b.app.default_folder_id().unwrap(), doc("B 的后手")).unwrap();
+    let before = manifest_sha(&srv);
+    let st_b = b.app.sync_once().await.expect("B 的一轮");
+    assert!(st_b.pushed >= 1, "让路只挡公告，不挡上传：{st_b:?}");
+    assert_eq!(manifest_sha(&srv), before, "B 让路期间不许提交清单（两份公告互相覆盖才是要防的事）");
+    let status = b.app.sync_status().unwrap();
+    assert_eq!(status.message_key.as_deref(), Some("sync.leaseHeld"), "让路必须让用户看得见：{status:?}");
+    assert!(status.retryable, "让路是可重试状态");
+    assert_eq!(b.app.store().stats().unwrap().dirty_notes, 1, "没公告的改动必须还是 dirty，下一轮重发");
+    let both = lock_writes(&srv);
+    // 每一轮都会续期，所以 PUT 次数会多于设备数；按路径去重才是"几台设备在贴"。
+    let devices: std::collections::BTreeSet<&str> = both.iter().map(|p| p.rsplit('/').next().unwrap_or_default()).collect();
+    assert_eq!(devices.len(), 2, "每台设备一份租约（续期是重复 PUT 同一路径）：{both:?}");
+    srv.clear_injection().await;
+    srv.stop().await;
+}
+
+#[tokio::test]
+async fn a_server_with_strong_etag_pays_nothing_for_the_lease() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let a = Device::boot("lease-strong", &srv.base_url());
+    a.app.create_note(&a.app.default_folder_id().unwrap(), doc("强 ETag 服务器")).unwrap();
+    let st = a.app.sync_once().await.expect("一轮");
+    assert!(st.pushed >= 1);
+    assert!(lock_writes(&srv).is_empty(), "有强 ETag + 条件写时 CAS 已经够用，不该白多两个请求");
+    assert!(matches!(a.app.lease_policy(), notera_sync::LeasePolicy::Off), "CAS 可信时不该开租约");
+    srv.stop().await;
+}

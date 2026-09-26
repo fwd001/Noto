@@ -505,6 +505,20 @@ impl RemotePort for WebDavRemote {
         }
     }
 
+    // §11.4 尽力而为租约：实现在 `lease.rs`，这里只是端口落点。
+    async fn lease_publish(&self, token: &str, expires_at: &str, seq: u64) -> Result<(), RemoteError> {
+        WebDavRemote::lease_publish(self, self.device_id(), token, expires_at, seq).await
+    }
+
+    async fn lease_holders(&self, known: &[String]) -> Result<Vec<notera_sync::PeerLease>, RemoteError> {
+        let me = self.device_id().to_string();
+        Ok(WebDavRemote::lease_peers(self, &me, known)
+            .await?
+            .into_iter()
+            .map(|d| notera_sync::PeerLease { device: d.device, expires_at: d.expires_at, seq: d.seq })
+            .collect())
+    }
+
     /// 写一条实体记录：§11.2 的 rev 闸门 + §5 的策略选择 + 写后复验。
     ///
     /// rev 闸门需要知道远端当前的 rev，而 HTTP 没有 `If-Rev` —— 因此"更新写"

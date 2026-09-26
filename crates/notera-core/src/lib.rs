@@ -248,6 +248,12 @@ impl Timestamp {
     pub fn as_millis(&self) -> Option<i64> {
         chrono::DateTime::parse_from_rfc3339(&self.0).ok().map(|d| d.timestamp_millis())
     }
+    /// `as_millis` 的反向：给"多久之后过期"算一个时间戳。
+    pub fn from_millis(ms: i64) -> Self {
+        Self::new(
+            chrono::DateTime::from_timestamp(ms / 1000, ((ms % 1000).max(0) as u32) * 1_000_000).unwrap_or_default(),
+        )
+    }
 }
 
 impl fmt::Display for Timestamp {

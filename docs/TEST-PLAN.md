@@ -373,6 +373,8 @@
 | CM-SV-06 | `aws-lc-rs` + `rustls` 于 `x86_64-pc-windows-gnu` | 构建 + 真实 TLS | 编译通过并握手成功（已实测） | 已实测 |
 | CM-SV-07 | §5 能力探测（`notera-webdav/tests/probe.rs`） | 五项各自的"缺失"被单独认出（`FAIL(status=…)` 逐项注入）且不误伤别项；服务器不可达 ⇒ `RemoteError::Offline` 而**不是**"全 false 的结论"；探测对象只待在 `probe/` 且用完清空，绝不碰 records/manifest/attachments | 位图 → 写入策略映射与 §5 表逐字一致（有条件写⇒S1，什么都没有⇒S3）；`caps_bits_map_exactly_as_the_table_says` | 已实测（5 例） |
 | CM-SV-08 | §5 探测的**接线位置**（`notera-host/tests/sync_once.rs`） | 启动路径先探后装：装出来的适配器带的就是实测位图（注入"条件写无效"→ 该会话应选 S2 而非默认 S1）；当天不重复探测；探测未完成时 `cap_mask` 保持 NULL 且发出可见提示；随后一轮同步把本地笔记推到真服务器、第二台设备原样拉回 | 请求日志里所有探测请求的 seq 都早于任何真实读写；`one_round_carries_a_local_note_to_a_second_device` 标题逐字一致 | 已实测（3 例） |
+| CM-SV-09 | §11.4 租约的适配器侧（`notera-webdav/tests/lease.rs`） | 贴上/他人可见/release；自己的旧租约必须被覆盖而不是"别人占着"；过期即失效；`PROPFIND` 坏掉时仍能靠"从清单学到的对手"让路；不可达时发布报错但**读**不许挡住同步 | 6 例全绿；写租约只碰 `locks/`，不碰 records/manifest/attachments | 已实测（6 例） |
+| CM-SV-10 | §11.4 租约的决策与端到端（`notera-sync/tests/engine.rs`、`notera-host/tests/sync_once.rs`） | 开关只看 §5 结果（S3 或无强 ETag 才开）；轮次开始贴自己的；**写清单之前**别人新鲜 → 不提交清单、改动保持 dirty、状态显示 `sync.leaseHeld`；过期/自己的/读不出来 都不挡公告；贴不上不中止本轮 | 弱服务器上第二台设备让路（清单 sha 不变、记录仍上传、`dirty_notes==1`），强 ETag 服务器上一个 `/locks/` 请求都不发 | 已实测（引擎 7 例 + 端到端 2 例） |
 
 ## 质量闸门
 

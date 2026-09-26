@@ -39,7 +39,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | `notera-crypto` | 信封 seal/open、sha256、argon2id | core | store/net/sync | L0 | 2 |
 | `notera-store` | SQLite、迁移、仓储、FTS、outbox 持久化、tombstone | core, richtext, crypto | net, webdav, sync（**存储层不知道同步**） | L1 | 1 |
 | `notera-net` | 唯一 HTTP 出口：代理、TLS、超时、退避、审计 | core, config | webdav, sync, store | L1 | 2,3 |
-| `notera-webdav` | DAV 语义、能力探测、原子写、路径安全 | core, net, crypto, sync（**仅端口契约**：`RemotePort`/`Commit`/`RemoteError`/`EntryRef`/`Manifest`。最后一个是 CAS 提交的清单**自校验**，解析必须由 schema 属主做 —— 适配器自带第二份解析器才是风险。本 crate 不得 re-export `SyncEngine`，引擎入口只有 sync 一处） | store, host；把同步判定搬进适配器 | L1,L2 | 2 |
+| `notera-webdav` | DAV 语义、能力探测、原子写、路径安全 | core, net, crypto, sync（**仅端口契约**：`RemotePort`/`Commit`/`RemoteError`/`EntryRef`/`PeerLease`，以及 `Manifest` —— 后者是 CAS 提交的清单**自校验**，解析必须由 schema 属主做，适配器自带第二份解析器才是风险。本 crate 不得 re-export `SyncEngine`，引擎入口只有 sync 一处） | store, host；把同步判定搬进适配器 | L1,L2 | 2 |
 | `notera-sync` | 状态机、plan、push/pull、冲突编排、幂等、租约 | core, richtext, crypto, store, webdav, config | UI、平台 API | L1–L4 | 2 |
 | `notera-config` | 设置、账户、代理 profile、凭据引用 | core, store | sync, webdav | L0,L1 | 1,3 |
 | `notera-importer` | 导出/导入/备份/恢复 | core, richtext, crypto, store, sync | net, webdav（复用 sync，不自己发请求） | L1,L3 | 7 |
@@ -185,7 +185,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 
 | 门禁 | 结果 | 怎么复现 |
 |---|---|---|
-| Rust 测试 | 418 通过 / 0 失败 / 0 ignored（49 个测试二进制） | `cargo test --workspace` |
+| Rust 测试 | 433 通过 / 0 失败 / 0 ignored（50 个测试二进制） | `cargo test --workspace` |
 | 前端 | 140 通过（14 文件）、`vue-tsc` 无错误、构建 206 KB→gzip 70 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
 | 架构适应度 | 20/20（最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
@@ -201,7 +201,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | OS 钥匙串接入（`credential_ref`） | 未实现 | Phase 5 平台工作；当前只有 debug 构建下的 `NOTERA_DEV_WEBDAV_USER/SECRET`，release 一律进 `needs_credentials`。`caps.keychain` 已改口为 `none`（此前对 Windows 报 `credential_manager`，是要用户误信"口令进钥匙串了"） |
 | 托盘 / 原生菜单 / 全局快捷键 / 通知 | 未实现 | 壳里一行相关代码都没有，但 `caps` 曾对 Windows 全报 true → 设置页摆出"关闭窗口时留在系统托盘"这种存了没人读的开关。现已按 as-built 报 false，UI 显示"此平台不可用"。**要恢复需评审**：分别需要 `tauri` 的 `tray-icon` 特性、`Menu::with_items`、`tauri-plugin-global-shortcut`、通知插件的实际调用 —— 都会动依赖图，按 §9 走，不"顺便"加 |
 | 协议 §5 能力探测 | 已接入 | `notera-webdav/probe.rs` 五项探测 → `sync_accounts.cap_mask`；启动路径**先探后装**（`App::remote_for_sync`），所以本次会话就按实测策略写，不用等下次启动。探测失败只提示不降级（`sync.probeDeferred`），当天不重复探测。判定结果经 `AccountDto`（`capMask`/`writeStrategy`/`capsProbedAt`）显示到设置页的"服务器能力"块，S3 明确建议多设备串行编辑 —— §5 末行要求的正是这句话。`notera-cli dav-probe` 可强制重探并打印结论 |
-| 协议 §11.3 租约 | 未接入 | 列（`lease_token`/`lease_expires_at`）已在库里并随状态往返，但没有任何获取/续期逻辑；§204 要求 S3 下必须启用租约，所以 S3 账户目前仍是"弱并发保护"——这正是 §5 要把服务器尽量推到 S1/S2 的原因 |
+| 协议 §11.4 尽力而为租约 | 已接入 | §11.2 第三层。开关由 §5 的探测结果决定：**S3 或探不到强 ETag 才开**（CAS 可信时白多两个请求没意义）。引擎在轮次开始贴自己的 `locks/<device>.json`（TTL 60s），在**写清单之前**看别人新不新鲜：新鲜就不提交清单，改动保持 dirty、状态显示 `sync.leaseHeld`，下一轮自动重来。读不到别人的租约 = 当作没人持有（这一层坏了绝不能变成永不同步）。不用 `LOCK`/`UNLOCK`。证据：引擎 7 例 + 适配器 6 例 + 两台设备真服务器 1 例 |
 | 多服务器同时启用 | 按 ADR-0018 拒绝 | 确认点 `sync_rev` 是全局列，需要迁到按账户表 |
 | 备份 / 恢复（§15） | 已实现 | `VACUUM INTO` 一致快照 + sha256/integrity_check 闸门 + 替换前留当前库 + 下次启动落地；恢复不在进程内换库（见 DATA-MODEL §15） |
 | 导出 / 导入（ZIP bundle） | 已实现 | `notera-importer/bundle.rs`；导入走 `apply_remote` 同一条冲突安全路径，删除事实随包带走（防复活） |
