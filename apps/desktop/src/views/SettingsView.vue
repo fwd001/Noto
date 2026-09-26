@@ -21,6 +21,7 @@ const shell = useShellStore();
 const bypassText = ref('');
 const savedAt = ref<number | null>(null);
 const dataPath = ref('');
+const restoreHint = ref('');
 const importMode = ref<'intoEmpty' | 'merge'>('merge');
 
 const tlsOptions: Array<{ value: TlsPolicyKind; label: string }> = [
@@ -106,12 +107,19 @@ async function doImport(): Promise<void> {
 }
 
 async function doBackup(): Promise<void> {
-  await settings.exportData({ folderIds: [], includeAttachments: true, includeTrash: true, ...(dataPath.value.trim() ? { path: dataPath.value.trim() } : {}) });
+  const info = await settings.backupDb(dataPath.value.trim() ? dataPath.value.trim() : undefined);
+  // 备份成功后把路径回填：下一步点"恢复"默认就是刚这份，不必手抄长路径
+  if (info) dataPath.value = info.path;
 }
 
 async function doRestore(): Promise<void> {
-  await settings.importData({ mode: 'intoEmpty', ...(dataPath.value.trim() ? { path: dataPath.value.trim() } : {}) });
-  await notes.load();
+  const path = dataPath.value.trim();
+  if (!path) {
+    restoreHint.value = t('settings.restoreNeedsPath');
+    return;
+  }
+  restoreHint.value = '';
+  await settings.restoreDb(path);
 }
 
 function keyHint(): string {
@@ -291,13 +299,13 @@ function keyHint(): string {
           <h2 class="card__title">{{ t('settings.data') }}</h2>
           <label class="field">
             <span>{{ t('settings.export') }} · path</span>
-            <input v-model="dataPath" class="input" type="text" spellcheck="false" placeholder="留空由本地核心决定位置" />
+            <input v-model="dataPath" class="input" type="text" spellcheck="false" data-testid="data-path" placeholder="留空由本地核心决定位置" />
           </label>
           <div class="row">
             <button type="button" class="btn" :disabled="settings.dataBusy" data-testid="export-data" @click="doExport">{{ t('settings.export') }}</button>
             <button type="button" class="btn" :disabled="settings.dataBusy" @click="doImport">{{ t('settings.import') }}</button>
-            <button type="button" class="btn" :disabled="settings.dataBusy" @click="doBackup">{{ t('settings.backup') }}</button>
-            <button type="button" class="btn btn--danger" :disabled="settings.dataBusy" @click="doRestore">{{ t('settings.restore') }}</button>
+            <button type="button" class="btn" :disabled="settings.dataBusy" data-testid="backup-db" @click="doBackup">{{ t('settings.backup') }}</button>
+            <button type="button" class="btn btn--danger" :disabled="settings.dataBusy" data-testid="restore-db" @click="doRestore">{{ t('settings.restore') }}</button>
           </div>
           <label class="row">
             <span class="text-sm">{{ t('settings.importModeEmpty') }}</span>
@@ -306,7 +314,9 @@ function keyHint(): string {
               <option value="intoEmpty">{{ t('settings.importModeEmpty') }}</option>
             </select>
           </label>
-          <p v-if="report" class="field-hint">{{ t('settings.report', { text: report }) }}</p>
+          <p v-if="report" class="field-hint" data-testid="data-report">{{ t('settings.report', { text: report }) }}</p>
+          <p v-if="restoreHint" class="field-hint" data-testid="restore-hint">{{ restoreHint }}</p>
+          <p class="field-hint">{{ t('settings.restoreNeedsRestart') }}</p>
         </div>
 
         <div class="card">

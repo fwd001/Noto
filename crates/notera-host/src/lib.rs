@@ -545,6 +545,27 @@ impl App {
         self.inner.store.get_prefs().map_err(CmdError::from)
     }
 
+    /// 一致性快照（DATA-MODEL §15）。产物自带 sha256 与 user_version，恢复闸门靠它们。
+    pub fn backup_db(&self, dest_dir: Option<&std::path::Path>) -> Result<notera_store::BackupInfo, CmdError> {
+        self.inner.store.create_backup(dest_dir).map_err(CmdError::from)
+    }
+
+    pub fn list_backups(&self) -> Result<Vec<notera_store::BackupInfo>, CmdError> {
+        self.inner.store.list_backups().map_err(CmdError::from)
+    }
+
+    /// 恢复只"排期"，不在进程内换库：真正落地发生在下次启动 `Store::open` 之前。
+    /// 返回 `restart_required=true` 是这条命令的正常结果，不是失败。
+    pub fn stage_restore(&self, path: &std::path::Path) -> Result<serde_json::Value, CmdError> {
+        let info = self.inner.store.stage_restore(path).map_err(CmdError::from)?;
+        Ok(serde_json::json!({
+            "restartRequired": true,
+            "sha256": info.sha256,
+            "userVersion": info.user_version,
+            "path": info.path.to_string_lossy(),
+        }))
+    }
+
     // ------------------------------------------------------------ 配置面 ---
 
     pub fn current_account(&self) -> Result<Option<AccountDto>, CmdError> {

@@ -77,9 +77,9 @@ impl Default for Edit {
 }
 
 pub struct Store {
-    paths: StorePaths,
+    pub(crate) paths: StorePaths,
     pub(crate) device: DeviceId,
-    write: Mutex<Connection>,
+    pub(crate) write: Mutex<Connection>,
     readers: Readers,
     clock: SystemClock,
     migration: MigrateReport,
@@ -105,6 +105,8 @@ impl Store {
     /// 不迁移、不写回、不改文件。
     pub fn open(dir: &Path, device_id: DeviceId) -> Result<Store, StoreError> {
         std::fs::create_dir_all(dir)?;
+        // 待恢复标记必须在打开库之前落地，这样后面的启动自检检查的是恢复后的数据。
+        crate::backup::apply_pending_restore(dir)?;
         let attachments = dir.join(ATTACHMENTS_DIR_NAME);
         std::fs::create_dir_all(&attachments)?;
         let db = dir.join(DB_FILE_NAME);
@@ -1352,7 +1354,7 @@ pub(crate) fn blob_path(dir: &Path, sha256: &str) -> PathBuf {
 }
 
 /// 先写 `.part` 再 rename：读者永远看不到半个 blob。
-fn write_atomic(target: &Path, bytes: &[u8]) -> Result<(), StoreError> {
+pub(crate) fn write_atomic(target: &Path, bytes: &[u8]) -> Result<(), StoreError> {
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }

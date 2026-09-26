@@ -14,6 +14,7 @@ pub mod error;
 pub mod types;
 
 mod apply;
+mod backup;
 mod derive;
 mod migrate;
 mod pool;
@@ -23,6 +24,7 @@ mod store;
 mod syncml;
 
 pub use crate::error::StoreError;
+pub use crate::backup::{apply_pending_restore, inspect_backup, BackupInfo, PendingRestore, BACKUP_DIR_NAME, PENDING_FILE_NAME};
 pub use crate::migrate::MigrateReport;
 pub use crate::syncml::SyncStateRow;
 pub use crate::types::{

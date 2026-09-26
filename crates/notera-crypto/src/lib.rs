@@ -67,6 +67,23 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     notera_core::hex_lower(&h.finalize())
 }
 
+/// 流式算文件 sha256。备份/恢复要校验的是整库快照，动辄上百 MB，
+/// 一次性读进内存会把"备份"变成内存压力源。
+pub fn sha256_hex_file(path: &std::path::Path) -> Result<String, std::io::Error> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buf)?;
+        if read == 0 {
+            break;
+        }
+        h.update(&buf[..read]);
+    }
+    Ok(notera_core::hex_lower(&h.finalize()))
+}
+
 /// 校验 `bytes` 的 sha256 是否等于 `expected`。
 ///
 /// `expected` 接受 `sha256:<64hex>` 或裸 `<64hex>`，大小写不敏感。

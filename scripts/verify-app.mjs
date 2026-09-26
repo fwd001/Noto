@@ -3,7 +3,7 @@
  * 不是假数据。每一步要么 PASS 要么 FAIL，没有"应该没问题"这一档。
  *
  * 前置（脚本不管，由调用方起）：
- *   cargo run -p notera-cli -- --data <空目录> serve --port 17323
+ *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
  *   npm --prefix apps/desktop run dev                      # 5173
  *
  *   node scripts/verify-app.mjs
@@ -12,6 +12,9 @@ const PW = process.env.PW_CORE || 'file:///C:/Users/lhcz-fu/node_modules/playwri
 const CHROME = process.env.CHROME || 'C:/Users/lhcz-fu/AppData/Local/ms-playwright/chromium-1243/chrome-win64/chrome.exe';
 const URL_BASE = process.env.APP_URL || 'http://127.0.0.1:5173';
 const OUT = 'D:/code/Notes/docs/evidence';
+// 备份/恢复两步要看盘上的真实产物，所以得知道本地核心用的是哪个数据目录
+const DATA_DIR = process.env.DATA_DIR || 'D:/code/Notes/.logs/e2e-data';
+const fs = await import('node:fs').then((m) => m.default);
 
 const pw = await (await import(PW)).default;
 const { chromium } = pw;
@@ -26,6 +29,10 @@ page.on('console', (m) => {
 });
 page.on('pageerror', (e) => pageErrors.push(String(e)));
 page.on('requestfailed', (r) => failedRequests.push(`${r.method()} ${r.url()} → ${r.failure()?.errorText}`));
+// 4xx/5xx 不是"请求失败"，但同样是坏了：只盯 requestfailed 会漏掉整类静默错误
+page.on('response', (r) => {
+  if (r.status() >= 400) failedRequests.push(`${r.request().method()} ${r.url()} → HTTP ${r.status()}`);
+});
 
 const rows = [];
 function record(step, ok, detail) {
@@ -321,6 +328,36 @@ await step('界面上没有漏出文案键名（设置页）', async () => {
   const leaked = await leakedKeys();
   if (leaked.length > 0) throw new Error(`漏出键名：${leaked.join(', ')}`);
   return 'clean';
+});
+
+await step('备份：真产出一个可校验的快照文件', async () => {
+  await page.locator('[data-testid="backup-db"]').click();
+  await page.waitForTimeout(1500);
+  const filled = await page.locator('[data-testid="data-path"]').inputValue();
+  if (!filled.endsWith('.sqlite')) throw new Error(`备份后路径框没回填快照路径：${JSON.stringify(filled)}`);
+  if (!fs.existsSync(filled)) throw new Error(`界面说备份在 ${filled}，但盘上没有`);
+  const size = fs.statSync(filled).size;
+  if (size < 4096) throw new Error(`备份只有 ${size} 字节，不像一个库`);
+  const report = await page.locator('[data-testid="data-report"]').innerText();
+  if (!/[0-9a-f]{8}/.test(report)) throw new Error(`报告里没有自证信息：${report}`);
+  return `${size} 字节 · ${filled.split(/[\\/]/).pop()}`;
+});
+
+await step('恢复：只排期并留下可核对的标记，不静默改库', async () => {
+  const before = fs.readFileSync(`${DATA_DIR}/notera.sqlite`);
+  await page.locator('[data-testid="restore-db"]').click();
+  await page.waitForTimeout(1200);
+  const markerPath = `${DATA_DIR}/restore-pending.json`;
+  if (!fs.existsSync(markerPath)) throw new Error('点了恢复却没有写下待恢复标记');
+  const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+  if (!/^[0-9a-f]{64}$/.test(marker.sha256)) throw new Error(`标记里的 sha256 不合法：${marker.sha256}`);
+  if (!fs.existsSync(marker.path)) throw new Error(`标记指向的备份不存在：${marker.path}`);
+  if (Buffer.compare(fs.readFileSync(`${DATA_DIR}/notera.sqlite`), before) !== 0) {
+    throw new Error('恢复排期阶段就改了当前库 —— 应当等到下次启动才落地');
+  }
+  fs.rmSync(markerPath);
+  const toast = await page.locator('[data-testid="data-report"], .toast').allInnerTexts();
+  return `已排期且现库未动 ${toast.join(' ').slice(0, 40)}`;
 });
 
 await step('桌面视口无横向溢出', async () => {

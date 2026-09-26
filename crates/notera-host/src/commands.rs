@@ -261,6 +261,14 @@ pub struct PrefsCmd {
     pub value: serde_json::Value,
 }
 
+/// 备份/恢复用：路径可省略，省略时由本地核心决定位置。
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathCmd {
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
 fn default_limit() -> u32 {
     200
 }
@@ -437,6 +445,16 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
         }
         "get_prefs" => j(app.get_prefs()?),
         "platform_caps" => j(app.platform_caps()),
+        "backup_db" => {
+            let c: PathCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            j(app.backup_db(c.path.as_ref().map(std::path::Path::new))?)
+        }
+        "list_backups" => j(app.list_backups()?),
+        "restore_db" => {
+            let c: PathCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let path = c.path.ok_or_else(|| CmdError::of("bad_args", false))?;
+            j(app.stage_restore(std::path::Path::new(&path))?)
+        }
         other => Err(CmdError::of("unknown_command", false).with(serde_json::json!({ "name": other }))),
     }
 }

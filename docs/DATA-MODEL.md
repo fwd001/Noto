@@ -592,8 +592,10 @@ SELECT * FROM tree;
 
 * **导出**：自描述 ZIP —— `manifest.json`（含 `exported_at`、`app_version`、`protocol`、`counts`）+ `notes/<id>.json`（信封）+ `folders.json` + `attachments/<sha>` + `tombstones.json`。导入时可勾选"保留删除事实"，默认保留（防复活）。
 * **导入**：视为一次 `bootstrap_push` —— 目标库为空则直接落库；非空则**逐条冲突求解**，绝不静默覆盖（I3/I6）。ID 冲突但内容不同 → 生成副本并记 `sync_conflicts`。
-* **备份**：SQLite Online Backup API（不复制活动 WAL 文件），产物含 `sha256` 校验与 `user_version`。
-* **恢复**：备份文件 → 校验哈希 → 校验 `user_version ≤ 当前支持` → 原子替换（先写 `.restore` 再 rename）→ 启动自检。
+* **备份**：`VACUUM INTO` —— 与 Online Backup API 同等的**一致单文件快照**（含未 checkpoint 的 WAL 内容，实测过），但不需要给 `rusqlite` 开 `backup` 特性。产物含 `sha256` 校验与 `user_version`。同一秒内重复备份各得一份，绝不覆盖已有文件。
+* **恢复**：备份文件 → 校验哈希 → 校验 `user_version ≤ 当前支持` → 校验 `integrity_check` → **替换前先留一份当前库**（`notera.sqlite.pre-restore.<ver>`）→ 原子替换（先写 `.restoring` 再 rename）→ 启动自检。
+  * 落地时机是**下次启动** `Store::open` 之前，而不是进程内换库：`Store` 活在 `Arc<Inner>` 里，进程内替换等于重构最共享的对象。UI 点"恢复"因此只回"已排期，重启生效"。
+  * 校验用的连接必须是真只读（`SQLITE_OPEN_READ_ONLY`）：走常规连接池会执行 `PRAGMA journal_mode=WAL`，把**待校验的备份就地改写**并留下 `-wal` 边车 —— 那样"校验"这一步本身就破坏了被校验的东西。
 * 验收：创建 → 导出 → 删除 → 重新导入 → 内容哈希逐条一致（TEST-PLAN.md 功能矩阵"导出/导入/恢复"）。
 
 ---

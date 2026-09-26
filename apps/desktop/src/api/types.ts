@@ -205,8 +205,7 @@ export interface ImportRequest {
 }
 
 export interface Report {
-  path?: string;
-  sha256?: string;
+  path?: string;  sha256?: string;
   created?: number;
   merged?: number;
   skipped?: number;
@@ -215,6 +214,22 @@ export interface Report {
   counts?: Record<string, number>;
   abortedReason?: string | null;
   ok?: boolean;
+}
+
+/** 一致性快照的自证信息：恢复闸门靠 sha256 + userVersion，不靠文件名。 */
+export interface BackupInfo {
+  path: string;
+  sha256: string;
+  userVersion: number;
+  bytes: number;
+  createdAt: string;
+}
+
+export interface RestoreOutcome {
+  restartRequired: boolean;
+  sha256: string;
+  userVersion: number;
+  path: string;
 }
 
 /* ------------------------------------------------------------------ 冲突 */
@@ -300,6 +315,9 @@ export const Commands = {
   account: 'account',
   exportData: 'export_data',
   importData: 'import_data',
+  backupDb: 'backup_db',
+  listBackups: 'list_backups',
+  restoreDb: 'restore_db',
   openConflicts: 'open_conflicts',
   resolveConflict: 'resolve_conflict',
   previewText: 'preview_text',

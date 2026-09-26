@@ -6,10 +6,12 @@ import {
   Commands,
   type Account,
   type AccountDraft,
+  type BackupInfo,
   type ExportRequest,
   type ImportRequest,
   type ProxyMode,
   type Report,
+  type RestoreOutcome,
   type StoreStats,
   type TlsPolicyKind,
 } from '../api/types';
@@ -251,6 +253,43 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  /** 备份：产出一致快照并回报自证信息。失败要能看清是哪一步。 */
+  async function backupDb(path?: string): Promise<BackupInfo | null> {
+    dataBusy.value = true;
+    lastReport.value = null;
+    try {
+      const info = await callCommand<BackupInfo>(Commands.backupDb, path ? { path } : {});
+      if (info) lastReport.value = { path: info.path, sha256: info.sha256.slice(0, 12) };
+      return info ?? null;
+    } catch (error) {
+      const bridge = asBridgeError(error);
+      toasts.push(bridge.messageKey, 'error');
+      return null;
+    } finally {
+      dataBusy.value = false;
+    }
+  }
+
+  /** 恢复只排期：真正落地在下次启动，所以这里必须明说"要重启"。 */
+  async function restoreDb(path: string): Promise<RestoreOutcome | null> {
+    dataBusy.value = true;
+    lastReport.value = null;
+    try {
+      const out = await callCommand<RestoreOutcome>(Commands.restoreDb, { path });
+      if (out) {
+        lastReport.value = { path: out.path, sha256: out.sha256.slice(0, 12) };
+        toasts.push('settings.restoreStaged', 'info');
+      }
+      return out ?? null;
+    } catch (error) {
+      const bridge = asBridgeError(error);
+      toasts.push(bridge.messageKey, 'error');
+      return null;
+    } finally {
+      dataBusy.value = false;
+    }
+  }
+
   function describeReport(report: Report | null): string {
     if (!report) return '';
     const parts: string[] = [];
@@ -295,6 +334,8 @@ export const useSettingsStore = defineStore('settings', () => {
     loadStats,
     exportData,
     importData,
+    backupDb,
+    restoreDb,
     describeReport,
   };
 });
