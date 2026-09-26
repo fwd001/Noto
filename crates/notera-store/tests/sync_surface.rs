@@ -373,6 +373,44 @@ fn mark_synced_refuses_to_lead_local_head_and_attachment_kind_is_explicit() {
     ));
 }
 
+/// 第二台设备的视角：收到一条带图片的笔记，附件必须**当场**认账。
+/// 漏登记不是"图片显示不出来"这么轻：`attachments` 行是附件在库里的唯一户口 ——
+/// 没有行 → 没有下载任务（图片永远占位）、引用计数恒为 0（GC 敢删还在用的 blob）、
+/// 按文件夹导出的附件集合也是空的。
+#[test]
+fn applying_a_remote_note_registers_the_attachments_it_references() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    let bytes = b"another device png";
+    let sha = notera_crypto::sha256_hex(bytes);
+    let doc = serde_json::json!({ "v": 1, "content": [
+        { "id": "blk000001", "type": "paragraph", "content": [{ "text": "看图" }] },
+        { "id": "blk000002", "type": "image",
+          "attrs": { "sha256": sha, "role": "inline", "size": bytes.len(), "mediaType": "image/png", "name": "shot.png" } },
+        // 畸形 sha（别的客户端拿 sha256 当普通字段名）：不能让整篇笔记因此写不进去
+        { "id": "blk000003", "type": "image", "attrs": { "sha256": "not-a-sha" } }
+    ] });
+    let id = EntityId::new();
+    store.apply_remote(&[ApplyOp::UpsertNote { env: note_envelope(&id, 1, &doc, Some(&folder)) }]).unwrap();
+
+    assert_eq!(store.attachment_refs(&sha).unwrap(), 1, "doc 里的引用要落到 note_attachments（外键也靠它）");
+    assert_eq!(
+        store.attachment_for_state(&sha),
+        ("missing".to_string(), "unknown".to_string()),
+        "本地没有字节、远端没确认过 —— 这才是诚实的起点"
+    );
+    let jobs = store.attachment_downloads(5).unwrap();
+    assert_eq!(jobs.iter().map(|j| j.sha256.as_str()).collect::<Vec<_>>(), vec![sha.as_str()], "没有下载任务 = 图片永远停在占位");
+    assert_eq!(jobs[0].media_type, "image/png", "媒体类型从块属性带过来（占位与上传都按它显示）");
+    assert_eq!(store.local_attachment_shas().unwrap(), vec![sha.clone()], "畸形 sha 一律不入库");
+    assert_eq!(store.stats().unwrap().attachments, 1);
+
+    // 幂等：同一条记录重放不产生第二行，也不把已登记的态改回去
+    store.apply_remote(&[ApplyOp::UpsertNote { env: note_envelope(&id, 1, &doc, Some(&folder)) }]).unwrap();
+    assert_eq!(store.local_attachment_shas().unwrap(), vec![sha]);
+}
+
 #[test]
 fn attachments_are_content_addressed_and_deduplicated() {
     let fx = Fix::new();

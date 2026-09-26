@@ -71,9 +71,40 @@ fn ingest_verifies_sha256_before_touching_the_disk() {
     assert!(store.attachment_downloads(5).unwrap().is_empty());
 }
 
+/// 备份包还原这条路（`restore_blob`）与同步下载那条路的区别就体现在这个测试里。
 #[test]
-fn finishing_ops_closes_the_outbox_rows_for_that_blob() {
+fn restore_from_a_bundle_registers_the_row_and_still_offers_to_upload() {
     let fx = Fix::new();
+    let store = fx.open();
+    let bytes = b"backup blob bytes".to_vec();
+    let sha = notera_core::ContentHash::of(&bytes).as_str().replace("sha256:", "");
+
+    // 干净库里没有这一行：同步那条路的 `ingest_blob` 只会 UPDATE，在这里直接失败
+    assert!(store.ingest_blob(&sha, &bytes).is_err(), "没有行的时候 UPDATE 打不到任何一行");
+    store.restore_blob(&sha, &bytes).unwrap();
+
+    assert_eq!(std::fs::read(store.blob_path(&sha)).unwrap(), bytes);
+    let (local, remote) = store.attachment_for_state(&sha);
+    assert_eq!(
+        (local.as_str(), remote.as_str()),
+        ("available", "unknown"),
+        "包里的字节没经过服务器，远端态不能谎报 present"
+    );
+    let queued: Vec<String> = store.attachment_uploads(5).unwrap().into_iter().map(|j| j.sha256).collect();
+    assert_eq!(queued, vec![sha.clone()], "还原出来的附件必须排进上传队列，否则第三台设备拿不到它");
+
+    let tampered = store.restore_blob(&sha, b"other bytes".as_ref());
+    assert!(matches!(tampered, Err(notera_store::StoreError::Constraint(_))), "哈希不符必须拒收：{tampered:?}");
+
+    // 已经确认服务器有了，再还原一次不得把它退回 unknown（否则每次还原都全量重传）
+    store.set_attachment_states(&sha, None, Some("present")).unwrap();
+    store.restore_blob(&sha, &bytes).unwrap();
+    assert_eq!(store.attachment_for_state(&sha).1, "present");
+    assert!(store.attachment_uploads(5).unwrap().is_empty());
+}
+
+#[test]
+fn finishing_ops_closes_the_outbox_rows_for_that_blob() {    let fx = Fix::new();
     let store = fx.open();
     let folder = default_folder(&store);
     let sha = attach(&store, &folder, b"payload", "blk00001");

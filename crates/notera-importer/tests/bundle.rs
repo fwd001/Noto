@@ -39,6 +39,7 @@ fn manifest() -> Manifest {
         app_version: "0.1.0".into(),
         root_id: None,
         counts: BTreeMap::new(),
+        partial: false,
     }
 }
 
@@ -77,6 +78,32 @@ fn bundle_round_trips_every_entry_kind() {
     assert_eq!(got.notes, vec![note], "笔记信封必须逐字回来");
     assert_eq!(got.attachments, vec![(sha, body)]);
     assert_eq!(got.manifest.as_ref().unwrap().format, BUNDLE_FORMAT);
+}
+
+#[test]
+fn a_bundle_written_before_the_partial_flag_still_reads_back_as_a_full_library() {
+    // 上一版导出的包里没有 `partial` 这个键。读不回来就等于"我们自己的升级让用户备份失效"，
+    // 那是数据丢失，不是兼容性问题 —— 所以这一条必须钉住 serde(default) 那行。
+    let tmp = Tmp::new();
+    let path = tmp.path().join("old.zip");
+    let body = serde_json::to_vec(&json!({
+        "format": BUNDLE_FORMAT, "protocol": 1, "exported_at": "2026-09-01T00:00:00.000Z",
+        "app_version": "0.1.0", "root_id": null, "counts": {}
+    }))
+    .unwrap();
+    let file = std::fs::File::create(&path).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+    zip.start_file("manifest.json", opts).unwrap();
+    std::io::Write::write_all(&mut zip, &body).unwrap();
+    zip.start_file("folders.json", opts).unwrap();
+    std::io::Write::write_all(&mut zip, b"[]").unwrap();
+    zip.start_file("tombstones.json", opts).unwrap();
+    std::io::Write::write_all(&mut zip, b"[]").unwrap();
+    zip.finish().unwrap();
+
+    let got = read_bundle(&path).expect("老包必须还能读");
+    assert!(!got.manifest.unwrap().partial, "缺 partial = 整库，不是子树");
 }
 
 #[test]

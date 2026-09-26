@@ -146,13 +146,37 @@ fn into_empty_refuses_a_library_that_already_has_notes() {
 }
 
 #[test]
-fn partial_folder_export_is_refused_instead_of_exporting_everything() {
+fn exporting_one_folder_carries_only_its_subtree_and_says_so() {
+    // 曾经是 `folder_scope_unsupported` 响亮拒绝（没做子树闭包就不能假装做了）。
+    // 现在闭包真的做了，这条就钉住"做了什么"：只带子树、报告说自己带、未知 id 仍然拒绝。
     let src = Tmp::new("psrc");
     let a = App::boot(src.path()).unwrap();
-    let folder = a.default_folder_id().unwrap();
-    a.create_note(&folder, doc("全部")).unwrap();
+    let root = a.default_folder_id().unwrap();
+    let keep = a.store().create_folder(Some(&root), "要带走").unwrap();
+    let aside = a.store().create_folder(Some(&root), "不带").unwrap();
+    let kept = eid(&a.create_note(&keep.id, doc("范围内")).unwrap().id);
+    let ignored = eid(&a.create_note(&aside.id, doc("范围外")).unwrap().id);
+
+    let out = src.path().join("子树.zip");
+    let got = a
+        .export_data(ExportCmd {
+            folder_ids: vec![keep.id.to_string()],
+            include_attachments: false,
+            include_trash: false,
+            path: Some(out.to_string_lossy().to_string()),
+        })
+        .unwrap();
+    assert_eq!(got["scope"], "folders", "报告必须自己说清这是子树包：{got:?}");
+    assert_eq!(got["counts"]["notes"], 1, "只带范围内那一篇：{got:?}");
+
+    let b = notera_importer::read_bundle(&out).unwrap();
+    assert!(b.manifest.unwrap().partial, "子树包要带 partial 标记，导入端据此拒绝整库还原");
+    assert_eq!(b.notes.len(), 1, "包里就只有那一篇：{:?}", b.notes.iter().map(|n| n["id"].clone()).collect::<Vec<_>>());
+    assert_eq!(b.notes[0]["id"], json!(kept.to_string()), "带回来的必须是范围内那条");
+    assert!(!b.notes.iter().any(|n| n["id"] == json!(ignored.to_string())), "平级文件夹的笔记不许混进来：{ignored}");
+
     let err = a
-        .export_data(ExportCmd { folder_ids: vec![folder.as_str().to_string()], include_attachments: false, include_trash: false, path: None })
-        .expect_err("还没做子树闭包，就不能假装做了");
-    assert!(format!("{err:?}").contains("folder_scope_unsupported"), "要给出可机读的拒绝理由：{err:?}");
+        .export_data(ExportCmd { folder_ids: vec![EntityId::new().to_string()], include_attachments: false, include_trash: false, path: None })
+        .expect_err("范围里有个不存在的文件夹，不能当成\"那就不用带\"");
+    assert!(format!("{err:?}").contains("文件夹不存在"), "要给出可机读的拒绝理由：{err:?}");
 }

@@ -1,5 +1,5 @@
 //! 派生数据抽取（DATA-MODEL.md §7.1）：`title / plain_text / summary / char_count /
-//! block_count / has_attachment`。
+//! block_count / has_attachment`，外加 [`attachments`]（doc 引用的附件 sha 清单，§8）。
 //!
 //! 这些列**只读**，且必须与 `doc` 同事务写入（I5）—— 所以抽取函数只能在这里，
 //! 不允许 UI 侧另算一份。
@@ -94,6 +94,53 @@ fn block_has_attachment_ref(b: &Block) -> bool {
             matches!(m.kind, MarkKind::AttachmentRef) || m.attrs.contains_key("sha256")
         })
     })
+}
+
+/// 块上一个附件引用的**全部**已知信息（DATA-MODEL §8：收到一条记录 = 知道要哪些 blob）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockAttachment {
+    pub block_id: String,
+    /// 64 位小写十六进制，已核验。
+    pub sha256: String,
+    /// `inline` / `file`；块上没写就是 `None`，由存储层按媒体类型决定。
+    pub role: Option<String>,
+    /// 声明的字节数。`None` = 这份 doc 没告诉我们，不代表 0。
+    pub size: Option<i64>,
+    pub media_type: Option<String>,
+    pub filename: Option<String>,
+}
+
+/// 导出 doc 引用的附件（按块顺序，同 sha 多次出现就多条，块 id 不同）。
+///
+/// 为什么需要它：附件字节是内容寻址、单独存放的，收到一条新笔记的人**只有 doc** ——
+/// 不把里面的 sha 抄进 `attachments`，就没有下载任务、引用计数恒为 0（GC 会把还在用的
+/// blob 删掉）、按文件夹导出的附件集合也是空的。实测踩过：第二台设备的图片永远停在占位。
+///
+/// 只认 `Image`/`Attachment` 块以及任何带 `sha256` 属性的块（前向兼容），且 **sha 必须形态
+/// 合法**：`attachments.sha256` 主键上有 CHECK 约束，把畸形值塞进去会让整批写入回滚 ——
+/// 那不是"这条附件不要了"，那是"这篇笔记同步不了"。所以畸形值在这里就被丢掉，
+/// 由 [`extract`] 的 `has_attachment` 继续如实反映"doc 里出现过 sha256 这个键"。
+pub fn attachments(doc: &Document) -> Vec<BlockAttachment> {
+    doc.content
+        .iter()
+        .filter_map(|b| {
+            let sha = b.attrs.get("sha256").and_then(|v| v.as_str()).filter(|s| is_sha256_hex(s))?;
+            let attr = |keys: &[&str]| keys.iter().find_map(|k| b.attrs.get(*k).and_then(|v| v.as_str())).map(|s| s.to_string());
+            Some(BlockAttachment {
+                block_id: b.id.clone(),
+                sha256: sha.to_string(),
+                role: attr(&["role"]).filter(|r| r == "inline" || r == "file"),
+                size: b.attrs.get("size").and_then(|v| v.as_i64()).filter(|n| *n >= 0),
+                media_type: attr(&["mediaType", "media_type"]),
+                filename: attr(&["name", "filename"]),
+            })
+        })
+        .collect()
+}
+
+/// 64 位小写十六进制 —— 与 `attachments` 主键上的 CHECK 同一套判据。
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 
 fn truncate_chars(s: &str, max: usize) -> String {

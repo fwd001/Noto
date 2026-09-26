@@ -36,6 +36,11 @@ pub struct Manifest {
     pub app_version: String,
     pub root_id: Option<String>,
     pub counts: BTreeMap<String, usize>,
+    /// 这个包**不是**整库：按文件夹导出时只含子树 + 祖先链，永久删除的笔记公告无法归属到
+    /// 文件夹，因此不在包里。缺 `default` 是为老包留的兼容位 —— 已经导出给用户的包必须
+    /// 还能读回来，否则"升级导致旧备份不可恢复"就是我们自己制造的数据丢失。
+    #[serde(default)]
+    pub partial: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -75,6 +80,8 @@ pub fn write_bundle(path: &Path, bundle: &Bundle) -> Result<(), ImportError> {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         root_id: None,
         counts: BTreeMap::new(),
+        // 调用方没给 manifest 时合成的这份 = 整库，不是子树
+        partial: false,
     });
     write_json(&mut zip, &opts, MANIFEST, &manifest)?;
     write_json(&mut zip, &opts, FOLDERS, &bundle.folders)?;

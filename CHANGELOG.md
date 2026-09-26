@@ -8,8 +8,8 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 442 通过 / 0 失败 / 0 ignored（50 个测试二进制） |
-| 前端 | 162 通过（15 文件）；`vue-tsc --noEmit` 无错误；构建 206 KB → gzip 70 KB |
+| `cargo test --workspace` | 449 通过 / 0 失败 / 0 ignored（50 个测试二进制） |
+| 前端 | 162 通过（15 文件）；`vue-tsc --noEmit` 无错误；构建 210 KB → gzip 72 KB |
 | `scripts/arch-check.mjs` | 24/24 |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
 | `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 32/32 |
@@ -35,6 +35,7 @@
 - **ADR-0019**：Joplin 同步与 AppFlowy 编辑交互的逐条采纳/拒绝及其理由
 
 - **设置页显示 §5 的判定**：`AccountDto` 增加 `capMask`/`writeStrategy`/`capsProbedAt`，设置页"服务器能力"块分三种说法 —— 还没探过 / 有并发保护（S1·S2）/ **没有并发保护（S3，建议多设备串行编辑）**，外加五项能力的 ✓✕ 芯片。策略由核心算好下发，前端不许自己从位图反推（`sync/serverCaps.ts` + 7 条测试）
+- **按文件夹导出真的做了子树闭包**（此前是 `folder_scope_unsupported` 响亮拒绝的那一条）：`Store::folder_closure` 把"选中的文件夹"扩成 子树 + 祖先链（缺祖先就导不回：笔记的 `folder_id` 会指向一个不存在的文件夹），范围里的笔记（含软删的，删除事实是内容的一部分）与它们引用的附件一起带上，范围外的一个字节都不进。两条诚实边界写进包里而不是猜：`manifest.partial = true`，以及**笔记的永久删除公告无法归属到文件夹**（`tombstones` 表不记父本），所以这种包**禁止**走"仅在空库时导入"的整库还原 —— 那样一导，之后与服务器同步时别人副本里那篇早该死掉的笔记会被带回来（§8 硬性要求 6）。合并模式不受影响：往里加内容不会删掉任何人的东西。范围里出现不存在的文件夹 id 一律拒绝，而不是"那就不用带"
 - **§11.4 尽力而为租约**：规范里有第三层并发保护（`locks/<device>.json`）却从没写过细则、也没人实现。先补规范（谁写、什么时候让路、TTL、读不到怎么办、以及它明确**防不住**什么），再接端口与实现。开关只看 §5 的结果：**S3 或探不到强 ETag 才开**，CAS 可信的服务器一个多余请求都不发。引擎在轮次开始贴自己那份，在**提交清单之前**看别人新不新鲜：新鲜就不公告，改动保持 dirty、状态显示"另一台设备正在写入"，下一轮自动重来。`sync_state.lease_token/lease_expires_at` 两列自 0002 起第一次真正被写入
 
 ### 修掉的静默错误（都是"看着在用、其实没接线"）
@@ -58,6 +59,9 @@
 - **编辑器的"插入图片 / 附件"接通了**（D11 拍板走 ③：前端 `<input type=file>` 读字节 → base64 交给 `attach_file`）。这条边整条是断的：核心要 `localPath` + `mediaType`，前端只发 `{noteId, blockId, role}` → 点一下必然 `bad_args`，而且没有任何测试走过它。现在形状集中在 `editor/attachmentWire.ts`（一处 + 11 条契约测试：载荷必须平铺 camelCase、超限在**读字节之前**就拒、base64 与 RFC 4648 已知答案逐字符对齐、1 MB 编码 < 1.5 s），核心仍然是唯一的写入口（sha256、落盘、`attachments`/`note_attachments`、上传队列）。显示用的 data URL 只活在内存表里，**绝不写进块属性** —— 那等于把每个附件在正文里再存一份 base64 并跟着每次编辑同步走（端到端有断言盯着）。新增命令 `attachment_data`（按 sha 取回字节）；`sha256` 参数先校验形态再用，因为它会被拼进 blob 路径，不校验就是给 `../../` 开门。零新依赖（`base64` 早已在 workspace 单一版本源里，经 `notera-crypto::b64` 用）
 - **插一张图，却被告知"这条笔记在别处被改动了"**：核心首次挂附件会翻转派生列 `has_attachment`，而那是**在同一事务里推进笔记 rev** 的动作；编辑器排队的自动保存还带着旧 rev 出发，于是被判定 `stale_edit` —— 界面切走、本地版本进 draft，用户完全看不出是自己干的。这就是之前那条"偶发一次、连跑三次全绿"的端到端红灯：给门禁补上"失败的 4xx 发生在哪一步"的归位信息后，新的附件步骤一复现就是它（`expected 7, actual 8`）。修法是把顺序钉死并在命令面回带新 rev：先落自己的编辑 → 核心写附件 → 接住 `attach_file` 的 `rev` → 才把附件块写进正文；失败则把占位块撤干净且**不**多存一版。核心侧与前端侧各一条测试锁住这个顺序
 - **另外 5 个命令错误码没有登记文案**（`no_default_folder` / `bad_action` / `sync_refused` / `sync_busy` / `unknown_account`）：新门禁 `hygiene:rust-error-codes-registered` 从 Rust 侧扫 `CmdError::of("…")` 与 `error.*` 表比对，一上来就炸出这五个 —— 它们此前全体退化成"操作没有成功，可以稍后再试"。这条门禁是从**源头**扫的，不再依赖前端那张手抄的对照表（`read_failed` / `attachment_missing` 也正是手抄漏掉的）
+- **收到的笔记从来不登记它的附件 —— 第二台设备上的图片永远停在占位**：`register_remote_attachment` 这个函数存在、有单测、语义也对，但**生产代码里零调用**：`apply_remote` 写笔记时不看 doc 里引用了哪些 sha，于是新设备收到一篇带图片的笔记后 `attachments` 一张行都没有。后果层层往下：没有行 → `attachment_downloads()` 永远空 → 附件轮一个字节都不取（界面上是"点重试"也没用的占位）；引用计数由 `note_attachments` 派生 → 恒为 0 → GC 的判据"没人引用才删"于是**敢删还在用的 blob**；按文件夹导出时"范围内的附件"也是从链接表算的 → 子树包悄悄少带文件。修法是补上那条一直缺的派生边，而不是给某个调用点打补丁：`notera_richtext::attachments(doc)` 抽出块级引用（`Image`/`Attachment` 以及任何带 `sha256` 属性的块，前向兼容），`Prepared` 带着它，`apply_note` 在**同一事务**里登记 `attachments` + `note_attachments`（口径与 I5 一致：doc 变了，由它派生的东西一起变）。两个刻意的边界：形态不合法的 sha **不入库**（`attachments.sha256` 主键上有 CHECK，塞进去会让整批同步回滚 —— 那是"这篇笔记同步不了"，不是"这个附件不要了"），以及下载队列的口径从"远端说 present"放宽成"**还没被否定**（present 或 unknown）"，因为外来记录登记出来的行起步就是 unknown，而唯一的确认办法恰恰是去问服务器一次（404 走既有的一条路：标 absent 就此收手，不会每轮空转）。删掉 `register_doc_attachments` 那一行调用，新测试立刻从 `left: 0 right: 1` 变红（实测过）
+- **带附件的备份包一个都导不进去**：ZIP 里只有 blob 字节，没有 `attachments` 行 —— 而还原走的 `ingest_blob` 是同步下载那条路，它只 `UPDATE` 已存在的行。干净库里没有行 → `Constraint("附件不存在: <sha>")` → **整次导入失败**（不是少一个附件，是一篇都进不去）。这是给"按文件夹导出"补外键闭包时，新测试第一次真跑导入才发现的：以前从来没有一条测试导出过带附件的包再导回去。新增 `Store::restore_blob`：按 sha 校验 → 落盘 → **登记**行。它还顺手纠正一个谎：`ingest_blob` 会把远端态写成 `present`，可包里的字节从没经过服务器 —— 于是还原出来的附件永远不会被补传，第三台设备永远拿不到它们（测试把"必须留在 `unknown` 并且排进上传队列"钉住，把 `'unknown'` 改成 `'present'` 立刻变红）
+- **`manifest.json` 少一个键就会让用户手上的备份失效**：按文件夹导出的包必须自己声明"我不是整库"（`partial`），而这个键是后加的 —— 老包里没有它。所以它带 `#[serde(default)]`，并专门有一条测试手写一份**不带该键**的 manifest 读回来断言 `partial == false`：升级把自己的旧备份读坏，就是我们自己制造的数据丢失
 - **冲突面板的"并排预览"其实一直是死的**：前端 `Commands.previewText` 与 `conflicts.ts` 都在调 `preview_text`，而核心 dispatch 里**没有这条分支** —— 每次都是 `unknown_command`，调用方那句"拿不到就保留已有预览"的兜底把它盖得严严实实，面板显示的仍是卡片摘要（两边一样），用户以为自己在看两个版本。补上命令（按 `(id, rev)` 取 revision，用与写路径同一套 `parse + extract` 抽纯文本，没有的 rev 报 `not_found` 而不是空字符串）。同时加门禁 `edge:declared-commands-exist`：前端声明的每一个命令名，核心必须有分支 —— 注入一个假命令名立刻判红（实测过）
 - `WorkspaceView` 不跟随 `selectedId` 打开编辑器（选中了却一片空白）、`create()` 不打开新笔记、冲突动词表三处不一致、`create_note` 拒绝 `folderId: null`、`/favicon.ico` 404
 - **架构适应度检查** `scripts/arch-check.mjs`：24 条机器可判定的层次约束（依赖边、唯一出口、SQL 只出现在 store、前端无协议词汇、端口边越界引用、命令面 DTO 覆盖界面读的每一个键…）

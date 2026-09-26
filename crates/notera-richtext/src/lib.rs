@@ -29,7 +29,7 @@ mod tests;
 pub use codec::{
     block_ids, canonical, normalize, parse, parse_for_read, parse_from_value, to_json, validate,
 };
-pub use extract::{extract, Extracted};
+pub use extract::{attachments, extract, BlockAttachment, Extracted};
 pub use merge::{merge, MergeOutcome, ReadOnlyReason};
 pub use model::{
     supports, Block, BlockType, Document, Inline, Mark, MarkKind, RichError, DOC_FORMAT,

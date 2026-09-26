@@ -385,3 +385,29 @@ fn parse_from_value_is_the_shared_entry_point() {
         parse(&v.to_string()).unwrap()
     );
 }
+
+#[test]
+fn attachments_lists_what_the_document_references_and_nothing_else() {
+    let sha = "a".repeat(64);
+    let v = doc(vec![
+        para("p1aaaa", "普通段落不该被当成附件"),
+        json!({ "id": "im1aaaaa", "type": "image", "attrs": {
+            "sha256": sha, "role": "inline", "size": 2048, "mediaType": "image/png", "name": "shot.png" } }),
+        // 还没落地的占位块：没有 sha256 就没有引用可登记
+        json!({ "id": "im2aaaaa", "type": "image", "attrs": { "role": "inline", "pending": true } }),
+        // 形态不对的 sha：`attachments` 主键上有 CHECK，塞进去会让整批写入回滚
+        json!({ "id": "im3aaaaa", "type": "image", "attrs": { "sha256": "ABC123" } }),
+        // 未知块类型带 sha256 也算（前向兼容：别的客户端用容器块装附件）
+        json!({ "id": "xx1aaaaa", "type": "someFutureBlock", "attrs": { "sha256": sha, "role": "bogus" } }),
+    ]);
+    let got = crate::attachments(&parse_from_value(&v).unwrap());
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(got[0].block_id, "im1aaaaa");
+    assert_eq!(got[0].sha256, sha);
+    assert_eq!(got[0].role.as_deref(), Some("inline"));
+    assert_eq!(got[0].size, Some(2048));
+    assert_eq!(got[0].filename.as_deref(), Some("shot.png"));
+    // 角色词汇之外的值一律丢回 None，由存储层按媒体类型判（表上有 CHECK(role IN (inline,file)))
+    assert_eq!(got[1].role, None);
+    assert_eq!(extract(&parse_from_value(&v).unwrap()).has_attachment, true, "畸形 sha 仍算\"这篇有附件\"，只是登记不了");
+}

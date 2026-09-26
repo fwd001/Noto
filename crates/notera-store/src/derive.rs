@@ -21,6 +21,9 @@ pub(crate) struct Prepared {
     pub block_count: u32,
     /// **仅**由 doc 推出的附件标记；与 `note_attachments` 链接取或后才落库（§7.1）。
     pub doc_has_attachment: bool,
+    /// doc 里引用的附件（sha 已核验形态）。收到远端记录时据此登记 `attachments` /
+    /// `note_attachments`，见 [`crate::apply`] 与 DATA-MODEL §8。
+    pub attachments: Vec<notera_richtext::BlockAttachment>,
 }
 
 /// 从 JSON 值准备一次写入（`Store` 写入口与 `apply_remote` 共用同一条闸门）。
@@ -65,6 +68,7 @@ fn finish(doc: notera_richtext::Document) -> Result<Prepared, StoreError> {
         char_count: ex.char_count,
         block_count: ex.block_count,
         doc_has_attachment: ex.has_attachment,
+        attachments: notera_richtext::attachments(&doc),
     })
 }
 

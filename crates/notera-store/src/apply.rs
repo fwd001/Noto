@@ -159,6 +159,8 @@ impl Store {
                 env.id, env.hash, prepared.content_hash.as_str()
             )));
         }
+        // doc 是外来笔记里附件引用的唯一来源：与笔记同一事务登记（DATA-MODEL §8）
+        let refs = prepared.attachments.clone();
         let folder_id: Option<EntityId> = match env.field("folder_id") {
             None => None,
             Some(v) if v.is_null() => None,
@@ -253,6 +255,7 @@ impl Store {
                 rep.notes_written += 1;
             }
         }
+        self.register_doc_attachments(tx, &env.id, &refs, now)?;
         Ok(())
     }
 

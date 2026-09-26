@@ -633,9 +633,14 @@ impl Store {
         self.attachment_jobs(limit, "available", &["unknown", "absent", "error"])
     }
 
-    /// 待下载的附件：清单说远端有，本地却没有内容。
+    /// 待下载的附件：本地没有内容，而"服务器上有"这件事**还没被否定**。
+    ///
+    /// 所以口径是 `present` **或** `unknown`，不只是 `present`：外来笔记登记进来的行起步就是
+    /// `unknown`（谁也没确认过），如果只等 `present`，那这台设备就永远不去取那个 blob ——
+    /// 而唯一的确认办法恰恰是去问服务器一次。404 走的是既有的一条路：标 `absent`，就此收手
+    /// （`run_attachment_round`），因此不会变成每轮重复的空转。
     pub fn attachment_downloads(&self, limit: usize) -> Result<Vec<AttachmentJob>, StoreError> {
-        self.attachment_jobs(limit, "missing", &["present"])
+        self.attachment_jobs(limit, "missing", &["present", "unknown"])
     }
 
     fn attachment_jobs(&self, limit: usize, local: &str, remote_in: &[&str]) -> Result<Vec<AttachmentJob>, StoreError> {
@@ -725,6 +730,23 @@ impl Store {
         Ok(conn
             .query_row("SELECT media_type FROM attachments WHERE sha256 = ?1", [sha.as_str()], |r| r.get::<_, String>(0))
             .optional()?)
+    }
+
+    /// 落在这些文件夹里的笔记所引用的附件 sha（按文件夹导出时只带上这些字节）。
+    /// 一次集合查询，不是"每篇笔记问一遍"。
+    pub fn attachment_shas_in_folders(&self, folder_ids: &[String]) -> Result<Vec<String>, StoreError> {
+        if folder_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.read()?;
+        let marks = folder_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT DISTINCT na.sha256 FROM note_attachments na JOIN notes n ON n.id = na.note_id WHERE n.folder_id IN ({marks}) ORDER BY na.sha256"
+        );
+        let binds: Vec<&dyn rusqlite::ToSql> = folder_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(binds.as_slice(), |r| r.get::<_, String>(0))?;
+        rows.collect::<Result<_, _>>().map_err(Into::into)
     }
 
     // ------------------------------------------------- push 侧：记录 wire ---

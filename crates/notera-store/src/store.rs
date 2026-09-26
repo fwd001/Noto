@@ -547,6 +547,97 @@ impl Store {
         self.set_attachment_states(&sha, Some("available"), Some("present"))
     }
 
+    /// 从**盘上的备份包**收下一个附件：先校验 sha256，再落盘，再登记行。
+    ///
+    /// 与 [`Store::ingest_blob`]（同步下载那条路）的两点差别都是要命的：
+    /// * 包里的字节不是从服务器拿的，所以远端态只能是 `unknown`。写成 `present` 等于对
+    ///   队列宣布"服务器已经有了"，于是这台设备永远不会把它补传上去 —— 还原出来的附件
+    ///   在服务器上不存在，第三台设备也就永远拿不到它。
+    /// * 目标库里可能**根本没有这一行**：`ingest_blob` 走的是 UPDATE，影响 0 行就报
+    ///   `附件不存在`，整包还原失败（实测踩过：带附件的备份包一个都导不进去）。
+    pub fn restore_blob(&self, sha256: &str, bytes: &[u8]) -> Result<(), StoreError> {
+        if bytes.is_empty() {
+            return Err(StoreError::Constraint("空 blob 不允许收下".into()));
+        }
+        let got = notera_crypto::sha256_hex(bytes);
+        if got != sha256 {
+            return Err(StoreError::Constraint(format!("blob 哈希不符：期望 {sha256} 实际 {got}")));
+        }
+        let target = blob_path(&self.paths.attachments, sha256);
+        if !target.exists() {
+            write_atomic(&target, bytes)?;
+        }
+        let sha = sha256.to_string();
+        let size = bytes.len() as i64;
+        self.write_tx(move |tx, now| Self::upsert_attachment_row(tx, now, &sha, size, None, None, "available"))
+    }
+
+    /// 登记 / 更新一行 `attachments` 元数据，**由调用方的事务驱动**（还原与"从记录派生引用"共用）。
+    ///
+    /// 为什么不能"文件写盘了就算数"：`attachments` 行是附件在库里的唯一户口 —— 引用计数、
+    /// 上传/下载队列、按文件夹导出的附件集合全都只看这张表。行不在，blob 就是一片孤儿文件。
+    ///
+    /// `media_type`/`filename` 传 `None` 表示"不知道"：保留已有值，绝不拿空值覆盖已知的。
+    /// `remote_state` 只在**新建**行时写 `'unknown'`，冲突时一字不动。
+    pub(crate) fn upsert_attachment_row(
+        tx: &Connection,
+        now: &str,
+        sha256: &str,
+        size: i64,
+        media_type: Option<&str>,
+        filename: Option<&str>,
+        local_state: &str,
+    ) -> Result<(), StoreError> {
+        // size 取两者较大：块属性/清单报过的数不许被"不知道"（0）冲掉，否则上传预算会把
+        // 一个大附件当成小附件排进本轮。
+        tx.execute(
+            "INSERT INTO attachments (sha256, size, media_type, filename, local_state, remote_state, created_at, verified_at)
+             VALUES (?1,?2,COALESCE(?3,'application/octet-stream'),?4,?5,'unknown',?6,NULLIF(?7,''))
+             ON CONFLICT(sha256) DO UPDATE SET
+               size = MAX(attachments.size, excluded.size),
+               media_type = COALESCE(?3, attachments.media_type),
+               filename = COALESCE(attachments.filename, ?4),
+               local_state = ?5,
+               verified_at = COALESCE(attachments.verified_at, NULLIF(?7,'')),
+               deleted_at = NULL",
+            params![sha256, size, media_type, filename, local_state, now, if local_state == "available" { now } else { "" }],
+        )?;
+        Ok(())
+    }
+
+    /// 把一条**外来的**笔记（同步拉回 / 备份包导入）doc 里的附件引用登记入库。
+    ///
+    /// 这一步以前是缺席的：`register_remote_attachment` 在生产代码里零调用，于是第二台设备
+    /// 收到带图片的笔记之后 —— 没有 `attachments` 行 → 没有下载任务 → 图片永远停在占位；
+    /// 引用计数恒为 0 → GC 可以把还在用的 blob 删掉；按文件夹导出的附件集合也是空的。
+    ///
+    /// 和笔记写在**同一事务**里，口径与 I5 一致：doc 变了，由它派生的东西一起变。
+    pub(crate) fn register_doc_attachments(
+        &self,
+        tx: &Connection,
+        note_id: &EntityId,
+        refs: &[notera_richtext::BlockAttachment],
+        now: &str,
+    ) -> Result<(), StoreError> {
+        for (idx, r) in refs.iter().enumerate() {
+            let media = r.media_type.as_deref().filter(|m| !m.trim().is_empty());
+            let local = if self.blob_path(&r.sha256).exists() { "available" } else { "missing" };
+            Self::upsert_attachment_row(tx, now, &r.sha256, r.size.unwrap_or(0), media, r.filename.as_deref(), local)?;
+            let role = match r.role.as_deref() {
+                Some(x @ ("inline" | "file")) => x,
+                // 块上没写角色就按媒体类型推（与 `attach_blob` 同一条判据）
+                _ => if media.is_some_and(|m| m.starts_with("image/")) { "inline" } else { "file" },
+            };
+            tx.execute(
+                "INSERT INTO note_attachments (note_id, sha256, block_id, role, position)
+                 VALUES (?1,?2,?3,?4,?5)
+                 ON CONFLICT(note_id, block_id) DO UPDATE SET sha256=excluded.sha256, role=excluded.role",
+                params![note_id.as_str(), r.sha256, r.block_id, role, idx as i64],
+            )?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn with_read<T>(&self, f: impl FnOnce(&Connection) -> Result<T, StoreError>) -> Result<T, StoreError> {
         let conn = self.read()?;
         f(&conn)
@@ -796,9 +887,46 @@ impl Store {
         Ok(out)
     }
 
+    /// 文件夹导出范围：选中项 + 全部后代 + 祖先链（外键闭包）。
+    ///
+    /// 为什么要祖先：包里那条子文件夹的 `parent_id` 指向祖先，导入端若没有祖先行就
+    /// 是外键失败 —— "导出一个文件夹，导不回去"比不导出更糟。
+    /// 为什么不存在的 id 要直接拒：静默跳过一个文件夹，用户看到的却是一份"成功了"的
+    /// 导出报告，那是把缺内容当成完整备份。
+    pub fn folder_closure(&self, ids: &[EntityId]) -> Result<std::collections::BTreeSet<String>, StoreError> {
+        let conn = self.read()?;
+        let mut out = std::collections::BTreeSet::new();
+        for id in ids {
+            let exists: i64 = conn.query_row("SELECT EXISTS(SELECT 1 FROM folders WHERE id = ?1)", [id.as_str()], |r| r.get(0))?;
+            if exists == 0 {
+                return Err(StoreError::Rejected(format!("文件夹不存在，无法按其范围导出：{id}")));
+            }
+            out.insert(id.to_string());
+            for d in Self::descendant_ids(&conn, id)? {
+                out.insert(d.to_string());
+            }
+            // 往上走。`folder_cycle` 保证正常情况下不会有环，但这里宁可自己停在 visited：
+            // 一次导出范围计算不该能把进程卡在库里的一条坏数据上。
+            let mut cursor = id.clone();
+            let mut hops = 0u32;
+            while hops < 64 {
+                let parent: Option<Option<String>> = conn
+                    .query_row("SELECT parent_id FROM folders WHERE id = ?1", [cursor.as_str()], |r| r.get::<_, Option<String>>(0))
+                    .optional()?;
+                let Some(Some(p)) = parent else { break };
+                let Ok(pid) = rows::parse_id(&p) else { break };
+                if !out.insert(pid.to_string()) {
+                    break; // 已经在集合里 = 走到已覆盖的分支或成环，停
+                }
+                cursor = pid;
+                hops += 1;
+            }
+        }
+        Ok(out)
+    }
+
     /// 某文件夹的全部后代（递归 CTE）。成环检测的唯一依据。
-    fn descendant_ids(conn: &Connection, id: &EntityId) -> Result<Vec<EntityId>, StoreError> {
-        let mut stmt = conn.prepare(
+    fn descendant_ids(conn: &Connection, id: &EntityId) -> Result<Vec<EntityId>, StoreError> {        let mut stmt = conn.prepare(
             "WITH RECURSIVE sub(id) AS (
                SELECT id FROM folders WHERE parent_id = ?1
                UNION ALL

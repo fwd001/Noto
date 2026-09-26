@@ -356,6 +356,7 @@ const MODULES = [
  ],
  outputs:[
   {peer:'store', data:'派生列内容', types:'ExtractedText{title, plainText, summary, charCount, blockCount, hasAttachment}'},
+  {peer:'store', data:'doc 引用的附件清单（外来记录据此登记 attachments/note_attachments）', types:'BlockAttachment{blockId, sha256, role?, size?, mediaType?, filename?}[]（sha 已核验为 64 位小写 hex）'},
   {peer:'crypto / store', data:'canonical 字节（哈希输入）', types:'Vec<u8>（UTF-8, 稳定）'},
   {peer:'sync', data:'合并结论', types:'MergeOutcome'},
   {peer:'ui', data:'渲染输入', types:'Document（原样，未识别节点保留）'},
@@ -380,7 +381,9 @@ const MODULES = [
 
 {id:'importer', layer:'L2', name:'notera-importer', ttl:'导出 · 导入 · 备份 · 恢复', tag:'crate',
  duties:[
-  '导出自描述 ZIP：manifest.json + records/<kind>/<id>.json + attachments/<sha> + tombstones.json',
+  '导出自描述 ZIP：manifest.json + folders.json + notes/<id>.json + attachments/<sha> + tombstones.json',
+  '按文件夹导出 = 子树 + 祖先链，且包必须自声明 partial：它缺别人的内容、也缺无法归属到文件夹的笔记永久删除公告 → 禁止用于「仅在空库时导入」',
+  '还原包里的附件走登记式写入（远端态留在 unknown，让队列补传）；同步下载那条路才写 present —— 两者的区别就是"这份字节有没有经过服务器"',
   '导入：IntoEmpty 直落；Merge 模式逐条走 sync 的 plan/冲突求解',
   'ID 相同内容不同 → 生成副本并记 sync_conflicts，绝不覆盖',
   '备份用 SQLite Online Backup API（不复制活动 WAL），产物带 sha256 与 user_version',

@@ -624,18 +624,37 @@ impl App {
         self.inner.store.get_prefs().map_err(CmdError::from)
     }
 
-    /// 导出整库为自描述 ZIP（DATA-MODEL §15）。
+    /// 导出为自描述 ZIP（DATA-MODEL §15）。整库或按文件夹子树。
     ///
     /// 记录由 `Store::all_records()` 用**与上传同一套**信封构造函数产出，
     /// 所以导入侧可以直接走 `apply_remote`，不必为导出另写一条写入路径。
     pub fn export_data(&self, c: ExportCmd) -> Result<serde_json::Value, CmdError> {
-        if !c.folder_ids.is_empty() {
-            // 只导出部分文件夹需要连带祖先与外键闭包。没做之前宁可明确拒绝，
-            // 也不能"用户勾了两个文件夹、结果把整库交出去"。
-            return Err(CmdError::of("bad_args", false).with(serde_json::json!({ "detail": "folder_scope_unsupported" })));
-        }
+        let ids: Vec<EntityId> = c
+            .folder_ids
+            .iter()
+            .map(|s| EntityId::parse(s).map_err(|_| CmdError::of("bad_id", false)))
+            .collect::<Result<_, _>>()?;
+        let scope: Option<std::collections::BTreeSet<String>> =
+            if ids.is_empty() { None } else { Some(self.inner.store.folder_closure(&ids).map_err(CmdError::from)?) };
+        let in_scope = |id: &str| scope.as_ref().is_none_or(|s| s.contains(id));
+
         let records = self.inner.store.all_records().map_err(CmdError::from)?;
+        let kind_of = |r: &serde_json::Value| r.get("kind").and_then(|k| k.as_str()).unwrap_or_default().to_string();
+        let id_of = |r: &serde_json::Value| r.get("id").and_then(|i| i.as_str()).unwrap_or_default().to_string();
+        let folder_of = |r: &serde_json::Value| {
+            r.get("payload")
+                .and_then(|p| p.get("folder_id"))
+                .and_then(|f| f.as_str())
+                .unwrap_or_default()
+                .to_string()
+        };
         let purged = |r: &serde_json::Value| r.get("purged").and_then(|p| p.as_bool()).unwrap_or(false);
+        // 按文件夹导时：
+        //   文件夹 → 子树 + 祖先链（`folder_closure` 的键集就是它）
+        //   笔记   → 父本在范围内的（软删的跟着走：删除事实是内容的一部分）
+        //   墓碑   → 只带**文件夹**的永久删除公告。`tombstones` 表不记父本，笔记的
+        //            永久删除公告无法归属到某个文件夹 —— 宁可标 `partial` 让导入端拒绝
+        //            "导进空库"，也不能猜：猜错就是把别人库里的一条笔记删掉。
         let bundle = notera_importer::Bundle {
             manifest: Some(notera_importer::Manifest {
                 format: notera_importer::BUNDLE_FORMAT,
@@ -644,17 +663,26 @@ impl App {
                 app_version: env!("CARGO_PKG_VERSION").to_string(),
                 root_id: None,
                 counts: std::collections::BTreeMap::new(),
+                partial: scope.is_some(),
             }),
-            folders: records.iter().filter(|r| r.get("kind").and_then(|k| k.as_str()) == Some("folder") && !purged(r)).cloned().collect(),
-            notes: records.iter().filter(|r| r.get("kind").and_then(|k| k.as_str()) == Some("note") && !purged(r)).cloned().collect(),
-            tombstones: records.iter().filter(|r| purged(r)).cloned().collect(),
+            folders: records.iter().filter(|r| kind_of(r) == "folder" && !purged(r) && in_scope(&id_of(r))).cloned().collect(),
+            notes: records.iter().filter(|r| kind_of(r) == "note" && !purged(r) && in_scope(&folder_of(r))).cloned().collect(),
+            tombstones: records
+                .iter()
+                .filter(|r| purged(r) && (scope.is_none() || (kind_of(r) == "folder" && in_scope(&id_of(r)))))
+                .cloned()
+                .collect(),
             attachments: Vec::new(),
+        };
+        let shas: Vec<String> = if scope.is_none() {
+            self.inner.store.local_attachment_shas().map_err(CmdError::from)?
+        } else {
+            let folders: Vec<String> = scope.clone().unwrap_or_default().into_iter().collect();
+            self.inner.store.attachment_shas_in_folders(&folders).map_err(CmdError::from)?
         };
         let mut attachments = Vec::new();
         if c.include_attachments {
-            // 以库为准枚举（见 `Store::local_attachment_shas` 的注释）：按目录名筛 64hex
-            // 在这套两层分片布局下一个也匹配不上，于是"含附件的导出"其实没有附件。
-            for sha in self.inner.store.local_attachment_shas().map_err(CmdError::from)? {
+            for sha in shas {
                 match std::fs::read(self.inner.store.blob_path(&sha)) {
                     Ok(bytes) => attachments.push((sha, bytes)),
                     // 读不到就少传一个附件：报告里如实记数，不静默当成功
@@ -663,6 +691,7 @@ impl App {
             }
         }
         let bundle = notera_importer::Bundle { attachments, ..bundle };
+        let scope_size = scope.map(|s| s.len()).unwrap_or(0);
         let path = match c.path.as_deref() {
             Some(p) => std::path::PathBuf::from(p),
             None => {
@@ -689,6 +718,9 @@ impl App {
             "path": path.to_string_lossy(),
             "created": bundle.notes.len(),
             "counts": counts,
+            // 报告必须自己说清这是整库还是子树：拿一份子树包当"整库备份"是最危险的误用。
+            "scope": if scope_size == 0 { "full" } else { "folders" },
+            "scopeFolders": scope_size,
         }))
     }
 
@@ -699,13 +731,24 @@ impl App {
         let bundle = notera_importer::read_bundle(&path)
             .map_err(|e| CmdError::of("save_failed", false).with(serde_json::json!({ "detail": e.to_string() })))?;
         let stats = self.inner.store.stats().map_err(CmdError::from)?;
+        // 子树包缺两样东西：不在范围内的其它内容，以及（无法归属的）**笔记永久删除公告**。
+        // 把它当"整库还原"导进一个空库，之后一旦与服务器同步，那些本该保持删除的笔记
+        // 就会被别的设备的副本带回来 —— 这正是 §8 硬性要求 6 禁的事。所以 intoEmpty 响亮拒绝；
+        // 合并模式不受影响：那只是往里加内容，少带几篇不会删掉任何人的东西。
+        if bundle.manifest.as_ref().is_some_and(|m| m.partial) && c.mode.as_deref() == Some("intoEmpty") {
+            return Err(CmdError::of("save_failed", false).with(serde_json::json!({
+                "detail": "这是一个按文件夹导出的部分包，不能用于「仅在空库时导入」的整库还原：它缺库内其它内容，也缺笔记的永久删除公告。请导整库，或改用合并模式。",
+            })));
+        }
         if c.mode.as_deref() == Some("intoEmpty") && (stats.notes > 0 || stats.folders > 1) {
             return Err(CmdError::of("save_failed", false).with(serde_json::json!({
                 "detail": format!("目标库非空（笔记 {} / 文件夹 {}），intoEmpty 拒绝写入", stats.notes, stats.folders),
             })));
         }
         for (sha, bytes) in &bundle.attachments {
-            self.inner.store.ingest_blob(sha, bytes).map_err(CmdError::from)?;
+            // 还原走 `restore_blob` 而不是同步的 `ingest_blob`：包里的字节没经过服务器，
+            // 远端态必须是 unknown（否则永远不补传），而且目标库很可能没有这一行。
+            self.inner.store.restore_blob(sha, bytes).map_err(CmdError::from)?;
         }
         let mut ops = Vec::new();
         for env in bundle.records_in_apply_order() {
@@ -2186,6 +2229,87 @@ mod tests {
         let missing = "ab".to_string() + &"0".repeat(62);
         let e = commands::dispatch(&app, "attachment_data", json!({ "sha256": missing })).expect_err("没有的附件不能返回空成功");
         assert_eq!(e.code, "attachment_missing");
+    }
+
+    /// 造一个"默认本 / 项目 / 项目·子夹"加上平级的"别的"，各放笔记与附件。
+    fn scoped_tree(app: &App) -> (EntityId, EntityId, EntityId, EntityId) {
+        let root = app.default_folder_id().unwrap();
+        let parent = app.store().create_folder(Some(&root), "项目").unwrap();
+        let kid = app.store().create_folder(Some(&parent.id), "子夹").unwrap();
+        let other = app.store().create_folder(Some(&root), "别的").unwrap();
+        let in_kid = EntityId::parse(&app.create_note(&kid.id, doc("范围内的笔记")).unwrap().id).unwrap();
+        app.create_note(&other.id, doc("范围外的笔记")).unwrap();
+        let blob: Vec<u8> = b"in-scope attachment bytes".to_vec();
+        app.store().attach_blob(&in_kid, &blob, "image/png", Some("a.png"), "b1").unwrap();
+        (root, kid.id, other.id, in_kid)
+    }
+
+    #[test]
+    fn exporting_a_folder_yields_a_subtree_that_a_clean_library_can_actually_import() {
+        let app = boot("scoped-a");
+        let (_root, kid, other, in_kid) = scoped_tree(&app);
+        let out = tmpdir("scoped-export").join("子树.zip");
+        let got = commands::dispatch(&app, "export_data", json!({ "path": out.to_string_lossy(), "folderIds": [kid.to_string()], "includeAttachments": true })).unwrap();
+        assert_eq!(got["scope"], "folders", "报告必须自己说清这是子树包");
+        assert_eq!(got["counts"]["notes"], 1, "只该带上范围内那一篇：{got:?}");
+        // 祖先链：子夹的 parent 指向"项目"，"项目"指向默认本 —— 少了它们就是导不回去的包
+        assert_eq!(got["counts"]["folders"], 3, "子夹 + 项目 + 默认本：{got:?}");
+        assert_eq!(got["counts"]["attachments"], 1, "范围内的附件要跟着走");
+
+        let b = notera_importer::read_bundle(&out).unwrap();
+        assert!(b.manifest.as_ref().unwrap().partial, "包自己也得标 partial");
+        assert!(b.notes.iter().any(|n| n["id"] == json!(in_kid.to_string())));
+        assert!(!b.notes.iter().any(|n| n["payload"]["folder_id"] == json!(other.to_string())), "平级文件夹的内容不许混进来");
+
+        // 真正的验收：干净库能把它导回来，且层级完整。
+        let fresh = boot("scoped-b");
+        let rep = commands::dispatch(&fresh, "import_data", json!({ "path": out.to_string_lossy(), "mode": "merge" })).expect("子树包必须能导进干净库（外键闭包不完整就会在这里失败）");
+        assert_eq!(rep["merged"], 4, "1 篇笔记 + 3 个文件夹：{rep:?}");
+        assert_eq!(rep["restoredAttachments"], 1, "包里的附件字节要真的落进新库");
+        let back = fresh.store().get_note(&in_kid).unwrap().expect("笔记要能按原 id 读回");
+        assert_eq!(back.folder_id, kid, "父本必须还是那个子夹");
+        let chain: Vec<String> = fresh.store().list_folders().unwrap().iter().map(|f| f.name.clone()).collect();
+        assert!(chain.contains(&"项目".to_string()) && chain.iter().any(|n| n == "子夹"), "祖先链要一起落地：{chain:?}");
+        // 附件不是"字节躺在盘上"就算还原好了：库里得有行、本地态是 available，
+        // 而远端态必须是 unknown —— 这个包没经过服务器，谎报 present 就永远不会补传。
+        let shas = fresh.store().local_attachment_shas().unwrap();
+        assert_eq!(shas.len(), 1, "还原后账上必须认得这一个附件：{shas:?}");
+        let data = commands::dispatch(&fresh, "attachment_data", json!({ "sha256": shas[0] })).expect("还原出来的附件必须读得出来");
+        let source = app.store().local_attachment_shas().unwrap();
+        let original = std::fs::read(app.store().blob_path(&source[0])).unwrap();
+        assert_eq!(notera_crypto::b64::decode(data["bytesBase64"].as_str().unwrap()).unwrap(), original, "字节要一字不差");
+        let (local, remote) = fresh.store().attachment_for_state(&shas[0]);
+        assert_eq!((local.as_str(), remote.as_str()), ("available", "unknown"), "还原的附件不得谎报服务器已有");
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn a_partial_bundle_is_refused_for_the_empty_library_restore_path() {
+        // "仅在空库时导入"的语义是整库还原。喂它一个子树包 = 之后与服务器同步时，
+        // 包里缺的那些"永久删除公告"会让已删的笔记被别人的副本带回来。
+        let app = boot("scoped-partial");
+        let (_root, kid, _other, _in_kid) = scoped_tree(&app);
+        let out = tmpdir("scoped-partial").join("子树.zip");
+        commands::dispatch(&app, "export_data", json!({ "path": out.to_string_lossy(), "folderIds": [kid.to_string()] })).unwrap();
+        let fresh = boot("scoped-c");
+        let e = commands::dispatch(&fresh, "import_data", json!({ "path": out.to_string_lossy(), "mode": "intoEmpty" })).expect_err("部分包不许走整库还原");
+        assert_eq!(e.code, "save_failed");
+        assert!(fresh.store().list_notes(&notera_store::NoteQuery::all()).unwrap().is_empty(), "被拒的导入不得留下半包状态");
+        // 整库包走同一条路则必须成功
+        let full = tmpdir("scoped-partial").join("整库.zip");
+        commands::dispatch(&app, "export_data", json!({ "path": full.to_string_lossy() })).unwrap();
+        commands::dispatch(&fresh, "import_data", json!({ "path": full.to_string_lossy(), "mode": "intoEmpty" })).expect("整库包在空库上应当放行");
+        let _ = std::fs::remove_dir_all(out.parent().unwrap());
+    }
+
+    #[test]
+    fn an_unknown_folder_in_the_export_scope_is_refused_not_ignored() {
+        let app = boot("scoped-bad");
+        let e = commands::dispatch(&app, "export_data", json!({ "folderIds": ["not-a-uuid"] }));
+        assert!(e.is_err(), "不存在的文件夹不能当成\"没勾\"" );
+        let ghost = EntityId::new().to_string();
+        let e = commands::dispatch(&app, "export_data", json!({ "folderIds": [ghost] })).expect_err("格式对但不存在的 id 也要拒");
+        assert!(matches!(e.code.as_str(), "constraint" | "rejected" | "storage"), "实际 {}", e.code);
     }
 
     #[test]

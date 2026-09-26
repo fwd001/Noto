@@ -127,6 +127,7 @@
 | FT-ATT-03 | 20 MiB 附件，链路 `FAIL(latency,target=attachments/**)` 限速 1 Mbit | 上传附件的同时编辑并同步另一条纯文本笔记 | 文本笔记在设备 B 于 ≤25 s（设计周期）内可见；附件队列未完成不影响文本轮（`STATS` 显示文本轮请求不含 `attachments/**` 等待）；UI 不出现整体阻塞（输入延迟 <100 ms） | L3,L5 | P6 |
 | FT-ATT-04 | 上传中断（`FAIL(abort,target=attachments/**)`） | 下一轮同步 | 附件在后续轮重试成功；服务端仅存在 `.tmp-*` 残留，`DUMP` 中无残缺正式对象；引用该附件的 manifest 不出现（INV-09） | L3,L4 | P6 |
 | FT-ATT-05 | 删除含附件笔记 → 清空回收站 | `DUMP` + 检查 tombstone | `purged` 置位；tombstone 不被自动 GC（INV-11） | L3 | P6 |
+| FT-ATT-08 | 干净库（没有任何 `attachments` 行） | `apply_remote` 一条 doc 里带 `image` 块的远端笔记 | 与笔记**同一事务**登记 `attachments` + `note_attachments`：`attachment_refs == 1`、起始态是 `missing`/`unknown`、`attachment_downloads()` 真的给出这一条（漏登记 = 第二台设备永远占位 + 引用计数恒为 0 让 GC 删掉还在用的 blob）。畸形 sha（非 64 位小写 hex）不入库、也不许把整批同步拖回滚；重放同一条记录不产生第二行 | L1,L2 | P6 |
 | FT-CHK-01 | 新笔记 | 建 checklist 3 项，勾选第 1、3 项 | 重开后勾选状态为 `[x][ ][x]`；纯文本抽取输出与该状态一致 | L1,L5 | P2 |
 | FT-CHK-02 | 同 checklist | 设备 A 勾第 1 项、设备 B 勾第 2 项（同一 base） → 双向同步 | 结果为两项都勾（块级三方合并不丢勾选）或产生冲突副本且两份内容完整可见；**禁止出现"只剩一项勾选"的静默覆盖**（INV-01/05） | L3 | P5 |
 | FT-CHK-03 | checklist 中间项 | 在第 2 项内换行 / 删除整项 | 项序连续无空项；重开后条目数 = 操作后预期数 | L5 | P2 |
@@ -185,6 +186,8 @@
 | FT-IO-06 | 从外部格式导入（Markdown/纯文本各 1 组） | 导入含中文文件名、CRLF、BOM、无扩展名的文件 | 每篇正文可读、条目数等于源文件数；文件名冲突时自动改名而非覆盖；0 字节文件按报告跳过 | L1 | P6 |
 | FT-IO-07 | 一篇挂了真实 blob 的笔记（`attach_blob` 走产品路径，落 `<attachments>/<2hex>/<sha>`） | 经真 `dispatch` 导出（`includeAttachments: true`）→ 立刻 `read_bundle` 回读 | 包里的附件**条目数与字节**必须等于库里的那一个：`counts.attachments == 1`、`attachments[0].0 == sha256`、字节逐字节相同；不勾这个开关时必须是 0。导出与"平铺 / `{req:…}`"两种封套形状都要覆盖，输出路径也必须按用户指的位置写 | L2 | P6 |
 | FT-IO-08 | 一个非空的库 | 导出整库 → 把同一个包导回**同一个库**（merge） | 幂等：笔记 rev 与 content_hash 一字不动（rev 一动，编辑器手里的 `expectedRev` 就成了旧的，用户会看到"这条笔记在别处被改动了"的假冲突），且不造出任何 open 冲突行 | L2 | P6 |
+| FT-IO-09 | 「默认本 / 项目 / 项目·子夹 / 平级的别的」各带笔记与附件 | 只导「项目·子夹」→ 导进干净库 | 包里恰好 = 子夹 + 祖先链（3 个文件夹）+ 范围内 1 篇笔记 + 它引用的附件，平级文件夹的笔记一个字节都不进；报告 `scope=="folders"`；包 `manifest.partial==true`；干净库导入后按原 id 读回、父本仍是那个子夹。范围里出现不存在的文件夹 id → 拒绝而不是忽略；`partial` 包走 `intoEmpty` → 响亮拒绝（缺笔记的永久删除公告，当成整库还原会让已删的笔记从别的设备回流） | L2 | P6 |
+| FT-IO-10 | 一个只含 blob 字节、库里没有 `attachments` 行的干净库 | 还原带附件的包 | 走 `restore_blob`：校验 sha → 落盘 → **登记行**（`ingest_blob` 只会 UPDATE，行不在就整次导入失败）。远端态必须留在 `unknown` 并排进上传队列（写成 `present` = 谎报服务器已有，还原出来的附件永远不补传，第三台设备拿不到）；哈希不符一律拒收且不改已有远端态；重复还原不把 `present` 退回 `unknown` | L1,L2 | P6 |
 | FT-CONF-06 | 一条 open 冲突，双方 rev 不同 | 打开并排预览 | 两侧文本分别来自 `preview_text(id, rev)` 且**互不相同**（两版一模一样就说明面板在做样子）；核心没有的 rev 报 `not_found`，不许用空串冒充某一版；前端声明的每个命令名在核心都有分支（arch-check `edge:declared-commands-exist`） | L2 | P5 |
 | FT-SETUP-01 | 全新安装 | 配置 WebDAV URL + 账号密码（含自签 CA） → 测试连接 | 成功时有可见确认；失败时提示区分 DNS / 拒绝连接 / TLS 不受信 / 401 / 403，不得只给"网络错误" | L5 | P4 |
 | FT-SETUP-02 | 已配置 | 改为错误密码 → 同步 → 改回 | 错误期间本地不受影响且保留配置；恢复后一轮内追上；失败不删远端任何对象（`DUMP` 前后一致） | L3,L5 | P5 |

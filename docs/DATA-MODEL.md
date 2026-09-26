@@ -455,7 +455,14 @@ len(query) <= 2   → content 表 LIKE + COLLATE NOCASE（慢一个数量级但�
 * 引用计数由 `note_attachments` 派生，**不存 `ref_count` 列**（缓存会漂移；需要时用一次索引扫描）。
 * blob 物理删除条件：引用计数为 0 **且** 该 sha 无 `pending/inflight` 上传 **且** `local_state='available'`。
 * 回收站内笔记仍持有引用 → 30 天窗口内 blob 不会被删。
-* 下载缺失 blob（换设备）：`local_state='missing'` 且远端 `present` → 入 download 队列，UI 显示占位而非报错。
+* 下载缺失 blob（换设备）：`local_state='missing'` 且远端**没被否定**（`present` 或 `unknown`）→ 入 download 队列，UI 显示占位而非报错。
+  口径为什么含 `unknown`：外来笔记登记出来的行起步就是 `unknown`（谁也没确认过），只等 `present` 就等于永远不去问服务器一次。
+  404 走既有的一条路 —— 标 `absent` 后收手，不会每轮空转。
+* **收到一条笔记 = 登记它引用的附件**：`apply_remote` 写笔记时在**同一事务**里把 doc 里的块级引用（`Image`/`Attachment` 及任何带
+  64 位小写 hex `sha256` 的块）抄进 `attachments` + `note_attachments`。漏了这一步，第二台设备就没有下载任务、引用计数恒为 0
+  （GC 敢删还在用的 blob）、按文件夹导出的附件集合也是空的。形态不合法的 `sha256` **不入库**：主键上的 CHECK 会让整批同步回滚。
+* **从备份包还原走 `Store::restore_blob`，不是同步的 `ingest_blob`**：包里的字节没经过服务器，所以登记行、远端态留在
+  `unknown`（→ 排进上传队列补传）。`ingest_blob` 会写 `present`，那等于宣布"服务器已经有了"，还原出来的附件就永远不再上传。
 
 ---
 
@@ -613,7 +620,11 @@ SELECT * FROM tree;
 
 ## 15. 导出 / 导入 / 备份
 
-* **导出**：自描述 ZIP —— `manifest.json`（含 `exported_at`、`app_version`、`protocol`、`counts`）+ `notes/<id>.json`（信封）+ `folders.json` + `attachments/<sha>` + `tombstones.json`。导入时可勾选"保留删除事实"，默认保留（防复活）。
+* **导出**：自描述 ZIP —— `manifest.json`（含 `exported_at`、`app_version`、`protocol`、`counts`、`partial`）+ `notes/<id>.json`（信封）+ `folders.json` + `attachments/<sha>` + `tombstones.json`。导入时可勾选"保留删除事实"，默认保留（防复活）。
+* **按文件夹导出 = 子树 + 祖先链**（`Store::folder_closure`）：笔记按父本是否在范围内筛，附件按范围内的笔记筛。包必须自己声明
+  `partial: true` —— `tombstones` 不记父本，笔记的**永久删除公告无法归属到文件夹**，因此这种包**禁止**用于"仅在空库时导入"
+  的整库还原（那样一导，之后与服务器同步时已删的笔记会被别人的副本带回来，违反 §8 硬性要求 6）。`partial` 带
+  `#[serde(default)]`：老包缺这个键也必须读得回来，升级把自己的旧备份读坏等于我们自己制造数据丢失。
 * **导入**：视为一次 `bootstrap_push` —— 目标库为空则直接落库；非空则**逐条冲突求解**，绝不静默覆盖（I3/I6）。ID 冲突但内容不同 → 生成副本并记 `sync_conflicts`。
 * **备份**：`VACUUM INTO` —— 与 Online Backup API 同等的**一致单文件快照**（含未 checkpoint 的 WAL 内容，实测过），但不需要给 `rusqlite` 开 `backup` 特性。产物含 `sha256` 校验与 `user_version`。同一秒内重复备份各得一份，绝不覆盖已有文件。
 * **恢复**：备份文件 → 校验哈希 → 校验 `user_version ≤ 当前支持` → 校验 `integrity_check` → **替换前先留一份当前库**（`notera.sqlite.pre-restore.<ver>`）→ 原子替换（先写 `.restoring` 再 rename）→ 启动自检。
