@@ -275,3 +275,52 @@ code[data-mark='code'] {
 .nb-content a {
   color: var(--text-link);
 }
+
+/* "/" 命令面板：挂在当前块下方。用块定位而不是测光标坐标 ——
+   后者在换行/滚动/字体缩放时一定会抖，且每次输入都要重算。 */
+.slash-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  display: grid;
+  gap: 2px;
+  min-width: 280px;
+  max-height: 288px;
+  margin: 0;
+  padding: var(--space-1);
+  overflow-y: auto;
+  list-style: none;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-2);
+  box-shadow: var(--shadow-2);
+}
+
+.slash-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 44px;
+  padding: var(--space-1) var(--space-2);
+  font-family: var(--font-ui);
+  font-size: var(--text-md);
+  color: var(--text-primary);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-1);
+  cursor: pointer;
+}
+
+.slash-item--on,
+.slash-item:hover {
+  background: var(--accent-soft);
+}
+
+.slash-item__hint {
+  font-size: var(--text-base);
+  color: var(--text-muted);
+}

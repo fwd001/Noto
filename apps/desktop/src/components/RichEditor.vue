@@ -7,6 +7,7 @@ import { computed, nextTick, onMounted, ref } from 'vue';
 import EditorToolbar from './EditorToolbar.vue';
 import { vEditable, markAsParsed } from '../editor/editableDirective';
 import { applySelection, parseEditable, safeHref, selectionIn } from '../editor/dom';
+import { applySlash, filterSlash, markdownShortcut, slashQuery, type SlashItem } from '../editor/quickInsert';
 import {
   applyMark,
   backspace,
@@ -51,6 +52,17 @@ const activeIndex = ref(0);
 const range = ref({ start: 0, end: 0 });
 const activeMarks = ref<string[]>([]);
 const charCount = computed(() => docCharCount(blocks.value));
+
+/** "/" 面板：查询串为 null 表示当前不是命令输入。选中项用键盘维护。 */
+const slashQ = ref<string | null>(null);
+const slashSel = ref(0);
+const slashList = computed<SlashItem[]>(() => (slashQ.value === null ? [] : filterSlash(slashQ.value)));
+
+async function chooseSlash(item: SlashItem | undefined): Promise<void> {
+  slashQ.value = null;
+  if (!item) return;
+  await run(applySlash(blocks.value, activeIndex.value, item));
+}
 
 const currentBlock = computed<EditorBlock | null>(() => blocks.value[activeIndex.value] ?? blocks.value[0] ?? null);
 const currentIndent = computed(() => (currentBlock.value ? indentOf(currentBlock.value) : 0));
@@ -150,6 +162,15 @@ async function onInput(index: number, event: Event): Promise<void> {
   markAsParsed(element, content);
   store.updateBlock({ ...block, content });
   await capture(index);
+  // 缩写优先：命中就换块型并吃掉前缀，此时不该再把它当命令查询
+  const edit = markdownShortcut(store.blocks, index);
+  if (edit) {
+    slashQ.value = null;
+    await run(edit);
+    return;
+  }
+  slashQ.value = slashQuery(inlineText(content));
+  slashSel.value = 0;
 }
 
 async function onKeydown(index: number, event: KeyboardEvent): Promise<void> {
@@ -160,6 +181,27 @@ async function onKeydown(index: number, event: KeyboardEvent): Promise<void> {
   const mod = event.ctrlKey || event.metaKey;
   const key = event.key;
   const text = inlineText(block.content);
+
+  if (slashQ.value !== null) {
+    if (key === 'Escape') {
+      event.preventDefault();
+      slashQ.value = null;
+      return;
+    }
+    if (slashList.value.length > 0) {
+      if (key === 'ArrowDown' || key === 'ArrowUp') {
+        event.preventDefault();
+        const n = slashList.value.length;
+        slashSel.value = (slashSel.value + (key === 'ArrowDown' ? 1 : n - 1)) % n;
+        return;
+      }
+      if (key === 'Enter' || key === 'Tab') {
+        event.preventDefault();
+        await chooseSlash(slashList.value[slashSel.value]);
+        return;
+      }
+    }
+  }
 
   if (mod && !event.altKey) {
     const lower = key.toLowerCase();
@@ -356,6 +398,30 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
           >
             <span class="nb-check__box" aria-hidden="true">{{ isChecked(block) ? '✓' : '' }}</span>
           </button>
+
+          <ul
+            v-if="slashQ !== null && index === activeIndex && slashList.length > 0"
+            class="slash-menu"
+            role="listbox"
+            :aria-label="t('slash.menu')"
+            data-testid="slash-menu"
+          >
+            <li v-for="(item, i) in slashList" :key="`${item.type}-${i}`">
+              <button
+                type="button"
+                role="option"
+                class="slash-item"
+                :class="{ 'slash-item--on': i === slashSel }"
+                :aria-selected="i === slashSel ? 'true' : 'false'"
+                :data-testid="`slash-${item.type}-${i}`"
+                @mousedown.prevent
+                @click="chooseSlash(item)"
+              >
+                <span class="slash-item__name">{{ t(item.labelKey) }}</span>
+                <span class="slash-item__hint">{{ t(item.hintKey) }}</span>
+              </button>
+            </li>
+          </ul>
 
           <div
             v-if="block.shape === 'text'"

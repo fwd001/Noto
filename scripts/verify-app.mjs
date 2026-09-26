@@ -91,6 +91,39 @@ await step('输入正文并自动保存（rev 前进）', async () => {
   return text.slice(0, 40);
 });
 
+await step('Markdown 缩写即时转换（# 空格 → 标题）', async () => {
+  const field = page.locator('[data-testid="editor-doc"] [contenteditable="true"]').last();
+  await field.click();
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('# 一级标题', { delay: 12 });
+  await page.waitForTimeout(700);
+  const heading = page.locator('[data-testid="editor-doc"] [data-type="heading"]');
+  if ((await heading.count()) === 0) throw new Error('输入 "# " 没有转成标题');
+  const text = asStored(await heading.last().innerText());
+  if (!text.includes('一级标题')) throw new Error(`标题内容不对：${JSON.stringify(text)}`);
+  return text;
+});
+
+await step('"/" 命令面板：出现 → 过滤 → 回车选中代码块', async () => {
+  const field = page.locator('[data-testid="editor-doc"] [contenteditable="true"]').last();
+  await field.click();
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('/', { delay: 12 });
+  await page.waitForSelector('[data-testid="slash-menu"]', { timeout: 4000 });
+  const all = await page.locator('[data-testid="slash-menu"] [role="option"]').count();
+  await page.keyboard.type('cod', { delay: 12 });
+  await page.waitForTimeout(400);
+  const filtered = await page.locator('[data-testid="slash-menu"] [role="option"]').count();
+  if (!(filtered < all && filtered > 0)) throw new Error(`过滤没生效：${all} → ${filtered}`);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(500);
+  if ((await page.locator('[data-testid="slash-menu"]').count()) > 0) throw new Error('选中后面板应关闭');
+  if ((await page.locator('[data-testid="editor-doc"] [data-type="codeBlock"]').count()) === 0) {
+    throw new Error('回车没有把这块变成代码块');
+  }
+  return `${all} 项 → 过滤到 ${filtered} 项 → 已转代码块`;
+});
+
 await step('回列表能看到这条笔记', async () => {
   await page.click('[data-testid="nav-all"]', { timeout: 5000 }).catch(() => {});
   await page.waitForTimeout(600);
