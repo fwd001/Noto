@@ -8,7 +8,7 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 449 通过 / 0 失败 / 0 ignored（50 个测试二进制） |
+| `cargo test --workspace` | 450 通过 / 0 失败 / 0 ignored（50 个测试二进制） |
 | 前端 | 162 通过（15 文件）；`vue-tsc --noEmit` 无错误；构建 210 KB → gzip 72 KB |
 | `scripts/arch-check.mjs` | 24/24 |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |

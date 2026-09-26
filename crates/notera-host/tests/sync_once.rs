@@ -201,6 +201,59 @@ async fn one_round_carries_a_local_note_to_a_second_device() {
     srv.stop().await;
 }
 
+/// FT-ATT-02 的真服务器版本：A 挂一张图 → B 不只拿到笔记，还拿到那张图的**字节**。
+///
+/// 这条同时是"外来记录要登记附件"那处修复的证据。不登记的话：B 的下载队列是空的，
+/// 界面永远是一张取不回来的占位图 —— 而文本轮照样 `Converged`、徽标写着"已同步"、
+/// 设置页一个错误都看不到。两台设备各自读回的字节都与源一致，也就证明了服务器上那份
+/// 不多不少（内容寻址，错一个字节所有引用同一 sha 的笔记都被污染）。
+#[tokio::test]
+async fn an_attachment_follows_its_note_to_a_second_device() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let a = Device::boot("att-a", &url);
+    let folder = a.app.default_folder_id().unwrap();
+    let note = a.app.create_note(&folder, doc("带图的笔记")).unwrap();
+    let blob: Vec<u8> = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, b'\x01'];
+    let note_id = notera_core::EntityId::parse(&note.id).expect("命令层回带的 id 一定合法");
+    let sha = a.app.store().attach_blob(&note_id, &blob, "image/png", Some("shot.png"), "blk000002").unwrap().sha256;
+    // 编辑器的真实顺序（`stores/editor.ts::attachFile`）：先落自己的编辑 → 核心写附件 →
+    // 接住新 rev → **才把带 sha256 的附件块写进正文**。引用住在 doc 里，`note_attachments`
+    // 只是本机账本 —— 只 `attach_blob` 而正文里没有引用，第二台设备根本无从知道要取哪个 blob。
+    let head = a.app.store().get_note(&note_id).unwrap().unwrap();
+    let with_image = json!({ "v": 1, "content": [
+        { "id": "blk000001", "type": "paragraph", "content": [{ "text": "带图的笔记" }] },
+        { "id": "blk000002", "type": "image", "attrs": {
+            "sha256": &sha, "ref": &sha, "role": "inline", "pending": false,
+            "size": blob.len(), "mediaType": "image/png", "name": "shot.png" } },
+    ] });
+    a.app.store().edit_note(&note_id, with_image, head.rev).expect("把附件引用写进正文");
+
+    let ra = a.app.remote_for_sync().await.unwrap().expect("A 装了适配器");
+    a.app.sync_once().await.expect("A 的文本轮");
+    let round_a = a.app.run_attachment_round(&ra).await;
+    assert_eq!(round_a, (1, 0, 0), "A 的附件轮要把那一个 blob 传上去：{round_a:?}");
+    assert_eq!(a.app.store().attachment_for_state(&sha).1, "present", "传成了就该记下服务器已有");
+
+    let b = Device::boot("att-b", &url);
+    let rb = b.app.remote_for_sync().await.unwrap().expect("B 装了适配器");
+    let stats_b = b.app.sync_once().await.expect("B 的文本轮");
+    assert!(stats_b.pulled >= 1, "B 必须从服务器拉到那条记录：{stats_b:?}");
+    let queued: Vec<String> = b.app.store().attachment_downloads(5).unwrap().into_iter().map(|j| j.sha256).collect();
+    assert_eq!(queued, vec![sha.clone()], "收到记录却没登记附件 = 没有下载任务 = 图片永远停在占位");
+
+    let round_b = b.app.run_attachment_round(&rb).await;
+    assert_eq!(round_b, (0, 1, 0), "B 的附件轮要把那一个 blob 取回来：{round_b:?}");
+    assert_eq!(std::fs::read(b.app.store().blob_path(&sha)).unwrap(), blob, "B 落盘的字节要和源一致");
+    // 走编辑器真正用的那条读路径（`attachment_data`），不是只看库里的账
+    let data = notera_host::commands::dispatch(&b.app, "attachment_data", json!({ "sha256": &sha }))
+        .expect("B 的界面读得出这张图");
+    assert_eq!(notera_crypto::b64::decode(data["bytesBase64"].as_str().unwrap()).unwrap(), blob);
+    assert_eq!(data["mediaType"], "image/png", "媒体类型随记录一起落地，否则显示只能退回二进制");
+    assert_eq!(b.app.store().attachment_refs(&sha).unwrap(), 1, "引用计数不是 0，GC 才不会删掉还在用的 blob");
+    srv.stop().await;
+}
+
 // ---------------------------------------------------------------- §11.4 租约 ---
 
 /// 清单 index.json 的 sha（内容指纹）。公告了就会变，没公告就不该变。

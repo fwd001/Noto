@@ -187,7 +187,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 
 | 门禁 | 结果 | 怎么复现 |
 |---|---|---|
-| Rust 测试 | 449 通过 / 0 失败 / 0 ignored（50 个测试二进制） | `cargo test --workspace` |
+| Rust 测试 | 450 通过 / 0 失败 / 0 ignored（50 个测试二进制） | `cargo test --workspace` |
 | 前端 | 162 通过（15 文件）、`vue-tsc` 无错误、构建 206 KB→gzip 70 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
 | 架构适应度 | 24/24（最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
@@ -210,6 +210,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | 编辑器"插入图片 / 附件"的入口 | **已接通**（按 D11 的 ③ 走） | 隐藏的 `<input type=file>` 取文件（WebView 里就是系统原生选择器），前端只负责把 File 变成 base64；sha256、落盘、`attachments`/`note_attachments`、上传队列仍全在核心。零新依赖，且**浏览器 dev 桥与真窗口是同一条代码路径** → 端到端真的点了一遍（`verify-app` 第 15 步）。形状集中在 `editor/attachmentWire.ts`；显示用的 data URL 只活在内存表里，**绝不写进块属性**（那等于把附件在正文里再存一份并跟着同步走）。顺序坑也在这里：首次挂载会翻转 `has_attachment` 并**推进笔记 rev**，所以必须"先落编辑 → 再写附件 → 接住新 rev → 才把块写进正文" |
 | 冲突并排预览 `preview_text` | 已实现 | 前端一直在调、核心一直没有这条分支 → 每次 `unknown_command`，被"退回卡片摘要"的兜底盖住了。现在按 `(id, rev)` 取 revision 抽纯文本，并加门禁 `edge:declared-commands-exist`（前端声明的每个命令名，核心必须有分支） |
 | 按文件夹部分导出 | 已实现 | `Store::folder_closure` = 子树 + 祖先链；笔记按父本是否在范围内筛，附件按范围内的笔记筛（`attachment_shas_in_folders`）。包自己声明 `manifest.partial`，**因此禁止**用它走"仅在空库时导入"：`tombstones` 不记父本，笔记的永久删除公告无法归属到文件夹，当成整库还原就会让已删的笔记从别的设备回流（§8 硬性要求 6）。范围里出现未知文件夹 id → 拒绝，不是忽略 |
+| 附件的第二条登记入口：从**清单**读引用 | 未做（已知缺口） | doc 这条路现在是通的（收到记录 → 按块上的 `sha256` 登记，见 DATA-MODEL §8，并有跨设备真服务器测试）。剩下的窗口是：A 上 `attach_blob` 成功了、但把引用写进正文的那一次保存没发生（崩溃 / 强杀）—— blob 已上传、`note_attachments` 有行，而**没有任何 doc 引用它**，B 侧因此无从得知。影响：A 上留一个既不回收也不分享的孤儿（不是数据丢失，也不覆盖任何东西）。补法需要 SYNC-PROTOCOL §13 的清单侧附件条目 + 在清单解析处调 `Store::register_remote_attachment`（那个函数的注释本来就写着"清单/记录里读到引用时调用"，清单那一半一直没人做）—— 属于协议改动，走 §9 评审 |
 | `.enex` 结构化导入 | 未实现 | 需要 XML 依赖 + ENML 映射与夹具 —— 动依赖图，按 §9 走人工评审 |
 | macOS / Android / iOS 产物与签名 | BLOCKED | 需要对应硬件、证书与工具链；本机只有 Windows |
 | CI workflow 文件 | 未创建 | 推送渠道待决（ARCHITECTURE-REVIEW §14）；本地等价检查已全部脚本化 |
