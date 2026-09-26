@@ -47,11 +47,12 @@ function isTransparentOk(os: OsKind): boolean {
 export function localCaps(): PlatformCaps {
   const os = inferOs();
   const mobile = os === 'ios' || os === 'android';
-  const keychain: PlatformCaps['keychain'] =
-    os === 'windows' ? 'credentialManager' : os === 'macos' || os === 'ios' ? 'keychain' : os === 'android' ? 'keystore' : 'none';
+  // 兜底值也必须只说"壳里真的做了的事"：这里曾经报 tray/globalShortcuts/keychain 为可用，
+  // 而桌面壳一行托盘或钥匙串代码都没有 —— 于是设置页摆出一个存了没人读的开关。
+  const keychain: PlatformCaps['keychain'] = 'none';
   return {
-    tray: !mobile && (os === 'windows' || os === 'macos' || os === 'other'),
-    globalShortcuts: !mobile,
+    tray: false,
+    globalShortcuts: false,
     bgTask: mobile ? (os === 'ios' ? 'bgAppRefresh' : 'workManager') : 'desktopTimer',
     shareSheet: os === 'ios' || os === 'android',
     keychain,

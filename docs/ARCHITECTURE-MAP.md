@@ -198,7 +198,8 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 
 | 项 | 状态 | 缺什么 |
 |---|---|---|
-| OS 钥匙串接入（`credential_ref`） | 未实现 | Phase 5 平台工作；当前只有 debug 构建下的 `NOTERA_DEV_WEBDAV_USER/SECRET`，release 一律进 `needs_credentials` |
+| OS 钥匙串接入（`credential_ref`） | 未实现 | Phase 5 平台工作；当前只有 debug 构建下的 `NOTERA_DEV_WEBDAV_USER/SECRET`，release 一律进 `needs_credentials`。`caps.keychain` 已改口为 `none`（此前对 Windows 报 `credential_manager`，是要用户误信"口令进钥匙串了"） |
+| 托盘 / 原生菜单 / 全局快捷键 / 通知 | 未实现 | 壳里一行相关代码都没有，但 `caps` 曾对 Windows 全报 true → 设置页摆出"关闭窗口时留在系统托盘"这种存了没人读的开关。现已按 as-built 报 false，UI 显示"此平台不可用"。**要恢复需评审**：分别需要 `tauri` 的 `tray-icon` 特性、`Menu::with_items`、`tauri-plugin-global-shortcut`、通知插件的实际调用 —— 都会动依赖图，按 §9 走，不"顺便"加 |
 | 协议 §5 能力探测、§11.3 租约 | 未接入 | `RemotePort` 这 7 个方法表达不了它们；需要扩端口或加 host 侧编排 |
 | 多服务器同时启用 | 按 ADR-0018 拒绝 | 确认点 `sync_rev` 是全局列，需要迁到按账户表 |
 | 备份 / 恢复（§15） | 已实现 | `VACUUM INTO` 一致快照 + sha256/integrity_check 闸门 + 替换前留当前库 + 下次启动落地；恢复不在进程内换库（见 DATA-MODEL §15） |

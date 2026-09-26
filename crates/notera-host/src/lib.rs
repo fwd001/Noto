@@ -75,16 +75,27 @@ pub struct PlatformCaps {
 }
 
 impl PlatformCaps {
+    /// **按已实现的能力**回答，不是按"这个平台原则上能做到什么"。
+    ///
+    /// PLATFORM.md §3 那张表是目标态；本结构体是 as-built，UI 拿它决定要不要把开关
+    /// 摆出来。之前这里对 Windows 报 `tray/global_shortcuts/native_menu = true`，
+    /// 于是设置页摆出"关闭窗口时留在系统托盘"，而壳里一行托盘代码都没有 ——
+    /// 用户勾完得到一个存了却没人读的偏好，比看不到这个选项更糟。
+    ///
+    /// 要翻回 true，需要各自真的接上：托盘要 `tauri` 的 `tray-icon` 特性 +
+    /// 关窗行为读这个偏好；全局快捷键要 `tauri-plugin-global-shortcut`；
+    /// 原生菜单要 `Menu::with_items`；钥匙串要 `credential_ref` 落地（Phase 5）。
+    /// 这些都会动依赖图，按 §9 走评审，不在这里"顺便"加。
     pub fn for_current_target() -> Self {
         if cfg!(target_os = "windows") {
             Self {
-                tray: true,
-                global_shortcuts: true,
-                native_menu: true,
-                notifications: true,
+                tray: false,
+                global_shortcuts: false,
+                native_menu: false,
+                notifications: false,
                 share_sheet: false,
                 background_task: "desktop_timer".into(),
-                keychain: "credential_manager".into(),
+                keychain: "none".into(),
                 file_picker: "native".into(),
                 safe_area: false,
             }
@@ -96,7 +107,7 @@ impl PlatformCaps {
                 notifications: true,
                 share_sheet: true,
                 background_task: "desktop_timer".into(),
-                keychain: "keychain".into(),
+                keychain: "none".into(),
                 file_picker: "native".into(),
                 safe_area: false,
             }
@@ -108,7 +119,7 @@ impl PlatformCaps {
                 notifications: true,
                 share_sheet: true,
                 background_task: "workmanager".into(),
-                keychain: "keystore".into(),
+                keychain: "none".into(),
                 file_picker: "saf".into(),
                 safe_area: true,
             }
@@ -120,7 +131,7 @@ impl PlatformCaps {
                 notifications: true,
                 share_sheet: true,
                 background_task: "bgapprefresh".into(),
-                keychain: "keychain".into(),
+                keychain: "none".into(),
                 file_picker: "document_picker".into(),
                 safe_area: true,
             }

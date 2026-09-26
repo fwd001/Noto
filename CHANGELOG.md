@@ -8,11 +8,11 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 382 通过 / 0 失败 / 0 ignored |
-| 前端 | 86 通过（9 文件）；`vue-tsc --noEmit` 无错误；构建 189 KB → gzip 65 KB |
+| `cargo test --workspace` | 407 通过 / 0 失败 / 0 ignored（47 个测试二进制） |
+| 前端 | 121 通过（12 文件）；`vue-tsc --noEmit` 无错误；构建 199 KB → gzip 68 KB |
 | `scripts/arch-check.mjs` | 18/18 |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
-| `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 16/16 |
+| `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 28/28 |
 | `scripts/verify-tauri-window.mjs`（真窗口，走真 `invoke`） | 8/8，控制台 0 error |
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8。
@@ -28,6 +28,20 @@
 - **导入器** `notera-importer`：Markdown/纯文本 → 富文本，无损优先（不认识的标记按字面保留）、三道入口闸门、按内容哈希幂等；64 个测试
 - **诊断入口** `notera-cli`：`serve`（dev 桥，落真实 Store）、`verify`、`conflicts`、`sync-once`、`net-probe`、`export`；退出码 0=PASS / 1=ASSERT_FAIL / 2=BLOCKED
 - **ADR-0018**：单一活跃同步账户约束（多服务器推迟到"按账户确认点"）
+- **备份 / 恢复**（DATA-MODEL §15）：`VACUUM INTO` 一致快照 + `sha256`/`integrity_check`/`user_version` 三道闸门 + 替换前留一份当前库 + 下次启动落地（不在进程内换库）。零新依赖
+- **导出 / 导入**：自描述 ZIP（`manifest.json` + `folders.json` + `notes/<id>.json` + `tombstones.json` + `attachments/<sha>`）。记录由**与上传同一套**信封构造函数产出，导入因此直接喂 `apply_remote` —— 没有第二条写入路径，"防复活"就没有第二个会漏的地方
+- **编辑器原生感**（对齐 AppFlowy）：Markdown 输入缩写、`/` 命令面板、块把手（拖拽重排 + 下方插入 + Alt+↑↓）、选中文字浮出小工具条
+- **ADR-0019**：Joplin 同步与 AppFlowy 编辑交互的逐条采纳/拒绝及其理由
+
+### 修掉的静默错误（都是"看着在用、其实没接线"）
+
+- **动态拼出来的文案键把键名直接印到界面上**：`MessageKey` 只是 `string` 别名，`t()` 查不到就原样返回 —— 工具条上写着 `editor.blockCodeBlock`，设置页写着 `settings.rootPrefix`。改成查表，并加两层门禁（扫源码的键登记测试 + 端到端看渲染文本）
+- **两条自动保存并发出发，自己造出一条假"在别处被改动了"**：`save()` 无互斥，防抖那一发和 blur 的 flush 带着同一个 `expectedRev` 同时上路，先回来的把 rev 推进、后回来的被核心判成 stale_edit。核心没错，错在前端让自己的两个保存互相打架
+- **校验备份这一步破坏了被校验的备份**：`pool::open_readonly_conn` 其实不是只读，会跑 `PRAGMA journal_mode=WAL` —— 把待校验的文件就地改写并留下 `-wal` 边车，于是 sha256 永远对不上、恢复必然失败
+- **导出会正好盖掉刚才的备份**：备份产物被回填进唯一那个路径框，下一次"导出"就写在那份 `.sqlite` 上。现在输出/输入两个框分开，且导出遇已存在文件一律不覆盖
+- **`caps` 报的是"这个平台原则上能做到什么"而不是"壳里做了什么"**：Windows 下 `tray/global_shortcuts/native_menu/notifications` 全报 true、`keychain` 报 `credential_manager`，而壳里一行相关代码都没有 —— 设置页因此摆出"关闭窗口时留在系统托盘"这种存了没人读的开关，并让用户误信口令已进钥匙串。现按 as-built 报 false/none
+- **端到端门禁漏掉整类 4xx**：只盯 `requestfailed`，而本地桥把业务拒绝映射成 HTTP 400 → 真错误（上面那条 stale_edit）被当成功放过
+- `WorkspaceView` 不跟随 `selectedId` 打开编辑器（选中了却一片空白）、`create()` 不打开新笔记、冲突动词表三处不一致、`create_note` 拒绝 `folderId: null`、`/favicon.ico` 404
 - **架构适应度检查** `scripts/arch-check.mjs`：18 条机器可判定的层次约束（依赖边、唯一出口、SQL 只出现在 store、前端无协议词汇、端口边越界引用…）
 - **端到端等价** `scripts/verify-app.mjs`：Playwright 驱动同一份前端 + 同一份 Rust 核心的 14 步 UAT
 
