@@ -173,6 +173,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | 0016 | 本地静态加密（SQLCipher） | **Proposed**（待内网合规要求确认） |
 | 0017 | 多窗口并发编辑同一条笔记 | **Proposed**（Phase 4 决策） |
 | 0018 | 单一活跃同步账户；多服务器推迟到"按账户确认点"落地 | Accepted |
+| 0019 | 外部参照：Joplin 同步与 AppFlowy 编辑交互，采纳与拒绝 | Accepted |
 
 ---
 
@@ -184,21 +185,21 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 
 | 门禁 | 结果 | 怎么复现 |
 |---|---|---|
-| Rust 测试 | 382 通过 / 0 失败 / 0 ignored | `cargo test --workspace` |
-| 前端 | 86 通过（9 文件）、`vue-tsc` 无错误、构建 189 KB→gzip 65 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
+| Rust 测试 | 389 通过 / 0 失败 / 0 ignored（44 个测试二进制） | `cargo test --workspace` |
+| 前端 | 103 通过（10 文件）、`vue-tsc` 无错误 | `npm --prefix apps/desktop test` / `run typecheck` |
 | 架构适应度 | 18/18 | `node scripts/arch-check.mjs` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
-| 浏览器端到端 | 16/16（真 Rust 核心，非 mock） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
+| 浏览器端到端 | 18/18（真 Rust 核心，非 mock） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
 | 真窗口 | 8/8（invoke 建笔记→落库→刷新读回→点开正文，控制台 0 error） | `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223 target/debug/notera-desktop.exe` + `node scripts/verify-tauri-window.mjs` |
 
-**已建立**：12 个 crate + `apps/desktop`（Tauri 壳 + Vue 前端）+ `migrations/0001..0005` + 自建测试 WebDAV 服务器 + 上述四套验证脚本 + `docs/` 全套规格与 ADR-0001…0018。
+**已建立**：12 个 crate + `apps/desktop`（Tauri 壳 + Vue 前端）+ `migrations/0001..0005` + 自建测试 WebDAV 服务器 + 上述四套验证脚本 + `docs/` 全套规格与 ADR-0001…0019。
 
 **尚未做，且明确不算完成**：
 
 | 项 | 状态 | 缺什么 |
 |---|---|---|
 | OS 钥匙串接入（`credential_ref`） | 未实现 | Phase 5 平台工作；当前只有 debug 构建下的 `NOTERA_DEV_WEBDAV_USER/SECRET`，release 一律进 `needs_credentials` |
-| 协议 §2 `protocol.json` 协商、§5 能力探测、§11.3 租约、§13 附件队列 | 未接入 | `RemotePort` 这 7 个方法表达不了它们；需要扩端口或加 host 侧编排 |
+| 协议 §5 能力探测、§11.3 租约 | 未接入 | `RemotePort` 这 7 个方法表达不了它们；需要扩端口或加 host 侧编排 |
 | 多服务器同时启用 | 按 ADR-0018 拒绝 | 确认点 `sync_rev` 是全局列，需要迁到按账户表 |
 | 备份/恢复、`.enex` 结构化导入 | BLOCKED | 前者需要 `rusqlite/backup` 特性（依赖变更需评审），后者需要 XML 依赖 + ENML 映射与夹具 |
 | macOS / Android / iOS 产物与签名 | BLOCKED | 需要对应硬件、证书与工具链；本机只有 Windows |
