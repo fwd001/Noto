@@ -11,9 +11,10 @@ import SidebarPanel from './components/SidebarPanel.vue';
 import WorkspaceView from './views/WorkspaceView.vue';
 import SettingsView from './views/SettingsView.vue';
 import ConflictsView from './views/ConflictsView.vue';
-import { callCommand, inTauri, onLinkChange, onUiEvent, probeLink } from './api/bridge';
+import { callCommand, inTauri, onLinkChange, onMenuAction, onUiEvent, probeLink } from './api/bridge';
 import type { UiEvent } from './api/types';
 import { loadCaps } from './platform/caps';
+import { dispatchMenu } from './platform/menu';
 import { LINK_PROBE_INTERVAL_MS } from './util/timing';
 import { useConflictStore } from './stores/conflicts';
 import { useEditorStore } from './stores/editor';
@@ -179,6 +180,7 @@ function onGlobalKeydown(event: KeyboardEvent): void {
 }
 
 let stopEvents: (() => void) | null = null;
+let stopMenu: (() => void) | null = null;
 let stopViewport: (() => void) | null = null;
 let stopSystemTheme: (() => void) | null = null;
 let stopLinkEvents: (() => void) | null = null;
@@ -209,6 +211,17 @@ onMounted(() => {
   stopViewport = shell.observeViewport();
   stopSystemTheme = settings.trackSystemTheme();
   stopEvents = onUiEvent(handleEvent);
+  // 原生菜单与键盘快捷键走的是同一批动作：菜单只是同一入口的另一层外壳。
+  stopMenu = onMenuAction((id) => {
+    dispatchMenu(id, {
+      newNote,
+      focusSearch,
+      syncNow: () => void sync.syncNow(),
+      gotoConflicts: () => shell.goto('conflicts'),
+      gotoTrash: () => void notes.setMode({ kind: 'trash' }),
+      gotoSettings: () => shell.goto('settings'),
+    });
+  });
   window.addEventListener('keydown', onGlobalKeydown);
   window.addEventListener('beforeunload', () => void editor.flush());
   void boot();
@@ -216,6 +229,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopEvents?.();
+  stopMenu?.();
   stopViewport?.();
   stopSystemTheme?.();
   stopLinkEvents?.();

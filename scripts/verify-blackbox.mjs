@@ -61,7 +61,13 @@ await step('打开就能用：首帧是笔记列表，不是白屏也不是加�
   const body = (await visible('body'));
   if (body.length < 20) throw new Error(`首帧几乎没有可见文字（${body.length} 字），像白屏`);
   if ((await count('[data-testid="nav-all"]')) === 0) throw new Error('侧栏「全部笔记」不在');
-  return `可见文字 ${body.length} 字`;
+  // 这条门禁的后续判定（"搜索恰好 1 行"、"列表里只有它"）都建立在**空库起步**上。
+  // 复用别人跑过的数据目录会让它时红时绿 —— 那种绿不是证据。
+  const leftovers = await page.locator('[data-testid^="note-row-"]').count();
+  if (leftovers > 0) {
+    throw new Error(`需要一座空库（发现 ${leftovers} 条遗留笔记）。请用独立数据目录起 dev 桥：notera-cli --data-dir <空目录> serve`);
+  }
+  return `可见文字 ${body.length} 字，起步库内 0 条`;
 });
 
 const title = `黑盒笔记 ${Date.now()}`;

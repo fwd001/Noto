@@ -187,8 +187,8 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 
 | 门禁 | 结果 | 怎么复现 |
 |---|---|---|
-| Rust 测试 | 462 通过 / 0 失败 / 0 ignored（51 个测试二进制） | `cargo test --workspace` |
-| 前端 | 169 通过（17 文件）、`vue-tsc` 无错误、构建 212 KB→gzip 73 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
+| Rust 测试 | 468 通过 / 0 失败 / 0 ignored（51 个测试二进制） | `cargo test --workspace` |
+| 前端 | 171 通过（18 文件）、`vue-tsc` 无错误、构建 213 KB→gzip 73 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
 | 架构适应度 | 24/24（最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |
 | L5 崩溃注入 | 9 个提交点逐个杀死真子进程 + 重启收敛（`crash_recovery`，2 条测试） | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |

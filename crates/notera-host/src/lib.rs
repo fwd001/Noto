@@ -8,6 +8,9 @@
 //! 必须在 `App::boot()` 返回**之后**才调用的独立步骤，类型上就分不开。
 
 pub mod commands;
+
+/// 平台原生物的计划表（菜单项 / 通知判定）—— 纯逻辑，壳只负责摆上去。
+pub mod platform;
 pub mod devserver;
 
 use commands::{AccountDraftCmd, AccountDto, CmdError, ConflictDto, ExportCmd, FolderDto, ImportCmd, ListNotesCmd, NoteDto, NoteListDto, SearchCmd, SearchHitDto, StatsDto, SyncStatusDto};
@@ -91,17 +94,20 @@ impl PlatformCaps {
     /// 于是设置页摆出"关闭窗口时留在系统托盘"，而壳里一行托盘代码都没有 ——
     /// 用户勾完得到一个存了却没人读的偏好，比看不到这个选项更糟。
     ///
-    /// 要翻回 true，需要各自真的接上：托盘要 `tauri` 的 `tray-icon` 特性 +
-    /// 关窗行为读这个偏好；全局快捷键要 `tauri-plugin-global-shortcut`；
-    /// 原生菜单要 `Menu::with_items`；钥匙串要 `credential_ref` 落地（Phase 5）。
-    /// 这些都会动依赖图，按 §9 走评审，不在这里"顺便"加。
+    /// as-built 现状（2026-09-26）：**原生菜单与系统通知已经真的接上**
+    /// （`src-tauri/src/platform.rs` + `attach_menu` + 事件泵里的 `notice_for`），
+    /// 所以桌面三端都报 true。仍然报 false 的两类各欠一件事：
+    /// 托盘要开 `tauri` 的 `tray-icon` 特性并让关窗行为读那个偏好；
+    /// 全局快捷键要 `tauri-plugin-global-shortcut`（此前 macOS/Linux 报的是 true，
+    /// 而壳里一个注册都没有 —— 设置页于是摆出一组按了没反应的组合键）；
+    /// 钥匙串要 `credential_ref` 落地（Phase 5）。这几项都会动依赖图，按 §9 走评审。
     pub fn for_current_target() -> Self {
         if cfg!(target_os = "windows") {
             Self {
                 tray: false,
                 global_shortcuts: false,
-                native_menu: false,
-                notifications: false,
+                native_menu: true,
+                notifications: true,
                 share_sheet: false,
                 background_task: "desktop_timer".into(),
                 keychain: "none".into(),
@@ -111,7 +117,7 @@ impl PlatformCaps {
         } else if cfg!(target_os = "macos") {
             Self {
                 tray: false,
-                global_shortcuts: true,
+                global_shortcuts: false,
                 native_menu: true,
                 notifications: true,
                 share_sheet: true,
@@ -125,7 +131,7 @@ impl PlatformCaps {
                 tray: false,
                 global_shortcuts: false,
                 native_menu: false,
-                notifications: true,
+                notifications: false,
                 share_sheet: true,
                 background_task: "workmanager".into(),
                 keychain: "none".into(),
@@ -137,7 +143,7 @@ impl PlatformCaps {
                 tray: false,
                 global_shortcuts: false,
                 native_menu: false,
-                notifications: true,
+                notifications: false,
                 share_sheet: true,
                 background_task: "bgapprefresh".into(),
                 keychain: "none".into(),
@@ -147,9 +153,9 @@ impl PlatformCaps {
         } else {
             Self {
                 tray: false,
-                global_shortcuts: true,
+                global_shortcuts: false,
                 native_menu: true,
-                notifications: false,
+                notifications: true,
                 share_sheet: false,
                 background_task: "desktop_timer".into(),
                 keychain: "none".into(),

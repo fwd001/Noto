@@ -213,7 +213,30 @@ export function onUiEvent(handler: EventHandler): () => void {
 }
 
 const handlerRegistry = new Set<EventHandler>();
-let unsubscribeTauri: (() => void) | null = null;
+
+/**
+ * 订阅**原生菜单**的点击。只在 Tauri 壳里有意义（dev 浏览器通道没有原生菜单），
+ * 因此这里不假装支持它：非壳环境下返回一个什么都不做的取消函数。
+ */
+export function onMenuAction(handler: (id: string) => void): () => void {
+  let stop: (() => void) | null = null;
+  let disposed = false;
+  if (inTauri()) {
+    void import('@tauri-apps/api/event')
+      .then((api) => api.listen<string>('notera://menu', (event) => handler(event.payload)))
+      .then((unregister) => {
+        if (disposed) unregister();
+        else stop = unregister;
+      })
+      .catch(() => {
+        /* 订阅失败：菜单点了没反应，但绝不能因此把界面卡住 */
+      });
+  }
+  return () => {
+    disposed = true;
+    stop?.();
+  };
+}let unsubscribeTauri: (() => void) | null = null;
 let eventSource: EventSource | null = null;
 let starting = false;
 

@@ -8,10 +8,10 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 462 通过 / 0 失败 / 0 ignored（51 个测试二进制） |
+| `cargo test --workspace` | 468 通过 / 0 失败 / 0 ignored（51 个测试二进制） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
 | L5 崩溃注入 `--test crash_recovery` | 9 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零 |
-| 前端 | 169 通过（17 文件）；`vue-tsc --noEmit` 无错误；构建 212 KB → gzip 73 KB |
+| 前端 | 171 通过（18 文件）；`vue-tsc --noEmit` 无错误；构建 213 KB → gzip 73 KB |
 | `scripts/arch-check.mjs` | 24/24 |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
 | `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 35/35 |
@@ -21,6 +21,10 @@
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
 ### 新增
+
+- **原生菜单与系统通知真的接上了**（§15 / §47 的"平台能力完成"，且**没有新增任何依赖**）：桌面壳在窗口显示之前挂上本应用自己的三级菜单（笔记：新建 ⌘/Ctrl+N、搜索 F；同步：立即同步 S、冲突收件箱 K；前往：最近删除、设置 ,）。菜单点击不自己碰业务 —— 发一条 `notera://menu` 给前端，由 `src/platform/menu.ts` 路由到与快捷键**同一批**动作。系统通知只在该打扰时打扰：一条冲突、一次带原因的同步失败；进度 / Toast / `notes-changed` 一律安静（每 25 秒响一次的通知，用户第二天就会去系统设置里把本应用关掉）。移动端不挂菜单（那边 `set_menu` 会失败；不加这道桌面守卫，同一个 setup 会把 Android/iOS 构建顶死在启动上）
+- **能力声明改成 as-built**：`PlatformCaps` 现在桌面三端报 `native_menu / notifications = true`（真的接上了才报）。顺带修了一条假声明：**macOS/Linux 此前报 `global_shortcuts: true`**，而壳里一个注册都没有 —— 设置页因此摆出一组按了没反应的组合键。现在它与托盘、钥匙串一样如实报 false
+- **菜单计划与通知判定下沉到 `notera-host::platform`（纯逻辑）**：一开始写在壳里，结果是 `cargo test --workspace` 起不来 —— **链接了原生菜单的测试 exe** 没有应用清单（comctl32 v6），一启动就 `STATUS_ENTRYPOINT_NOT_FOUND`。"该有什么"该放在能被测到的层，"怎么摆上去"才留在壳里。id 集合的跨语言漂移由一条 **Rust 读前端路由表**的测试守（两边集合都打得出，变异验证过）
 
 - **存储层** `notera-store`：11 张表 + FTS5（trigram）迁移 0001…0006、写连接单写者 + 只读连接池、tombstone、outbox、冲突收件箱、附件内容寻址、偏好读写与记录 wire 出口
 - **同步引擎** `notera-sync`：清单两段式解析与压实、`P1..P18` 判定表、退避重试、CAS 提交与恢复阶梯；端口化（`LocalPort`/`RemotePort`），10 个引擎级集成测试跑真 `run_round`
