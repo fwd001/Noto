@@ -4,7 +4,18 @@
 
 ## 0.1.0 — Phase 1–4（实现进行中）· 未发布
 
-当前测试基线（本机 GNU 工具链实测）：Rust 268 通过（`notera-store` 58，`core/config/crypto/richtext/sync/net/test-webdav` 合计 210），前端 81 通过 9 个测试文件；`scripts/arch-check.mjs` 18 条中 17 通过；`scripts/verify-diagram.mjs` 59 条全通过；`vue-tsc --noEmit` 无错误，生产包 189 KB（gzip 65 KB）。
+当前测试基线（2026-09-26 本机 GNU 工具链实测）：
+
+| 门禁 | 结果 |
+|---|---|
+| `cargo test --workspace` | 382 通过 / 0 失败 / 0 ignored |
+| 前端 | 86 通过（9 文件）；`vue-tsc --noEmit` 无错误；构建 189 KB → gzip 65 KB |
+| `scripts/arch-check.mjs` | 18/18 |
+| `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
+| `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 16/16 |
+| `scripts/verify-tauri-window.mjs`（真窗口，走真 `invoke`） | 8/8，控制台 0 error |
+
+复现命令见 `docs/ARCHITECTURE-MAP.md` §8。
 
 ### 新增
 
@@ -13,6 +24,8 @@
 - **网络出口** `notera-net`：全系统唯一 HTTP 出口，代理四档、TLS 策略、分层超时、退避、`RouteProof` 脱敏审计（13 测试）
 - **测试基建** `notera-test-webdav`：真 TCP/HTTP 的 WebDAV 子集 + `/_control/*` 能力开关与故障注入 + `/_fs/dump`
 - **前端** `apps/desktop`：三栏 UI、独立富文本模型映射、四态同步徽标、design token 与对比度契约测试、Tauri 单命令通道及其契约测试
+- **WebDAV 适配器** `notera-webdav`：`RemotePort` 的生产实现，S1/S2/S3 写入策略与中途降级、清单 CAS（tmp → 让位 → 落地 → 复算）、目录穿越白名单闸门；33 个测试里有两条是**跨设备真同步**与**重启后仍在**
+- **导入器** `notera-importer`：Markdown/纯文本 → 富文本，无损优先（不认识的标记按字面保留）、三道入口闸门、按内容哈希幂等；64 个测试
 - **诊断入口** `notera-cli`：`serve`（dev 桥，落真实 Store）、`verify`、`conflicts`、`sync-once`、`net-probe`、`export`；退出码 0=PASS / 1=ASSERT_FAIL / 2=BLOCKED
 - **ADR-0018**：单一活跃同步账户约束（多服务器推迟到"按账户确认点"）
 - **架构适应度检查** `scripts/arch-check.mjs`：18 条机器可判定的层次约束（依赖边、唯一出口、SQL 只出现在 store、前端无协议词汇、端口边越界引用…）
