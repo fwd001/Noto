@@ -371,6 +371,57 @@ await step('搜索能命中这条笔记', async () => {
   return `${hit} 行命中`;
 });
 
+await step('回收站这条边：删除 → 回收站看得到 → 恢复 → 再删 → 彻底删除', async () => {
+  // §9 的两级删除是数据安全的地基，而它在 UI 层从来没有端到端跑过：删除走工具栏、
+  // 回收站走侧栏、恢复/永久删除走行内按钮，中间任何一条边的参数名或视图模式错了，
+  // 用户看到的就是"删不掉"或者"恢复回来是空的"。用一条专门的笔记，不动前面步骤依赖的那条。
+  const doomed = `回收站验证 ${Date.now()}`;
+  const made = await callBridge('create_note', { doc: { v: 1, content: [{ id: 'blk000001', type: 'paragraph', content: [{ text: doomed }] }] } });
+  const row = (name) => page.locator(`[data-testid^="note-row-"]:has-text(${JSON.stringify(name)})`);
+  await page.locator('[data-testid="nav-all"]').click();
+  await page.waitForTimeout(700);
+  await row(doomed).first().waitFor({ timeout: 5000 });
+
+  await row(doomed).first().click();
+  await page.locator('[data-testid="trash-note"]').click();
+  await page.waitForTimeout(800);
+  if ((await row(doomed).count()) > 0) throw new Error('点了删除，它还留在列表里');
+
+  await page.locator('[data-testid="nav-trash"]').click();
+  await page.waitForTimeout(800);
+  if ((await row(doomed).count()) === 0) throw new Error('回收站里没有它 —— list_notes(trash) 这条边没通');
+  await page.locator('[data-testid="restore-note"]').first().click();
+  await page.waitForTimeout(800);
+  if ((await row(doomed).count()) > 0) throw new Error('按了恢复，它还留在回收站里');
+  const live = await callBridge('list_notes', { limit: 500 });
+  if (!live.some((r) => r.id === made.id)) throw new Error('界面说恢复了，库里却没有');
+
+  await page.locator('[data-testid="nav-all"]').click();
+  await page.waitForTimeout(700);
+  await row(doomed).first().click();
+  await page.locator('[data-testid="trash-note"]').click();
+  await page.waitForTimeout(800);
+  await page.locator('[data-testid="nav-trash"]').click();
+  await page.waitForTimeout(800);
+  await page.locator('[data-testid="purge-note"]').first().click();
+  await page.waitForTimeout(300);
+  await page.locator('[data-testid="purge-confirm"]').click();
+  await page.waitForTimeout(900);
+  if ((await row(doomed).count()) > 0) throw new Error('按了彻底删除，它还挂在回收站里');
+  const trash = await callBridge('list_notes', { limit: 500, trash: true });
+  if (trash.some((r) => r.id === made.id)) throw new Error('库里的回收站视图还留着它');
+  let revived = null;
+  try {
+    revived = await callBridge('get_note', { id: made.id });
+  } catch {
+    /* not_found 正是永久删除该有的样子 */
+  }
+  if (revived) throw new Error(`永久删除之后 get_note 还回得来：${JSON.stringify(revived).slice(0, 120)}`);
+  await page.locator('[data-testid="nav-all"]').click();
+  await page.waitForTimeout(500);
+  return '删除 · 回收站 · 恢复 · 永久删除 全通，删的这条已彻底消失';
+});
+
 await step('同步徽标存在且只有 4 态之一', async () => {
   const el = page.locator('[data-testid="sync-badge"], [data-testid="mobile-sync"]').first();
   await el.waitFor({ timeout: 4000 });
