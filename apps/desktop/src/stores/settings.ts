@@ -9,12 +9,11 @@ import {
   type BackupInfo,
   type ExportRequest,
   type ImportRequest,
-  type ProxyMode,
   type Report,
   type RestoreOutcome,
   type StoreStats,
-  type TlsPolicyKind,
 } from '../api/types';
+import { draftFromWire, toWire } from '../sync/accountWire';
 import { asBridgeError } from '../util/errors';
 import { localCaps, normalizeCaps, type PlatformCaps } from '../platform/caps';
 import { useToastStore } from './toasts';
@@ -64,36 +63,21 @@ function writePrefs(prefs: UiPrefs): void {
   }
 }
 
+/**
+ * 表单的初始空值。回填/发送的翻译规则全在 `sync/accountWire.ts` —— 那里记着这条边
+ * 曾经错在哪（嵌套 vs 平铺），别在这里再写第二份。
+ */
 export function emptyDraft(): AccountDraft {
   return {
+    label: '',
     baseUrl: '',
-    rootPrefix: '.notes',
+    rootPrefix: '/.notes',
     username: '',
     password: '',
     tlsPolicy: { kind: 'strict' },
     proxy: { mode: 'direct', bypass: [] },
     enabled: true,
   };
-}
-
-export function draftFromAccount(account: Account | null | undefined): AccountDraft {
-  const draft = emptyDraft();
-  if (!account) return draft;
-  draft.id = account.id ?? null;
-  draft.baseUrl = account.baseUrl ?? '';
-  draft.rootPrefix = account.rootPrefix ?? '.notes';
-  draft.username = account.username ?? '';
-  draft.enabled = account.enabled !== false;
-  draft.tlsPolicy = { kind: (account.tlsPolicy?.kind as TlsPolicyKind) ?? 'strict', fingerprints: account.tlsPolicy?.fingerprints ?? [] };
-  draft.proxy = {
-    mode: (account.proxy?.mode as ProxyMode) ?? 'direct',
-    host: account.proxy?.host ?? '',
-    port: typeof account.proxy?.port === 'number' ? account.proxy.port : undefined,
-    username: account.proxy?.username ?? '',
-    bypass: account.proxy?.bypass ?? [],
-    resolveSystem: account.proxy?.resolveSystem ?? true,
-  };
-  return draft;
 }
 
 export const useSettingsStore = defineStore('settings', () => {
@@ -171,7 +155,7 @@ export const useSettingsStore = defineStore('settings', () => {
     try {
       const result = await callCommand<Account | null>(Commands.account, {});
       account.value = typeof result === 'object' && result !== null ? result : null;
-      draft.value = draftFromAccount(account.value);
+      draft.value = draftFromWire(account.value);
     } catch (error) {
       const bridge = asBridgeError(error);
       accountErrorKey.value = bridge.messageKey;
@@ -184,13 +168,13 @@ export const useSettingsStore = defineStore('settings', () => {
   async function saveAccount(): Promise<boolean> {
     accountSaving.value = true;
     accountErrorKey.value = null;
-    const payload: AccountDraft = { ...draft.value };
-    // 口令只在用户本次输入了内容时才提交；提交后立即从内存草稿清掉。
-    if (!payload.password || payload.password.length === 0) delete payload.password;
+    // 命令参数是平铺的：直接把翻译好的线格式当 body（此前包了一层 {draft:…}，
+    // 核心反序列化不认，"保存"一直回 bad_args —— 也就是这条配置从来没生效过）。
+    const payload = toWire(draft.value);
     try {
-      const saved = await callCommand<Account>(Commands.configureAccount, { draft: payload });
+      const saved = await callCommand<Account>(Commands.configureAccount, { ...payload });
       account.value = typeof saved === 'object' && saved !== null ? saved : account.value;
-      draft.value = { ...draftFromAccount(account.value), password: '' };
+      draft.value = { ...draftFromWire(account.value), password: '' };
       toasts.push('settings.saved', 'info');
       return true;
     } catch (error) {

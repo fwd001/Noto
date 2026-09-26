@@ -12,6 +12,7 @@ import { shortcutsFor, type PlatformCaps } from '../platform/caps';
 import { t, messageFor } from '../i18n';
 import { formatBytes, formatNumber, formatWhen } from '../util/format';
 import { FONT_SCALE_MAX, FONT_SCALE_MIN, type ThemeMode } from '../stores/settings';
+import { capChips, capsState } from '../sync/serverCaps';
 
 const settings = useSettingsStore();
 const sync = useSyncStore();
@@ -24,6 +25,14 @@ const dataPath = ref('');
 const outPath = ref('');
 const restoreHint = ref('');
 const importMode = ref<'intoEmpty' | 'merge'>('merge');
+
+// §5 的判定：核心算好策略发下来，这里只负责把它讲成人话（不许前端自己反推）。
+const capsStateOf = computed(() => capsState(settings.account));
+const capChipsOf = computed(() => capChips(settings.account?.capMask));
+const capsProbedWhen = computed(() => {
+  const at = settings.account?.capsProbedAt;
+  return at ? formatWhen(at) : '';
+});
 
 const tlsOptions: Array<{ value: TlsPolicyKind; label: string }> = [
   { value: 'strict', label: 'settings.tlsStrict' },
@@ -243,6 +252,37 @@ function keyHint(): string {
           </p>
           <button type="button" class="btn" data-testid="sync-now" @click="syncNow()">{{ t('sync.syncNow') }}</button>
 
+          <div v-if="settings.hasAccount" class="caps" data-testid="server-caps">
+            <h3 class="caps__title">{{ t('settings.serverCaps') }}</h3>
+            <p
+              v-if="capsStateOf === 'unprotected'"
+              class="caps__note caps__note--warn"
+              data-testid="server-caps-verdict"
+            >
+              {{ t('sync.capsUnprotected') }}
+            </p>
+            <p v-else-if="capsStateOf === 'protected'" class="caps__note" data-testid="server-caps-verdict">
+              {{ t('sync.capsProtected', { strategy: settings.account?.writeStrategy ?? '' }) }}
+            </p>
+            <p v-else class="caps__note caps__note--muted" data-testid="server-caps-verdict">
+              {{ t('sync.capsUnknown') }}
+            </p>
+            <ul v-if="capChipsOf.length" class="caps__chips" aria-label="capabilities">
+              <li
+                v-for="chip in capChipsOf"
+                :key="chip.name"
+                class="caps__chip"
+                :class="chip.on ? 'caps__chip--on' : 'caps__chip--off'"
+                :data-testid="`cap-${chip.name}`"
+                :aria-label="chip.labelKey"
+              >
+                <span aria-hidden="true">{{ chip.on ? '✓' : '✕' }}</span>
+                {{ t(chip.labelKey) }}
+              </li>
+            </ul>
+            <p v-if="capsProbedWhen" class="caps__when">{{ t('sync.capsProbedAt', { when: capsProbedWhen }) }}</p>
+          </div>
+
           <dl v-if="settings.stats" class="stats">
             <div>
               <dt>{{ t('settings.notesCount', { count: formatNumber(settings.stats.notes), folders: formatNumber(settings.stats.folders) }) }}</dt>
@@ -374,6 +414,72 @@ function keyHint(): string {
   font-size: var(--text-md);
   font-weight: 700;
   margin-bottom: var(--space-2);
+}
+
+.caps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-2);
+  background: var(--bg-sunken);
+}
+
+.caps__title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.caps__note {
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+  color: var(--text-primary);
+}
+
+/* S3 是本页少数"必须显眼"的提示：它讲的是覆盖风险，不是性能。 */
+.caps__note--warn {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.caps__note--muted {
+  color: var(--text-muted);
+}
+
+.caps__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.caps__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+}
+
+/* on/off 只用已经在 tokens.spec.ts 里量过对比度的语义色，对新底 --bg-sunken 两者均 ≥4.5:1。 */
+.caps__chip--on {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.caps__chip--off {
+  color: var(--text-muted);
+}
+
+.caps__when {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
 }
 
 .stats {

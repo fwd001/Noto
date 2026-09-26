@@ -163,23 +163,42 @@ export interface TlsPolicy {
   caBundlePem?: string;
 }
 
-/** 后端返回的账户视图：凭据以 hasCredential 布尔表达，不回显口令。 */
+/**
+ * 后端返回的账户视图：凭据以 hasCredential 布尔表达，不回显口令。
+ * 字段是**平铺**的（`proxyHost` 而不是 `proxy.host`），翻译集中在 `sync/accountWire.ts`。
+ */
 export interface Account {
   id?: Uuid;
+  label?: string;
   baseUrl?: string;
   rootPrefix?: string;
+  /** 用户名不是秘密，回填表单要用它；口令仍然只写不读。 */
   username?: string;
   authKind?: string;
-  tlsPolicy?: TlsPolicy | null;
-  proxy?: ProxyProfile | null;
+  tlsPolicy?: string;
+  proxyMode?: string;
+  proxyHost?: string;
+  proxyPort?: number;
+  proxyUsername?: string;
+  bypass?: string[];
   enabled?: boolean;
   hasCredential?: boolean;
+  /**
+   * §5 探测结果。`null`/缺省 = **还没探过**（区别于 `0` = 探过了，什么都不支持）。
+   * 核心的 `Option<u32>` 序列化成 JSON `null`，所以这里必须允许 null。
+   */
+  capMask?: number | null;
+  /** 核心按 §5 的表算出的写入策略；界面不许自己从 capMask 反推。 */
+  writeStrategy?: 'S1' | 'S2' | 'S3' | string | null;
+  capsProbedAt?: Rfc3339 | null;
   updatedAt?: Rfc3339;
 }
 
 /** 提交给后端的账户草稿：口令可选，缺省表示"保留已存的凭据"。 */
 export interface AccountDraft {
   id?: Uuid | null;
+  /** 核心要求非空；留空时由 `labelFromBaseUrl` 从地址推一个。 */
+  label?: string;
   baseUrl: string;
   rootPrefix: string;
   username: string;

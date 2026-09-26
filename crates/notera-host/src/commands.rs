@@ -102,6 +102,15 @@ pub struct AccountDto {
     pub enabled: bool,
     /// 永不下发明文，只告诉 UI 有没有存过
     pub has_credential: bool,
+    /// 用户名不是秘密，而且是表单回填的唯一依据 —— 没有它，用户改一次设置就得重填用户名，
+    /// 少填一个字段还会让配置静默退回"需要凭据"。口令与 `credential_ref` 一律不下发。
+    pub username: Option<String>,
+    /// §5 的探测结果。`None` = **还没探过**（不是"探过了但不支持"）——
+    /// 界面必须能把这两件事分开说，否则用户会以为自己的服务器不行。
+    pub cap_mask: Option<u32>,
+    /// 由位图选出的写入策略：`S1`/`S2`/`S3`（`S3` = 盲写复验，无并发保护）。
+    pub write_strategy: Option<String>,
+    pub caps_probed_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]

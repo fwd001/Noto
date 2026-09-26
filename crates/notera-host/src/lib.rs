@@ -688,7 +688,7 @@ impl App {
     // ------------------------------------------------------------ 配置面 ---
 
     pub fn current_account(&self) -> Result<Option<AccountDto>, CmdError> {
-        Ok(ConfigRepository::active(&self.config()).map(account_dto))
+        Ok(ConfigRepository::active(&self.config()).map(account_dto).map(|d| self.attach_caps(d)))
     }
 
     pub fn configure_account(&self, draft: AccountDraftCmd) -> Result<AccountDto, CmdError> {
@@ -766,7 +766,11 @@ impl App {
             .register_account(&acct.id, &acct.label, &acct.base_url)
             .map_err(|e| CmdError::of("invalid_account", false).with(serde_json::json!({ "why": e.to_string() })))?;
         self.set_sync(|v| v.phase = Phase::Provisioning);
-        ConfigRepository::active(&cfg).map(account_dto).ok_or_else(|| CmdError::of("no_account", false))
+        // 带上新账户的探测状态（刚配上 = 还没探过），界面才不会把"没探过"说成"不支持"
+        ConfigRepository::active(&cfg)
+            .map(account_dto)
+            .map(|d| self.attach_caps(d))
+            .ok_or_else(|| CmdError::of("no_account", false))
     }
 
     // ---------------------------------------------------- 远端适配器 ---
@@ -813,6 +817,19 @@ impl App {
             Ok(Some(mask)) => notera_webdav::Caps::from_mask(mask),
             _ => notera_webdav::Caps::conventional(),
         }
+    }
+
+    /// 把 §5 的探测结果挂到账户视图上（SYNC-PROTOCOL §5 要求 S3 账户在界面上明说
+    /// "这台服务器不提供并发保护"）。读不到就当没探过 —— 界面上的这一行是**说明**，
+    /// 不是判定依据，所以宁可少说，也不能为它把一次本地存储错误变成配置失败。
+    fn attach_caps(&self, mut dto: AccountDto) -> AccountDto {
+        let Ok(Some(mask)) = self.inner.store.account_caps(&dto.id) else {
+            return dto;
+        };
+        dto.cap_mask = Some(mask);
+        dto.write_strategy = Some(format!("{:?}", self.stored_caps(&dto.id).write_strategy()));
+        dto.caps_probed_at = self.inner.store.account_caps_probed_at(&dto.id).unwrap_or(None);
+        dto
     }
 
     /// §5：跑一次能力探测并写回 `sync_accounts.cap_mask`。
@@ -1375,6 +1392,10 @@ fn account_dto(a: &AccountConfig) -> AccountDto {
         bypass: a.proxy.bypass.clone(),
         enabled: a.enabled,
         has_credential: !a.credential_ref.is_empty(),
+        username: a.username.clone(),
+        cap_mask: None,
+        write_strategy: None,
+        caps_probed_at: None,
     }
 }
 
@@ -2133,6 +2154,33 @@ mod tests {
         // 探测结果也要写到这一行上，而不是写到空串那行
         app.store().set_account_caps(&active, 0b000101).unwrap();
         assert_eq!(app.store().account_caps(&active).unwrap(), Some(0b000101));
+    }
+
+    /// §5 的判定必须能到界面，而且要区分三件事：没探过 / 探到并发保护 / 探到没有。
+    /// 用户看到的句子不一样，"建议多设备串行编辑"只在第三种情况下该出现。
+    #[test]
+    fn account_view_reports_the_probe_verdict_and_distinguishes_never_probed() {
+        let app = boot("caps-view");
+        let draft = draft("c1", "https://dav.home.example/dav", Some("notera"));
+        app.configure_account(draft).unwrap();
+        let fresh = app.current_account().unwrap().expect("账户在");
+        assert_eq!((fresh.cap_mask.as_ref(), fresh.write_strategy.as_deref()), (None, None), "刚配上时是『还没探』而不是『不支持』");
+
+        // S1：条件写在位图里
+        app.store().set_account_caps(&fresh.id, notera_webdav::Caps::conventional().mask()).unwrap();
+        let s1 = app.current_account().unwrap().expect("账户在");
+        assert_eq!(s1.write_strategy.as_deref(), Some("S1"));
+        assert!(s1.caps_probed_at.as_deref().unwrap_or_default().ends_with('Z'), "要带上什么时候探的：{:?}", s1.caps_probed_at);
+
+        // S3：什么都没探到（位图为 0，与 None 不同）
+        app.store().set_account_caps(&fresh.id, 0).unwrap();
+        let s3 = app.current_account().unwrap().expect("账户在");
+        assert_eq!(s3.cap_mask, Some(0), "『探过了，全不支持』必须原样报出去");
+        assert_eq!(s3.write_strategy.as_deref(), Some("S3"));
+
+        // S2：只有 Overwrite:F MOVE
+        app.store().set_account_caps(&fresh.id, notera_webdav::Caps::OVERWRITE_F_MOVE).unwrap();
+        assert_eq!(app.current_account().unwrap().expect("账户在").write_strategy.as_deref(), Some("S2"));
     }
 
     /// 装配路径本身要能被测到（钥匙串还没接入，不能等它才有测试）。

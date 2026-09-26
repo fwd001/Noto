@@ -8,11 +8,11 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 417 通过 / 0 失败 / 0 ignored（49 个测试二进制） |
-| 前端 | 121 通过（12 文件）；`vue-tsc --noEmit` 无错误；构建 199 KB → gzip 68 KB |
+| `cargo test --workspace` | 418 通过 / 0 失败 / 0 ignored（49 个测试二进制） |
+| 前端 | 140 通过（14 文件）；`vue-tsc --noEmit` 无错误；构建 206 KB → gzip 70 KB |
 | `scripts/arch-check.mjs` | 20/20 |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
-| `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 29/29 |
+| `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 30/30 |
 | `scripts/verify-tauri-window.mjs`（真窗口，走真 `invoke`） | 8/8，控制台 0 error |
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8。
@@ -34,8 +34,11 @@
 - **编辑器原生感**（对齐 AppFlowy）：Markdown 输入缩写、`/` 命令面板、块把手（拖拽重排 + 下方插入 + Alt+↑↓）、选中文字浮出小工具条
 - **ADR-0019**：Joplin 同步与 AppFlowy 编辑交互的逐条采纳/拒绝及其理由
 
+- **设置页显示 §5 的判定**：`AccountDto` 增加 `capMask`/`writeStrategy`/`capsProbedAt`，设置页"服务器能力"块分三种说法 —— 还没探过 / 有并发保护（S1·S2）/ **没有并发保护（S3，建议多设备串行编辑）**，外加五项能力的 ✓✕ 芯片。策略由核心算好下发，前端不许自己从位图反推（`sync/serverCaps.ts` + 7 条测试）
+
 ### 修掉的静默错误（都是"看着在用、其实没接线"）
 
+- **设置页的"保存服务器"从来没成功过**：前端把草案包成 `{draft:{…}}` 而核心的命令参数是**平铺**的，`tlsPolicy` 发的是 `{kind:'caBundle'}` 对象而核心要 `"ca_bundle"` 字符串，回填又按 `account.proxy.host` 读嵌套而核心发的是 `proxyHost`。三处不一致叠在一起：点保存回一句 `bad_args`，而且即便存成功，改过的 TLS/代理设置也会在下次打开页面时静默变回默认。现在整条边集中到 `sync/accountWire.ts` 一份翻译 + 11 条线格式契约测试；顺带让核心把 `username` 回发（它不是秘密，而不回发就意味着改一次设置要重填用户名，漏填还会把配置静默退回"需要凭据"）。端到端新增一步真的走"填表→保存→读回→清理"
 - **架构门禁里有 8 条一直在空转**：`scripts/arch-check.mjs` 的 `sources()` 用 `statSafe(dir)` 当入口守卫，而 `statSafe(p)` 默认判的是"这不是目录" —— 于是每次遍历都在第一行返回空表，`layer:sql-literal`（host/UI 不得写 SQL）、`layer:ui-protocol-vocab`（前端不得出现协议词汇）、`egress:raw-socket`、`edge:webdav-uses-only-ports`、`hygiene:ui-no-node-apis` 等 8 条**全绿但什么都没看**。修好之后立刻炸出两条真实越界：`notera-webdav` re-export 了 `SyncEngine`（引擎入口该只有 sync 一处，已删），以及核心错误词表有 8 个 messageKey 前端没登记。这条是"绿灯不等于检查过"的最坏样子
 - **门禁自己不会说"我没检查到东西"**：修好 `sources()` 之后加了两条自我约束 —— `hygiene:no-vacuous-source-scan`（任何源码扫描扫到 0 个文件即判失败）与"按名字取源码目录"（桌面壳在 `apps/desktop/src-tauri/src`，不在 `crates/` 下）。后者一上来就抓到 `egress:raw-socket` 从来没扫过壳代码：它扫的是不存在的 `crates/notera-desktop/src`
 - **核心错误词表里 8 个键没登记，提示全部退化成"操作没有成功"**：`sync.forbidden / sync.precondition / sync.unsupported / sync.divergence / sync.cancelled / app.db_too_new / attach.missing / proxy.cert_untrusted` —— 都是会直接讲给用户的话（"服务器拒绝了这次写入"和"操作没成功，稍后再试"完全不是一回事）。现在补进 `i18n.ts`，并新增门禁 `hygiene:rust-message-keys-registered` 把这条边钉住（双向变异测过：改 Rust 侧键名或改登记表都会变红）

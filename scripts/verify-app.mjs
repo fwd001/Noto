@@ -394,6 +394,28 @@ const liveNotes = async () => {
   return rows;
 };
 
+await step('服务器能力块：刚配上时说的是"还没探过"，不是"不支持"', async () => {
+  // 走 UI 填表保存：顺带覆盖"空 id 的草案要落对 sync_accounts 那一行"（此前会静默不出站）
+  await page.fill('[data-testid="account-baseUrl"]', 'https://127.0.0.1:9/dav');
+  await page.fill('[data-testid="account-username"]', 'notera-e2e');
+  await page.fill('[data-testid="account-password"]', 'e2e-secret');
+  await page.click('[data-testid="account-save"]');
+  await page.waitForTimeout(1000);
+  const box = page.locator('[data-testid="server-caps"]');
+  if ((await box.count()) === 0) throw new Error('配好账户后没出现"服务器能力"这一块');
+  const verdict = (await page.locator('[data-testid="server-caps-verdict"]').innerText()).trim();
+  if (!verdict.includes('还没有')) throw new Error(`还没探测就被说成有结论了：「${verdict}」`);
+  const acct = await callBridge('account');
+  if (!acct || !acct.id) throw new Error(`保存后 /cmd/account 读不到账户：${JSON.stringify(acct).slice(0, 140)}`);
+  // 核心的 Option<u32> 在 JSON 里是 null：下发非 null 的位图就等于编造探测结论
+  if (acct.capMask !== null && acct.capMask !== undefined) throw new Error(`还没探测就不该下发 capMask：${JSON.stringify(acct).slice(0, 160)}`);
+  if ((await page.locator('.caps__chip').count()) !== 0) throw new Error('还没探测就摆出了能力芯片');
+  const leaked = await leakedKeys();
+  await callBridge('remove_account', { id: acct.id });
+  if (leaked.length > 0) throw new Error(`能力块漏出键名：${leaked.join(', ')}`);
+  return `verdict=「${verdict.slice(0, 18)}…」 id=${String(acct.id).slice(0, 8)}（填表→保存→读回→清理）`;
+});
+
 await step('导出：真产出一个能读回来的 ZIP，且不盖掉刚才的备份', async () => {
   const backup = (await page.locator('[data-testid="data-path"]').inputValue()).trim();
   const before = (await liveNotes()).length;

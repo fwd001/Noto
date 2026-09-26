@@ -290,6 +290,17 @@ const MESSAGES: Record<MessageKey, string> = {
   'app.db_too_new': '本地数据来自更新版本的 Notera，已按只读方式打开。',
   'attach.missing': '附件暂时不可用，正文不受影响。',
   'proxy.cert_untrusted': '服务器证书校验未通过。若确认是自签证书，可在设置里调整校验方式。',
+  // §5 探测结果的界面表达（SYNC-PROTOCOL §5 末行：S3 必须被如实标出来）
+  'settings.serverCaps': '服务器能力（首次连接与每天自动探测）',
+  'sync.capsUnknown': '还没有对这台服务器做过能力探测。下一次连上网时会自动探测，并在这里告诉你结果。',
+  'sync.capsProtected': '这台服务器支持并发保护（写入策略 {strategy}）：多人同时改会被服务器拦下，不会互相覆盖。',
+  'sync.capsUnprotected': '这台服务器不支持条件写入（策略 S3）：靠"写完再核对"来防覆盖，存在很短的覆盖窗口。建议多台设备**串行**编辑，改完等它同步完再换设备。',
+  'sync.capsProbedAt': '上次探测：{when}',
+  'sync.cap.conditionalPut': '条件写入',
+  'sync.cap.overwriteFMove': '不覆盖式移动',
+  'sync.cap.strongEtag': '强 ETag',
+  'sync.cap.depthInfinity': '递归列举',
+  'sync.cap.range': '分段读取',
 };
 
 const TOAST_PREFIXES = ['notera.', 'error.', 'sync.', 'toast.', 'state.', 'note.', 'link.', 'settings.', 'cmd.'];
