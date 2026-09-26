@@ -13,7 +13,7 @@
 use crate::derive;
 use crate::error::StoreError;
 use crate::rows;
-use crate::store::{folder_hash, Edit, Store};
+use crate::store::{folder_hash, CurNote, Edit, Store};
 use crate::types::*;
 use notera_core::{EntityId, EntityKind, Rev};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -450,6 +450,63 @@ impl Store {
         rep.tombstones_written += 1;
         rep.rows_removed += n;
         Ok(())
+    }
+
+    /// 冲突卡片上"用我这一版"真正要做的事：**把正文与副本互换**。
+    ///
+    /// §6.1 采纳之后正文是服务器那一版、本机那一版活在副本笔记里；用户点这颗按钮就是要
+    /// 把这个方向反过来。互换（而不是"一边覆盖另一边"）的理由：两版始终各有一处存放，
+    /// 这个决定因此不可能吃掉任何人的输入 —— 而副本是普通笔记，会照常同步给别人。
+    ///
+    /// 前提用事实核对，不靠调用方的自觉：卡片必须是未处理的**笔记**冲突、当时存下了副本，
+    /// 而且正文现在的内容确实就是当初采纳进来的那一版（`content_hash == remote_hash`）。
+    /// 任一条件不成立就返回 `Ok(false)` —— 那时"正文用我这一版"要么已经成立，要么这按钮
+    /// 对这个卡片没有内容可换，调用方据此只把卡片关掉即可（绝不静默改别的东西）。
+    pub fn swap_conflict_sides(&self, conflict_id: i64) -> Result<bool, StoreError> {
+        let card = self.with_read(|c| {
+            c.query_row(
+                "SELECT entity_id, copy_note_id, remote_hash FROM sync_conflicts
+                  WHERE id = ?1 AND state = 'open' AND entity_type = 'note' AND copy_note_id IS NOT NULL",
+                [conflict_id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
+            )
+            .optional()
+            .map_err(StoreError::from)
+        })?;
+        let Some((live_raw, copy_raw, remote_hash)) = card else { return Ok(false) };
+        let live = EntityId::parse(&live_raw).map_err(|e| StoreError::Rejected(e.to_string()))?;
+        let copy = EntityId::parse(&copy_raw).map_err(|e| StoreError::Rejected(e.to_string()))?;
+        self.write_tx(|tx, now| {
+            let a = Self::load_cur(tx, &live)?;
+            // 行上存的是清单里那一份哈希（12 位短形式），本地行上是全哈希 —— 必须按同一条
+            // 容忍规则比，用 `!=` 会让互换永远不发生。
+            if !notera_core::same_content_hash(&remote_hash, a.note.content_hash.as_str()) {
+                return Ok(false);
+            }
+            let b = Self::load_cur(tx, &copy)?;
+            let (a_doc, b_doc) = (a.doc_json.clone(), b.doc_json.clone());
+            // 两条都要 enqueue：正文换了内容就必须重新公告，否则别的设备看到的还是旧的那一版
+            let swap = |target: &CurNote, doc: String| {
+                self.commit_edit(
+                    tx,
+                    target,
+                    &Edit {
+                        doc: Some(derive::prepare_text(&doc)?),
+                        origin: RevOrigin::Local,
+                        enqueue: true,
+                        ..Edit::default()
+                    },
+                    now,
+                )
+            };
+            swap(&b, a_doc)?;
+            swap(&a, b_doc)?;
+            tx.execute(
+                "UPDATE sync_conflicts SET state = 'resolved', resolution = 'local', resolved_at = ?2 WHERE id = ?1",
+                params![conflict_id, now],
+            )?;
+            Ok(true)
+        })
     }
 
     pub(crate) fn note_rowid_or_err(tx: &Connection, id: &EntityId) -> Result<i64, StoreError> {

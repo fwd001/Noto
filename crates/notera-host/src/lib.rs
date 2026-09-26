@@ -618,6 +618,14 @@ impl App {
             "merged" => "merged",
             other => return Err(CmdError::of("bad_action", false).with(serde_json::json!({ "action": other }))),
         };
+        // "用我这一版"不是记账就完事：§6.1 采纳之后正文是对面那一版，用户点这颗按钮
+        // 要的就是把两版互换（互换后两版各有一处存放，谁都没被吃掉）。
+        // 前提不成立时（正文本来就是我要的那一版）`swap_conflict_sides` 返回 false，
+        // 那就只关卡片 —— 用户要的结果已经在了，不去动任何内容。
+        if resolution == "local" && self.inner.store.swap_conflict_sides(c.id).map_err(CmdError::from)? {
+            self.emit(BusEvent::NotesChanged { ids: vec![] });
+            return Ok(());
+        }
         self.inner.store.resolve_conflict(c.id, resolution)?;
         self.emit(BusEvent::NotesChanged { ids: vec![] });
         Ok(())

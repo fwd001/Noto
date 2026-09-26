@@ -359,6 +359,52 @@ async fn a_recurring_conflict_is_recorded_once_and_makes_exactly_one_copy() {
     srv.stop().await;
 }
 
+/// 面板上"用我这一版"这颗按钮说到做到：两版**互换**，然后照常传播到另一台设备。
+///
+/// 关键性质不是"换了"，而是**换了也谁都没丢**：正文与副本各拿到对方的内容，两版始终各有
+/// 一处存放；副本是普通笔记，会同步给别人。所以对面那台设备最终同时持有两份，而不是
+/// 被覆盖掉一份。这条测试跑的是真分叉 → 用户决定 → 双方再同步的完整回路。
+#[tokio::test]
+async fn replacing_with_the_local_version_swaps_both_sides_and_propagates() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let a = Device::boot("sw-a", &url);
+    let folder = a.app.default_folder_id().unwrap();
+    let note = a.app.create_note(&folder, doc("共同起点")).unwrap();
+    let id = notera_core::EntityId::parse(&note.id).unwrap();
+    a.app.sync_once().await.expect("A 推起点");
+
+    let a_head = a.app.store().get_note(&id).unwrap().unwrap();
+    a.app.store().edit_note(&id, doc("甲设备加的段落"), a_head.rev).unwrap();
+    let b = Device::boot("sw-b", &url);
+    b.app.sync_once().await.expect("B 拉起点");
+    let b_head = b.app.store().get_note(&id).unwrap().unwrap();
+    b.app.store().edit_note(&id, doc("乙设备加的段落"), b_head.rev).unwrap();
+    b.app.sync_once().await.expect("B 推上去");
+    a.app.sync_once().await.expect("A 判出冲突并采纳");
+
+    let card = &notera_host::commands::dispatch(&a.app, "open_conflicts", json!({})).unwrap()[0];
+    let copy_id = notera_core::EntityId::parse(card["copyNoteId"].as_str().unwrap()).unwrap();
+    // 采纳之后：正文 = 乙，副本 = 甲
+    assert!(a.app.store().get_note(&id).unwrap().unwrap().plain_text.contains("乙"), "前提：正文已被采纳成服务器那一版");
+
+    notera_host::commands::dispatch(&a.app, "resolve_conflict", json!({ "id": card["id"], "action": "replaceWithLocal" })).expect("用我这一版");
+    let body = a.app.store().get_note(&id).unwrap().unwrap();
+    let copy = a.app.store().get_note(&copy_id).unwrap().unwrap();
+    assert!(body.plain_text.contains("甲设备加的段落"), "点完之后正文该是我这一版：{}", body.plain_text);
+    assert!(copy.plain_text.contains("乙设备加的段落"), "对面那一版必须原样活着（这次决定不许吃掉任何人的输入）：{}", copy.plain_text);
+    assert!(body.rev > body.sync_rev, "正文换了内容就得重新公告，否则另一台看到的还是旧的一版");
+    assert!(a.app.store().open_conflicts().unwrap().is_empty(), "处理完的卡片要关掉");
+
+    a.app.sync_once().await.expect("A 把决定推上去");
+    let stats_b = b.app.sync_once().await.expect("B 拉回来");
+    assert!(stats_b.pulled >= 1, "B 要能看到 A 的决定：{stats_b:?}");
+    let mine: Vec<String> = b.app.store().list_notes(&NoteQuery::all()).unwrap().into_iter().map(|r| format!("{} {}", r.title, r.summary)).collect();
+    assert!(mine.iter().any(|t| t.contains("甲设备加的段落")), "B 上该有甲那一版：{mine:?}");
+    assert!(mine.iter().any(|t| t.contains("乙设备加的段落")), "B 上也该有乙那一版：{mine:?}");
+    srv.stop().await;
+}
+
 // ---------------------------------------------------------------- §11.4 租约 ---
 
 /// 清单 index.json 的 sha（内容指纹）。公告了就会变，没公告就不该变。
