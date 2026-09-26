@@ -46,7 +46,7 @@
 | 平台能力：OS 钥匙存放凭据（`credential_ref`） | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **BLOCKED** | 今天凭据只认 debug 环境变量；口令与 `credential_ref` 明确不下发界面。需要 §9 评审 + 各平台真机验证 |
 | 移动端（Android） | ✅ | ⬜ | ✅ | ⬜ | ⬜ | ⬜ | ✅ | **BLOCKED** | 前端 390×844 视口与 44pt 已验；APK 构建/真机 = 本机无 NDK/JDK 与设备。原因/影响/解除条件见 CI-CD §L6 |
 | 移动端（iOS / iPadOS） | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **BLOCKED** | 无 macOS/Xcode 与真机（本机 Windows）。总指令 §46 明确这种情况要写 BLOCKED 而非伪装已验 |
-| 发布构建与安装包（`.msi` / `.exe`） | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **BLOCKED** | `@tauri-apps/cli` 不在依赖里 → `pnpm tauri build` 跑不了；今天所有窗口验证跑的是 **debug** 构建，release 下"dev 桥被编译掉 + 前端走打包资源 + CSP 真生效"这条路径**从未跑过**。解除 = 装 CLI 后跑 `tauri build` 并把 `verify-tauri-window` 指向 release 产物 |
+| 发布构建与安装包（`.msi` / `.exe`） | ✅ | ⬜ | ✅ | ✅ | ⬜ | ⬜ | ✅ | **IMPLEMENTING** | **release 产物本身已验通**（`cargo build --release` + 关掉 vite 跑 `verify-tauri-window` 8/8，页面 `http://tauri.localhost/`）；修掉的是"缺 `[features] custom-protocol` → 正式构建开空白窗"这条 P0。**仍未产出安装器**：`@tauri-apps/cli` 不在依赖里 → 跑不了 `pnpm tauri build`（`.msi`/`.exe` 打包、图标嵌入、Updater 骨架都在它身上）。解除条件 = 许可装 `@tauri-apps/cli`（动依赖图，需 §9 点头）或改由 CI 的 Windows lane 出包 |
 | 黑盒 UAT（§23：只许点击/输入/键盘/拖放） | ✅ | ⬜ | ⬜ | ⬜ | ✅ | ⬜ | ✅ | **IMPLEMENTING** | `verify-app.mjs` 大量用 `callBridge` 复核库内真实状态（这是它值钱的地方），但按 §23 那不是纯黑盒 → 需要另立一条只碰界面的 lane，两者并存 |
 | CI/CD 工作流落地 | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **BLOCKED** | 仓库里没有 workflow 文件；推送通道未定（ARCHITECTURE-REVIEW §14 D1–D10）。无 Actions 运行证据时不得声称 CI 已过 |
 | `.enex` 结构化导入 | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **PLANNED** | 需要 XML 依赖，属"要动依赖图"→ §9 人工评审 |
@@ -57,7 +57,7 @@
 按优先级（数据安全 > 同步正确性 > 稳定性 > 用户体验 > 原生体验 > 性能 > 可维护性 > 新功能）：
 
 1. **附件断点续传 / 分片**（§8 明列 `resume`、`range`）—— 目前只有整块 PUT。
-2. **release 构建 + 安装包 + 在 release 产物上重跑窗口门禁** —— 今天没有任何一个可安装产物。
+2. **安装器**（`.msi`/`.exe`）—— release 产物本身已验通（见上表），但打包要靠 `@tauri-apps/cli`，它不在依赖里。
 3. **托盘 / 原生菜单 / 全局快捷键 / 真通知 / OS 钥匙串**（§15、§47"平台能力完成"）—— 需要 §9 评审点头。
 4. **纯黑盒 UAT lane**（§23）+ **CI 工作流**（§42 那套门禁要有地方真的跑）。
 5. **P11 远端版本可见性**的产品决定（§51）。

@@ -16,6 +16,13 @@ crate-type = ["rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+# 官方模板那一段：默认 = 生产模式（资源走内嵌的 `frontendDist`）。
+# `tauri dev` 会自己带 --no-default-features 改走 devUrl。少了这一段，
+# `cargo build --release` 出来的窗口会去连 127.0.0.1:5173 并停在空白错误页（实测踩过）。
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"

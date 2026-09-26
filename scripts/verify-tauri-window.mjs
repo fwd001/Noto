@@ -4,8 +4,14 @@
  * 并让 WebView 自己截图（屏幕抓取抓不到 GPU 合成的 surface，CDP 抓得到）。
  *
  * 前置：
+ *   npm --prefix apps/desktop run build          # 资源是**编译期内嵌**的，dist 必须先是新的
+ *   cargo build [--release] -p notera-desktop
  *   WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223 notera-desktop.exe
  *   node scripts/verify-tauri-window.mjs
+ *
+ * 注意：壳的 `default = ["custom-protocol"]` 一旦生效，debug 与 release 都从内嵌的
+ * `frontendDist` 取资源（不再走 5173）。所以这一步测的是"将要发出去的那份前端"，
+ * 改了 .vue 却忘了 `pnpm build`，这里绿了也不算数。
  */
 const PW = process.env.PW_CORE || 'file:///C:/Users/lhcz-fu/node_modules/playwright-core/index.js';
 const CDP = process.env.CDP || 'http://127.0.0.1:9223';

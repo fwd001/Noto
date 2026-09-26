@@ -45,6 +45,8 @@
 
 ### 修掉的静默错误（都是"看着在用、其实没接线"）
 
+- **正式构建会开出一个空白窗口**（P0，生产阻塞级）：`apps/desktop/src-tauri/Cargo.toml` 里**根本没有 `[features]` 段**，`tauri/custom-protocol` 因此从未开启 —— 而没有它，壳不会把 `frontendDist` 内嵌进去，窗口启动后去连 `devUrl`（`127.0.0.1:5173`）。今天所有"真窗口 8/8"跑的都是 **debug + vite 在跑**，所以这条从没暴露：`cargo build --release` 出来的 exe 在 vite 停掉的情况下停在 `chrome-error://chromewebdata/`，控制台两声 500，`page.reload()` 直接 `ERR_CONNECTION_REFUSED`。补上官方模板那一段（`default = ["custom-protocol"]`）之后，**release 产物在开发服务器关闭的状态下 8/8 通过**，页面是 `http://tauri.localhost/`，走真 `invoke`、真 SQLite、CSP 真生效。顺带记下：`notera-cli serve` 在 release 里明确拒绝（`dev 桥只在 debug 构建启用`，退出码 2，端口不绑定）—— 无鉴权本地桥不会带进正式产物
+
 - **§20 崩溃注入第一次真的落地**（`NOTERA_CRASH_AT` 此前在整个 `crates/` 里一次都没出现过，而协议把"每一步失败之后数据仍可恢复"写成硬约束）。`notera_core::crash_point(点名)` + 九个提交点插桩：`after_local_write`（`write_tx` 唯一写入口，commit 之后）、`before/after_records_push`、`before/after_apply`、`before/after_manifest_commit`、`before/after_attachment_upload`。测试**真的 spawn 子进程**再用 `process::exit(77)` 杀死自己：在同一进程里 panic + `catch_unwind` 会跑析构，那测的不是"断电级"中途死亡。只活在 debug 构建里（正式产物不留"一个环境变量就能让应用自杀"的开关），且注入点名单一处在 `CRASH_POINTS`，文档/插桩/测试共用，防"点名拼错却照样绿"。每个点都要求**死法正确**（退出码 77）：正常退出说明这点没人经过，panic 说明进程是被别的原因弄挂的 —— 两种都判红
 - **公告已经落到服务器、本地却没结清：这条改动永远等不到下一轮**（崩溃注入照出来的第一个真缺陷）。崩在 `after_manifest_commit`（PUT 清单成功、`MarkSynced` 之前）之后，那一篇是 `rev=3 / sync_rev=0` 的脏行，而远端清单里已经公告了同样的 rev 与哈希 —— 于是 P7 判 `NoOp`，`NoOp` 什么都不做，那行待办永远没人回头结：设置页的"待同步"计数就此永久挂着（§18 要求它诚实）。现在引擎在 P7 之外补一步：本地脏 + 远端已公告同一 rev 且哈希一致 + 两侧都不是删除/永久删除 → 就地 `MarkSynced` + 结清 outbox
 - **状态已经满足的附件待办永远不会被关掉**（同一道门照出来的第二个）。附件队列是按 `attachments.local_state / remote_state` 挑活的，同一份字节被反复引用时却会重复入队 —— 状态已满足的那些行根本不会被取出，也就永远没人去关它。`Store::settle_satisfied_attachment_ops` 按方向分开收尾（`upload` 看服务器有没有、`download` 看本地有没有；混成一个 OR 会把"本地还缺着"的下载单也顺手关掉，那才是真丢数据）
