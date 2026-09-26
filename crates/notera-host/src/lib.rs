@@ -1291,6 +1291,10 @@ impl App {
     pub async fn run_attachment_round(&self, remote: &notera_webdav::WebDavRemote) -> (usize, usize, usize) {
         const FILES: usize = 4;
         const BYTES: i64 = 64 * 1024 * 1024;
+        // §8 的下载窗口：一轮一个窗口，进度落在 `.part` 上。4 MiB 是"内存上界 vs
+        // 往返次数"的折中 —— 一次整块拉完会让一张大图吃掉等量内存，且中途断网全丢。
+        const ATTACH_WINDOW: u64 = 4 * 1024 * 1024;
+        use std::io::Write;
         let (mut up, mut down, mut failed) = (0usize, 0usize, 0usize);
         let mut budget = BYTES;
 
@@ -1334,19 +1338,82 @@ impl App {
             if i > 0 && job.size > budget {
                 break;
             }
-            match remote.fetch_attachment(&job.sha256).await {
-                Ok(Some(bytes)) => {
-                    budget -= (bytes.len() as i64).min(budget);
-                    if self.inner.store.ingest_blob(&job.sha256, &bytes).is_ok() {
-                        let _ = self.inner.store.finish_attachment_ops(&job.sha256, true);
+            // §8 的 resume：一次一个窗口，已拿到的部分写在 `.part` 上。
+            // 于是"进程被杀 / 网断 / 这一轮预算用完了"都不会把进度清零 ——
+            // 下一轮从 `have` 处接着要，而不是从头再拉一遍大文件。
+            let sha = job.sha256.as_str();
+            let part = self.inner.store.blob_part_path(sha);
+            let mut have = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+            if job.size >= 0 && have > job.size as u64 {
+                // 比对象还长的 part 只能是坏数据（换过内容、或上一次写歪了）：
+                // 留着它续传只会拼出一个永远校验不过的文件，不如重来。
+                let _ = std::fs::remove_file(&part);
+                have = 0;
+            }
+            match remote.fetch_attachment_window(sha, have, ATTACH_WINDOW).await {
+                Ok(Some(w)) => {
+                    budget -= (w.bytes.len() as i64).min(budget);
+                    // blob 目录是 `<attachments>/<2hex>/<sha>` 两层：`create(true)` 不会把父
+                    // 目录顺手建出来，本机从没有过这个附件时就会写失败（实测踩过）。
+                    if let Some(dir) = part.parent() {
+                        let _ = std::fs::create_dir_all(dir);
+                    }
+                    // `w.from == 0` 意味着这一份是**整份对象**（服务器不支持 Range，或支持
+                    // 探测却没理我们那个头）：这时必须覆盖，追加会拼出一份双份内容的文件。
+                    let opened = if w.from == 0 {
+                        std::fs::OpenOptions::new()
+                            .create(true)
+                            .write(true)
+                            .truncate(true)
+                            .open(&part)
+                            .and_then(|mut f| f.write_all(&w.bytes))
+                    } else {
+                        std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&part)
+                            .and_then(|mut f| f.write_all(&w.bytes))
+                    };
+                    if let Err(e) = opened {
+                        tracing::warn!(%e, %sha, "半截附件写不进去，本轮放弃这个附件");
+                        failed += 1;
+                        continue;
+                    }
+                    let got = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+                    if got < w.total {
+                        // 有进展但没完：不动 outbox（还挂着），下一轮接着要
+                        tracing::debug!(%sha, got, total = w.total, "附件窗口推进中，未完成");
+                        continue;
+                    }
+                    let bytes = match std::fs::read(&part) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            tracing::warn!(%e, %sha, "半截附件读不出来");
+                            failed += 1;
+                            continue;
+                        }
+                    };
+                    // 拼完先自己核对一次哈希：服务器给错东西、或者中途混进了别的
+                    // 窗口的字节，都必须在这里被拦下，而不是当成一份"完整的附件"落盘。
+                    if notera_crypto::sha256_hex(&bytes) != sha {
+                        tracing::warn!(%sha, "续传拼出来的附件哈希不符，丢弃半截文件");
+                        let _ = std::fs::remove_file(&part);
+                        let _ = self.inner.store.finish_attachment_ops(sha, false);
+                        failed += 1;
+                        continue;
+                    }
+                    if self.inner.store.ingest_blob(sha, &bytes).is_ok() {
+                        let _ = std::fs::remove_file(&part);
+                        let _ = self.inner.store.finish_attachment_ops(sha, true);
                         down += 1;
                     } else {
-                        let _ = self.inner.store.finish_attachment_ops(&job.sha256, false);
+                        let _ = self.inner.store.finish_attachment_ops(sha, false);
                         failed += 1;
                     }
                 }
                 // 远端 404：只改远端态。§10 —— 任何情况下都不因远端缺失删本地
                 Ok(None) => {
+                    let _ = std::fs::remove_file(&part);
                     let _ = self.inner.store.set_attachment_states(&job.sha256, None, Some("absent"));
                 }
                 Err(e) => {

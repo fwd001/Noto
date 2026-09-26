@@ -668,6 +668,14 @@ impl Store {
         blob_path(&self.paths.attachments, sha256)
     }
 
+    /// 下载中途落在磁盘上的那半截。**只有它存在，跨轮次的续传才有地方放**。
+    /// 与正式 blob 同目录、加 `.part` 后缀：清理时一眼认得出，也不会被当成附件本体。
+    pub fn blob_part_path(&self, sha256: &str) -> PathBuf {
+        let mut p = self.blob_path(sha256);
+        p.as_mut_os_string().push(".part");
+        p
+    }
+
     // ---------------------------------------------------------- 内部：编辑 ---
 
     pub(crate) fn load_cur(tx: &Connection, id: &EntityId) -> Result<CurNote, StoreError> {

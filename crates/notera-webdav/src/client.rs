@@ -915,20 +915,101 @@ impl WebDavRemote {
         Ok(())
     }
 
-    /// 下载并**在返回前**校验 sha256：调用方拿到字节就可以直接落盘。
-    pub async fn fetch_attachment(&self, sha256: &str) -> Result<Option<Vec<u8>>, RemoteError> {
+    /// 取附件的一段（§8 的 `resume` / `range`）。
+    ///
+    /// 为什么按窗口要而不是"一次性流式拉完"：本层的响应是**整块 buffered** 的
+    /// （`Response.body: Vec<u8>`），一次 2 GB 的附件会直接把内存吃掉；而按窗口取
+    /// 天然把"已拿到多少"落在磁盘的 `.part` 上，进程被杀、网断、这一轮预算用完
+    /// 都不丢进度。内存上界 = 一个窗口。
+    ///
+    /// 诚实的降级：服务器不认 Range（§5 探出来 RANGE 位是 0）就直接整块取，
+    /// 而不是发一个会被当成"参数无效"的请求。
+    ///
+    /// `from == 0` 也照样按窗口要：否则第一块就把整份读进内存，"有界内存"和
+    /// "断点续传"两头都落空（实测过：只在 `from > 0` 时带 Range，结果一轮就下完了）。
+    pub async fn fetch_attachment_window(&self, sha256: &str, from: u64, len: u64) -> Result<Option<AttachmentWindow>, RemoteError> {
         let url = self.paths.attachment(sha256)?;
-        let resp = self.get_raw(&url, None).await?;
+        let want_range = self.caps.has(Caps::RANGE);
+        let mut s = self.spec(HttpMethod::Get, &url)?;
+        if want_range {
+            s = s.with_header("range", format!("bytes={}-{}", from, from + len - 1));
+        }
+        let resp = self.get_with(s).await?;
         if resp.status == 404 {
             return Ok(None);
         }
         if !resp.is_success() {
             return Err(crate::error::map_status(resp.status));
         }
-        let got = notera_crypto::sha256_hex(&resp.body);
-        if got != sha256 {
-            return Err(RemoteError::Protocol(format!("附件内容哈希不符：期望 {sha256} 实际 {got}")));
-        }
-        Ok(Some(resp.body))
+        // 先把头抄成自己的 String：`resp.header(..)` 借的是 `resp`，直接传进去就搬不走 `resp.body`。
+        let cr = resp.header("content-range").map(str::to_owned);
+        Ok(Some(resolve_window(resp.status, cr.as_deref(), resp.body, from)))
+    }
+
+    pub(crate) async fn get_with(&self, s: RequestSpec) -> Result<Response, RemoteError> {
+        self.send_retry(s).await
+    }
+}
+
+/// 一次窗口取回的结果。
+#[derive(Debug, Clone)]
+pub struct AttachmentWindow {
+    pub bytes: Vec<u8>,
+    /// 这段字节在整份对象里的起始偏移。
+    pub from: u64,
+    /// 对象总长（来自 `content-range`，整块响应时等于 `bytes.len()`）。
+    pub total: u64,
+}
+
+/// 把一次 GET 的答复解释成"这段字节落在对象的哪一段"。
+///
+/// 只有一条判据：**没有 206，就是我们没拿到分片**。
+/// - `206` + `content-range: bytes F-T/total`：分片，偏移正是我们问的那个 `from`。
+/// - `200`：无论我们是没带 `Range`（RANGE 位为 0）还是带了却被服务器忽略了（探测时
+///   老实、正式请求时被负载均衡换了一台，真实会发生在兼容矩阵里），它给的都是**全文**。
+///   这时偏移必须报 0 —— 照 `from` 报，调用方就会把全文追加到已有半截的后面，凑出
+///   一份哈希永远对不上的文件，这一轮白跑还得删 `.part` 重来。
+fn resolve_window(status: u16, content_range: Option<&str>, body: Vec<u8>, from: u64) -> AttachmentWindow {
+    let from = if status == 206 { from } else { 0 };
+    // `bytes 5-9/10` 的第三段才是对象总长；读不到（没有该头，或是 `bytes 0-3/*`）就按已收到的长度算。
+    let total = content_range
+        .and_then(|v| v.rsplit('/').next())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(from + body.len() as u64);
+    AttachmentWindow { bytes: body, from, total }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_window;
+
+    fn body(n: usize) -> Vec<u8> {
+        (0..n).map(|i| i as u8).collect()
+    }
+
+    #[test]
+    fn a_206_reports_the_offset_we_asked_for_and_the_real_total() {
+        let w = resolve_window(206, Some("bytes 4-7/12"), body(4), 4);
+        assert_eq!((w.from, w.total, w.bytes.len()), (4, 12, 4));
+    }
+
+    #[test]
+    fn a_200_without_a_range_request_is_the_whole_object_from_zero() {
+        let w = resolve_window(200, None, body(12), 0);
+        assert_eq!((w.from, w.total), (0, 12));
+    }
+
+    /// 这条就是"服务器忽略了 Range"那一支：不改报 0 的话，调用方会把全文追加到
+    /// 已有半截后面，凑出一份双份内容的文件。
+    #[test]
+    fn a_200_answered_to_a_range_request_is_relabelled_as_the_whole_object() {
+        let w = resolve_window(200, None, body(12), 4);
+        assert_eq!((w.from, w.total), (0, 12));
+    }
+
+    #[test]
+    fn an_unknown_total_falls_back_to_what_was_received() {
+        let w = resolve_window(206, Some("bytes 0-3/*"), body(4), 0);
+        assert_eq!((w.from, w.total), (0, 4));
     }
 }

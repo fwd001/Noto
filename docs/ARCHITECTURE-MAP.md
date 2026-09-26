@@ -187,10 +187,11 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 
 | 门禁 | 结果 | 怎么复现 |
 |---|---|---|
-| Rust 测试 | 468 通过 / 0 失败 / 0 ignored（51 个测试二进制） | `cargo test --workspace` |
+| Rust 测试 | 474 通过 / 0 失败 / 0 ignored（52 个测试二进制） | `cargo test --workspace` |
 | 前端 | 171 通过（18 文件）、`vue-tsc` 无错误、构建 213 KB→gzip 73 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
 | 架构适应度 | 24/24（最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |
 | L5 崩溃注入 | 9 个提交点逐个杀死真子进程 + 重启收敛（`crash_recovery`，2 条测试） | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery` |
+| 附件续传 + Range 兼容 | 2/2（一条真杀进程重启接着要、一条让服务器**不理** Range 头看它当不当整份覆盖） | `cargo test -p notera-host --test attachment_resume` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
 | 浏览器端到端 | 35/35（真 Rust 核心，非 mock；含"设置页存服务器 → 能力块读回"、"库统计五行全是数字"、"删除 → 回收站 → 恢复 → 永久删除"、"勾一个文件夹 → 包就只有那一棵子树"、"侧栏建子文件夹 → '移动到'选得到"五条真实往返） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
 | L5 纯黑盒 UAT | 9/9（只用点击/输入/键盘/刷新，零 `/cmd/*`、零读库） | `node scripts/verify-blackbox.mjs` |
@@ -214,6 +215,8 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | 按文件夹部分导出 | 已实现 | **两个集合两种用途**：`Store::folder_closure`（子树 + 祖先链）只决定"哪些文件夹行要进包"（缺祖先就是外键接不上的废包），`Store::folder_subtree`（子树，不含祖先）决定"哪些内容算这一棵"——笔记按父本是否在子树里筛，附件按这些笔记筛（`attachment_shas_in_folders`）。曾用同一个闭包筛内容，于是勾一个子层会把默认本里那篇无关笔记连它的图片字节一起带走。包自己声明 `manifest.partial`，**因此禁止**用它走"仅在空库时导入"：`tombstones` 不记父本，笔记的永久删除公告无法归属到文件夹，当成整库还原就会让已删的笔记从别的设备回流（§8 硬性要求 6）。范围里出现未知文件夹 id → 拒绝，不是忽略 |
 | 文件夹树的跨语言形状 | 已对齐 | `/cmd/list_folders` 下发**嵌套树**（`children`），前端 `stores/folders.ts::buildTree` 必须两种形状通吃（树 / 平铺）：它曾经先清空 `children` 再按顶层数组重建，等于把树里的子层全部丢弃 → 侧栏、"移动到"下拉、导出选择器一起失去子文件夹，而唯一的三级树测试喂的是平铺输入所以照绿。现在契约测试用真桥原样输出的 JSON；`flattenTree` 的 64 项上限见 CHANGELOG 已知限制 |
 | 附件的第二条登记入口：从**清单**读引用 | 未做（已知缺口） | doc 这条路现在是通的（收到记录 → 按块上的 `sha256` 登记，见 DATA-MODEL §8，并有跨设备真服务器测试）。剩下的窗口是：A 上 `attach_blob` 成功了、但把引用写进正文的那一次保存没发生（崩溃 / 强杀）—— blob 已上传、`note_attachments` 有行，而**没有任何 doc 引用它**，B 侧因此无从得知。影响：A 上留一个既不回收也不分享的孤儿（不是数据丢失，也不覆盖任何东西）。补法需要 SYNC-PROTOCOL §13 的清单侧附件条目 + 在清单解析处调 `Store::register_remote_attachment`（那个函数的注释本来就写着"清单/记录里读到引用时调用"，清单那一半一直没人做）—— 属于协议改动，走 §9 评审 |
+| 附件下载续传（§8 硬性要求 5 / §13） | 已实现 | `WebDavRemote::fetch_attachment_window` 在 §5 探到 `RANGE` 位时**每个窗口都带 Range**（包括第一窗，写死 `from>0` 才发会让首轮整块拉回、把"续传"变成一句空话）。响应解释只有一条判据：**没有 206 就是我们没拿到分片** —— 偏移一律按 0（服务器不支持 Range、或探测老实而正式请求被一个不认 Range 的节点接走，两种都给全文）。host 侧按 4 MiB 一片落到 `<blob>.part`：偏移 0 ⇒ **覆盖**，偏移等于手头长度 ⇒ 追加；拼完先自己核对 sha256，**不符就丢弃半截文件**并把账记成 failed，对得上才 `ingest_blob` 落成正式对象并删 `.part`。三条不可让步的点：没拼完之前**正式 blob 绝不出现**（否则半截文件被当成完整附件同步给别人）、outbox 在有进展但未完成时**保持 pending**（下一轮接着要，不重头再来）、`.part` 比对象总长还大（换过内容 / 上次崩在追加中间）先删再要。证据：`attachment_resume.rs` 两条 —— 真杀进程重启接着要（第二轮恰好一个 206），以及 `FAIL(ignore-range)` 下整份答复被当整份覆盖（字节不多不少）。变异验证两处：摘掉 `want_range` → 第一条红；拆掉"非 206 报 0" → 第二条与 4 条偏移判定一起红 |
+| 附件分片上传 | 未做（已知缺口） | 下载侧已经是窗口化续传，**上传侧仍是一次 PUT**：一个 20 MiB 附件传一半断了，下一轮整份重传。补法要在 SYNC-PROTOCOL §13 里定"服务端如何容忍半截对象"（`.tmp-*` + `MOVE`，还是 PATCH/append 且需要新的能力探测位）—— 属于协议改动，走 §9 评审，不在这里顺手发明 |
 | 冲突：远端那一版真的来到本机 | 已实现（本轮补上） | 判出 `UpdateUpdate` 时引擎**真的去取那条记录**并发 `ApplyOp::AdoptConflict`：`apply_remote` 的"冲突采纳"分支是唯一允许 `rev` 相等而内容不同的写入口（前提是本机那份已先存成副本笔记），采纳后 `rev == sync_rev` 因此本机不会把自己那一版推回去盖掉别人。面板两栏：右 `(noteId, remoteRev)`、左 `(copyNoteId, copyRev)`。证据：两台设备 + 真 TCP 服务器的分叉测试（去掉采纳就红）。仍欠的一块记在 CHANGELOG §已知限制：P11（删除 vs 修改）的服务器那一版同样没来到本机，右栏只有哈希。`用我这一版` 已不是空操作 —— `swap_conflict_sides` 真的把正文与副本互换并重新公告 |
 | `.enex` 结构化导入 | 未实现 | 需要 XML 依赖 + ENML 映射与夹具 —— 动依赖图，按 §9 走人工评审 |
 | macOS / Android / iOS 产物与签名 | BLOCKED | 需要对应硬件、证书与工具链；本机只有 Windows |

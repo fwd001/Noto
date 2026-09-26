@@ -59,6 +59,7 @@
 | `FAIL(abort,target=records/**)` | 接受连接后 TCP 中断（半写响应） |
 | `FAIL(corrupt-body,target=.notes/manifest/index.json)` | 200 + 截断/坏 JSON/hash 不符 |
 | `FAIL(partial-write,target=.notes/records/n/n1.json)` | 服务端**已落盘**但返回 500 |
+| `FAIL(ignore-range)` | 摘掉请求里的 `Range` 头再交给处理器 ⇒ 答 **200 + 全文**。§14 兼容矩阵那一类"探测时答 206、正式请求被一个不认 Range 的节点接走" |
 | `OFF` / `ON` | `POST /_control/stop` / `/_control/start`；`OFF(close-listener)` 模拟服务器不可达，`OFF(进程 kill)` 模拟主机消失 |
 | `RESTART` | `fs` 模式下重启服务器进程（保留权威状态），用于断言客户端不依赖服务端内存态 |
 | `DUMP` | `GET /_fs/dump?prefix=.notes/` → 服务端权威文件清单 + 内容 hash（**唯一允许的服务端状态断言手段**） |
@@ -128,6 +129,8 @@
 | FT-ATT-04 | 上传中断（`FAIL(abort,target=attachments/**)`） | 下一轮同步 | 附件在后续轮重试成功；服务端仅存在 `.tmp-*` 残留，`DUMP` 中无残缺正式对象；引用该附件的 manifest 不出现（INV-09） | L3,L4 | P6 |
 | FT-ATT-05 | 删除含附件笔记 → 清空回收站 | `DUMP` + 检查 tombstone | `purged` 置位；tombstone 不被自动 GC（INV-11） | L3 | P6 |
 | FT-ATT-08 | 干净库（没有任何 `attachments` 行） | `apply_remote` 一条 doc 里带 `image` 块的远端笔记 | 与笔记**同一事务**登记 `attachments` + `note_attachments`：`attachment_refs == 1`、起始态是 `missing`/`unknown`、`attachment_downloads()` 真的给出这一条（漏登记 = 第二台设备永远占位 + 引用计数恒为 0 让 GC 删掉还在用的 blob）。畸形 sha（非 64 位小写 hex）不入库、也不许把整批同步拖回滚；重放同一条记录不产生第二行 | L1,L2 | P6 |
+| FT-ATT-09 | 4 MiB + 1234 字节的附件，服务器支持 Range | 一轮只取回一个 4 MiB 窗口后**真杀掉进程**，重启再跑一轮 | 第一轮：`.part` 恰好 4 MiB、**正式 blob 不存在**、outbox 仍是 pending（没下完不许结清）。第二轮：只发**一个** `Range: bytes=4194304-…` 请求（请求日志逐条核对，不是"看起来变快了"），拼完字节与源**逐字节相同**、`.part` 被删、`local_state=available`。拼接后 sha256 与期望不符 → 丢弃半截 + 记 failed，绝不把半截文件当完整附件（§10）。服务器探得不支持 Range 时整块取，不发一个注定被答 200 的请求骗自己。证据：`notera-host/tests/attachment_resume.rs::a_partial_attachment_keeps_its_progress_and_finishes_after_a_restart`。门禁自证：把 `want_range` 写死成 `false` → 立刻红 | L3,L4 | P6 |
+| FT-ATT-10 | 同 FT-ATT-09 的库，但第二轮起服务器 `FAIL(ignore-range)` | 重启后再跑一轮 | 服务器把我们的 Range **没理**、答 200 + 全文 ⇒ 客户端必须**当整份覆盖**，不许往 4 MiB 半截后面追加（那会拼出一份内容重复、哈希永远对不上的文件，用户看到的是"这张图永远下不下来"）。断言：该轮请求日志恰好一条 `GET -> 200`、正式 blob 与源**逐字节相同**、`.part` 不在、账上 `available`。证据：`attachment_resume.rs::a_server_that_ignores_range_still_lands_the_right_bytes`；变异自证：把"非 206 一律报偏移 0"那一句拆掉 → 本条与 `notera-webdav` 的 4 条偏移判定一起红 | L3,L4 | P6 |
 | FT-CHK-01 | 新笔记 | 建 checklist 3 项，勾选第 1、3 项 | 重开后勾选状态为 `[x][ ][x]`；纯文本抽取输出与该状态一致 | L1,L5 | P2 |
 | FT-CHK-02 | 同 checklist | 设备 A 勾第 1 项、设备 B 勾第 2 项（同一 base） → 双向同步 | 结果为两项都勾（块级三方合并不丢勾选）或产生冲突副本且两份内容完整可见；**禁止出现"只剩一项勾选"的静默覆盖**（INV-01/05） | L3 | P5 |
 | FT-CHK-03 | checklist 中间项 | 在第 2 项内换行 / 删除整项 | 项序连续无空项；重开后条目数 = 操作后预期数 | L5 | P2 |

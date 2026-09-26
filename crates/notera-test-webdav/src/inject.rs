@@ -30,6 +30,9 @@ use serde::{Deserialize, Serialize};
 /// * `truncate_upload_at` —— 读够 N 字节就断开（半上传）。服务端**不存储**半份 body。
 /// * `require_proxy` —— 只接受"经代理到达"的连接（CONNECT 隧道或绝对形式请求目标），
 ///   其余一律 403。这是 PROXY.md §9 证据链②。
+/// * `ignore_range` —— 把请求里的 `Range` 头摘掉再交给 handler，于是答 `200` + 全文
+///   （`FAIL(ignore-range)`）。§14 兼容矩阵要的就是这个形态：**探测时老实答 206、
+///   正式请求却忽略 Range**（后面挂了个不认 Range 的节点），客户端必须按"这是整份"处理。
 /// * `reset_after` —— 第 N 个数据请求处理完后清空全部状态（模拟服务器侧被清空）。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -41,6 +44,7 @@ pub struct Injection {
     pub corrupt_manifest: bool,
     pub truncate_upload_at: Option<usize>,
     pub require_proxy: bool,
+    pub ignore_range: bool,
     pub reset_after: Option<usize>,
 }
 
@@ -85,6 +89,14 @@ impl Injection {
     pub fn abort_after(after_n: usize) -> Injection {
         Injection {
             drop_after_n: Some(after_n),
+            ..Default::default()
+        }
+    }
+
+    /// `FAIL(ignore-range)` —— 忽略客户端的 `Range` 头，一律答 `200` + 全文。
+    pub fn ignore_range() -> Injection {
+        Injection {
+            ignore_range: true,
             ..Default::default()
         }
     }

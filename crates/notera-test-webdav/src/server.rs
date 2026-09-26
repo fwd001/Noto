@@ -428,6 +428,20 @@ fn decide(shared: &Arc<Shared>, req: &Request, proxied: bool) -> Decision {
     let mut c = lock(shared);
     let inj = c.injection.clone();
 
+    // FAIL(ignore-range)：把 `Range` 头摘掉再交给 handler —— 服务器"看到了但没理"，
+    // 于是答 200 + 全文。§14 兼容矩阵里最难缠的那一类：探测时答得规规矩矩，
+    // 正式请求却被一个不认 Range 的节点接走。
+    let stripped;
+    let req = if inj.ignore_range && req.headers.iter().any(|(k, _)| k == "range") {
+        stripped = Request {
+            headers: req.headers.iter().filter(|(k, _)| k != "range").cloned().collect(),
+            ..req.clone()
+        };
+        &stripped
+    } else {
+        req
+    };
+
     // FAIL(hang)
     if inj.timeout_all {
         c.counters.hung += 1;
