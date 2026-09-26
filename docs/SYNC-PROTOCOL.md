@@ -150,13 +150,22 @@ Notera ⇄ 用户自有 WebDAV 的同步协议 v1。本文是**规范性**文档
 清单写入（`index.json` 是本轮的**最后**一步，见 R2）：
 
 ```text
-1. 读当前 index.json（带 etag E0）
+1. GET index.json，记下 etag E0
 2. 生成新清单：seq = max(观测 seq)+1，checksum 自校验
 3. PUT manifest/index.json.tmp-<device>-<nonce>   → GET 回读校验 checksum
-4. MOVE .tmp-* → manifest/index.json.prev         (Overwrite:T)   保留上一版
-5. MOVE .tmp-*2 → manifest/index.json             (If-Match: E0 或 Overwrite:F，取决于 cap_mask)
+4. MOVE index.json → index.json.prev              (If-Match: E0, Overwrite:T)
+5. MOVE manifest/index.json.tmp-* → index.json    (Overwrite:F)
 6. GET index.json 复算 checksum，比对 seq 与预期
 ```
+
+> 步骤 4 与 5 的先后是修订过的：原文写的是"把 `.tmp` 移进 `.prev`"，那会把**新**清单
+> 放进上一版的位置、并把真正的上一版覆盖掉，D1 回退时读到的就是自己刚写的那份，
+> 等于没有回退点；而步骤 5 的 `Overwrite:F`（创建语义）在 `index.json` 仍存在时永远失败。
+> 现在改成先让位（旧版进 `.prev`）、再落地（新建 `index.json`），CAS 判定就落在步骤 4 的
+> `If-Match: E0` 上 —— 别的设备在我们读取之后改过清单，这一步直接 412，本轮重规划。
+
+4 与 5 之间崩溃留下的窗口：`index.json` 缺失、`.prev` 是旧版、`.tmp-*` 是新版。
+按 D1 读 `.prev` 继续工作，下一轮由持有新清单的设备重新提交；`missing_remote` 一律不删本地。
 
 失败与损坏恢复阶梯（严格顺序，任一级成功即停）：
 

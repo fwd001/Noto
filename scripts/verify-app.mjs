@@ -37,9 +37,14 @@ async function step(name, fn) {
     const detail = await fn();
     record(name, true, detail ?? '');
   } catch (e) {
-    record(name, false, String(e).split('\n')[0]);
+    const text = String(e).replace(/\n/g, '\n      ');
+    record(name, false, text.slice(0, 600));
   }
 }
+
+// 编辑器渲染时把空格写成 U+00A0 以保持连续空格（dom.ts:104），读回时再折回 U+0020。
+// 所以"屏幕上的文本"与"库里的文本"必然差在这一格 —— 断言要按库的口径比。
+const asStored = (s) => s.replace(/ /g, ' ');
 
 const stamp = Date.now();
 const title = `E2E 笔记 ${stamp}`;
@@ -66,25 +71,30 @@ await step('空态或列表骨架存在', async () => {
 });
 
 await step('新建笔记 → 编辑器出现', async () => {
-  await page.click('[data-testid="first-new-note"]', { timeout: 5000 });
+  // `first-new-note` 只在空态里出现；库非空时用的是列表上的 `new-note`。两个都是合法入口。
+  const primary = page.locator('[data-testid="new-note"]');
+  if ((await primary.count()) > 0) await primary.first().click({ timeout: 5000 });
+  else await page.click('[data-testid="first-new-note"]', { timeout: 5000 });
   await page.waitForSelector('[data-testid="editor-doc"]', { timeout: 5000 });
   return 'editor-doc 可见';
 });
 
 await step('输入正文并自动保存（rev 前进）', async () => {
-  const doc = page.locator('[data-testid="editor-doc"]');
-  await doc.click();
+  // 真正可编辑的是块级 contenteditable，`editor-doc` 只是滚动容器。
+  const field = page.locator('[data-testid="editor-doc"] [contenteditable="true"]').first();
+  await field.waitFor({ timeout: 5000 });
+  await field.click();
   await page.keyboard.type(title, { delay: 12 });
-  await page.waitForTimeout(1200);
-  const text = await doc.innerText();
-  if (!text.includes(title)) throw new Error(`编辑器内容不含输入：${text.slice(0, 60)}`);
+  await page.waitForTimeout(1400);
+  const text = asStored(await field.innerText());
+  if (!text.includes(title)) throw new Error(`编辑器内容不含输入：${JSON.stringify(text.slice(0, 60))}`);
   return text.slice(0, 40);
 });
 
 await step('回列表能看到这条笔记', async () => {
   await page.click('[data-testid="nav-all"]', { timeout: 5000 }).catch(() => {});
   await page.waitForTimeout(600);
-  const hit = await page.locator(`[data-testid^="note-row-"]:has-text(${JSON.stringify(title.slice(0, 12))})`).count();
+  const hit = await page.locator(`[data-testid^="note-row-"]:has-text(${JSON.stringify(title)})`).count();
   if (hit === 0) throw new Error('列表里找不到刚建的笔记');
   return `${hit} 行匹配`;
 });
@@ -92,17 +102,29 @@ await step('回列表能看到这条笔记', async () => {
 await step('刷新后仍在（真的落库，不是内存态）', async () => {
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForTimeout(900);
-  const hit = await page.locator(`[data-testid^="note-row-"]:has-text(${JSON.stringify(title.slice(0, 12))})`).count();
+  const hit = await page.locator(`[data-testid^="note-row-"]:has-text(${JSON.stringify(title)})`).count();
   if (hit === 0) throw new Error('刷新后笔记消失');
   return `${hit} 行匹配`;
+});
+
+await step('点开这条笔记 → 正文真的显示出来（不是空面板/重试占位）', async () => {
+  await page.locator(`[data-testid^="note-row-"]:has-text(${JSON.stringify(title)})`).first().click();
+  await page.waitForTimeout(900);
+  const blank = await page.locator('.editor-blank, [data-testid="retry-open"]').count();
+  if (blank > 0) throw new Error('选中标题却落在空面板上：编辑器没跟着 selectedId 打开');
+  const field = page.locator('[data-testid="editor-doc"] [contenteditable="true"]').first();
+  await field.waitFor({ timeout: 5000 });
+  const text = asStored(await field.innerText());
+  if (!text.includes(title)) throw new Error(`正文不含预期：期望 ${JSON.stringify(title)} 实际 ${JSON.stringify(text.slice(0, 60))}`);
+  return text.slice(0, 32);
 });
 
 await step('搜索能命中这条笔记', async () => {
   const box = page.locator('input[type="search"], [data-testid="search-input"], input[placeholder*="搜索"]').first();
   await box.waitFor({ timeout: 4000 });
-  await box.fill(title.slice(0, 12));
+  await box.fill(title);
   await page.waitForTimeout(900);
-  const hit = await page.locator(`[data-testid^="note-row-"]:has-text(${JSON.stringify(title.slice(0, 12))})`).count();
+  const hit = await page.locator(`[data-testid^="note-row-"]:has-text(${JSON.stringify(title)})`).count();
   if (hit === 0) throw new Error('搜索无命中');
   await box.fill('');
   return `${hit} 行命中`;

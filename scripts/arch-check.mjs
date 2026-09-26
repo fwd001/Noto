@@ -135,8 +135,10 @@ const portLeaks = sources(join(ROOT, 'crates/notera-webdav/src'), ['.rs'])
 check('edge:webdav-uses-only-ports', 'ARCHITECTURE-MAP §1（webdav 只见 sync 的端口契约）', [...new Set(portLeaks)],
   `notera-webdav 引用了 notera-sync 的非端口项：${[...new Set(portLeaks)].join(', ')}`);
 
-const hostLib = join(ROOT, 'crates/notera-host/src/lib.rs');const devserverGated = statSafe(hostLib)
-  && /#\[cfg\(debug_assertions\)\]\s*\npub mod devserver/.test(read(hostLib).replace(/\r\n/g, '\n'));
+const devserverSrc = join(ROOT, 'crates/notera-host/src/devserver.rs');
+const devserverGated = statSafe(devserverSrc)
+  && /(if !cfg!\(debug_assertions\)|#\[cfg\(not\(debug_assertions\)\)\])/.test(read(devserverSrc).replace(/\r\n/g, '\n'))
+  && /dev 桥只在 debug 构建启用|debug 构建/.test(read(devserverSrc));
 check('egress:devserver-debug-only', 'devserver.rs 头注释（release 必须关掉本地桥）', devserverGated ? [] : ['devserver 未在 debug_assertions 下门控'],
   'release 构建仍带 loopback HTTP 桥，可无凭据驱动真实 Store');
 

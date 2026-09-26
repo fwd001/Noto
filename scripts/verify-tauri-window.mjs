@@ -1,0 +1,106 @@
+/**
+ * 真窗口验证：通过 WebView2 的远程调试端口连进 **Tauri 壳里的 WebView**，
+ * 走真正的 `invoke('notera_command', …)` 通道（不是 dev HTTP 桥），
+ * 并让 WebView 自己截图（屏幕抓取抓不到 GPU 合成的 surface，CDP 抓得到）。
+ *
+ * 前置：
+ *   WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223 notera-desktop.exe
+ *   node scripts/verify-tauri-window.mjs
+ */
+const PW = process.env.PW_CORE || 'file:///C:/Users/lhcz-fu/node_modules/playwright-core/index.js';
+const CDP = process.env.CDP || 'http://127.0.0.1:9223';
+const OUT = 'D:/code/Notes/docs/evidence/app-tauri-window.png';
+const pw = await (await import(PW)).default;
+const { chromium } = pw;
+
+const rows = [];
+function record(name, ok, detail) {
+  rows.push({ name, ok });
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  —— ${detail}` : ''}`);
+}
+async function step(name, fn) {
+  try {
+    record(name, true, await fn());
+  } catch (e) {
+    record(name, false, String(e).split('\n').slice(0, 3).join(' / '));
+  }
+}
+
+const browser = await chromium.connectOverCDP(CDP, { timeout: 15000 });
+const contexts = browser.contexts();
+const pages = contexts.flatMap((c) => c.pages());
+const page = pages.find((p) => (p.url() || '').length > 0) ?? pages[0];
+const consoleErrors = [];
+page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text().slice(0, 160)); });
+page.on('pageerror', (e) => consoleErrors.push(String(e).slice(0, 160)));
+
+await step('CDP 能连进 Tauri 的 WebView', async () => page.url());
+await step('页面里确实有 Tauri 运行时（不是浏览器兜底）', async () => {
+  const has = await page.evaluate(() => typeof window.__TAURI_INTERNALS__ === 'object');
+  if (!has) throw new Error('__TAURI_INTERNALS__ 不存在 → 这是普通浏览器页面');
+  return 'invoke 通道在';
+});
+await step('invoke 走真命令通道：stats 返回真实库统计', async () => {
+  const v = await page.evaluate(async () => {
+    const core = window.__TAURI_INTERNALS__;
+    return await core.invoke('notera_command', { name: 'stats', args: {} });
+  });
+  if (!v || typeof v.notes !== 'number') throw new Error(`stats 形状不对：${JSON.stringify(v).slice(0, 120)}`);
+  return `notes=${v.notes} folders=${v.folders} user_version=${v.user_version}`;
+});
+const stamp = Date.now();
+const title = `真窗口笔记 ${stamp}`;
+await step('invoke 新建笔记 → 落进真实 SQLite', async () => {
+  const note = await page.evaluate(async (t) => {
+    const core = window.__TAURI_INTERNALS__;
+    const folders = await core.invoke('notera_command', { name: 'list_folders', args: {} });
+    const doc = { v: 1, content: [{ id: 'blk0000001', type: 'paragraph', content: [{ text: t }] }] };
+    return await core.invoke('notera_command', { name: 'create_note', args: { folderId: folders[0].id, doc } });
+  }, title);
+  if (!note || !note.id) throw new Error(`创建失败：${JSON.stringify(note).slice(0, 160)}`);
+  const back = await page.evaluate(async (id) => {
+    return await window.__TAURI_INTERNALS__.invoke('notera_command', { name: 'get_note', args: { id } });
+  }, note.id);
+  if (!back || back.title !== title) throw new Error(`读回不一致：${JSON.stringify(back).slice(0, 120)}`);
+  return `id=${note.id.slice(0, 8)}… rev=${back.rev}`;
+});
+const needle = title.replace(/\D+/g, '');
+await step('UI 能看到这条笔记（刷新后由列表读回，不是内存态）', async () => {
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(900);
+  const hit = await page.locator(`[data-testid^="note-row-"]:has-text(${JSON.stringify(needle)})`).count();
+  if (hit === 0) {
+    await page.reload({ waitUntil: 'networkidle' }).catch(() => {});
+    await page.waitForTimeout(1200);
+    const again = await page.locator(`[data-testid^="note-row-"]:has-text(${JSON.stringify(needle)})`).count();
+    if (again === 0) throw new Error('列表里没有刚创建的笔记');
+    return `${again} 行（刷新后）`;
+  }
+  return `${hit} 行`;
+});
+await step('真窗口里点这条笔记 → 正文显示（选中即打开）', async () => {
+  const row = page.locator(`[data-testid^="note-row-"]:has-text(${JSON.stringify(needle)})`).first();
+  await row.waitFor({ timeout: 6000 });
+  await row.click();
+  await page.waitForTimeout(900);
+  if ((await page.locator('.editor-blank').count()) > 0) throw new Error('选中后落在空面板上：编辑器没跟着 selectedId 打开');
+  const field = page.locator('[data-testid="editor-doc"] [contenteditable="true"]').first();
+  await field.waitFor({ timeout: 5000 });
+  // 渲染层把空格写成 U+00A0 以保持连续空格，读回时折回 U+0020（dom.ts:104）
+  const text = (await field.innerText()).replace(/ /g, ' ');
+  if (!text.includes(title)) throw new Error(`正文不含预期：${JSON.stringify(text.slice(0, 60))}`);
+  return text.slice(0, 30);
+});
+
+await step('WebView 内截图', async () => {
+  const buf = await page.screenshot({ path: OUT, fullPage: false });
+  return `${(buf ?? Buffer.alloc(0)).length ?? 0} 字节 → app-tauri-window.png`;
+});
+await step('交互期间控制台零 error（CDP 抓取）', async () => {
+  if (consoleErrors.length > 0) throw new Error(`${consoleErrors.length} 条：${consoleErrors.slice(0, 3).join(' | ')}`);
+  return `0 条（监听覆盖 ${rows.length} 步交互）`;
+});
+const failed = rows.filter((r) => !r.ok).length;
+console.log(`\nverify-tauri-window: ${rows.length - failed}/${rows.length} 步通过`);
+await browser.close();
+process.exit(failed === 0 ? 0 : 1);
