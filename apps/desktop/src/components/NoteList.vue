@@ -195,8 +195,8 @@ onBeforeUnmount(() => {
                 v-if="!notes.inTrash"
                 type="button"
                 class="btn btn--quiet btn--icon"
-                :aria-label="t('sidebar.deleteFolder')"
-                :title="t('sidebar.deleteFolder')"
+                :aria-label="t('list.moveToTrash')"
+                :title="t('list.moveToTrash')"
                 @click.stop="notes.moveToTrash(entry.id)"
               >
                 ⌫

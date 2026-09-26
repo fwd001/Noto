@@ -38,6 +38,8 @@ const MESSAGES: Record<MessageKey, string> = {
   'list.unpin': '取消固定',
   'list.hasAttachment': '含附件',
   'list.trashMode': '最近删除',
+  'list.moveToTrash': '移到最近删除',
+  'list.delete': '删除',
   'list.restore': '恢复',
   'list.purge': '彻底删除',
   'list.purgeConfirm': '彻底删除后无法找回（会同时从服务器上抹掉这条记录）。确认删除？',

@@ -71,10 +71,12 @@ function onFolderChange(event: Event): void {
           type="button"
           class="btn btn--quiet btn--danger"
           :disabled="!canEdit || notes.inTrash"
+          :title="t('list.moveToTrash')"
+          :aria-label="t('list.moveToTrash')"
           data-testid="trash-note"
           @click="notes.selectedId && notes.moveToTrash(notes.selectedId)"
         >
-          {{ t('list.trashMode') }}
+          {{ t('list.delete') }}
         </button>
       </div>
 
