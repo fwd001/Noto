@@ -187,11 +187,11 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 
 | 门禁 | 结果 | 怎么复现 |
 |---|---|---|
-| Rust 测试 | 438 通过 / 0 失败 / 0 ignored（50 个测试二进制） | `cargo test --workspace` |
-| 前端 | 140 通过（14 文件）、`vue-tsc` 无错误、构建 206 KB→gzip 70 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
-| 架构适应度 | 22/22（最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |
+| Rust 测试 | 441 通过 / 0 失败 / 0 ignored（50 个测试二进制） | `cargo test --workspace` |
+| 前端 | 162 通过（15 文件）、`vue-tsc` 无错误、构建 206 KB→gzip 70 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
+| 架构适应度 | 23/23（最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
-| 浏览器端到端 | 31/31（真 Rust 核心，非 mock；含"设置页存服务器 → 能力块读回"与"库统计五行全是数字"两条真实往返） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
+| 浏览器端到端 | 32/32（真 Rust 核心，非 mock；含"设置页存服务器 → 能力块读回"与"库统计五行全是数字"两条真实往返） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
 | 真窗口 | 8/8（invoke 的 `stats` 键集合 == 契约那 8 个 → 建笔记→落库→刷新读回→点开正文，控制台 0 error） | `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223 target/debug/notera-desktop.exe` + `node scripts/verify-tauri-window.mjs` |
 
 **已建立**：12 个 crate + `apps/desktop`（Tauri 壳 + Vue 前端）+ `migrations/0001..0006` + 自建测试 WebDAV 服务器 + 上述四套验证脚本 + `docs/` 全套规格与 ADR-0001…0019。
@@ -207,12 +207,13 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | 多服务器同时启用 | 按 ADR-0018 拒绝 | 确认点 `sync_rev` 是全局列，需要迁到按账户表 |
 | 备份 / 恢复（§15） | 已实现 | `VACUUM INTO` 一致快照 + sha256/integrity_check 闸门 + 替换前留当前库 + 下次启动落地；恢复不在进程内换库（见 DATA-MODEL §15） |
 | 导出 / 导入（ZIP bundle） | 已实现 | `notera-importer/bundle.rs`；导入走 `apply_remote` 同一条冲突安全路径，删除事实随包带走（防复活）。附件按**库**枚举（`Store::local_attachment_shas`）——曾经按一层目录名筛 64hex，而 blob 在 `<attachments>/<2hex>/<sha>` 两层里，于是"含附件的导出"其实一个附件都没有（见 CHANGELOG） |
-| 编辑器"插入图片 / 附件"的入口 | 未接通 | 存储、队列、同步、导出/导入这条链全都在并有测试，但 `attach_file` 需要 `localPath` + `mediaType`，前端只发 `{noteId, blockId, role}` → 必然 `bad_args`。壳里 `tauri-plugin-dialog` 已 init，前端却没有对应的 JS 绑定（`package.json` 只有 `@tauri-apps/api`）。**待定方案（属平台工作，按 §9 走）**：① 前端加 `@tauri-apps/plugin-dialog` 依赖；② 由壳出一个"选文件"命令返回路径，前端把路径交给 `attach_file`。②不多一个 npm 依赖，且浏览器 dev 桥可以走同一形状。失败路径本身是干净的：占位块撤掉 + 提示，不会留下半个附件块或脏文档。**等你拍板 → ARCHITECTURE-REVIEW §14 D11**（三条路：加 npm 插件 / 加壳的平台命令 / 前端 file input 走同一条 `attach_file`） |
+| 编辑器"插入图片 / 附件"的入口 | **已接通**（按 D11 的 ③ 走） | 隐藏的 `<input type=file>` 取文件（WebView 里就是系统原生选择器），前端只负责把 File 变成 base64；sha256、落盘、`attachments`/`note_attachments`、上传队列仍全在核心。零新依赖，且**浏览器 dev 桥与真窗口是同一条代码路径** → 端到端真的点了一遍（`verify-app` 第 15 步）。形状集中在 `editor/attachmentWire.ts`；显示用的 data URL 只活在内存表里，**绝不写进块属性**（那等于把附件在正文里再存一份并跟着同步走）。顺序坑也在这里：首次挂载会翻转 `has_attachment` 并**推进笔记 rev**，所以必须"先落编辑 → 再写附件 → 接住新 rev → 才把块写进正文" |
+| 冲突并排预览 `preview_text` | 未实现 | 前端 `Commands.previewText` 与 `conflicts.ts` 都在调，核心 dispatch 里**没有这条命令** → 一律 `unknown_command`，UI 静默退回卡片摘要。补一条命令面 + `Store::revision_doc` 就够 |
 | 按文件夹部分导出、`.enex` 结构化导入 | 未实现 | 前者需要文件夹子树 + 外键闭包，目前**明确拒绝**（`folder_scope_unsupported`）而不是假装做了；后者需要 XML 依赖 + ENML 映射与夹具 |
 | macOS / Android / iOS 产物与签名 | BLOCKED | 需要对应硬件、证书与工具链；本机只有 Windows |
 | CI workflow 文件 | 未创建 | 推送渠道待决（ARCHITECTURE-REVIEW §14）；本地等价检查已全部脚本化 |
 | 真实公网 WebDAV 端点验证 | 未做 | 需要一个可写的真实服务器（现仅对自建测试服务器验证） |
-| 端到端偶发一次 `edit_note → 400 stale_edit（expected 7，actual 8）` | **未定位，不当作已通过** | 单次出现（同一套件随后连跑 3 次全绿）。这是本地保存把自己顶掉的形状：`expectedRev` 落后一格，而这条路上没有别的设备。已排除的假设：自导入推 rev（`FT-IO-08` 证明幂等，包导回同一个库 rev/hash 一字不动）、并发 `save()`（`editor.ts` 的 `saveChain` 已串行，且 `doSave` 在执行时才读 `rev.value`）。缺的是**归位信息**：门禁现在把每个 4xx 记到"当时在做哪一步"，下次复现就能定位是谁把 rev 顶上去的。在定位之前，这一条按待查项处理，不改断言、不放宽门禁 |
+| 端到端出现过一次 `edit_note → 400 stale_edit（expected 7，actual 8）` | **已定位并修掉** | 定位手段是给门禁加上"失败的 4xx 发生在哪一步"的归位信息；新加的附件步骤一复现就是它：核心**首次**挂附件会翻转派生列 `has_attachment`，而那是同一事务里推进笔记 rev 的动作，编辑器排队的自动保存却还带着旧 rev 出发 —— 用户插一张图，得到的是"这条笔记在别处被改动了"并把界面切走。修法是把顺序钉死：先落自己的编辑 → 再让核心写附件 → 接住 `attach_file` 回的新 rev → 才把附件块写进正文（`stores/editor.ts::attachFile`，带测试）。当时排除掉的两个假设也留档：自导入推 rev（证明幂等，包导回同一个库 rev/hash 一字不动）、并发 save（`saveChain` 已串行且 `doSave` 执行时才读 `rev.value`） |
 
 **阻塞项**：B1 MSVC 链接器（已用 GNU host 绕行）· B3 无 Android 工具链 · B4 GitHub 不可达 · B5 无真实 WebDAV 端点 · B6 iOS 证书 · B7 商标核查。详见 ARCHITECTURE.md §8。
 

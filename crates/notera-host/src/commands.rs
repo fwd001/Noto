@@ -253,11 +253,28 @@ pub struct AttachCmd {
     pub note_id: String,
     pub block_id: String,
     pub role: String,
-    /// 已落到应用数据目录内的相对路径（由文件选择器复制进来）
-    pub local_path: String,
+    /// 字节的来源之一：壳里选好的文件路径（绝对或相对应用数据目录）。
+    /// 与 `bytesBase64` **恰好二选一** —— 两个都给或都不给是形状错误，
+    /// 宁可拒绝也不能猜，猜错就是把一份附件当成另一份。
+    #[serde(default)]
+    pub local_path: Option<String>,
+    /// 字节的来源之二：前端 `<input type=file>` 读到的字节（标准 base64）。
+    /// 走这条时字节仍然只经核心算 sha256、落盘、写库 —— 前端不做任何"存"的决定。
+    #[serde(default)]
+    pub bytes_base64: Option<String>,
+    /// 空串 = 按 `application/octet-stream` 落库（浏览器对未知扩展就是给不出 type）。
+    #[serde(default)]
     pub media_type: String,
     #[serde(default)]
     pub filename: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentDataCmd {
+    /// 内容寻址键。必须是 64 位小写 hex —— 它会被拼进 blob 路径，
+    /// 不校验就等于把"任意相对路径"交给文件系统（`../../` 那类）。
+    pub sha256: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -484,6 +501,10 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
         "attach_file" => {
             let c: AttachCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.attach(c)?)
+        }
+        "attachment_data" => {
+            let c: AttachmentDataCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            j(app.attachment_data(&c.sha256)?)
         }
         "stats" => j(app.stats()?),
         "sync_now" => {

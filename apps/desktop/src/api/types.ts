@@ -125,6 +125,11 @@ export interface Attachment {
   name?: string;
   /** present | missing | pending —— 缺失时 UI 显示占位而非空白。 */
   state?: string;
+  /**
+   * 附件写入会推进笔记的 rev（核心改了派生列与引用表），所以命令把新 rev 一起回给
+   * 编辑器 —— 不接住它，编辑器随后那次自动保存就带着旧 rev 出发，被判成"在别处被改动"。
+   */
+  rev?: number;
   localPath?: string | null;
 }
 
@@ -328,6 +333,7 @@ export const Commands = {
   search: 'search',
   listFolders: 'list_folders',
   attachFile: 'attach_file',
+  attachmentData: 'attachment_data',
   stats: 'stats',
   syncNow: 'sync_now',
   configureAccount: 'configure_account',

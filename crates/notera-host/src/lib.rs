@@ -27,6 +27,11 @@ use std::time::Duration;
 /// 设备崩溃后这份租约最多挡住别人 60s，不需要任何清理进程。
 const LEASE_TTL_MS: i64 = 60_000;
 
+/// 单个附件的上限。锚在 SYNC-PROTOCOL §13 的"一轮 ≤ 4 个文件 / ≤ 64 MiB"：
+/// 一个文件就超过整轮预算的话，放进去只会反复上传失败，用户看到的是"永远同步不完"，
+/// 所以在入口就挡并说清楚，而不是让它进来慢慢坏。
+const MAX_ATTACHMENT_BYTES: u64 = 32 * 1024 * 1024;
+
 /// UI 能看到的同步语义，一共四态。任何协议细节都必须先折进这四个值。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -467,16 +472,76 @@ impl App {
         Ok(out)
     }
 
+    /// 挂一个附件。字节可以来自壳里选的文件，也可以来自前端 `<input type=file>` 读到的
+    /// base64 —— 但**两条路都只有核心**算 sha256、落盘、写 `attachments`/`note_attachments`
+    /// 并入上传队列。前端只负责"把用户选的东西变成字节"，不负责"存到哪、叫什么、有没有存成"。
     pub fn attach(&self, c: commands::AttachCmd) -> Result<serde_json::Value, CmdError> {
-        let bytes = std::fs::read(&c.local_path).map_err(|e| CmdError::of("read_failed", false).with(serde_json::json!({ "why": e.to_string() })))?;
+        let bytes = match (c.local_path.as_deref(), c.bytes_base64.as_deref()) {
+            (Some(_), Some(_)) | (None, None) => {
+                return Err(CmdError::of("bad_args", false).with(serde_json::json!({
+                    "detail": "localPath 与 bytesBase64 必须恰好给一个",
+                })));
+            }
+            (Some(p), None) => std::fs::read(p).map_err(|e| CmdError::of("read_failed", false).with(serde_json::json!({ "why": e.to_string() })))?,
+            (None, Some(b)) => notera_crypto::b64::decode(b).map_err(|e| CmdError::of("bad_args", false).with(serde_json::json!({ "detail": e.to_string() })))?,
+        };
+        if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
+            // 单个附件超过同步一轮的预算上限时，先在这里挡住并给出能看懂的话；
+            // 让它进去只会在上传阶段反复失败，用户看到的是"永远同步不完"。
+            return Err(CmdError::of("too_large", false).with(serde_json::json!({
+                "bytes": bytes.len(),
+                "limit": MAX_ATTACHMENT_BYTES,
+            })));
+        }
         let note = EntityId::parse(&c.note_id).map_err(|_| CmdError::of("bad_id", false))?;
+        let media = if c.media_type.trim().is_empty() { "application/octet-stream".to_string() } else { c.media_type.clone() };
         let a = self
             .inner
             .store
-            .attach_blob(&note, &bytes, &c.media_type, c.filename.as_deref(), &c.block_id)
+            .attach_blob(&note, &bytes, &media, c.filename.as_deref(), &c.block_id)
             .map_err(CmdError::from)?;
         self.inner.dirty_ticks.fetch_add(1, Ordering::SeqCst);
-        Ok(serde_json::json!({ "sha256": a.sha256, "size": a.size, "mediaType": a.media_type }))
+        // 回上笔记的**新 rev**：`attach_blob` 会改笔记的派生列与引用表，因而把 rev 推进一格。
+        // 编辑器若不接住这个数，它随后那次自动保存就带着旧 rev 出发，被核心判成
+        // `stale_edit` —— 用户插一张图，却看到"这条笔记在别处被改动了"（端到端实测踩过）。
+        let rev = self
+            .inner
+            .store
+            .get_note(&note)
+            .map_err(CmdError::from)?
+            .map(|n| n.rev.get())
+            .unwrap_or(0);
+        Ok(serde_json::json!({ "sha256": a.sha256, "size": a.size, "mediaType": a.media_type, "rev": rev }))
+    }
+
+    /// 读回一个附件的字节（编辑器显示图片用）。
+    ///
+    /// `sha256` 会被拼进 blob 路径（`<attachments>/<2hex>/<sha>`），所以先校验形态：
+    /// 不校验就等于允许 `../../xxx` 这类相对路径去碰文件系统。
+    pub fn attachment_data(&self, sha256: &str) -> Result<serde_json::Value, CmdError> {
+        // 只认**小写** 64hex：`sha256_hex` 出来的就是这个形态，收大写等于允许同一个
+        // blob 有两种拼法、两条路径（Windows 上还不报错）。更关键的是它挡住 `../` 那类
+        // 字符串走进 `blob_path` —— 这个参数会被拼进文件路径，不能靠"调用方总不会乱传"。
+        if sha256.len() != 64 || !sha256.chars().all(|ch| ch.is_ascii_digit() || ('a'..='f').contains(&ch)) {
+            return Err(CmdError::of("bad_args", false).with(serde_json::json!({ "detail": "sha256 必须是 64 位 hex" })));
+        }
+        let path = self.inner.store.blob_path(sha256);
+        let bytes = std::fs::read(&path).map_err(|_| CmdError::of("attachment_missing", false).with(serde_json::json!({ "sha256": sha256 })))?;
+        if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
+            return Err(CmdError::of("too_large", false).with(serde_json::json!({ "bytes": bytes.len(), "limit": MAX_ATTACHMENT_BYTES })));
+        }
+        let media_type = self
+            .inner
+            .store
+            .attachment_media_type(sha256)
+            .map_err(CmdError::from)?
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        Ok(serde_json::json!({
+            "sha256": sha256,
+            "mediaType": media_type,
+            "size": bytes.len(),
+            "bytesBase64": notera_crypto::b64::encode(&bytes),
+        }))
     }
 
     pub fn stats(&self) -> Result<StatsDto, CmdError> {
@@ -2031,6 +2096,82 @@ mod tests {
         assert_eq!(after.content_hash, before.content_hash, "内容也不许变");
         assert_eq!(app.store().open_conflicts().unwrap().len(), 0, "自导入不许造出冲突：{report:?}");
         let _ = std::fs::remove_dir_all(out.parent().unwrap());
+    }
+
+    #[test]
+    fn attachment_bytes_may_arrive_as_base64_and_come_back_identical() {
+        // 编辑器选不到文件时，这条路是"前端读字节 → 核心算 sha 并落盘"。
+        // 关键是**核心仍然是唯一的写入口**：sha 由核心算、盘由核心写、库由核心记，
+        // 前端给的字节只是输入，不是决定。
+        let app = boot("attach-b64");
+        let folder = app.default_folder_id().unwrap();
+        let note = app.create_note(&folder, doc("贴一张图")).unwrap();
+        let blob: Vec<u8> = (0..600u16).map(|i| (i % 251) as u8).collect();
+        let b64 = notera_crypto::b64::encode(&blob);
+        let want_sha = notera_crypto::sha256_hex(&blob);
+        let got = commands::dispatch(
+            &app,
+            "attach_file",
+            json!({ "noteId": note.id, "blockId": "b1", "role": "inline", "bytesBase64": b64, "mediaType": "image/png", "filename": "图.png" }),
+        )
+        .unwrap();
+        assert_eq!(got["sha256"], want_sha.as_str(), "sha 必须由核心算出来");
+        assert_eq!(got["size"], blob.len());
+        // 附件写入推进了笔记的 rev（改了派生列与引用表），因此**必须把新 rev 回给编辑器**：
+        // 编辑器手里若还是旧 rev，它随后那次自动保存就会被判成 stale_edit —— 用户插一张图，
+        // 得到的却是"这条笔记在别处被改动了"。端到端实测过：expected 7 / actual 8。
+        let now = app.store().get_note(&EntityId::parse(&note.id).unwrap()).unwrap().unwrap();
+        assert_eq!(now.rev.get(), note.rev + 1, "attach 会把笔记 rev 推进一格（这是回 rev 的前提）");
+        assert_eq!(got["rev"], now.rev.get(), "响应里必须带推进后的新 rev");
+        assert_eq!(std::fs::read(app.store().blob_path(&want_sha)).unwrap(), blob, "落盘的字节必须与输入相同");
+        assert_eq!(app.store().attachment_media_type(&want_sha).unwrap().as_deref(), Some("image/png"));
+
+        let back = commands::dispatch(&app, "attachment_data", json!({ "sha256": want_sha })).unwrap();
+        assert_eq!(notera_crypto::b64::decode(back["bytesBase64"].as_str().unwrap()).unwrap(), blob, "读回来必须逐字节相同");
+        assert_eq!(back["mediaType"], "image/png");
+    }
+
+    #[test]
+    fn attachment_entry_points_reject_bad_shapes_instead_of_guessing() {
+        let app = boot("attach-shape");
+        let folder = app.default_folder_id().unwrap();
+        let note = app.create_note(&folder, doc("形状检查")).unwrap();
+        let base = json!({ "noteId": note.id, "blockId": "b1", "role": "inline", "mediaType": "image/png" });
+        let mut both = base.clone();
+        both["bytesBase64"] = json!(notera_crypto::b64::encode(b"x"));
+        both["localPath"] = json!("某处.png");
+        let e = commands::dispatch(&app, "attach_file", both).expect_err("两个来源都给 = 不知道听谁的，必须拒");
+        assert_eq!(e.code, "bad_args");
+        let e = commands::dispatch(&app, "attach_file", base).expect_err("两个来源都不给同样要拒");
+        assert_eq!(e.code, "bad_args");
+        // 坏 base64 不许被"尽量解一下"，那是把用户的文件改成另一份内容
+        let e = commands::dispatch(&app, "attach_file", json!({ "noteId": note.id, "blockId": "b1", "role": "inline", "bytesBase64": "###" })).expect_err("坏 base64 必须报错");
+        assert_eq!(e.code, "bad_args");
+        // 空字节不允许挂载（store 的既有约束，别在这里绕过）
+        let e = commands::dispatch(&app, "attach_file", json!({ "noteId": note.id, "blockId": "b1", "role": "inline", "bytesBase64": "" })).expect_err("空 blob 必须报错");
+        assert!(matches!(e.code.as_str(), "bad_args" | "storage" | "constraint"), "实际 {}", e.code);
+    }
+
+    #[test]
+    fn attachment_reads_reflect_the_size_cap_and_the_shape_of_a_content_key() {
+        // sha 会被拼进 blob 路径（<attachments>/<2hex>/<sha>）。不校验形态就是允许
+        // `../../…` 去碰任意文件 —— 读命令尤其不能靠"调用方总不会乱传"。
+        let app = boot("attach-cap");
+        let bad_keys: Vec<String> = vec![
+            "../../etc/passwd".into(),
+            "a".repeat(63),
+            "a".repeat(65),
+            "A".repeat(64),
+            "zz".to_string() + &"0".repeat(62),
+        ];
+        for bad in bad_keys {
+            let e = commands::dispatch(&app, "attachment_data", json!({ "sha256": bad })).expect_err(&format!("非法 sha 必须被拒：{bad}"));
+            assert_eq!(e.code, "bad_args", "实际 {e:?}");
+        }
+        // 形态合法但盘上没有：是"缺附件"，不是"参数错"，UI 要显示占位而不是报错堆栈
+        let missing = "ab".to_string() + &"0".repeat(62);
+        let e = commands::dispatch(&app, "attachment_data", json!({ "sha256": missing })).expect_err("没有的附件不能返回空成功");
+        assert_eq!(e.code, "attachment_missing");
     }
 
     #[test]

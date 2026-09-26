@@ -3,7 +3,7 @@
  * 富文本编辑器：contenteditable + 块模型双向映射。
  * 不依赖任何第三方编辑器：块 id 由我们生成并保持，未知块只读保留，版本过高只读。
  */
-import { computed, nextTick, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import EditorToolbar from './EditorToolbar.vue';
 import { vEditable, markAsParsed } from '../editor/editableDirective';
 import { applySelection, parseEditable, safeHref, selectionBoxIn, selectionIn } from '../editor/dom';
@@ -167,7 +167,17 @@ function imageSrc(block: EditorBlock): string | null {
   const direct = safeHref(stringAttr(block, 'src'));
   if (direct) return direct;
   const data = stringAttr(block, 'dataUrl');
-  return data && /^data:image\//i.test(data) ? data : null;
+  if (data && /^data:image\//i.test(data)) return data;
+  // 正文里只有内容键 sha256，字节在盘上 —— 显示要另取一次（取回来只活在内存的
+  // URL 表里，写进块属性就等于写进 doc、随同步把附件在正文里再存一份）。
+  return store.attachmentUrl(stringAttr(block, 'sha256'));
+}
+
+/** 缺附件时的那颗按钮：既要让同步去把 blob 拉回来，也要在拉回后重新取一次显示 URL。 */
+function retryAttachment(block: EditorBlock): void {
+  const sha = stringAttr(block, 'sha256') ?? stringAttr(block, 'ref');
+  if (sha) void store.ensureAttachmentUrl(sha);
+  void sync.syncNow();
 }
 
 function attachmentName(block: EditorBlock): string {
@@ -443,9 +453,39 @@ function onBackspaceInBlock(index: number): void {
   void run(backspace(blocks.value, index, range.value));
 }
 
+/**
+ * "插入图片 / 附件"走一个隐藏的 `<input type=file>`：在 Tauri 的 WebView 里点的就是
+ * 操作系统原生的选择器，而在浏览器 dev 桥里是同一条代码路径 —— 于是这一步能被端到端
+ * 真的点一遍（原生对话框插件那条路做不到，只能标 BLOCKED）。
+ */
+const attachInput = ref<HTMLInputElement | null>(null);
+const attachRole = ref<'inline' | 'file'>('inline');
+
 function onAttach(role: 'inline' | 'file'): void {
-  void store.attachFile(role);
+  attachRole.value = role;
+  if (attachInput.value) {
+    attachInput.value.accept = role === 'inline' ? 'image/*' : '';
+    attachInput.value.value = '';
+    attachInput.value.click();
+  }
 }
+
+async function onAttachPicked(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement | null;
+  const file = input?.files?.[0] ?? null;
+  await store.attachFile(attachRole.value, file);
+  if (input) input.value = '';
+}
+
+// 全局快捷键（Shift+F）递过来的意图，走的还是上面这条唯一的路径。
+watch(
+  () => store.attachRequest,
+  (role) => {
+    if (!role) return;
+    store.clearAttachRequest();
+    onAttach(role);
+  },
+);
 
 function onNative(kind: 'undo' | 'redo'): void {
   const block = currentBlock.value;
@@ -480,6 +520,17 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
 
 <template>
   <div class="editor">
+    <!-- 附件的唯一取文件入口。`aria-hidden` + 不占位：它不是给用户看的控件，
+         但必须真的在 DOM 里 —— 端到端就是往它塞文件来验这条边的。 -->
+    <input
+      ref="attachInput"
+      type="file"
+      class="editor-file-input"
+      data-testid="attach-input"
+      tabindex="-1"
+      aria-hidden="true"
+      @change="onAttachPicked"
+    />
     <EditorToolbar
       :disabled="readOnly"
       :active-marks="activeMarks"
@@ -611,7 +662,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
               <span class="nb-chip__glyph" aria-hidden="true">▦</span>
               <span>{{ t('editor.imageMissing') }}</span>
               <span v-if="attachmentName(block)" class="nb-chip__meta">{{ attachmentName(block) }}</span>
-              <button type="button" class="btn btn--quiet" @click="sync.syncNow()">{{ t('editor.attachmentDownload') }}</button>
+              <button type="button" class="btn btn--quiet" @click="retryAttachment(block)">{{ t('editor.attachmentDownload') }}</button>
             </figcaption>
           </figure>
 
@@ -622,7 +673,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
               <span v-if="formatSize(block.attrs.size)" class="nb-chip__meta">{{ formatSize(block.attrs.size) }}</span>
               <template v-if="attachmentMissing(block)">
                 <span class="nb-chip__meta">{{ t('editor.attachmentMissing') }}</span>
-                <button type="button" class="btn btn--quiet" @click="sync.syncNow()">{{ t('editor.attachmentDownload') }}</button>
+                <button type="button" class="btn btn--quiet" @click="retryAttachment(block)">{{ t('editor.attachmentDownload') }}</button>
               </template>
             </span>
           </div>
@@ -689,6 +740,15 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
   flex-direction: column;
   min-height: 0;
   flex: 1;
+}
+
+/* 隐藏的取文件入口：不占位、不吃焦点，但留在可测的 DOM 里。 */
+.editor-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .editor-note {

@@ -311,6 +311,19 @@ for (const arm of commandsSrc.matchAll(/j\(app\.([a-z_]+)\(/g)) {
 check('edge:command-wire-is-camelCase', 'ARCHITECTURE-MAP §5（命令面出参的键名是契约）', [...new Set(camelArmViolations)],
   `这些命令出参的类型没声明 camelCase，wire 上会是 snake_case 而界面按 camelCase 取值：\n    ${[...new Set(camelArmViolations)].join('\n    ')}`);
 
+// 核心每一个 `CmdError::of("<code>")` 都要有 `error.<code>` 文案。
+// 为什么单独一条：`messageFor` 把 `cmd.<code>` 剥前缀后查 `error.<code>`，查不到就退成
+// 通用兜底；而前端那份对齐表（i18n.spec.ts 的 COMMAND_CODES）是手抄的 —— 手抄就会漏，
+// `read_failed`/`attachment_missing` 实际上就漏在表外。这条从 Rust 侧扫，漏了直接判红。
+const codeLines = [
+  ...sources(join(ROOT, 'crates/notera-host/src'), ['.rs']),
+  ...sources(join(ROOT, 'crates/notera-store/src'), ['.rs']),
+].flatMap((f) => [...read(f).matchAll(/CmdError::of\(\s*"([a-z_]+)"/g)].map((m) => m[1]));
+const errorKeys = new Set([...i18nText.matchAll(/^\s*'error\.([a-z_]+)':/gm)].map((m) => m[1]));
+const unregisteredCodes = [...new Set(codeLines)].filter((c) => !errorKeys.has(c));
+check('hygiene:rust-error-codes-registered', 'ARCHITECTURE-MAP §5（错误码 → 文案，一处不漏）', unregisteredCodes,
+  `这些命令错误码没有对应的 error.* 文案（界面会退化成通用兜底）：${unregisteredCodes.join(', ')}`);
+
 // ------------------------------------------------------------------------- 输出 ---
 
 // "扫了 0 个文件"和"扫了但没问题"必须能区分开：前者是门禁在空转，

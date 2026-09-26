@@ -8,11 +8,11 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 438 通过 / 0 失败 / 0 ignored（50 个测试二进制） |
-| 前端 | 140 通过（14 文件）；`vue-tsc --noEmit` 无错误；构建 206 KB → gzip 70 KB |
-| `scripts/arch-check.mjs` | 22/22 |
+| `cargo test --workspace` | 441 通过 / 0 失败 / 0 ignored（50 个测试二进制） |
+| 前端 | 162 通过（15 文件）；`vue-tsc --noEmit` 无错误；构建 206 KB → gzip 70 KB |
+| `scripts/arch-check.mjs` | 23/23 |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
-| `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 31/31 |
+| `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 32/32 |
 | `scripts/verify-tauri-window.mjs`（真窗口，走真 `invoke`） | 8/8，控制台 0 error |
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8。
@@ -55,9 +55,12 @@
 - **设置页的"最近删除 / 本地占用 / 待处理任务"恒为占位符 `—`，侧栏回收站恒为 0**：`App::stats` 是命令面里唯一没走 DTO 的一条 —— 它把 `notera_store::StoreStats` 原样序列化，wire 上是 snake_case 的 `notes_trash / fts_rows / outbox_pending`，而契约图与前端读的是 `notesInTrash / ftsEntries / inflightOps`，于是全是 `undefined`。TypeScript 的类型是断言不是校验，`formatNumber(undefined)` 很诚实地给出 `—`；而 `app.spec.ts` 喂的 mock 恰好是 camelCase —— 假数据把这个洞完整盖住了。现在命令面补 `StatsDto`（8 个契约字段 + `From<StoreStats>` 一处翻译），三处一起钉住：Rust 用真 `dispatch("stats")` 断言键集合、arch-check 新增 `edge:stats-dto-covers-ui-reads`（扫前端每一处 `settings.stats.X` 与 `StoreStats` 声明，核心发不出就判红；删掉 `#[serde(rename_all)]` 或改任一个字段名都会变红，两条都实测过）、端到端新增一步在浏览器里断言这五行全是数字
 - **通用门禁 `edge:command-wire-is-camelCase`**：上一条是逐键核对，这一条把整类挡掉 —— 命令面每一个 `j(app.x()?)` 出参的结构体都必须**显式**声明 `#[serde(rename_all = "camelCase")]`，否则判红并指名是哪个命令、哪个类型。审计顺带查了另一处同源风险（`backup_db`/`list_backups` 发的是 store 的 `BackupInfo`），它本来就带这个属性所以界面没坏；门禁的作用是不许下一个人在没注意的时候漏掉它（变异测过：删掉那个属性 → `backup_db → BackupInfo（缺 #[serde(rename_all = "camelCase")]）` 立刻变红）
 - **导出说"含附件"，包里一个附件都没有**：附件按 DATA-MODEL §5.1 落在 `<attachments>/<2hex>/<sha>` 两层分片目录里，而导出用的是"读一层目录、按 64hex 筛文件名"—— 那一层里只有 2 字符的分片目录名，所以过滤器**永远筛不到任何东西**。后果不是报错而是安心感被偷走：`include_attachments: true`（设置页写死 true）、`notera-cli export`、以及备份语义都指向"这份包里有我的文件"，实际交出去的是一个只有文字的空壳，而且回读校验只检查"包能不能打开"，于是 `附件 0` 也照样算通过。改成以库为准（新增 `Store::local_attachment_shas()`），并补三处判定：命令面测试真挂一个 blob 并断言包里的条目数/字节（变异测过：换回旧的扫目录写法 → `left: Some(0) right: Some(1)`）、CLI 导出后**比对数量**而不只是打开、端到端在统计卡与包之间对账。顺带发现：编辑器"插入图片/附件"这条 UI 入口至今没有文件选择器接上（`attach_file` 需要 `localPath`/`mediaType`，前端只发 `{noteId, blockId, role}` → 必然 `bad_args`），失败路径本身是干净的（占位块会撤掉并提示），但功能确实不可用 —— 见 §尚未做
+- **编辑器的"插入图片 / 附件"接通了**（D11 拍板走 ③：前端 `<input type=file>` 读字节 → base64 交给 `attach_file`）。这条边整条是断的：核心要 `localPath` + `mediaType`，前端只发 `{noteId, blockId, role}` → 点一下必然 `bad_args`，而且没有任何测试走过它。现在形状集中在 `editor/attachmentWire.ts`（一处 + 11 条契约测试：载荷必须平铺 camelCase、超限在**读字节之前**就拒、base64 与 RFC 4648 已知答案逐字符对齐、1 MB 编码 < 1.5 s），核心仍然是唯一的写入口（sha256、落盘、`attachments`/`note_attachments`、上传队列）。显示用的 data URL 只活在内存表里，**绝不写进块属性** —— 那等于把每个附件在正文里再存一份 base64 并跟着每次编辑同步走（端到端有断言盯着）。新增命令 `attachment_data`（按 sha 取回字节）；`sha256` 参数先校验形态再用，因为它会被拼进 blob 路径，不校验就是给 `../../` 开门。零新依赖（`base64` 早已在 workspace 单一版本源里，经 `notera-crypto::b64` 用）
+- **插一张图，却被告知"这条笔记在别处被改动了"**：核心首次挂附件会翻转派生列 `has_attachment`，而那是**在同一事务里推进笔记 rev** 的动作；编辑器排队的自动保存还带着旧 rev 出发，于是被判定 `stale_edit` —— 界面切走、本地版本进 draft，用户完全看不出是自己干的。这就是之前那条"偶发一次、连跑三次全绿"的端到端红灯：给门禁补上"失败的 4xx 发生在哪一步"的归位信息后，新的附件步骤一复现就是它（`expected 7, actual 8`）。修法是把顺序钉死并在命令面回带新 rev：先落自己的编辑 → 核心写附件 → 接住 `attach_file` 的 `rev` → 才把附件块写进正文；失败则把占位块撤干净且**不**多存一版。核心侧与前端侧各一条测试锁住这个顺序
+- **另外 5 个命令错误码没有登记文案**（`no_default_folder` / `bad_action` / `sync_refused` / `sync_busy` / `unknown_account`）：新门禁 `hygiene:rust-error-codes-registered` 从 Rust 侧扫 `CmdError::of("…")` 与 `error.*` 表比对，一上来就炸出这五个 —— 它们此前全体退化成"操作没有成功，可以稍后再试"。这条门禁是从**源头**扫的，不再依赖前端那张手抄的对照表（`read_failed` / `attachment_missing` 也正是手抄漏掉的）
 - `WorkspaceView` 不跟随 `selectedId` 打开编辑器（选中了却一片空白）、`create()` 不打开新笔记、冲突动词表三处不一致、`create_note` 拒绝 `folderId: null`、`/favicon.ico` 404
-- **架构适应度检查** `scripts/arch-check.mjs`：22 条机器可判定的层次约束（依赖边、唯一出口、SQL 只出现在 store、前端无协议词汇、端口边越界引用、命令面 DTO 覆盖界面读的每一个键…）
-- **端到端等价** `scripts/verify-app.mjs`：Playwright 驱动同一份前端 + 同一份 Rust 核心的 31 步 UAT
+- **架构适应度检查** `scripts/arch-check.mjs`：23 条机器可判定的层次约束（依赖边、唯一出口、SQL 只出现在 store、前端无协议词汇、端口边越界引用、命令面 DTO 覆盖界面读的每一个键…）
+- **端到端等价** `scripts/verify-app.mjs`：Playwright 驱动同一份前端 + 同一份 Rust 核心的 32 步 UAT
 
 ### 修复（都是会静默丢数据或静默错的那些，不是整理）
 

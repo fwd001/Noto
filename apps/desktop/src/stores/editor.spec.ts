@@ -135,3 +135,57 @@ describe('事件回流校正', () => {
     expect(editor.rev).toBe(7);
   });
 });
+
+describe('插入附件与自动保存的先后', () => {
+  /**
+   * 核心的附件写入会把笔记 rev 推进一格（它改了派生列与引用表）。曾经编辑器让附件
+   * 先写、自己排队的自动保存随后带着旧 rev 出发 → 被判定 stale_edit：用户插一张图，
+   * 得到的却是"这条笔记在别处被改动了"并把界面切走。端到端里它就是那条 expected 7 /
+   * actual 8。顺序与"接住新 rev"两件事都必须被测到。
+   */
+  it('先落地待保存内容，再让核心写附件，并接住附件推进后的新 rev', async () => {
+    const service = stubLocalService({
+      edit_note: () => noteFixture({ rev: 8 }),
+      attach_file: () => ({ sha256: 'ab'.repeat(32), size: 3, mediaType: 'image/png', rev: 9 }),
+    });
+    const editor = useEditorStore();
+    editor.hydrate(asNote(noteFixture({ rev: 7 })));
+    editor.updateBlock({ ...editor.blocks[0], content: [{ text: '改一段再插图' }] });
+
+    await editor.attachFile('inline', new File([new Uint8Array([1, 2, 3])], '图.png', { type: 'image/png' }));
+    // 附件写之前先落编辑；随后取显示字节；再之后才是把附件块写进正文
+    expect(service.calls.map((c) => c.name)).toEqual(['edit_note', 'attach_file', 'attachment_data']);
+
+    await vi.advanceTimersByTimeAsync(1400);
+    const last = service.lastArgsOf('edit_note') as { expectedRev: number; doc: { content: unknown[] } };
+    // 必须用核心回的新 rev：带着旧的出发就是自己跟自己造 stale_edit
+    expect(last.expectedRev).toBe(9);
+    expect(JSON.stringify(last.doc)).toContain('sha256');
+  });
+
+  it('核心没回 rev 时不许把本地 rev 改成 undefined', async () => {
+    stubLocalService({
+      edit_note: () => noteFixture({ rev: 4 }),
+      attach_file: () => ({ sha256: 'ab'.repeat(32), size: 3, mediaType: 'image/png' }),
+    });
+    const editor = useEditorStore();
+    editor.hydrate(asNote(noteFixture({ rev: 4 })));
+    await editor.attachFile('file', new File([new Uint8Array([9])], 'a.bin', { type: '' }));
+    expect(editor.rev).toBe(4);
+    expect(editor.blocks.some((b) => b.shape === 'attachment')).toBe(true);
+  });
+
+  it('附件写失败要撤掉占位块，不许留一个永远转圈的假附件', async () => {
+    stubLocalService({
+      edit_note: () => noteFixture({ rev: 4 }),
+      attach_file: () => {
+        throw new Error('boom');
+      },
+    });
+    const editor = useEditorStore();
+    editor.hydrate(asNote(noteFixture({ rev: 4 })));
+    const before = editor.blocks.length;
+    await expect(editor.attachFile('inline', new File([new Uint8Array([1])], 'x.png', { type: 'image/png' }))).resolves.toBeNull();
+    expect(editor.blocks).toHaveLength(before);
+  });
+});

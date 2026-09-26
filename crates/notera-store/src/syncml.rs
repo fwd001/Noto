@@ -718,6 +718,15 @@ impl Store {
         rows.collect::<Result<_, _>>().map_err(Into::into)
     }
 
+    /// 附件登记的媒体类型（显示用）。行不存在时给 `None`，让调用方决定占位。
+    pub fn attachment_media_type(&self, sha256: &str) -> Result<Option<String>, StoreError> {
+        let sha = sha256.to_string();
+        let conn = self.read()?;
+        Ok(conn
+            .query_row("SELECT media_type FROM attachments WHERE sha256 = ?1", [sha.as_str()], |r| r.get::<_, String>(0))
+            .optional()?)
+    }
+
     // ------------------------------------------------- push 侧：记录 wire ---
 
     /// 笔记记录的 wire 字节（DATA-MODEL §11 / SYNC-PROTOCOL §3）：同步引擎 PUT 的就是这份。

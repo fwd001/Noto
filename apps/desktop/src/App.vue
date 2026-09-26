@@ -144,7 +144,7 @@ function onGlobalKeydown(event: KeyboardEvent): void {
     }
     if (key === 'f' && event.shiftKey) {
       event.preventDefault();
-      void editor.attachFile('file');
+      editor.requestAttach('file');
       return;
     }
     if (key === 'backspace' && !typing) {

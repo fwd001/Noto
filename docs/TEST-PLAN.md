@@ -121,6 +121,8 @@
 | FT-PIN-02 | 固定 N | 把 N 移到另一文件夹 → 设备 B 同步 | B 上 N 仍在固定区且归属新文件夹；固定状态不因移动丢失（pin 与 folder 是两个独立字段） | L3 | P5 |
 | FT-PIN-03 | 固定 10 篇 | 重启 App | 10 篇全部保持固定且顺序不变 | L5 | P3 |
 | FT-ATT-01 | 一篇笔记 | 插入 1 张 PNG（1.2 MiB） | 图片可见；导出包内存在该图且 sha256 与源文件一致；远端 `DUMP` 出现 `attachments/<2hex>/<sha256>` 且路径前 2 hex 与 sha256 前缀吻合 | L1,L3 | P6 |
+| FT-ATT-06 | 一篇打开中的笔记 | 插入图片（前端 file input → base64 → `attach_file`） | 顺序必须是"落自己的编辑 → 核心写附件 → 接住新 rev → 才把附件块写进正文"：核心首次挂附件会翻转 `has_attachment` 并在同一事务推进 rev，顺序反了编辑器就把自己判成 `stale_edit`（用户看到的是"这条笔记在别处被改动了"）。断言：调用序列、随后那次保存的 `expectedRev` == 附件返回的 rev、正文里**没有** base64、失败时占位块被撤干净且不多存一版 | L2,L5 | P6 |
+| FT-ATT-07 | 挂了一个附件的库 | `attach_file`（bytesBase64）→ `attachment_data` 读回 | sha256 由**核心**算（前端给的键不算数）；字节逐字节相同；`localPath` 与 `bytesBase64` 给两个或给零个都拒；坏 base64 不许"尽量解"；超过 32 MiB 在**读字节之前**就拒；`attachment_data` 的 sha 参数必须是 64 位小写 hex（它会被拼进 blob 路径，不校验等于给 `../../` 开门），形态对但盘上没有 → `attachment_missing` 而不是空成功 | L2 | P6 |
 | FT-ATT-02 | 已有附件 | 在设备 B 打开同一条笔记 | 附件按内容寻址取回并渲染；本地 sha256 校验通过；不产生第二份副本（同 sha256 只落一个文件） | L3 | P6 |
 | FT-ATT-03 | 20 MiB 附件，链路 `FAIL(latency,target=attachments/**)` 限速 1 Mbit | 上传附件的同时编辑并同步另一条纯文本笔记 | 文本笔记在设备 B 于 ≤25 s（设计周期）内可见；附件队列未完成不影响文本轮（`STATS` 显示文本轮请求不含 `attachments/**` 等待）；UI 不出现整体阻塞（输入延迟 <100 ms） | L3,L5 | P6 |
 | FT-ATT-04 | 上传中断（`FAIL(abort,target=attachments/**)`） | 下一轮同步 | 附件在后续轮重试成功；服务端仅存在 `.tmp-*` 残留，`DUMP` 中无残缺正式对象；引用该附件的 manifest 不出现（INV-09） | L3,L4 | P6 |

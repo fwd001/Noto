@@ -11,6 +11,14 @@ import { messageFor, t } from '../i18n';
 import { asBridgeError } from '../util/errors';
 import { AUTOSAVE_DEBOUNCE_MS, createDebounced } from '../util/timing';
 import {
+  attachmentAttrs,
+  AttachmentEmpty,
+  AttachmentTooLarge,
+  toAttachPayload,
+  toDataUrl,
+  type AttachmentData,
+} from '../editor/attachmentWire';
+import {
   blocksToDoc,
   docToBlocks,
   emptyParagraph,
@@ -79,6 +87,12 @@ export const useEditorStore = defineStore('editor', () => {
     docVersion.value = typeof note.doc?.v === 'number' ? note.doc.v : SUPPORTED_DOC_VERSION;
     inTrash.value = note.deletedAt !== null && note.deletedAt !== undefined;
     blocks.value = docToBlocks(note.doc);
+    // 图片块里的 `sha256` 只是内容键 —— 显示要另外把字节取回来变成 data URL。
+    // 取不到就显示占位（INV：附件不阻塞正文），所以这里不 await、不抛错。
+    for (const block of blocks.value) {
+      const sha = typeof block.attrs?.sha256 === 'string' ? block.attrs.sha256 : null;
+      if (sha && block.shape === 'image') void ensureAttachmentUrl(sha);
+    }
     dirty.value = false;
     saveState.value = 'idle';
     saveErrorKey.value = null;
@@ -256,10 +270,22 @@ export const useEditorStore = defineStore('editor', () => {
     return localDraft.value;
   }
 
-  /** 附件块：先落一个带稳定 id 的占位块，再由本地核心回填摘要与名称。 */
-  async function attachFile(role: 'inline' | 'file'): Promise<EditorBlock | null> {
+  /**
+   * 附件块：字节经过前端，但 sha256、落盘、写库、入上传队列全在核心
+   * （形状见 `editor/attachmentWire.ts`）。
+   *
+   * 顺序不是可有可无：核心的 `attach_blob` 首次挂载会翻转派生列 `has_attachment`，
+   * 那是**在同一事务里推进笔记 rev** 的。所以先把编辑器待保存的内容落完（占位块还不进
+   * 正文，免得留一个假的"处理中"），再让核心写附件并接住它回的新 rev，最后才把带 sha256
+   * 的块写进正文。反过来的话就是我端到端里抓到的那条 `stale_edit（expected 7, actual 8）`：
+   * 用户插一张图，得到的却是"这条笔记在别处被改动了"并把界面切走。
+   */
+  async function attachFile(role: 'inline' | 'file', file: File | null): Promise<EditorBlock | null> {
     const targetId = noteId.value;
-    if (!targetId || writeBlocked.value) return null;
+    if (!targetId || !file || writeBlocked.value) return null;
+    debouncedSave.cancel();
+    await save();
+    if (noteId.value !== targetId) return null;
     const type = role === 'inline' ? 'image' : 'attachment';
     const block: EditorBlock = {
       id: newBlockId(),
@@ -274,31 +300,76 @@ export const useEditorStore = defineStore('editor', () => {
     const next = [...blocks.value];
     next.splice(index + 1, 0, block);
     blocks.value = next;
-    dirty.value = true;
-    saveState.value = 'pending';
     try {
-      const attachment = await callCommand<Attachment>(Commands.attachFile, { noteId: targetId, blockId: block.id, role });
-      const merged: EditorBlock = {
-        ...block,
-        attrs: {
-          ...block.attrs,
-          pending: false,
-          ...(attachment?.sha256 ? { sha256: attachment.sha256, ref: attachment.id ?? attachment.sha256 } : {}),
-          ...(attachment?.name ? { name: attachment.name } : {}),
-          ...(typeof attachment?.size === 'number' ? { size: attachment.size } : {}),
-          ...(attachment?.mediaType ? { mediaType: attachment.mediaType } : {}),
-        },
-      };
+      const attachment = await callCommand<Attachment>(Commands.attachFile, { ...(await toAttachPayload(targetId, block.id, role, file)) });
+      if (typeof attachment?.rev === 'number') rev.value = attachment.rev;
+      const merged: EditorBlock = { ...block, attrs: { ...attachmentAttrs(role, file.name, attachment) } };
       blocks.value = blocks.value.map((item) => (item.id === block.id ? merged : item));
+      if (attachment?.sha256) void ensureAttachmentUrl(attachment.sha256);
       if (attachment?.id) pendingAttachments.value = { ...pendingAttachments.value, [attachment.id]: attachment };
+      dirty.value = true;
+      saveState.value = 'pending';
       debouncedSave();
       return merged;
     } catch (error) {
-      const bridge = asBridgeError(error);
+      // 占位块撤干净就完事：正文从没写过它，所以这里不该再多存一版（白推进一次 rev）。
       blocks.value = blocks.value.filter((item) => item.id !== block.id);
+      if (error instanceof AttachmentTooLarge) {
+        toasts.push('attach.tooLarge', 'warn');
+        return null;
+      }
+      if (error instanceof AttachmentEmpty) {
+        toasts.push('attach.empty', 'warn');
+        return null;
+      }
+      const bridge = asBridgeError(error);
       if (bridge.code !== 'cancelled' && bridge.code !== 'aborted') toasts.push(bridge.messageKey, 'warn');
       return null;
     }
+  }
+
+  /**
+   * 显示用的 data URL 只活在内存里：写进块属性就等于写进 doc，而 doc 会随同步走 ——
+   * 那是把每个附件在正文里再存一份 base64（体积 +4/3，且每次编辑都拖着它）。
+   */
+  const attachmentUrls = ref<Record<string, string>>({});
+  const urlFetches = new Map<string, Promise<void>>();
+
+  function attachmentUrl(sha256: string | undefined): string | null {
+    if (!sha256) return null;
+    return attachmentUrls.value[sha256] ?? null;
+  }
+
+  /** 同一个 sha 只取一次；取不到就保持没有 URL，让 UI 显示占位而不是错误。 */
+  function ensureAttachmentUrl(sha256: string): Promise<void> {
+    if (attachmentUrls.value[sha256]) return Promise.resolve();
+    const inflight = urlFetches.get(sha256);
+    if (inflight) return inflight;
+    const p = (async () => {
+      try {
+        const url = toDataUrl(await callCommand<AttachmentData>(Commands.attachmentData, { sha256 }));
+        if (url) attachmentUrls.value = { ...attachmentUrls.value, [sha256]: url };
+      } catch {
+        // 附件缺就缺着显示占位：它不该把正文变成错误堆栈（INV：附件不阻塞文本）
+      } finally {
+        urlFetches.delete(sha256);
+      }
+    })();
+    urlFetches.set(sha256, p);
+    return p;
+  }
+
+  /**
+   * 全局快捷键（Shift+F）与工具条/命令面板共用同一个取文件入口：这里只递一个意图，
+   * 真正开选择器的是 RichEditor 里那颗隐藏的 `<input type=file>`。两处各开各的
+   * 选择器就会出现"快捷键那条测不到、也没带 accept 过滤"的分叉。
+   */
+  const attachRequest = ref<'inline' | 'file' | null>(null);
+  function requestAttach(role: 'inline' | 'file'): void {
+    attachRequest.value = role;
+  }
+  function clearAttachRequest(): void {
+    attachRequest.value = null;
   }
 
   function attachmentState(id: string | undefined): string | undefined {
@@ -350,7 +421,12 @@ export const useEditorStore = defineStore('editor', () => {
     discardLocalDraft,
     viewDraft,
     attachFile,
+    attachRequest,
+    requestAttach,
+    clearAttachRequest,
     attachmentState,
+    attachmentUrl,
+    ensureAttachmentUrl,
     schedule: () => debouncedSave(),
     cancelScheduled: () => debouncedSave.cancel(),
     reset,

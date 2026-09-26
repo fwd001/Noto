@@ -433,14 +433,24 @@ len(query) <= 2   → content 表 LIKE + COLLATE NOCASE（慢一个数量级但�
 
 ```
 插入图片/文件
-  ↓  读字节 → sha256 → 落盘 <data>/attachments/xx/<sha>（tmp + rename 原子写）
+  ↓  取字节：前端 file input → base64，或壳里选好的 localPath（二者恰好二选一，都给/都不给都拒）
+  ↓  核心算 sha256 → 落盘 <data>/attachments/xx/<sha>（tmp + rename 原子写）；单文件上限 32 MiB（读字节之前就拒）
   ↓  INSERT attachments(local_state='available', remote_state='unknown')
-  ↓  INSERT note_attachments(...)  —— 与 doc 修改同一事务
-  ↓  outbox: op='upload'
+  ↓  INSERT note_attachments(...)
+  ↓  outbox: op='upload'（键是 sha256，不是笔记 UUID）
+  ↓  首次挂载翻转 notes.has_attachment → 走 commit_edit，**笔记 rev +1** 并留一条 revision
 后台上传队列（独立于文本轮次，见 SYNC-PROTOCOL.md §9）
   ↓  清单里已存在同 sha → 直接 remote_state='present'，不重复上传
   ↓  上传后校验 size + 服务器 ETag → 'present'
 ```
+
+* **`attach_file` 必须把推进后的新 rev 回给调用方**：编辑器手里若还是旧 rev，它随后那次自动保存
+  就被判成 `stale_edit` —— 用户插一张图，看到的却是"这条笔记在别处被改动了"（端到端实测踩过）。
+  正确顺序：先落编辑器自己的改动 → 核心写附件 → 接住新 rev → 才把附件块写进正文。
+* **附件块本身进正文是编辑器的下一次保存做的事**：`attach_blob` 只写 `attachments` /
+  `note_attachments` / 派生列，不改 `notes.doc`。显示要的字节走 `attachment_data`（按 sha 取，
+  先校验是 64 位小写 hex —— 它会被拼进 blob 路径），且**只存在内存的 URL 表里**：写进块属性
+  就等于写进 doc、随同步把附件在正文里再存一份 base64。
 
 * 引用计数由 `note_attachments` 派生，**不存 `ref_count` 列**（缓存会漂移；需要时用一次索引扫描）。
 * blob 物理删除条件：引用计数为 0 **且** 该 sha 无 `pending/inflight` 上传 **且** `local_state='available'`。

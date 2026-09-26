@@ -67,6 +67,21 @@ const leakedKeys = async () => {
   return [...new Set(text.match(KEY_LEAK) ?? [])];
 };
 
+// 桥侧读数：放在所有步骤之前定义，步骤里才不必在意声明顺序（TDZ）。
+const callBridge = async (name, args = {}) => {
+  const r = await fetch(`http://127.0.0.1:17323/cmd/${name}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: URL_BASE },
+    body: JSON.stringify(args),
+  });
+  return r.json();
+};
+const liveNotes = async () => {
+  const rows = await callBridge('list_notes');
+  if (!Array.isArray(rows)) throw new Error(`list_notes 没返回数组：${JSON.stringify(rows).slice(0, 120)}`);
+  return rows;
+};
+
 /** 块序列指纹：类型 + 正文文本。重排类断言都要比这个，单看数量证明不了顺序。
  *  文本只取 .nb-content：把手字形（+ 和 ⠿）也在块元素里，按整块 innerText 会比不齐。 */
 const blockSig = () =>
@@ -254,6 +269,7 @@ await step('选中文字 → 浮动工具条出现、位置不压工具条、能
 
 const orderBeforeReload = await blockSig();
 
+
 await step('回列表能看到这条笔记', async () => {
   await page.click('[data-testid="nav-all"]', { timeout: 5000 }).catch(() => {});
   await page.waitForTimeout(600);
@@ -292,6 +308,35 @@ await step('重排落到库里了：刷新重开后块顺序与刷新前一致',
     throw new Error('加粗没落库：刷新后 strong 不见了');
   }
   return `${after.length} 块同序，加粗仍在`;
+});
+
+await step('插入图片：真选一个文件 → 显示出来，而正文里只留内容键', async () => {
+  // 这条边整条都是新的：曾经前端少发两个必填字段，点"插入图片/附件"必然 bad_args，
+  // 而没有任何测试走过它。选文件用隐藏的 <input type=file>（WebView 里就是原生选择器），
+  // 于是浏览器 dev 桥与真窗口是同一条代码路径 —— 这一步才谈得上"验过"。
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  const file = `${DATA_DIR}/e2e-attach.png`;
+  fs.writeFileSync(file, png);
+  await page.setInputFiles('[data-testid="attach-input"]', file);
+  const img = page.locator('[data-testid="editor-doc"] img.nb-image');
+  await img.last().waitFor({ timeout: 6000 });
+  const src = (await img.last().getAttribute('src')) ?? '';
+  if (!src.startsWith('data:image/png;base64,')) throw new Error(`图片没按附件的字节显示：${src.slice(0, 48)}`);
+  await page.waitForTimeout(1600); // 等自动保存落库
+  // 认笔记不能用标题：前面的步骤拖过块、转过代码块，标题是从"第一个文本块"派生的，
+  // 到这一步早就不是当初那句 E2E 笔记了。附件位 + 最近更新时间才是确定的判据。
+  const rows = await callBridge('list_notes', { limit: 500 });
+  const withFile = rows.filter((r) => r.hasAttachment);
+  const hit = withFile.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
+  if (!hit) throw new Error(`没有任何一条笔记带附件位（共 ${rows.length} 条）：${JSON.stringify(rows.slice(0, 3))}`);
+  const doc = JSON.stringify(await (await callBridge('get_note', { id: hit.id })).doc);
+  if (!doc.includes('sha256')) throw new Error(`正文里没有内容键，图就是凭空的：${doc.slice(0, 160)}`);
+  // base64 进了 doc = 每个附件在正文里再存一份（+4/3 体积），还会跟着每次编辑同步走
+  if (doc.includes('base64')) throw new Error('附件的 base64 被写进了正文');
+  return `图片显示 ✓ · 正文只存 sha256 ✓ · ${png.length} 字节落盘`;
 });
 
 await step('界面上没有漏出文案键名（编辑器 + 工具条）', async () => {
@@ -396,19 +441,6 @@ await step('恢复：只排期并留下可核对的标记，不静默改库', as
 });
 
 /** 直接问本地核心要活笔记列表：比"数界面上的行"稳，不受当前停在哪个视图影响。 */
-const callBridge = async (name, args = {}) => {
-  const r = await fetch(`http://127.0.0.1:17323/cmd/${name}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', origin: URL_BASE },
-    body: JSON.stringify(args),
-  });
-  return r.json();
-};
-const liveNotes = async () => {
-  const rows = await callBridge('list_notes');
-  if (!Array.isArray(rows)) throw new Error(`list_notes 没返回数组：${JSON.stringify(rows).slice(0, 120)}`);
-  return rows;
-};
 
 await step('服务器能力块：刚配上时说的是"还没探过"，不是"不支持"', async () => {
   // 走 UI 填表保存：顺带覆盖"空 id 的草案要落对 sync_accounts 那一行"（此前会静默不出站）

@@ -30,6 +30,17 @@ const COMMAND_CODES = [
   'proxy_credentials_pending',
   'serialize',
   'handler_panic',
+  // 下面这批是新增门禁（arch-check `hygiene:rust-error-codes-registered`）从 Rust 侧
+  // 扫出来、而这份手抄表当时漏掉的 —— 漏掉的后果不是报错，是那类错误全体退化成
+  // "操作没有成功，可以稍后再试"。两边都要有：arch-check 管登记，这里管真拿得到文案。
+  'read_failed',
+  'attachment_missing',
+  'too_large',
+  'no_default_folder',
+  'bad_action',
+  'sync_refused',
+  'sync_busy',
+  'unknown_account',
 ];
 
 describe('命令层错误文案', () => {
