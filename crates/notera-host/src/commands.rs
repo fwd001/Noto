@@ -279,6 +279,13 @@ pub struct AttachmentDataCmd {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PreviewTextCmd {
+    pub id: String,
+    pub rev: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountDraftCmd {
     #[serde(default)]
     pub id: String,
@@ -505,6 +512,12 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
         "attachment_data" => {
             let c: AttachmentDataCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.attachment_data(&c.sha256)?)
+        }
+        // 冲突面板的并排预览：前端一直在调这条，而核心没有 —— 于是它每次都是
+        // unknown_command，面板安静地退回卡片摘要（用户以为看到的就是那一版）。
+        "preview_text" => {
+            let c: PreviewTextCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            j(app.preview_text(&c.id, c.rev)?)
         }
         "stats" => j(app.stats()?),
         "sync_now" => {

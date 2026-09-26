@@ -734,6 +734,20 @@ impl App {
         }))
     }
 
+    /// 冲突并排预览：某条笔记在某个 rev 上的纯文本。
+    ///
+    /// 解析与抽取用**和写路径同一套** `notera_richtext`（`§10.3` 那条顺序），
+    /// 预览因此不会和列表/正文用的是"另一种算法"—— 两套算法迟早会给出不同的文本。
+    pub fn preview_text(&self, id: &str, rev: u64) -> Result<String, CmdError> {
+        let id = EntityId::parse(id).map_err(|_| CmdError::of("bad_id", false))?;
+        let doc = self.inner.store.revision_doc(&id, Rev(rev))?.ok_or_else(|| {
+            CmdError::of("not_found", false).with(serde_json::json!({ "kind": "note", "id": id.to_string(), "rev": rev }))
+        })?;
+        let parsed = notera_richtext::parse_from_value(&doc)
+            .map_err(|e| CmdError::of("corrupt_record", false).with(serde_json::json!({ "why": e.to_string() })))?;
+        Ok(notera_richtext::extract(&parsed).plain_text)
+    }
+
     /// 一致性快照（DATA-MODEL §15）。产物自带 sha256 与 user_version，恢复闸门靠它们。
     pub fn backup_db(&self, dest_dir: Option<&std::path::Path>) -> Result<notera_store::BackupInfo, CmdError> {
         self.inner.store.create_backup(dest_dir).map_err(CmdError::from)
@@ -2172,6 +2186,30 @@ mod tests {
         let missing = "ab".to_string() + &"0".repeat(62);
         let e = commands::dispatch(&app, "attachment_data", json!({ "sha256": missing })).expect_err("没有的附件不能返回空成功");
         assert_eq!(e.code, "attachment_missing");
+    }
+
+    #[test]
+    fn preview_text_shows_the_exact_revision_the_conflict_panel_is_comparing() {
+        // 冲突面板并排看的是"我方那一版 / 对方那一版"。它调的 `preview_text` 一度在
+        // 核心里根本不存在 → 每次 unknown_command，面板安静地退回卡片摘要，
+        // 用户以为看到的就是那一版，其实看的是同一条派生摘要。
+        let app = boot("preview");
+        let folder = app.default_folder_id().unwrap();
+        let note = app.create_note(&folder, doc("第一版的内容")).unwrap();
+        let eid = EntityId::parse(&note.id).unwrap();
+        app.edit_note(&eid, doc("第二版的内容"), Rev(note.rev)).unwrap();
+        let at = |rev: u64| {
+            commands::dispatch(&app, "preview_text", json!({ "id": note.id, "rev": rev }))
+                .unwrap()
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        };
+        assert!(at(1).contains("第一版"), "rev 1 的预览必须是第一版：{}", at(1));
+        assert!(at(2).contains("第二版"), "rev 2 的预览必须是第二版：{}", at(2));
+        assert_ne!(at(1), at(2), "两版预览一模一样 = 面板在做样子");
+        let e = commands::dispatch(&app, "preview_text", json!({ "id": note.id, "rev": 99 })).expect_err("没有的 rev 不许给空成功");
+        assert_eq!(e.code, "not_found");
     }
 
     #[test]

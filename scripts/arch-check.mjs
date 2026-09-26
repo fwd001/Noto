@@ -324,6 +324,18 @@ const unregisteredCodes = [...new Set(codeLines)].filter((c) => !errorKeys.has(c
 check('hygiene:rust-error-codes-registered', 'ARCHITECTURE-MAP §5（错误码 → 文案，一处不漏）', unregisteredCodes,
   `这些命令错误码没有对应的 error.* 文案（界面会退化成通用兜底）：${unregisteredCodes.join(', ')}`);
 
+// 前端声明的每一个命令名，核心 dispatch 里必须真有那条分支。
+// 缺席不会编译报错、也不会测试失败：调用时静默收到 unknown_command，而调用方普遍
+// 有"拿不到就退回已有内容"的兜底 —— 于是功能看着在，其实每次都没走到。
+// `preview_text`（冲突并排预览）就是这么藏了很久的一条死边。
+const declaredCommands = new Set(
+  [...read(join(ROOT, 'apps/desktop/src/api/types.ts')).matchAll(/^\s{2}[a-zA-Z]+:\s*'([a-z_]+)',$/gm)].map((m) => m[1]),
+);
+const handledCommands = new Set([...commandsSrc.matchAll(/^\s*"([a-z_]+)" =>/gm)].map((m) => m[1]));
+const missingCommands = [...declaredCommands].filter((n) => !handledCommands.has(n)).sort();
+check('edge:declared-commands-exist', 'ARCHITECTURE-MAP §5（命令面 = 前端声明的那一份）', missingCommands,
+  `前端声明了核心没有的命令（调用必得 unknown_command）：${missingCommands.join(', ')}`);
+
 // ------------------------------------------------------------------------- 输出 ---
 
 // "扫了 0 个文件"和"扫了但没问题"必须能区分开：前者是门禁在空转，
