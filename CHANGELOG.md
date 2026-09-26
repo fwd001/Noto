@@ -17,7 +17,7 @@
 | `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 35/35 |
 | `scripts/verify-tauri-window.mjs`（真窗口，走真 `invoke`） | 8/8，控制台 0 error |
 
-复现命令见 `docs/ARCHITECTURE-MAP.md` §8。
+复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
 ### 新增
 

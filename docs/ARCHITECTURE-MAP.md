@@ -9,7 +9,7 @@
 
 ```text
 1. 读本文件（模块注册表 §2 · 不变式 §3 · 改动路由 §4 · 禁止模式 §5）
-2. 读当前 Phase 与其出口条件（ARCHITECTURE.md §10 · TEST-PLAN.md §阶段出口条件）
+2. 读当前 Phase 与其出口条件（ARCHITECTURE.md §10 · TEST-PLAN.md §阶段出口条件）（另：分领域验收状态与 BLOCKED 项见 IMPLEMENTATION-STATUS.md）
 3. 读与本次改动相关的 ADR（§7 索引）
 4. 若触碰协议/数据：读 SYNC-PROTOCOL.md + DATA-MODEL.md 对应小节
 5. git status（确认工作树干净）+ 跑一遍当前测试基线，记录起点是否已绿
