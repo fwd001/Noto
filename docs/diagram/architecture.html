@@ -468,7 +468,7 @@ const MODULES = [
   {n:'SyncOperation（outbox 行）', f:'id:i64 · accountId · dedupeKey:unique · entityType · entityId · op:upsert|delete|purge|upload|download · payloadRev? · sha256? · state:pending|inflight|done|failed|superseded|blocked · attempts · nextRetryAt · lastError · createdAt · updatedAt'},
   {n:'SearchHit', f:'noteId · score:f32 · titleHit:bool · snippetHtml:SafeString（已转义） · matchStarts:u32[]'},
   {n:'MigrationPlan', f:'from:u32 · to:u32 · steps:MigrationStep{name,sql,needsRebuild,noTransaction} · backupPath'},
-  {n:'StoreStats', f:'notes:u32 · notesInTrash:u32 · folders:u32 · attachments:u32 · ftsEntries:u32 · dbBytes:u64 · searchGeneration:u64 · inflightOps:u32'}
+  {n:'StatsDto（store 侧叫 StoreStats，命令面按契约改名）', f:'notes:u32 · notesInTrash:u32 · folders:u32 · attachments:u32 · ftsEntries:u32 · dbBytes:u64 · searchGeneration:u64 · inflightOps:u32（待发：只算启用中的账户，本地哨兵账的留痕行不计）'}
  ],
  rules:[
   '禁止绕过 commit_* 直接 UPDATE 权威列（架构测试 grep 更新语句归属）',

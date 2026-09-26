@@ -125,6 +125,44 @@ pub struct SyncStatusDto {
     pub retryable: bool,
 }
 
+/// 库统计的对外视图。
+///
+/// 这条边以前是 `serde_json::to_value(StoreStats)` 直发 —— 存储层的字段名（`notes_trash`、
+/// `fts_rows`、`outbox_pending`）就这么漏到了 UI，而契约图和前端读的是
+/// `notesInTrash / ftsEntries / inflightOps`。TypeScript 的类型是断言不是校验，
+/// 于是设置页的"回收站 / 占用空间 / 待同步"三行恒为 `—`、侧栏回收站恒为 0，
+/// 而单元测试喂的是 camelCase 假数据，正好把这个洞盖住。
+/// 现在按命令面的规矩走 DTO：字段名是契约，存储层内部叫什么不算。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsDto {
+    pub notes: u32,
+    pub notes_in_trash: u32,
+    pub folders: u32,
+    pub attachments: u32,
+    pub fts_entries: u32,
+    pub db_bytes: u64,
+    pub search_generation: i64,
+    /// 待发的服务端操作数。口径见 `StoreStats::outbox_pending`：只算启用中的账户，
+    /// 本地哨兵账户的留痕行不计入，与 `SyncStatusDto::pending_ops` 同一个意思。
+    pub inflight_ops: u32,
+}
+
+impl From<StoreStats> for StatsDto {
+    fn from(s: StoreStats) -> Self {
+        Self {
+            notes: s.notes,
+            notes_in_trash: s.notes_trash,
+            folders: s.folders,
+            attachments: s.attachments,
+            fts_entries: s.fts_rows,
+            db_bytes: s.db_bytes,
+            search_generation: s.search_generation,
+            inflight_ops: s.outbox_pending,
+        }
+    }
+}
+
 // ---------------------------------------------------------------- DTO 入参 ---
 
 #[derive(Clone, Debug, Deserialize)]

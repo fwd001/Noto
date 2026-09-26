@@ -207,6 +207,8 @@ pub struct StoreStats {
     pub tombstones: u32,
     pub tombstones_purged: u32,
     pub dirty_notes: u32,
+    /// 待发操作数：只统计**启用中账户**的 pending/inflight/failed。
+    /// 本地哨兵账户（`local`）的留痕行不计入，否则这个数永远归不了零。
     pub outbox_pending: u32,
     pub conflicts_open: u32,
     pub fts_rows: u32,

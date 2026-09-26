@@ -924,7 +924,15 @@ impl Store {
             tombstones: one("SELECT COUNT(*) FROM tombstones")? as u32,
             tombstones_purged: one("SELECT COUNT(*) FROM tombstones WHERE purged = 1")? as u32,
             dirty_notes: one("SELECT COUNT(*) FROM notes WHERE rev <> sync_rev")? as u32,
-            outbox_pending: one("SELECT COUNT(*) FROM sync_operations WHERE state IN ('pending','inflight','failed')")? as u32,
+            // 「待发操作」只统计**会真往服务器发**的那些账户（启用中的）。本地哨兵账户
+            // （enabled=0）是"提交即入 outbox"的留痕账（I8：不依赖网络可达），引擎永远不消费它，
+            // 把它算进来这个计数就永远归不了零 —— 用户看到的是"同步卡住了"。
+            // 本地有未上传改动这件事由 dirty_notes 表达，两者不混。
+            outbox_pending: one(
+                "SELECT COUNT(*) FROM sync_operations o
+                  WHERE o.state IN ('pending','inflight','failed')
+                    AND EXISTS(SELECT 1 FROM sync_accounts a WHERE a.id = o.account_id AND a.enabled = 1)",
+            )? as u32,
             conflicts_open: one("SELECT COUNT(*) FROM sync_conflicts WHERE state = 'open'")? as u32,
             fts_rows: one("SELECT COUNT(*) FROM notes_fts")? as u32,
             user_version: migrate::current_version(&conn)?,

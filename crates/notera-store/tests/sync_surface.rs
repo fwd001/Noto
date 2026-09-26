@@ -489,3 +489,33 @@ fn probed_caps_survive_a_restart_and_null_means_never_probed() {
     assert_eq!(again.account_caps("acct-c").unwrap(), Some(0), "重启后探测结果必须还在");
     assert!(matches!(again.set_account_caps("nope", 1), Err(StoreError::Constraint(_))), "不存在的账户要报错");
 }
+
+#[test]
+fn settle_locates_a_row_by_entity_and_rev_and_touches_nothing_else() {
+    // 引擎结清待办时手里只有 (kind, id, rev)。按这三样定位必须精确：
+    // 猜错行 = 把另一条还没上传的待办标成已完成，那是静默漏同步。
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    let acct = notera_store::LOCAL_ACCOUNT_ID;
+    let n = create(&store, &folder, "第一版");
+    // 此时 local 名下有两行：默认本 + 笔记
+    assert_eq!(store.outbox_len(acct, &[OpState::Pending]).unwrap(), 2);
+
+    assert!(
+        store.outbox_settle(acct, EntityKind::Note, n.id.as_str(), n.rev.get() as i64, OpState::Done).unwrap(),
+        "按实体 + rev 必须能定位到那一行"
+    );
+    assert_eq!(store.outbox_len(acct, &[OpState::Done]).unwrap(), 1, "只结清指定的那一行");
+    assert_eq!(store.outbox_len(acct, &[OpState::Pending]).unwrap(), 1, "默认本那行不该被顺手标掉");
+
+    // rev 对不上 = 找不到，如实返回 false（而不是"随便结一行"）
+    assert!(!store.outbox_settle(acct, EntityKind::Note, n.id.as_str(), 999, OpState::Done).unwrap());
+    // 账户也在键里：别的账户没有这一行
+    assert!(!store.outbox_settle("acct-other", EntityKind::Note, n.id.as_str(), n.rev.get() as i64, OpState::Done).unwrap());
+    // 已 done 的行不会被第二次结清改写状态
+    assert!(!store.outbox_settle(acct, EntityKind::Note, n.id.as_str(), n.rev.get() as i64, OpState::Failed).unwrap());
+    assert_eq!(store.outbox_len(acct, &[OpState::Done]).unwrap(), 1, "重复结清不许把 done 改成 failed");
+    // kind 对不上同样不许命中：同 id/同 rev 也不会跨实体类型误结
+    assert!(!store.outbox_settle(acct, EntityKind::Folder, n.id.as_str(), n.rev.get() as i64, OpState::Done).unwrap());
+}

@@ -10,7 +10,7 @@
 pub mod commands;
 pub mod devserver;
 
-use commands::{AccountDraftCmd, AccountDto, CmdError, ConflictDto, ExportCmd, FolderDto, ImportCmd, ListNotesCmd, NoteDto, NoteListDto, SearchCmd, SearchHitDto, SyncStatusDto};
+use commands::{AccountDraftCmd, AccountDto, CmdError, ConflictDto, ExportCmd, FolderDto, ImportCmd, ListNotesCmd, NoteDto, NoteListDto, SearchCmd, SearchHitDto, StatsDto, SyncStatusDto};
 use notera_config::{AccountConfig, AppConfig, ConfigRepository, ProxyMode, ProxyProfile, TlsPolicyKind};
 use notera_core::{Clock, DeviceId, EntityId, EntityKind, Rev, SystemClock, Timestamp};
 use notera_store::{ApplyOp as StoreApplyOp, ConflictRow, Folder, Note, NoteListRow, NoteQuery, SearchPath, Store, StoreError};
@@ -479,9 +479,8 @@ impl App {
         Ok(serde_json::json!({ "sha256": a.sha256, "size": a.size, "mediaType": a.media_type }))
     }
 
-    pub fn stats(&self) -> Result<serde_json::Value, CmdError> {
-        let s = self.inner.store.stats()?;
-        Ok(serde_json::to_value(s).map_err(|_| CmdError::of("serialize", false))?)
+    pub fn stats(&self) -> Result<StatsDto, CmdError> {
+        Ok(self.inner.store.stats()?.into())
     }
 
     pub fn open_conflicts(&self) -> Result<Vec<ConflictDto>, CmdError> {
@@ -1695,11 +1694,39 @@ impl LocalPort for HostLocalPort {
             })
             .collect())
     }
-    /// outbox 状态回写目前**接不上**：引擎传回来的是 `dedupe_key`（甚至不是键，见下），
-    /// 而 `Store::outbox_state` 要的是行号 `id`。这里绝不用"看起来能编"的键去猜行号 ——
-    /// 猜错就是把别的实体的待办标成 Done（丢上传）。缺的是 store 侧按键定位的能力。
-    fn outbox_state(&self, key: &str, st: notera_sync::OutboxState, retry_at: Option<&str>) -> Result<(), LocalError> {
-        tracing::debug!(key, state = ?st, ?retry_at, "outbox 状态回写未接线（Store 需要按 dedupe_key 定位行）");
+    /// 结清某个实体某 rev 的待办。以前这里是**空实现**（注释说"Store 缺按键定位的能力"），
+    /// 后果是每一行都永远停在 `inflight`：设置页的"待同步"计数不会掉，`sync_operations`
+    /// 只增不清，而崩溃恢复说的"重放"也无从判断从哪重放。
+    /// 现在按 `(账户, kind, id, rev)` 精确结清 —— 匹配不到就记一条 warn，
+    /// 绝不"猜一行"来标完成。
+    ///
+    /// 引擎给的 `kind` 是**线上短标记**（n/f/a，用于远端路径），而 `sync_operations.entity_type`
+    /// 存的是长标记。这里就是这两种词汇唯一的翻译点（`local_views`/`outbox_take` 是反向那一条边）；
+    /// 认不出的标记直接放弃并留痕，不去猜数据库里叫什么。
+    fn outbox_settle(&self, kind: &str, id: &str, rev: u64, st: notera_sync::OutboxState) -> Result<(), LocalError> {
+        let Some(entity_kind) = EntityKind::from_tag(kind) else {
+            tracing::warn!(kind, id, rev, state = ?st, "待办结清收到未知的 kind 标记，已放弃（不猜词汇）");
+            return Ok(());
+        };
+        let Some(acct) = ConfigRepository::active(&self.0.config()).cloned() else {
+            return Ok(());
+        };
+        let mapped = match st {
+            notera_sync::OutboxState::Pending => notera_store::OpState::Pending,
+            notera_sync::OutboxState::Inflight => notera_store::OpState::Inflight,
+            notera_sync::OutboxState::Done => notera_store::OpState::Done,
+            notera_sync::OutboxState::Failed => notera_store::OpState::Failed,
+            notera_sync::OutboxState::Superseded => notera_store::OpState::Superseded,
+            notera_sync::OutboxState::Blocked => notera_store::OpState::Blocked,
+        };
+        let found = self
+            .0
+            .store()
+            .outbox_settle(&acct.id, entity_kind, id, rev as i64, mapped)
+            .map_err(store_err)?;
+        if !found {
+            tracing::warn!(account = %acct.id, kind, id, rev, state = ?st, "待办结清没找到匹配行（outbox 里这一条的状态不会变）");
+        }
         Ok(())
     }
     /// §11.4：把本轮贴上的租约记进 sync_state 的两列（诊断用）。
@@ -1943,6 +1970,27 @@ mod tests {
         assert_eq!(got["fontSize"], 15);
         // 偏好不是内容：不该产生任何待上传的东西
         assert_eq!(app.store().stats().unwrap().dirty_notes, 0);
+    }
+
+    #[test]
+    fn stats_command_emits_exactly_the_contract_keys_the_shell_reads() {
+        // 这条边的历史事故：`StoreStats` 被原样序列化，存储层字段名（notes_trash /
+        // fts_rows / outbox_pending）直接漏到 UI，而契约图和前端读的是
+        // notesInTrash / ftsEntries / inflightOps。TS 的类型是断言不是校验，
+        // 于是设置页"回收站 / 占用空间 / 待同步"三行恒为「—」、侧栏回收站恒为 0，
+        // 而单元测试喂的是 camelCase 假数据 —— 正好把洞盖住。键集合就是契约，逐项钉死。
+        let app = boot("stats");
+        let got = commands::dispatch(&app, "stats", json!({})).unwrap();
+        let mut keys: Vec<&str> = got.as_object().expect("stats 应是对象").keys().map(|k| k.as_str()).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["attachments", "dbBytes", "folders", "ftsEntries", "inflightOps", "notes", "notesInTrash", "searchGeneration"]
+        );
+        // 值也得接得上：全新库里没有待发操作（本地哨兵账户的留痕行不算队列）
+        assert_eq!(got["inflightOps"], 0, "没配置远端时待发队列必须是 0");
+        assert_eq!(got["notes"], 0);
+        assert_eq!(got["notesInTrash"], 0);
     }
 
     #[test]

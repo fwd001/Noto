@@ -343,6 +343,19 @@ await step('设置视图可打开（账户/代理表单存在）', async () => {
   return baseUrl > 0 ? '账户表单在' : '设置页在（无账户表单）';
 });
 
+await step('库统计真的接上了：五行都是数字，不是占位符', async () => {
+  // 这条边曾经把存储层的 StoreStats 原样发出去（snake_case：notes_trash / outbox_pending），
+  // 而界面读的是 notesInTrash / inflightOps。TS 类型是断言不是校验，于是这几行
+  // 全成了 formatNumber(undefined) 的「—」，前端单测喂 camelCase 假数据恰好把它盖住。
+  const card = page.locator('.stats');
+  await card.waitFor({ timeout: 4000 });
+  const text = await card.innerText();
+  if (text.includes('—')) throw new Error(`统计里有没接上的字段（显示成占位符）：${text.replace(/\s+/g, ' ')}`);
+  const numbered = text.split('\n').map((l) => l.trim()).filter((l) => /[0-9]/.test(l));
+  if (numbered.length < 5) throw new Error(`期望 5 行带数字的统计，实际只有 ${numbered.length} 行：${text.replace(/\s+/g, ' ')}`);
+  return numbered.join(' / ');
+});
+
 await step('界面上没有漏出文案键名（设置页）', async () => {
   const leaked = await leakedKeys();
   if (leaked.length > 0) throw new Error(`漏出键名：${leaked.join(', ')}`);

@@ -40,13 +40,21 @@ await step('页面里确实有 Tauri 运行时（不是浏览器兜底）', asyn
   if (!has) throw new Error('__TAURI_INTERNALS__ 不存在 → 这是普通浏览器页面');
   return 'invoke 通道在';
 });
-await step('invoke 走真命令通道：stats 返回真实库统计', async () => {
+await step('invoke 走真命令通道：stats 的键就是契约那 8 个', async () => {
   const v = await page.evaluate(async () => {
     const core = window.__TAURI_INTERNALS__;
     return await core.invoke('notera_command', { name: 'stats', args: {} });
   });
-  if (!v || typeof v.notes !== 'number') throw new Error(`stats 形状不对：${JSON.stringify(v).slice(0, 120)}`);
-  return `notes=${v.notes} folders=${v.folders} user_version=${v.user_version}`;
+  // 这条断言是活的序列化证据：界面上的每一个数字都靠这些名字取到。
+  // 以前这里读的是 `v.user_version`（存储层的 snake_case 原名），而前端读的是 camelCase ——
+  // 两个消费方各自对了一半，于是谁都没发现 wire 上是哪套名字。
+  const want = ['attachments', 'dbBytes', 'folders', 'ftsEntries', 'inflightOps', 'notes', 'notesInTrash', 'searchGeneration'];
+  const keys = Object.keys(v || {}).sort();
+  if (keys.join(',') !== [...want].sort().join(',')) {
+    throw new Error(`stats 键集合漂了：${keys.join(', ')}（期望 ${want.join(', ')}）`);
+  }
+  for (const k of want) if (typeof v[k] !== 'number') throw new Error(`${k} 不是数字，界面会显示占位符：${JSON.stringify(v[k])}`);
+  return `notes=${v.notes} 回收站=${v.notesInTrash} 附件=${v.attachments} 待发=${v.inflightOps} 占用=${v.dbBytes}B`;
 });
 const stamp = Date.now();
 const title = `真窗口笔记 ${stamp}`;

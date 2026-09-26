@@ -205,8 +205,8 @@ impl LocalPort for FakeLocal {
     fn outbox_take(&self, _limit: usize) -> Result<Vec<OutboxItem>, LocalError> {
         Ok(Vec::new())
     }
-    fn outbox_state(&self, key: &str, st: OutboxState, _retry: Option<&str>) -> Result<(), LocalError> {
-        self.outbox_states.lock().unwrap().push((key.into(), st));
+    fn outbox_settle(&self, kind: &str, id: &str, rev: u64, st: OutboxState) -> Result<(), LocalError> {
+        self.outbox_states.lock().unwrap().push((format!("{kind}:{id}:{rev}"), st));
         Ok(())
     }
     fn cached_manifest(&self) -> Option<Vec<u8>> {

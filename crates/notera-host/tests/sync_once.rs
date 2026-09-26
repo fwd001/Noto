@@ -169,6 +169,26 @@ async fn one_round_carries_a_local_note_to_a_second_device() {
     let stats = a.app.sync_once().await.expect("A 的一轮");
     assert_eq!(stats.outcome, notera_sync::RoundOutcome::Converged, "{stats:?}");
     assert!(stats.pushed >= 1);
+    // 队列得真的清空：outbox 停在 inflight 的话，设置页的"待同步"计数永远不掉，
+    // 而且这张表只会一直长。
+    let acct = a.account_id();
+    assert_eq!(
+        a.app.store().outbox_len(&acct, &[notera_store::OpState::Inflight]).unwrap(),
+        0,
+        "一轮跑完不许留下『进行中但没结清』的待办"
+    );
+    assert!(
+        a.app.store().outbox_len(&acct, &[notera_store::OpState::Done]).unwrap() >= 1,
+        "推上去的那条要留下 done 痕迹，而不是凭空消失"
+    );
+    assert_eq!(a.app.store().stats().unwrap().outbox_pending, 0, "同步成功后不该还有未完成操作");
+    // 本地哨兵账户（enabled=0）是"提交即入 outbox"的留痕账，引擎永不消费它。
+    // 它留在这儿正是 outbox_pending 不许把它算进来的原因 —— 算进去，用户看到的
+    // "待同步"就永远归不了零，长得像同步卡死。
+    assert!(
+        a.app.store().outbox_len(notera_store::LOCAL_ACCOUNT_ID, &[notera_store::OpState::Pending]).unwrap() >= 1,
+        "哨兵账户的留痕行不该被同步顺手改掉"
+    );
 
     let b = Device::boot("pull", &url);
     let stats_b = b.app.sync_once().await.expect("B 的一轮");

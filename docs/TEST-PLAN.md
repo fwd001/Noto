@@ -375,6 +375,8 @@
 | CM-SV-08 | §5 探测的**接线位置**（`notera-host/tests/sync_once.rs`） | 启动路径先探后装：装出来的适配器带的就是实测位图（注入"条件写无效"→ 该会话应选 S2 而非默认 S1）；当天不重复探测；探测未完成时 `cap_mask` 保持 NULL 且发出可见提示；随后一轮同步把本地笔记推到真服务器、第二台设备原样拉回 | 请求日志里所有探测请求的 seq 都早于任何真实读写；`one_round_carries_a_local_note_to_a_second_device` 标题逐字一致 | 已实测（3 例） |
 | CM-SV-09 | §11.4 租约的适配器侧（`notera-webdav/tests/lease.rs`） | 贴上/他人可见/release；自己的旧租约必须被覆盖而不是"别人占着"；过期即失效；`PROPFIND` 坏掉时仍能靠"从清单学到的对手"让路；不可达时发布报错但**读**不许挡住同步 | 6 例全绿；写租约只碰 `locks/`，不碰 records/manifest/attachments | 已实测（6 例） |
 | CM-SV-10 | §11.4 租约的决策与端到端（`notera-sync/tests/engine.rs`、`notera-host/tests/sync_once.rs`） | 开关只看 §5 结果（S3 或无强 ETag 才开）；轮次开始贴自己的；**写清单之前**别人新鲜 → 不提交清单、改动保持 dirty、状态显示 `sync.leaseHeld`；过期/自己的/读不出来 都不挡公告；贴不上不中止本轮 | 弱服务器上第二台设备让路（清单 sha 不变、记录仍上传、`dirty_notes==1`），强 ETag 服务器上一个 `/locks/` 请求都不发 | 已实测（引擎 7 例 + 端到端 2 例） |
+| CM-SV-11 | outbox 结清的两套 kind 词汇（`notera-store/tests/sync_surface.rs`、`notera-host/tests/sync_once.rs`） | 结清按 `(账户, entity_type, entity_id, payload_rev)` 精确命中；rev 对不上、账户对不上、kind 对不上都返回 false 而**不随便结一行**；已 done 的行不被第二次结清改写。端到端跑真的一轮：待发队列必须归零、`done` 行留在表里、哨兵账户的留痕行不许被顺手改掉 | 变异测过两条：把 `entity_type` 换成线上短标记（`n`）→ store 单测与端到端同时变红；把"待同步"计数的 `enabled=1` 过滤去掉 → 端到端 `left: 2` 变红 | 已实测（store 1 例 + 端到端 1 例） |
+| CM-SV-12 | 命令面 `stats` 的键名 == 界面读的键名（`notera-host` 内 `stats_command_emits_…`、`scripts/verify-app.mjs`、`scripts/verify-tauri-window.mjs`、arch-check `edge:stats-dto-covers-ui-reads`） | 走真 `dispatch`/真 `invoke` 拿到的对象，键集合必须恰为契约那 8 个（camelCase）；浏览器里设置页五行全是数字而非 `—`；架构门禁扫前端每一处 `settings.stats.X` 与 `StoreStats` 声明 | 变异测过三条：删掉 `#[serde(rename_all)]` → Rust 断言与 arch-check 双双变红；改任一个 DTO 字段名 → arch-check 指名那个键与那个文件；把窗口门禁的类型判断改坏 → 该步 FAIL | 已实测 |
 
 ## 质量闸门
 

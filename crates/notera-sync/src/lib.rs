@@ -44,7 +44,11 @@ pub trait LocalPort: Send + Sync {
     /// 记录冲突（保留双方）
     fn record_conflict(&self, d: &Decision, local: &LocalView, remote: &RemoteView) -> Result<(), LocalError>;
     fn outbox_take(&self, limit: usize) -> Result<Vec<OutboxItem>, LocalError>;
-    fn outbox_state(&self, dedupe_key: &str, st: OutboxState, retry_at: Option<&str>) -> Result<(), LocalError>;
+    /// 结清某个实体某 rev 的待办。参数刻意是 `kind/id/rev` 而不是某个"键"：
+    /// 引擎手里只有这三样（`Decision.key` 就是 `(kind, id)`），以前把它当
+    /// `dedupe_key` 传下去，实现方要么接不上、要么猜错行 —— 猜错就是把别人的
+    /// 待办标成已完成。
+    fn outbox_settle(&self, kind: &str, id: &str, rev: u64, st: OutboxState) -> Result<(), LocalError>;
     /// §11.4：把本轮贴上的租约记进本地状态（诊断用：出问题时能看出"当时我以为谁在写"）。
     /// 允许空实现 —— 它不丢数据，只少一条线索。
     fn record_lease(&self, _token: &str, _expires_at: &str) -> Result<(), LocalError> {
@@ -395,8 +399,8 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
         // 推成功了但**公告还没提交**的一批：等清单 CAS 成功再落 `MarkSynced`。
         // 早于公告就标成已同步 = 清单提交一失败（网络抖一下、CAS 让路）这批改动
         // 再也不会被重新公告，别的设备永远看不见（§11.3 C4 要的正是"清单重放"）。
-        let mut await_announce: Vec<(String, String, u64, String)> = Vec::new();
-        let mut lmap: BTreeMap<(String, String), &LocalView> =
+        let mut await_announce: Vec<(String, String, u64)> = Vec::new();
+        let lmap: BTreeMap<(String, String), &LocalView> =
             locals.iter().map(|l| (l.key(), l)).collect();
         for d in plan.pushes() {
             if st.requests >= self.cfg.round_request_cap {
@@ -417,19 +421,19 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                     st.bytes_up += wire.len() as u64;
                     st.pushed += 1;
                     written.push(plan::entry_of(l, wire.len() as u64));
-                    await_announce.push((l.kind.clone(), l.id.clone(), l.rev, d.key.1.clone()));
+                    await_announce.push((l.kind.clone(), l.id.clone(), l.rev));
                 }
                 Ok(_) => {
                     // 写未通过复验：不得记为已提交（webdav 层契约）
-                    let _ = self.local.outbox_state(&d.key.1, OutboxState::Failed, None);
+                    let _ = self.local.outbox_settle(&l.kind, &l.id, l.rev, OutboxState::Failed);
                 }
                 Err(RemoteError::Precondition) => {
                     // 有人先写了：本轮该实体让路，重算在下轮
-                    let _ = self.local.outbox_state(&d.key.1, OutboxState::Pending, None);
+                    let _ = self.local.outbox_settle(&l.kind, &l.id, l.rev, OutboxState::Pending);
                     st.outcome = RoundOutcome::Partial;
                 }
                 Err(e) => {
-                    let _ = self.local.outbox_state(&d.key.1, OutboxState::Failed, None);
+                    let _ = self.local.outbox_settle(&l.kind, &l.id, l.rev, OutboxState::Failed);
                     if e.halts_round() {
                         return (RoundStats { outcome: RoundOutcome::Failed, ..st }, vec![self.fail_event(&e)]);
                     }
@@ -542,13 +546,13 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                     match self.remote.commit_manifest(&next.to_wire(), new_etag.as_deref()).await {
                         Ok(e) => {
                             // 公告成功了，这批才算"已同步"；outbox 也在此刻结清。
-                            for (kind, id, rev, dedupe) in &await_announce {
+                            for (kind, id, rev) in &await_announce {
                                 let _ = self.local.apply(vec![ApplyOp::MarkSynced {
                                     kind: kind.clone(),
                                     id: id.clone(),
                                     rev: *rev,
                                 }]);
-                                let _ = self.local.outbox_state(dedupe, OutboxState::Done, None);
+                                let _ = self.local.outbox_settle(kind, id, *rev, OutboxState::Done);
                             }
                             let _ = self.local.apply(vec![
                                 ApplyOp::StoreManifest { wire: next.to_wire(), etag: e.clone(), seq: next.seq },

@@ -322,6 +322,29 @@ impl Store {
         })
     }
 
+    /// 结清某个实体某 rev 的待办（引擎手里只有"kind/id/rev"，没有行号也没有 dedupe_key，
+    /// 所以定位只能按这三样）。返回 `false` = 没有匹配的待办行：调用方要能区分
+    /// "结清了"和"没找到"，否则 outbox 会安静地停在 inflight，队列计数永远不掉。
+    /// 只动 pending/inflight：`failed` 行归退避逻辑管，`done`/`superseded` 不该被改写。
+    ///
+    /// `kind` 刻意是 `EntityKind` 而不是字符串：`entity_type` 列写的是长标记
+    /// （note/folder/attachment），而同步线上飘的是短标记（n/f/a）。这里收字符串的话，
+    /// 传错词汇编译能过、UPDATE 匹配 0 行、待办静静停在 inflight —— 实测就这么坏过。
+    pub fn outbox_settle(&self, account: &str, kind: EntityKind, id: &str, rev: i64, st: OpState) -> Result<bool, StoreError> {
+        let account = account.to_string();
+        let id = id.to_string();
+        let st = st.as_str().to_string();
+        self.write_tx(|tx, now| {
+            let n = tx.execute(
+                "UPDATE sync_operations SET state = ?5, updated_at = ?6
+                  WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3 AND payload_rev = ?4
+                    AND state IN ('pending','inflight')",
+                params![account, rows::kind_tag(kind), id, rev, st, now],
+            )?;
+            Ok(n > 0)
+        })
+    }
+
     pub fn outbox_len(&self, account: &str, states: &[OpState]) -> Result<u32, StoreError> {
         let conn = self.read()?;
         let list: Vec<String> = if states.is_empty() {

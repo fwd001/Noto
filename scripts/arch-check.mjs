@@ -230,6 +230,42 @@ function fsInUx(list) {
   return list.filter((p) => !p.includes('vitest.config') && !p.includes('.spec.'));
 }
 
+// --------------------------------------------------- stats 这条边的键名不许漂 ---
+
+// 这里守的是一起真实事故：`App::stats` 曾经把存储层的 `StoreStats` 原样序列化发给界面，
+// 于是 wire 上是 snake_case 的 notes_trash / fts_rows / outbox_pending，而契约图与界面
+// 读的是 notesInTrash / ftsEntries / inflightOps。TypeScript 的类型是断言不是校验，
+// undefined 悄悄变成占位符 —— 设置页"回收站 / 占用空间 / 待同步"三行恒为 —，
+// 侧栏回收站恒为 0，而前端单测喂的正是 camelCase 假数据，把这个洞完整盖住了。
+// 规则：界面能读到的每一个 stats 键，核心那份 DTO 必须真的发得出来。
+const commandsSrc = read(join(ROOT, 'crates/notera-host/src/commands.rs'));
+// 结构体上方紧邻的属性行也要一起看：光有 snake_case 字段名 + camel() 换算是自欺，
+// 真正把 wire 变成 camelCase 的是 serde 的 rename_all（实测过"属性被删、门照样绿"）。
+const statsHeader = /#\[serde\(rename_all = "camelCase"\)\]\s*\npub struct StatsDto \{([\s\S]*?)\n\}/.exec(commandsSrc);
+const statsBlock = statsHeader?.[1] ?? '';
+const camel = (s) => s.replace(/_+([a-z0-9])/g, (_, c) => c.toUpperCase());
+const statsDtoKeys = new Set([...statsBlock.matchAll(/^\s*pub ([a-z0-9_]+):/gm)].map((m) => camel(m[1])));
+const statsTypesTs = read(join(ROOT, 'apps/desktop/src/api/types.ts'));
+const declaredStats = [
+  ...[...statsTypesTs.matchAll(/export interface StoreStats \{([\s\S]*?)\n\}/g)].flatMap((m) =>
+    [...m[1].matchAll(/^\s*(\w+)\??\s*:/gm)].map((x) => x[1]),
+  ),
+];
+const statsReads = [];
+for (const f of uiFiles) {
+  for (const m of read(f).matchAll(/\b(?:settings\.stats|stats\.value)\??\.([A-Za-z][A-Za-z0-9_]*)/g)) {
+    statsReads.push({ key: m[1], at: rel(f) });
+  }
+}
+const statsDrift = statsHeader
+  ? [
+      ...declaredStats.filter((k) => !statsDtoKeys.has(k)).map((k) => `${k}  <- api/types.ts:StoreStats`),
+      ...statsReads.filter((r) => !statsDtoKeys.has(r.key)).map((r) => `${r.key}  <- ${r.at}`),
+    ]
+  : ['StatsDto 没有 #[serde(rename_all = "camelCase")]，或结构体没找到（wire 会是 snake_case，界面一律读不到）'];
+check('edge:stats-dto-covers-ui-reads', 'ARCHITECTURE-MAP §5（命令面 DTO = 界面读到的键）', [...new Set(statsDrift)],
+  `界面读到/声明了核心发不出的 stats 键（会静默变成 — 或 0）：\n    ${[...new Set(statsDrift)].join('\n    ')}`);
+
 // ------------------------------------------------------------------------- 输出 ---
 
 // "扫了 0 个文件"和"扫了但没问题"必须能区分开：前者是门禁在空转，

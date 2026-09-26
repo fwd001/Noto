@@ -320,6 +320,17 @@ CREATE TABLE sync_operations (                -- 持久化 outbox：崩溃可恢
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
+-- `entity_type` 用的是**库里长标记**（note/folder/attachment），而同步线上飘的是
+-- **短标记**（n/f/a，见 SYNC-PROTOCOL §2 的路径 `/.notes/n/<id>.json`）。两套词汇之间
+-- 的唯一翻译点是 `notera-host` 的适配器；`Store::outbox_settle` 因此收 `EntityKind`
+-- 而不是字符串 —— 收字符串时传错词汇编译能过，只是 UPDATE 匹配 0 行、待办静默停在
+-- inflight（实测坏过：设置页"待同步"永远不掉，`sync_operations` 只增不清）。
+--
+-- 结清按 `(account_id, entity_type, entity_id, payload_rev)` 精确定位，且只动
+-- pending/inflight；匹配不到就返回 false 并留 warn，绝不"猜一行"标完成。
+--
+-- 「待发操作」计数（设置页那行）只统计**启用中账户**的行：`local` 哨兵账户
+-- （enabled=0）是"提交即入 outbox"的留痕账，引擎永不消费它，算进来这个数永远归不了零。
 
 CREATE TABLE sync_conflicts (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
