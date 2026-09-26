@@ -187,9 +187,10 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 
 | 门禁 | 结果 | 怎么复现 |
 |---|---|---|
-| Rust 测试 | 457 通过 / 0 失败 / 0 ignored（50 个测试二进制） | `cargo test --workspace` |
+| Rust 测试 | 462 通过 / 0 失败 / 0 ignored（51 个测试二进制） | `cargo test --workspace` |
 | 前端 | 169 通过（17 文件）、`vue-tsc` 无错误、构建 212 KB→gzip 73 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
 | 架构适应度 | 24/24（最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |
+| L5 崩溃注入 | 9 个提交点逐个杀死真子进程 + 重启收敛（`crash_recovery`，2 条测试） | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
 | 浏览器端到端 | 35/35（真 Rust 核心，非 mock；含"设置页存服务器 → 能力块读回"、"库统计五行全是数字"、"删除 → 回收站 → 恢复 → 永久删除"、"勾一个文件夹 → 包就只有那一棵子树"、"侧栏建子文件夹 → '移动到'选得到"五条真实往返） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
 | 真窗口 | 8/8（invoke 的 `stats` 键集合 == 契约那 8 个 → 建笔记→落库→刷新读回→点开正文，控制台 0 error） | `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223 target/debug/notera-desktop.exe` + `node scripts/verify-tauri-window.mjs` |

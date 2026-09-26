@@ -176,6 +176,9 @@ impl Store {
         let tx = guard.transaction()?;
         let out = f(&tx, &now)?;
         tx.commit()?;
+        // 「写本地」这一刀刻意落在 commit **之后**：这才是"事务已经在了、
+        // 但进程还没来得及往下走"的那个真实窗口（唯一写入口，所以每条写路径都覆盖）。
+        notera_core::crash_point("after_local_write");
         Ok(out)
     }
 

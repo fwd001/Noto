@@ -8,8 +8,9 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 457 通过 / 0 失败 / 0 ignored（50 个测试二进制） |
+| `cargo test --workspace` | 462 通过 / 0 失败 / 0 ignored（51 个测试二进制） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
+| L5 崩溃注入 `--test crash_recovery` | 9 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零 |
 | 前端 | 169 通过（17 文件）；`vue-tsc --noEmit` 无错误；构建 212 KB → gzip 73 KB |
 | `scripts/arch-check.mjs` | 24/24 |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
@@ -43,6 +44,10 @@
 - **删除按钮对屏幕阅读器念的是"删除文件夹"**：笔记行内那颗"把这条移到最近删除"的按钮，`aria-label`/`title` 复用了 `sidebar.deleteFolder` —— 读屏用户听到的是错的动词和错的对象；而编辑器工具栏那颗直接把导航项的名字（"最近删除"）当成动作按钮的文案，看不出点了会发生什么。改成 `list.moveToTrash`（移到最近删除，作可访问名与悬停提示）+ 可见文案"删除"（比原来更短，不吃窄栏的行宽）
 
 ### 修掉的静默错误（都是"看着在用、其实没接线"）
+
+- **§20 崩溃注入第一次真的落地**（`NOTERA_CRASH_AT` 此前在整个 `crates/` 里一次都没出现过，而协议把"每一步失败之后数据仍可恢复"写成硬约束）。`notera_core::crash_point(点名)` + 九个提交点插桩：`after_local_write`（`write_tx` 唯一写入口，commit 之后）、`before/after_records_push`、`before/after_apply`、`before/after_manifest_commit`、`before/after_attachment_upload`。测试**真的 spawn 子进程**再用 `process::exit(77)` 杀死自己：在同一进程里 panic + `catch_unwind` 会跑析构，那测的不是"断电级"中途死亡。只活在 debug 构建里（正式产物不留"一个环境变量就能让应用自杀"的开关），且注入点名单一处在 `CRASH_POINTS`，文档/插桩/测试共用，防"点名拼错却照样绿"。每个点都要求**死法正确**（退出码 77）：正常退出说明这点没人经过，panic 说明进程是被别的原因弄挂的 —— 两种都判红
+- **公告已经落到服务器、本地却没结清：这条改动永远等不到下一轮**（崩溃注入照出来的第一个真缺陷）。崩在 `after_manifest_commit`（PUT 清单成功、`MarkSynced` 之前）之后，那一篇是 `rev=3 / sync_rev=0` 的脏行，而远端清单里已经公告了同样的 rev 与哈希 —— 于是 P7 判 `NoOp`，`NoOp` 什么都不做，那行待办永远没人回头结：设置页的"待同步"计数就此永久挂着（§18 要求它诚实）。现在引擎在 P7 之外补一步：本地脏 + 远端已公告同一 rev 且哈希一致 + 两侧都不是删除/永久删除 → 就地 `MarkSynced` + 结清 outbox
+- **状态已经满足的附件待办永远不会被关掉**（同一道门照出来的第二个）。附件队列是按 `attachments.local_state / remote_state` 挑活的，同一份字节被反复引用时却会重复入队 —— 状态已满足的那些行根本不会被取出，也就永远没人去关它。`Store::settle_satisfied_attachment_ops` 按方向分开收尾（`upload` 看服务器有没有、`download` 看本地有没有；混成一个 OR 会把"本地还缺着"的下载单也顺手关掉，那才是真丢数据）
 
 - **CI-CD 规定的那条 lint 门禁此前根本跑不起来**：`cargo clippy --workspace --all-targets -- -D warnings` 先是报 **3 条编译错误**（`notera-richtext` 的零宽字符测试用字面不可见字符写夹具，触发 `invisible_character_location`），修掉后又露出 40 条 warning。现在按 CI-CD 那一行原样实测 `exit=0`。分两类处理：能真修的直接修（`sort_by_key`、`map_or`→`is_some_and`、`entry` 的 vacant 分支、`Ok(x?)`→`x?`、重复的 `#[derive(Default)]`、`as_bytes().len()`、以及把"常量断言"改成 `const _: () = assert!(…)` —— 从"跑到才红"提前到**编译不过**）；三类"照 clippy 建议改就要动结构"的加**带理由的窄范围 allow**：形参本身就是表列的三个内部写入函数（`too_many_arguments`）、两处以"复杂类型"为被测对象的签名哨兵（`type_complexity`：抽成别名等于用被检查的写法去检查它）、能力探测那处"一项一次往返、失败就地早退"的增量填充（`field_reassign_with_default`）。没有一处是为了变绿而关掉真问题
 
@@ -98,7 +103,6 @@
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
 
 - **`cargo fmt --check` 本机跑不了 → BLOCKED**：原因 = `stable-x86_64-pc-windows-gnu` 工具链没装 `rustfmt` 组件（`error: 'cargo-fmt.exe' is not installed`）；影响 = CI-CD 的 `format` 那一环没有本地等价证据，格式漂移只会在 CI 上第一次暴露；解除条件 = `rustup component add --toolchain stable-x86_64-pc-windows-gnu rustfmt`（要联网，且会改本机工具链，所以没有擅自动手）
-- **崩溃注入（§20 / TEST-PLAN L5）尚未实现**：`NOTERA_CRASH_AT` 在整个 `crates/` 里一次都没出现过 —— 协议把"每一步失败之后数据仍可恢复"写成硬约束，而今天没有任何机器证据证明它在写本地/写附件/写 manifest/pull/apply/commit 这些点上真的成立。已有的是**中途失败**类证据（`notera-test-webdav` 的注入开关、412/降级、断网），不是**进程被杀**类证据。这是接下来第一优先要补的洞
 - **`scripts/verify-app.mjs` 不是纯黑盒**：总指令 §23 要求核心 UAT 只用点击/输入/键盘/拖放，禁止直接调 Rust command；这一步今天大量用 `callBridge(...)` 复核库内真实状态（这是它值钱的地方，界面说成功而库里没有就算失败）。要按 §23 再立一条**只碰界面**的黑盒 lane，而不是把现有的状态复核拆掉 —— 两者用途不同，都留着
 
 - **文件夹树在界面上截断到 64 个**：`flattenTree(roots, limit = 64)` 是侧栏"移动到"和导出选择器共用的上限，超过 64 个文件夹的库会**静默少列**后面的（不报错、不提示）。深层子树现在能正常出现了，这个上限才第一次真正生效，因此必须记下来：要么去掉上限并改为虚拟列表，要么在界面上明说"只显示前 64 个"。属于交互取舍，按 §9 走人工评审，不在本轮自行改

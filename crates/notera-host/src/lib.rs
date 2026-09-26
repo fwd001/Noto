@@ -1305,8 +1305,12 @@ impl App {
                     continue;
                 }
             };
+            notera_core::crash_point("before_attachment_upload");
             match remote.put_attachment(&job.sha256, &bytes).await {
                 Ok(()) => {
+                    // 字节已经在服务器上、账上还没标 present：崩在这里必须既不重复传、
+                    // 也不留下"以为没传"的悬账（内容寻址 + 复验就是为这一刻准备的）。
+                    notera_core::crash_point("after_attachment_upload");
                     let _ = self.inner.store.set_attachment_states(&job.sha256, None, Some("present"));
                     let _ = self.inner.store.finish_attachment_ops(&job.sha256, true);
                     up += 1;
@@ -1348,6 +1352,14 @@ impl App {
         if up + down > 0 {
             // 附件到位 = 列表里的缩略图/占位要重画，走同一条事件回流
             self.emit(BusEvent::NotesChanged { ids: vec![] });
+        }
+        // 状态已满足却还挂着的附件单要关掉：同一份字节被反复引用时会重复入队，
+        // 而队列按状态挑活，那些行永远不会被取出，也就永远没人结它 ——
+        // 表现是"待同步"计数永久不掉（§18 要求这个数诚实）。
+        match self.inner.store.settle_satisfied_attachment_ops() {
+            Ok(n) if n > 0 => tracing::debug!(n, "附件待办已按状态结清"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(%e, "附件待办结清失败，计数可能虚高"),
         }
         (up, down, failed)
     }

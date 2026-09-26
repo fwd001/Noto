@@ -393,7 +393,31 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
         };
         let plan = Plan::build(&locals, &remotes);
 
+        // P7「内容已经一样」不等于"本轮无事可做"就完事：本地这条可能**还挂着脏**
+        // —— 上一轮公告已经落到服务器、却还没来得及把本地结清（进程正好崩在那里）。
+        // 此时远端 rev 与内容哈希都对得上，就把这一条按已同步收尾；不收的话它永远
+        // 不会被任何一轮再处理，设置页的"待同步"计数就此永久不掉（§18 要求诚实）。
+        for l in &locals {
+            if !l.dirty() || l.deleted_at.is_some() || l.purged_at.is_some() {
+                continue;
+            }
+            let Some(r) = remotes.iter().find(|r| r.kind == l.kind && r.id == l.id) else { continue };
+            if r.purged || r.deleted_at.is_some() || r.rev != l.rev {
+                continue;
+            }
+            if !r.hash.as_deref().is_some_and(|h| notera_core::same_content_hash(h, &l.content_hash)) {
+                continue;
+            }
+            let _ = self.local.apply(vec![ApplyOp::MarkSynced {
+                kind: l.kind.clone(),
+                id: l.id.clone(),
+                rev: l.rev,
+            }]);
+            let _ = self.local.outbox_settle(&l.kind, &l.id, l.rev, OutboxState::Done);
+        }
+
         // ③ push 本地变更（先实体，后清单 —— R2）
+        notera_core::crash_point("before_records_push");
         let mut written: Vec<EntryRef> = Vec::new();
         // 推成功了但**公告还没提交**的一批：等清单 CAS 成功再落 `MarkSynced`。
         // 早于公告就标成已同步 = 清单提交一失败（网络抖一下、CAS 让路）这批改动
@@ -442,6 +466,8 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
         }
 
         // ④ pull 远端变更
+        notera_core::crash_point("after_records_push");
+        notera_core::crash_point("before_apply");
         for d in plan.pulls() {
             if st.requests >= self.cfg.round_request_cap {
                 st.outcome = RoundOutcome::Partial;
@@ -521,6 +547,7 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
         }
 
         // ⑥ CAS 提交清单（本轮最后一步 —— R2）
+        notera_core::crash_point("after_apply");
         // 304 轮次手里没有清单正文：回落到上一轮缓存，否则本地变更将永远无法公告。
         let mut manifest = manifest;
         if manifest.is_none() && !written.is_empty() {
@@ -563,8 +590,12 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 loop {
                     st.requests += 1;
                     st.bytes_up += next.to_wire().len() as u64;
+                    notera_core::crash_point("before_manifest_commit");
                     match self.remote.commit_manifest(&next.to_wire(), new_etag.as_deref()).await {
                         Ok(e) => {
+                            // 公告已在服务器上、本地却还没结清 —— 这是最要命的一刀：
+                            // 崩在这里之后下一轮必须既不再重复公告、也不把改动弄丢。
+                            notera_core::crash_point("after_manifest_commit");
                             // 公告成功了，这批才算"已同步"；outbox 也在此刻结清。
                             for (kind, id, rev) in &await_announce {
                                 let _ = self.local.apply(vec![ApplyOp::MarkSynced {

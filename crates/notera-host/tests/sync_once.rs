@@ -483,3 +483,25 @@ async fn a_server_with_strong_etag_pays_nothing_for_the_lease() {
     assert!(matches!(a.app.lease_policy(), notera_sync::LeasePolicy::Off), "CAS 可信时不该开租约");
     srv.stop().await;
 }
+
+/// 同一篇连改两次、只跑一轮同步：旧 rev 的那条待办必须被较新的那次公告结清。
+///
+/// 这条是被崩溃注入照出来的真实缺陷：`outbox_settle` 以前按**精确 rev** 匹配，
+/// 于是 rev=2 的行在 rev=3 公告之后仍然 `pending`，永远没有下一轮会去结它 ——
+/// 设置页的"待同步"计数就此卡住不动（§18 要求它诚实）。
+#[tokio::test]
+async fn two_edits_before_one_round_leave_nothing_pending() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let a = Device::boot("two-edits", &srv.base_url());
+    let folder = a.app.default_folder_id().unwrap();
+    let note = a.app.create_note(&folder, doc("第一版")).unwrap();
+    let id = notera_core::EntityId::parse(&note.id).unwrap();
+    a.app.store().edit_note(&id, doc("第二版"), notera_core::Rev(note.rev)).unwrap();
+    a.app.store().edit_note(&id, doc("第三版"), notera_core::Rev(note.rev + 1)).unwrap();
+
+    a.app.sync_once().await.expect("一轮同步");
+    let st = a.app.store().stats().unwrap();
+    assert_eq!(st.dirty_notes, 0, "公告之后不该还有脏 head：{st:?}");
+    assert_eq!(st.outbox_pending, 0, "旧 rev 的待办没被结清，计数会永远挂着：{st:?}");
+    srv.stop().await;
+}

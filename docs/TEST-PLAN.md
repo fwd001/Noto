@@ -472,3 +472,26 @@
 | Q9 | 未同步/冲突之外的删除保留策略与 purge 语义 | 已给事实为"tombstone 永不自动 GC"，但"用户主动清空回收站 / 永久删除后远端对象与附件何时真正回收"未定 | FT-NOTE-05/06、FT-ATT-05 的断言只能停在"purged 置位 + tombstone 保留"，无法验证存储回收 | 决定 purge 的触发者与安全性条件（是否需全设备确认、是否有安全窗口），再补对应不变式 |
 | Q10 | 附件与记录的加密边界 | 已给事实为"记录信封 aes-256-gcm-siv"；附件（内容寻址、immutable）是否加密、加密是否影响 sha256 去重与跨设备复用 | FT-ATT-01/02、CM-SV-03 无法断言"附件在远端为密文"这一层；可能存在"内容 hash 泄露元数据"的安全疑问 | 明确附件是否加密、hash 取明文还是密文、以及信封字段（`enc`/`ct`）对附件的取值 |
 | Q11 | `notera-test-webdav` 控制 API 的字段名与语义细节 | 已给事实只到 `/_control/*` 支持 start/stop/reset/inspect/inject-failure 与 `/_fs/dump` | §记法 中的 `FAIL(kind,target,times)` 为**测试计划统一记法**，与实现签名可能有差异；L3/L4 断言写法需按实现校正 | 在 P0 末冻结控制 API schema（并把本表与实现逐条对齐） |
+
+## 崩溃注入矩阵（§20 · 进程真的被杀死）
+
+实现：`notera_core::crash_point(点名)` + `NOTERA_CRASH_AT`，只在 debug 构建有效
+（正式产物不留"一个环境变量就能让应用自杀"的开关）。用 `process::exit(77)` 而不是
+`panic`：panic 会展开栈、跑析构、还可能被上层接住，那测的就不是"写一半时断电"。
+注入点名单一处在 `CRASH_POINTS`，插桩、文档、测试共用一份，避免"点名拼错却照样绿"。
+
+跑法：`crates/notera-host/tests/crash_recovery.rs` 为每个点 **spawn 一个子进程**
+（写一条带附件的笔记 → 正文轮 → 附件轮），要求它以 77 死在这一点上，然后父进程
+重启同一目录、按生产调度跑正文轮 + 附件轮至收敛。
+
+| 编号 | 注入点 | 必须成立 | 层 |
+|---|---|---|---|
+| CI-CRASH-01 | `after_local_write`（`write_tx` 唯一写入口，commit 之后） | 该条改动仍在，重启后一轮即公告 | L3 |
+| CI-CRASH-02/03 | `before_records_push` / `after_records_push` | 记录不半截；已推未公告的下轮补公告，不产生副本 | L3 |
+| CI-CRASH-04/05 | `before_apply` / `after_apply` | 拉下来的内容要么完整生效要么没有，不留半条 revision | L3 |
+| CI-CRASH-06/07 | `before_attachment_upload` / `after_attachment_upload` | 字节在不在服务器与账上状态一致；不重复传也不谎报已传 | L4 |
+| CI-CRASH-08/09 | `before_manifest_commit` / `after_manifest_commit` | 公告失败 → 改动保持脏；**公告成功但本地未结清 → 下一轮必须把它结清**（今天就是这里坏过：P7 判 NoOp 后再没人回头，"待同步"计数永久挂着） | L3 |
+| CI-CRASH-ALL | 九个点连跑 | 崩完重启后两台设备笔记**逐条一致**（不多不少）、`dirty_notes=0`、`outbox_pending=0`、FTS 行数 == 笔记数（I5） | L3 |
+
+门禁自身的反空转证明：把 P7 的结清分支改回"永远跳过"，CI-CRASH-09 立刻红并打出
+卡住的那一行（`outbox pending=1；脏笔记 [rev=3 sync_rev=0]；待办行 [note rev=3 op=Upsert]`）。

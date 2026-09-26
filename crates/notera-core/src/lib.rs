@@ -406,6 +406,73 @@ pub struct InvariantViolation {
     pub detail: String,
 }
 
+// --------------------------------------------------- §20 崩溃注入（L5）---
+
+/// 全部合法注入点。**文档、注入代码、测试三处引用同一份名字**，
+/// 免得测试里写 `"after_aply"` 这种拼错的名字然后"崩溃恢复已验证"是假的。
+pub const CRASH_POINTS: &[&str] = &[
+    "after_local_write",
+    "before_records_push",
+    "after_records_push",
+    "before_attachment_upload",
+    "after_attachment_upload",
+    "before_apply",
+    "after_apply",
+    "before_manifest_commit",
+    "after_manifest_commit",
+];
+
+/// 被注入杀死时进程用的退出码：刻意避开 `notera-cli` 的 0/1/2，
+/// 这样"崩溃注入"和"断言失败"在日志里不会混成一回事。
+pub const CRASH_EXIT_CODE: i32 = 77;
+
+/// 在名为 `name` 的提交点**让进程当场消失**（仅当 `NOTERA_CRASH_AT==name`）。
+///
+/// 为什么是 `process::exit` 而不是 `panic!`：panic 会展开栈、跑析构、还可能被
+/// 上层 `catch_unwind` 接住 —— 那测的就不是"写一半时断电"。`exit` 什么都不收尾，
+/// 恢复只能依赖 WAL 事务与协议写序（记录 → 附件 → 清单），而这正是要验的东西。
+///
+/// 只在 debug 构建里有效：正式产物不允许留"一个环境变量就能让应用自杀"的开关。
+#[cfg(debug_assertions)]
+#[inline]
+pub fn crash_point(name: &str) {
+    use std::sync::OnceLock;
+    static TARGET: OnceLock<Option<String>> = OnceLock::new();
+    debug_assert!(CRASH_POINTS.contains(&name), "未登记的崩溃注入点：{name}");
+    let target = TARGET.get_or_init(|| std::env::var("NOTERA_CRASH_AT").ok());
+    if target.as_deref() == Some(name) {
+        eprintln!("NOTERA_CRASH_AT={name}：在该提交点强制退出进程");
+        std::process::exit(CRASH_EXIT_CODE);
+    }
+}
+
+/// release 构建里这是个空函数：连读环境变量都不做。
+#[cfg(not(debug_assertions))]
+#[inline]
+pub fn crash_point(_name: &str) {}
+
+#[cfg(test)]
+mod crash_tests {
+    use super::*;
+
+    #[test]
+    fn crash_point_names_are_unique_and_non_empty() {
+        let mut sorted = CRASH_POINTS.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), CRASH_POINTS.len(), "注入点名字重复了");
+        assert!(CRASH_POINTS.iter().all(|p| !p.is_empty()));
+    }
+
+    #[test]
+    fn an_unnamed_point_is_not_accidentally_instrumented() {
+        // 测试进程本身没设 NOTERA_CRASH_AT：任何 crash_point 调用都必须活着回来
+        for p in CRASH_POINTS {
+            crash_point(p);
+        }
+    }
+}
+
 #[cfg(test)]
 mod hash_shape_tests {
     use super::same_content_hash;

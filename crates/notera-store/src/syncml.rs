@@ -701,6 +701,29 @@ impl Store {
         })
     }
 
+    /// 关掉"已经没有活可干"的附件待办行。
+    ///
+    /// 为什么需要：同一份字节流被反复引用时会重复入队，而上传/下载队列是按
+    /// `attachments` 的**状态**挑活的 —— 状态已经满足的那些行根本不会被取出来，
+    /// 于是永远没人去关它。留着的表现就是设置页的"待同步"计数永久虚高（§18 要求诚实）。
+    /// 方向必须分开判：`upload` 看服务器有没有、`download` 看本地有没有；
+    /// 用 OR 混在一起会把"本地还缺着"的下载单也顺手关掉，那才是真的丢数据。
+    pub fn settle_satisfied_attachment_ops(&self) -> Result<u32, StoreError> {
+        self.write_tx(|tx, now| {
+            let n = tx.execute(
+                "UPDATE sync_operations SET state = 'done', updated_at = ?1
+                  WHERE entity_type = 'attachment' AND state IN ('pending','inflight')
+                    AND EXISTS (
+                      SELECT 1 FROM attachments a
+                       WHERE a.sha256 = sync_operations.sha256
+                         AND ((sync_operations.op = 'upload' AND a.remote_state = 'present')
+                           OR (sync_operations.op = 'download' AND a.local_state = 'available')))",
+                params![now],
+            )?;
+            Ok(n as u32)
+        })
+    }
+
     /// 附件在本地的引用计数（由 `note_attachments` 派生，**不存 ref_count 列**，§8）。
     pub fn attachment_refs(&self, sha256: &str) -> Result<u32, StoreError> {
         let sha = sha256.to_string();
