@@ -193,7 +193,8 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | L5 崩溃注入 | 9 个提交点逐个杀死真子进程 + 重启收敛（`crash_recovery`，2 条测试） | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
 | 浏览器端到端 | 35/35（真 Rust 核心，非 mock；含"设置页存服务器 → 能力块读回"、"库统计五行全是数字"、"删除 → 回收站 → 恢复 → 永久删除"、"勾一个文件夹 → 包就只有那一棵子树"、"侧栏建子文件夹 → '移动到'选得到"五条真实往返） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
-| 真窗口 | 8/8（invoke 的 `stats` 键集合 == 契约那 8 个 → 建笔记→落库→刷新读回→点开正文，控制台 0 error） | `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223 target/debug/notera-desktop.exe` + `node scripts/verify-tauri-window.mjs` |
+| L5 纯黑盒 UAT | 9/9（只用点击/输入/键盘/刷新，零 `/cmd/*`、零读库） | `node scripts/verify-blackbox.mjs` |
+| 真窗口 | debug 8/8 **且 release 8/8**（开发服务器关闭 → 资源走内嵌 `frontendDist`，页面 `http://tauri.localhost/`；`stats` 键集合 == 契约那 8 个 → 建笔记→落库→列表刷新读回→点开正文→截图，控制台 0 error） | `pnpm build` + `cargo build [--release] -p notera-desktop` + `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223` + `node scripts/verify-tauri-window.mjs` |
 
 **已建立**：12 个 crate + `apps/desktop`（Tauri 壳 + Vue 前端）+ `migrations/0001..0006` + 自建测试 WebDAV 服务器 + 上述四套验证脚本 + `docs/` 全套规格与 ADR-0001…0019。
 
