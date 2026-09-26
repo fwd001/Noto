@@ -91,11 +91,13 @@ async function removeFolder(id: string): Promise<void> {
 
 function openFolder(id: string | null): void {
   void notes.setMode(id === null ? { kind: 'all' } : { kind: 'folder', folderId: id });
+  // 点文件夹也是"回库"的动作：停在设置页时它以前只改 mode，界面却一动不动
+  shell.goto('workspace');
   if (shell.isCompact) shell.backToList();
-  else shell.closeDrawer();
 }
 
 function isActive(id: string | null): boolean {
+  if (shell.view !== 'workspace') return false;
   if (notes.mode.kind !== 'folder') return false;
   return notes.mode.folderId === id;
 }
@@ -114,7 +116,7 @@ function isActive(id: string | null): boolean {
           <button type="button" class="btn btn--quiet btn--icon" :title="t('sidebar.rename')" :aria-label="t('sidebar.rename')" @click="beginRename(node.id, node.name)">
             ✎
           </button>
-          <button type="button" class="btn btn--quiet btn--icon" :title="t('sidebar.newSubfolder')" :aria-label="t('sidebar.newSubfolder')" @click="beginCreate(node.id)">
+          <button type="button" class="btn btn--quiet btn--icon" :data-testid="`folder-new-sub-${node.id}`" :title="t('sidebar.newSubfolder')" :aria-label="t('sidebar.newSubfolder')" @click="beginCreate(node.id)">
             ＋
           </button>
           <button
@@ -169,6 +171,7 @@ function isActive(id: string | null): boolean {
           v-model="nameDraft"
           class="input"
           type="text"
+          data-testid="folder-create-input"
           :aria-label="t('sidebar.newSubfolder')"
           :placeholder="t('sidebar.newSubfolder')"
           @keydown.enter.prevent="commitCreate"

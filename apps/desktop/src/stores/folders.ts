@@ -29,16 +29,26 @@ function ensureNode(value: unknown): FolderNode | null {
 /** 后端可能给树（FolderNode[]）也可能给平铺（Folder[]）；两种都能用。 */
 export function buildTree(value: unknown): FolderNode[] {
   const list = Array.isArray(value) ? value : [];
-  const nodes = list.map(ensureNode).filter((node): node is FolderNode => node !== null);
+  // 嵌套树里的子层只存在于 `children` 中，顶层数组看不到 —— 所以先把整片森林
+  // 收进同一个池子，再统一按 parentId 重建。曾经这里在收集前就把 children 清空了，
+  // 于是"后端给的树"被削成只剩根，侧栏 / "移动到" / 导出选择器一起失去子文件夹。
+  const pool = new Map<string, FolderNode>();
+  const collect = (items: readonly unknown[]): void => {
+    for (const item of items) {
+      const node = ensureNode(item);
+      if (!node || pool.has(node.id)) continue;
+      const nested = node.children;
+      pool.set(node.id, node);
+      collect(nested);
+    }
+  };
+  collect(list);
+  const nodes = [...pool.values()];
   if (nodes.length === 0) return [];
-  const byId = new Map<string, FolderNode>();
-  for (const node of nodes) {
-    node.children = [];
-    byId.set(node.id, node);
-  }
+  for (const node of nodes) node.children = [];
   const roots: FolderNode[] = [];
   for (const node of nodes) {
-    const parent = node.parentId ? byId.get(node.parentId) : undefined;
+    const parent = node.parentId ? pool.get(node.parentId) : undefined;
     if (parent && parent.id !== node.id) parent.children = [...(parent.children ?? []), node];
     else roots.push(node);
   }

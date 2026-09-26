@@ -44,11 +44,15 @@ async function commitNewFolder(): Promise<void> {
 
 function selectAll(): void {
   void notes.setMode({ kind: 'all' });
+  // 库内导航必须能把人从设置/冲突页带回列表：以前只改 mode，
+  // 停在设置页时点「全部笔记」看着像死的。
+  shell.goto('workspace');
   shell.closeDrawer();
 }
 
 function selectTrash(): void {
   void notes.setMode({ kind: 'trash' });
+  shell.goto('workspace');
   shell.closeDrawer();
 }
 </script>
@@ -63,11 +67,11 @@ function selectTrash(): void {
     </div>
 
     <div class="side-nav">
-      <button type="button" class="nav-btn" :data-active="notes.mode.kind === 'all' ? 'true' : 'false'" data-testid="nav-all" @click="selectAll">
+      <button type="button" class="nav-btn" :data-active="shell.view === 'workspace' && notes.mode.kind === 'all' ? 'true' : 'false'" data-testid="nav-all" @click="selectAll">
         <span>{{ t('sidebar.allNotes') }}</span>
         <span v-if="allCount" class="nav-btn__count">{{ allCount }}</span>
       </button>
-      <button type="button" class="nav-btn" :data-active="notes.mode.kind === 'trash' ? 'true' : 'false'" data-testid="nav-trash" @click="selectTrash">
+      <button type="button" class="nav-btn" :data-active="shell.view === 'workspace' && notes.mode.kind === 'trash' ? 'true' : 'false'" data-testid="nav-trash" @click="selectTrash">
         <span>{{ t('sidebar.trash') }}</span>
         <span v-if="trashCount" class="nav-btn__count">{{ trashCount }}</span>
       </button>
