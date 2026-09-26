@@ -82,7 +82,8 @@ fn degenerate_unknown(kind: &MarkKind) -> bool {
 ///
 /// **不**剥 `U+200D`（ZWJ，emoji 家庭序列依赖它）与 `U+200C`（ZWNJ，波斯语/阿拉伯语
 /// 正字法依赖它）——剥了就是摧毁用户输入，违反 §0。
-const ZERO_WIDTH: [char; 3] = ['​', '﻿', '⁠'];
+/// 用转义写死：字面量本身是不可见字符，留在源码里既读不出也改不动。
+const ZERO_WIDTH: [char; 3] = ['\u{200B}', '\u{FEFF}', '\u{2060}'];
 
 fn strip_zero_width(s: &str) -> String {
     if !s.chars().any(|c| ZERO_WIDTH.contains(&c)) {

@@ -123,6 +123,10 @@ pub struct AccountConfig {
     pub base_url: String,
     pub root_prefix: String,
     pub auth_kind: AuthKind,
+    /// Basic 的用户名 / Token 的主体名。**用户名不是秘密**，可以进配置；
+    /// 秘密（口令）只以 `credential_ref` 指向钥匙串。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
     /// 凭据引用；配置里永不含明文。
     pub credential_ref: String,
     pub tls_policy: TlsPolicyKind,
@@ -143,6 +147,7 @@ impl Default for AccountConfig {
             base_url: String::new(),
             root_prefix: "/.notes".into(),
             auth_kind: AuthKind::Basic,
+            username: None,
             credential_ref: String::new(),
             tls_policy: TlsPolicyKind::default(),
             ca_pem: None,

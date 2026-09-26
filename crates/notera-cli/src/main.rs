@@ -162,7 +162,8 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
             }
         }
 
-        Cmd::SyncOnce { json } => {
+        // `--json` 目前无处可施：这一支在接线前恒为 BLOCKED，没有任何报告可格式化。
+        Cmd::SyncOnce { json: _ } => {
             // 需要已配置账户与可达服务器；没有就报 BLOCKED，不假装成功。
             let app = match boot(&dir) {
                 Ok(a) => a,

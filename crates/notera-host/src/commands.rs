@@ -121,7 +121,10 @@ pub struct SyncStatusDto {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateNoteCmd {
-    pub folder_id: String,
+    /// `None` = 用户还没选过文件夹。落点由核心决定（默认本），
+    /// 不让 UI 自己猜"该放哪"—— 那是业务判定。
+    #[serde(default)]
+    pub folder_id: Option<String>,
     pub doc: serde_json::Value,
 }
 
@@ -276,27 +279,49 @@ pub struct CmdError {
 }
 
 impl CmdError {
-    fn of(code: &str, retryable: bool) -> Self {
+    /// `pub(crate)`：整个 host（含 cli 走不到的内部路径）共用同一套错误码，
+    /// 但**不外泄**给壳层 —— 壳层只看见 `CmdError` 这个值类型。
+    pub(crate) fn of(code: &str, retryable: bool) -> Self {
         Self { code: code.into(), message_key: format!("cmd.{code}"), retryable, detail: None }
     }
-    fn with(mut self, d: serde_json::Value) -> Self {
+    pub(crate) fn with(mut self, d: serde_json::Value) -> Self {
         self.detail = Some(d);
         self
     }
 }
 
+/// 出参序列化：所有命令走同一个出口，序列化失败也折成错误码而不是 panic。
+pub(crate) fn j<T: Serialize>(v: T) -> R<serde_json::Value> {
+    serde_json::to_value(v).map_err(|e| CmdError::of("serialize", false).with(serde_json::json!({ "why": e.to_string() })))
+}
+
 impl From<notera_store::StoreError> for CmdError {
     fn from(e: notera_store::StoreError) -> Self {
         use notera_store::StoreError as E;
+        // 每个变体一个码：UI 要能区分"我改晚了"和"库被新版程序写过"。
         match e {
-            E::NotFound => Self::of("not_found", false),
+            E::NotFound { kind, id } => Self::of("not_found", false).with(serde_json::json!({
+                "kind": format!("{kind:?}"),
+                "id": id.to_string(),
+            })),
             E::StaleEdit(s) => Self::of("stale_edit", false).with(serde_json::json!({
                 "expected": s.expected.get(),
                 "actual": s.actual.get(),
             })),
-            E::ReadOnly | E::Migration(_) => Self::of("db_too_new", false),
+            // ADR-0012：库版本过新 → 只读，绝不降级写回
+            E::ReadOnly { db, supported } => Self::of("db_too_new", false).with(serde_json::json!({ "db": db, "supported": supported })),
+            // 迁移失败不是"版本过新"，混在一起会让人去查错方向
+            E::Migration { from, to, detail } => Self::of("db_migration", false).with(serde_json::json!({ "from": from, "to": to, "detail": detail })),
+            // 文档格式超前 → 该笔记只读（I7），与整库只读是两回事
+            E::DocTooNew { doc, supported } => Self::of("doc_too_new", false).with(serde_json::json!({ "doc": doc, "supported": supported })),
             E::Constraint(c) => Self::of("constraint", false).with(serde_json::json!({ "why": c })),
-            other => Self::of("storage", false).with(serde_json::json!({ "why": other.to_string() })),
+            // I6 闸门拒绝：本地写不进去 = 我们生成的内容不合法，不是存储坏了
+            E::InvalidDoc(m) => Self::of("invalid_doc", false).with(serde_json::json!({ "why": m })),
+            E::Rejected(m) => Self::of("rejected", false).with(serde_json::json!({ "why": m })),
+            E::Rich(m) => Self::of("richtext", false).with(serde_json::json!({ "why": m })),
+            E::Io(e) => Self::of("io", true).with(serde_json::json!({ "why": e.to_string() })),
+            E::Identity(e) => Self::of("bad_id", false).with(serde_json::json!({ "why": e.to_string() })),
+            E::Sql(e) => Self::of("storage", false).with(serde_json::json!({ "why": e.to_string() })),
         }
     }
 }
@@ -311,12 +336,14 @@ fn id(s: &str) -> R<EntityId> {
 
 /// 命令名 → 处理器。Tauri 侧一个 `invoke` 转发到这里，dev 侧 HTTP 也走这里。
 pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json::Value> {
-    let j = |v: impl Serialize| serde_json::to_value(v).map_err(|e| CmdError::of("serialize", false).with(serde_json::json!({ "why": e.to_string() })));
-
     match name {
         "create_note" => {
             let c: CreateNoteCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
-            j(app.create_note(&id(&c.folder_id)?, c.doc)?)
+            let fid = match c.folder_id.as_deref() {
+                Some(s) => id(s)?,
+                None => app.default_folder_id()?,
+            };
+            j(app.create_note(&fid, c.doc)?)
         }
         "edit_note" => {
             let c: EditNoteCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;

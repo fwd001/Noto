@@ -21,6 +21,16 @@ pub struct DevServer {
 }
 
 pub fn start(app: App, port: u16) -> std::io::Result<DevServer> {
+    // 发布版里这条命令面一律不开：它能不带任何凭据地驱动真实 Store（删笔记、清库、
+    // 改账户配置）。绑 127.0.0.1 与 Origin 白名单都不足以让它进 release ——
+    // 同机上的任意进程都能连。留在编译期之外还有一层好处：调用方拿到的就是
+    // 一个 PermissionDenied，而不是"函数不存在"这种编译期惊喜。
+    if !cfg!(debug_assertions) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "dev 桥只在 debug 构建启用",
+        ));
+    }
     let addr: SocketAddr = format!("127.0.0.1:{port}").parse().expect("loopback addr");
     let listener = TcpListener::bind(addr)?;
     let stop = Arc::new(AtomicBool::new(false));
@@ -93,27 +103,41 @@ fn handle(app: App, mut stream: TcpStream) -> std::io::Result<()> {
         let name = target.trim_start_matches("/cmd/").split('?').next().unwrap_or("");
         let args: serde_json::Value = if body.is_empty() { Ok(serde_json::Value::Null) } else { serde_json::from_slice(&body) }
             .unwrap_or(serde_json::Value::Null);
+        // 与 Tauri 通道**同一形状**：成功是裸 DTO（`invoke` 直接 resolve 出值），
+        // 失败是 CmdError。曾经这里包了一层 {ok,value}，前端 unwrap 拿不到 payload，
+        // 浏览器模式下每条命令都变成 null —— 两条通道必须是一条契约。
         let (status, payload) = match crate::commands::dispatch(&app, name, args) {
-            Ok(v) => (200u16, serde_json::json!({ "ok": true, "value": v })),
-            Err(e) => (400, serde_json::json!({ "ok": false, "error": e })),
+            Ok(v) => (200u16, v),
+            Err(e) => (400, serde_json::to_value(&e).unwrap_or(serde_json::json!({ "code": "storage" }))),
         };
         return respond(&mut stream, status, "application/json", payload.to_string().as_bytes());
     }
 
     if target.starts_with("/events") {
-        // 极简 SSE：把事件总线的内容按行推给前端
+        // SSE：头里必须带 CORS（少了就是浏览器 ERR_FAILED），并且一直推到客户端断开。
         let rx = app.subscribe();
-        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n")?;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n"
+        )?;
         stream.flush()?;
-        for _ in 0..3 {
-            if let Ok(e) = rx.try_recv() {
-                let s = serde_json::to_string(&e).unwrap_or_default();
-                let _ = write!(stream, "data: {s}\n\n");
-                let _ = stream.flush();
+        loop {
+            match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                Ok(event) => {
+                    let s = serde_json::to_string(&event).unwrap_or_default();
+                    // 写失败 = 浏览器已经走了；此时退出，App 侧的死订阅会被 emit 清理。
+                    if writeln!(stream, "data: {s}\n").is_err() || stream.flush().is_err() {
+                        return Ok(());
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if writeln!(stream, ": ping\n").is_err() || stream.flush().is_err() {
+                        return Ok(());
+                    }
+                }
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        return Ok(());
     }
 
     if target.starts_with("/health") {
@@ -139,7 +163,7 @@ fn same_origin_ok(headers: &[(String, String)]) -> bool {
     let host_port = rest.split('/').next().unwrap_or("");
     let host = host_port
         .rsplit_once(':')
-        .map(|(h, p)| h.trim_matches(|c| c == '[' || c == ']'))
+        .map(|(h, _p)| h.trim_matches(|c| c == '[' || c == ']'))
         .unwrap_or(host_port);
     matches!(host, "127.0.0.1" | "localhost" | "::1")
 }
@@ -196,5 +220,35 @@ mod tests {
         assert!(same_origin_ok(&[("origin".into(), "tauri://localhost".into())]));
         assert!(!same_origin_ok(&[("origin".into(), "http://evil.example".into())]), "外部来源必须拒绝");
         assert!(!same_origin_ok(&[("origin".into(), "http://127.0.0.1.evil.example".into())]), "前缀匹配不得放过仿冒域");
+    }
+
+    /// 两条通道必须是**一条契约**：HTTP 桥的响应体要与 Tauri `invoke` resolve 出来的值逐字节同形。
+    /// 漂了不会编译错，只会让浏览器模式下每条命令静默变成 null。
+    #[test]
+    fn http_channel_returns_the_same_shape_as_tauri_invoke() {
+        use std::io::{Read, Write};
+        let app = App::boot(&tmpdir("shape")).unwrap();
+        let (port, _server) = (18900u16..18940)
+            .find_map(|p| match start(app.clone(), p) {
+                Ok(s) => Some((p, s)),
+                Err(_) => None,
+            })
+            .expect("找不到可用的测试端口");
+
+        let expected = crate::commands::dispatch(&app, "stats", serde_json::json!({})).unwrap();
+        let body = {
+            let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            write!(
+                c,
+                "POST /cmd/stats HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{{}}"
+            )
+            .unwrap();
+            let mut buf = String::new();
+            c.read_to_string(&mut buf).unwrap();
+            buf.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default()
+        };
+        let got: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(got, expected, "HTTP 通道不得再包 {{ok,value}} 一层");
+        assert!(got.get("notes").is_some(), "应为裸 DTO 而不是封套：{got}");
     }
 }
