@@ -524,12 +524,48 @@ impl Store {
         self.with_read(|c| attachment_for(c, &note_id, &sha))
     }
 
+    /// 收下远端发来的 blob：**先校验 sha256 再落盘**，内容不符就拒收。
+    /// 内容寻址意味着"错了还写进去"会污染所有引用同一 sha 的笔记。
+    pub fn ingest_blob(&self, sha256: &str, bytes: &[u8]) -> Result<(), StoreError> {
+        let sha = sha256.to_string();
+        if bytes.is_empty() {
+            return Err(StoreError::Constraint("空 blob 不允许收下".into()));
+        }
+        let got = notera_crypto::sha256_hex(bytes);
+        if got != sha {
+            self.set_attachment_states(&sha, Some("error"), None).ok();
+            return Err(StoreError::Constraint(format!("blob 哈希不符：期望 {sha} 实际 {got}")));
+        }
+        let target = crate::store::blob_path(&self.paths.attachments, &sha);
+        if !target.exists() {
+            crate::store::write_atomic(&target, bytes)?;
+        }
+        self.set_attachment_states(&sha, Some("available"), Some("present"))
+    }
+
     pub(crate) fn with_read<T>(&self, f: impl FnOnce(&Connection) -> Result<T, StoreError>) -> Result<T, StoreError> {
         let conn = self.read()?;
         f(&conn)
     }
 
     /// blob 的落盘路径（内容寻址，无 path 列）。
+    /// 读回附件的两个状态位（测试与诊断用；生产代码走队列查询）。
+    pub fn attachment_for_state(&self, sha256: &str) -> (String, String) {
+        let sha = sha256.to_string();
+        self.with_read(|c| {
+            c.query_row(
+                "SELECT local_state, remote_state FROM attachments WHERE sha256 = ?1",
+                [sha.as_str()],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(StoreError::from)
+        })
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| ("absent".into(), "absent".into()))
+    }
+
     pub fn blob_path(&self, sha256: &str) -> PathBuf {
         blob_path(&self.paths.attachments, sha256)
     }

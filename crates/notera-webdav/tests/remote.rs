@@ -12,7 +12,7 @@ use notera_net::{HttpMethod, HttpClient, ProxyProfile, RequestSpec, Timeouts, Tl
 use notera_sync::manifest::{EntryRef, Manifest};
 use notera_sync::{RemoteError, RemotePort};
 use notera_test_webdav::{Backend, Injection, Started, TestServer};
-use notera_webdav::{Caps, Credentials, WebDavConfig, WebDavRemote, WriteStrategy};
+use notera_webdav::{Caps, Credentials, RemotePath, WebDavConfig, WebDavRemote, WriteStrategy};
 use serde_json::{json, Value};
 
 const AT: &str = "2026-09-25T10:00:00.000Z";
@@ -657,4 +657,25 @@ async fn corrupt_manifest_body_is_refused_not_trusted() {
     assert_ne!(got, v1, "注入应改动了响应字节");
     assert!(Manifest::parse(&got).is_err(), "改动后的清单必须过不了自校验");
     assert_eq!(r.fetch_manifest(None).await.unwrap().unwrap().0, v1, "撤掉注入后原样无损");
+}
+
+/// 附件名是内容寻址的校验和本身：名字不合法就没有"该校验什么"这回事，
+/// 必须在拼路径阶段就拒，一个请求都不发出去。
+#[test]
+fn attachment_names_are_validated_before_any_request() {
+    let p = RemotePath::new("http://dav.local:5005", "/.notes").unwrap();
+    let good = "a".repeat(64);
+    assert_eq!(
+        p.attachment(&good).unwrap(),
+        format!("http://dav.local:5005/.notes/attachments/aa/{good}")
+    );
+    for bad in [
+        "a".repeat(63),
+        "A".repeat(64),
+        "../../etc/passwd".to_string(),
+        format!("{}..{}", &good[..62], "aa"),
+        String::new(),
+    ] {
+        assert!(p.attachment(&bad).is_err(), "必须拒绝附件名：{bad:?}");
+    }
 }

@@ -81,7 +81,17 @@ pub fn run() {
                     let host = app.as_ref().clone();
                     tauri::async_runtime::spawn(async move {
                         match host.negotiate(&remote).await {
-                            Ok(()) => host.start_sync(remote).run().await,
+                            Ok(()) => {
+                                // 附件走自己的循环（§13）：与文本轮次互不等待、互不阻塞，
+                                // 一个 20 MB 的图片不该让文字同步停下来。
+                                let att = host.clone();
+                                let att_remote = std::sync::Arc::clone(&remote);
+                                tauri::async_runtime::spawn(async move {
+                                    att.run_attachments(att_remote, std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)))
+                                        .await;
+                                });
+                                host.start_sync(remote).run().await
+                            }
                             Err(key) => {
                                 host.emit(BusEvent::Toast { message_key: key.to_string(), level: "warn".into() });
                             }

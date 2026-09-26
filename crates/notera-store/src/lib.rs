@@ -30,7 +30,7 @@ pub use crate::types::{
     DirtyWhy, Folder, Note, NoteListRow, NoteQuery, OpKind, OpState, RemoteIndexEntry, RevOrigin,
     SearchHit, SearchPath, SearchQuery, StorePaths, StoreStats, SyncOperation, TombstoneRow,
     DEFAULT_FOLDER_NAME, LOCAL_ACCOUNT_ID, SUPPORTED_SCHEMA_VERSION,
-};
+    AttachmentJob,};
 
 pub use crate::store::Store;
 

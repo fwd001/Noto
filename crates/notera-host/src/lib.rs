@@ -801,6 +801,93 @@ impl App {
         }
     }
 
+    /// §13 附件轮：与文本轮次**解耦**的独立传输。单轮预算 ≤4 个文件 / ≤64 MiB，
+    /// 超出的留下一轮 —— 移动网络不该被一个大文件长期占住。
+    ///
+    /// 返回 `(上传, 下载, 失败)`。任何失败都不向上抛：附件全失败时，
+    /// 文本同步必须照常完成（TEST-PLAN 的"只拔附件端点"用例）。
+    pub async fn run_attachment_round(&self, remote: &notera_webdav::WebDavRemote) -> (usize, usize, usize) {
+        const FILES: usize = 4;
+        const BYTES: i64 = 64 * 1024 * 1024;
+        let (mut up, mut down, mut failed) = (0usize, 0usize, 0usize);
+        let mut budget = BYTES;
+
+        for (i, job) in self.inner.store.attachment_uploads(FILES).unwrap_or_default().into_iter().enumerate() {
+            // 第一个文件不设预算，否则一个 100 MiB 的附件永远轮不到
+            if i > 0 && job.size > budget {
+                break;
+            }
+            budget -= job.size.min(budget);
+            let bytes = match std::fs::read(self.inner.store.blob_path(&job.sha256)) {
+                Ok(b) => b,
+                // 账上"本地有"而盘上没有：标 error，绝不把它当成已上传
+                Err(e) => {
+                    tracing::warn!(?e, sha = %job.sha256, "本地 blob 缺失");
+                    let _ = self.inner.store.set_attachment_states(&job.sha256, Some("error"), None);
+                    let _ = self.inner.store.finish_attachment_ops(&job.sha256, false);
+                    failed += 1;
+                    continue;
+                }
+            };
+            match remote.put_attachment(&job.sha256, &bytes).await {
+                Ok(()) => {
+                    let _ = self.inner.store.set_attachment_states(&job.sha256, None, Some("present"));
+                    let _ = self.inner.store.finish_attachment_ops(&job.sha256, true);
+                    up += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(%e, sha = %job.sha256, "附件上传失败，留下一轮");
+                    let _ = self.inner.store.finish_attachment_ops(&job.sha256, false);
+                    failed += 1;
+                }
+            }
+        }
+
+        budget = BYTES;
+        for (i, job) in self.inner.store.attachment_downloads(FILES).unwrap_or_default().into_iter().enumerate() {
+            if i > 0 && job.size > budget {
+                break;
+            }
+            match remote.fetch_attachment(&job.sha256).await {
+                Ok(Some(bytes)) => {
+                    budget -= (bytes.len() as i64).min(budget);
+                    if self.inner.store.ingest_blob(&job.sha256, &bytes).is_ok() {
+                        let _ = self.inner.store.finish_attachment_ops(&job.sha256, true);
+                        down += 1;
+                    } else {
+                        let _ = self.inner.store.finish_attachment_ops(&job.sha256, false);
+                        failed += 1;
+                    }
+                }
+                // 远端 404：只改远端态。§10 —— 任何情况下都不因远端缺失删本地
+                Ok(None) => {
+                    let _ = self.inner.store.set_attachment_states(&job.sha256, None, Some("absent"));
+                }
+                Err(e) => {
+                    tracing::warn!(%e, sha = %job.sha256, "附件下载失败");
+                    failed += 1;
+                }
+            }
+        }
+        if up + down > 0 {
+            // 附件到位 = 列表里的缩略图/占位要重画，走同一条事件回流
+            self.emit(BusEvent::NotesChanged { ids: vec![] });
+        }
+        (up, down, failed)
+    }
+
+    /// 常驻附件循环（壳 spawn 一次）。与文本调度器互不等待、互不阻塞。
+    pub async fn run_attachments(self, remote: Arc<notera_webdav::WebDavRemote>, stop: Arc<AtomicBool>) {
+        let mut ticker = tokio::time::interval(Duration::from_secs(20));
+        loop {
+            ticker.tick().await;
+            if stop.load(Ordering::SeqCst) {
+                return;
+            }
+            self.run_attachment_round(remote.as_ref()).await;
+        }
+    }
+
     pub fn remove_account(&self, id: &str) -> Result<(), CmdError> {
         let mut cfg = self.inner.config.lock().unwrap().clone();
         self.inner
@@ -1754,6 +1841,59 @@ mod tests {
         assert_eq!(remote.device_id(), cfg.device_id);
         assert_eq!(remote.paths().root_prefix(), "/.notes");
         // 适配器刻意不实现 Debug：里面藏着凭据，derive 出来就可能整条打印进日志。
+    }
+
+    /// §13 的完整回路：A 上传 → B 下载，中间只经过真 HTTP 服务器。
+    #[tokio::test]
+    async fn attachments_travel_between_two_devices_through_the_real_server() {
+        use notera_core::EntityId as Eid;
+        use notera_webdav::Credentials;
+        let srv = notera_test_webdav::TestServer::start(notera_test_webdav::Backend::Mem).await;
+        let url = srv.base_url.clone();
+        let a = boot("att-a");
+        let b = boot("att-b");
+        for app in [&a, &b] {
+            app.configure_account(draft("srv", &url, Some("u"))).unwrap();
+        }
+        let remote_for = |app: &App| {
+            let cfg = app.config();
+            let acct = ConfigRepository::active(&cfg).unwrap().clone();
+            let device = DeviceId::parse(&cfg.device_id).unwrap();
+            std::sync::Arc::new(App::build_remote(&acct, device, Credentials::new("u", "p").unwrap()).unwrap())
+        };
+        let (ra, rb) = (remote_for(&a), remote_for(&b));
+        a.negotiate(&ra).await.unwrap();
+        b.negotiate(&rb).await.unwrap();
+
+        let folder = Eid::parse(&a.list_folders().unwrap().remove(0).id).unwrap();
+        let note = a.create_note(&folder, doc("带一张图")).unwrap();
+        let blob = format!("PNG-ish bytes 图片 {}", note.id.as_str()).into_bytes();
+        let sha = a
+            .store()
+            .attach_blob(&Eid::parse(&note.id).unwrap(), &blob, "image/png", Some("pic.png"), "blk0000001")
+            .unwrap()
+            .sha256;
+
+        assert_eq!(a.run_attachment_round(&ra).await, (1, 0, 0), "A 应当把这一个附件传上去");
+        assert!(ra.has_attachment(&sha).await.unwrap(), "服务器上必须真的存在这个 blob");
+        assert_eq!(a.run_attachment_round(&ra).await.0, 0, "已 present 的不得重传");
+
+        // B 只知道"清单说远端有这个 sha"
+        b.store().register_remote_attachment(&sha, blob.len() as i64, "image/png").unwrap();
+        assert_eq!(b.run_attachment_round(&rb).await, (0, 1, 0), "B 应当把它下载下来");
+        assert_eq!(std::fs::read(b.store().blob_path(&sha)).unwrap(), blob, "字节必须逐字节相同");
+        assert_eq!(
+            b.store().attachment_for_state(&sha),
+            ("available".into(), "present".into()),
+            "落盘成功后两个状态位都要推进"
+        );
+
+        // 远端 404 时：只改远端态，绝不删本地（§10）
+        let ghost = notera_core::ContentHash::of(b"ghost").as_str().replace("sha256:", "");
+        b.store().register_remote_attachment(&ghost, 10, "image/png").unwrap();
+        b.run_attachment_round(&rb).await;
+        assert_eq!(b.store().attachment_for_state(&ghost).1, "absent");
+        assert_eq!(b.store().attachment_for_state(&sha).0, "available", "别人的缺失不能牵连已存在的附件");
     }
 
     /// SYNC-PROTOCOL §2：两个库指到同一个目录时必须**停手**，而不是把两库并成一库。

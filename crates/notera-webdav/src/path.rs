@@ -90,6 +90,13 @@ impl RemotePath {
     }
 
     /// `manifest/<name>.json`：基线分段（§1 `seg-<NNNN>.json`）。
+    /// `attachments/<2hex>/<sha256>`（§1）。内容寻址的名字**就是**校验和：
+    /// 名字不合法意味着连"该校验什么"都不成立，因此在拼路径阶段就拒，不发请求。
+    pub fn attachment(&self, sha256: &str) -> Result<String, PathError> {
+        check_sha_hex(sha256)?;
+        Ok(self.url(&["attachments", &sha256[..2], sha256]))
+    }
+
     pub fn segment(&self, name: &str) -> Result<String, PathError> {
         check_segment_name(name)?;
         Ok(self.url(&["manifest", &format!("{name}.json")]))

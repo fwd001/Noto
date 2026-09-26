@@ -843,3 +843,78 @@ impl WebDavRemote {
         Ok(false)
     }
 }
+
+// ------------------------------------------------------- §13 附件传输 ---
+//
+// 附件走**独立队列**，与文本轮次解耦（§13）：附件全失败时文本轮次必须照常完成。
+// 因此这三个方法也不进 `RemotePort` —— 它们是 worker 的工具，不是引擎每轮的步骤。
+impl WebDavRemote {
+    /// 远端是否已有这个 blob。内容寻址 ⇒ 存在即可信，不需要再读一遍。
+    pub async fn has_attachment(&self, sha256: &str) -> Result<bool, RemoteError> {
+        let url = self.paths.attachment(sha256)?;
+        match self.head_raw(&url).await {
+            Ok(r) if r.status == 404 => Ok(false),
+            Ok(r) if r.is_success() => Ok(true),
+            Ok(r) => Err(crate::error::map_status(r.status)),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// 上传：tmp → MOVE(Overwrite:F) → 复读校验 sha256。
+    /// 目标已存在视为成功（同一 sha = 同一内容，去重是内容寻址的本意）。
+    pub async fn put_attachment(&self, sha256: &str, bytes: &[u8]) -> Result<(), RemoteError> {
+        if bytes.len() > MAX_RECORD_BYTES * 8 {
+            return Err(RemoteError::Protocol(format!("附件过大（{} 字节），拒绝上传", bytes.len())));
+        }
+        let dest = self.paths.attachment(sha256)?;
+        if self.has_attachment(sha256).await? {
+            return Ok(());
+        }
+        let tmp = self.paths.tmp(&self.device, self.next_nonce())?;
+        self.put_plain(&tmp, bytes).await?;
+        let moved = self.move_raw(&tmp, &dest, false, None).await;
+        match moved {
+            Ok(r) if r.is_success() => {}
+            // 405/412：并发下别人先传了同一份内容 —— 结果一致，当成功
+            Ok(r) if matches!(r.status, 405 | 412) => {
+                self.best_effort_delete(&tmp).await;
+                return Ok(());
+            }
+            Ok(r) => {
+                self.best_effort_delete(&tmp).await;
+                return Err(crate::error::map_status(r.status));
+            }
+            Err(e) => {
+                self.best_effort_delete(&tmp).await;
+                return Err(e);
+            }
+        }
+        // 复读校验：写进去的不是这份内容，比写失败更糟（会污染所有引用同 sha 的笔记）
+        let back = self.get_raw(&dest, None).await?;
+        if !back.is_success() {
+            return Err(RemoteError::Protocol(format!("附件上传后读不到: {sha256}")));
+        }
+        let got = notera_crypto::sha256_hex(&back.body);
+        if got != sha256 {
+            return Err(RemoteError::Protocol(format!("附件复验不符：期望 {sha256} 实际 {got}")));
+        }
+        Ok(())
+    }
+
+    /// 下载并**在返回前**校验 sha256：调用方拿到字节就可以直接落盘。
+    pub async fn fetch_attachment(&self, sha256: &str) -> Result<Option<Vec<u8>>, RemoteError> {
+        let url = self.paths.attachment(sha256)?;
+        let resp = self.get_raw(&url, None).await?;
+        if resp.status == 404 {
+            return Ok(None);
+        }
+        if !resp.is_success() {
+            return Err(crate::error::map_status(resp.status));
+        }
+        let got = notera_crypto::sha256_hex(&resp.body);
+        if got != sha256 {
+            return Err(RemoteError::Protocol(format!("附件内容哈希不符：期望 {sha256} 实际 {got}")));
+        }
+        Ok(Some(resp.body))
+    }
+}

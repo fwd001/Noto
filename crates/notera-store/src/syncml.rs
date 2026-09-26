@@ -567,6 +567,75 @@ impl Store {
         })
     }
 
+    /// 待上传的附件：本地有内容、远端还没确认存在。按体积升序 ——
+    /// 小附件先走完，移动网络上更快看到"同步上了"。
+    pub fn attachment_uploads(&self, limit: usize) -> Result<Vec<AttachmentJob>, StoreError> {
+        self.attachment_jobs(limit, "available", &["unknown", "absent", "error"])
+    }
+
+    /// 待下载的附件：清单说远端有，本地却没有内容。
+    pub fn attachment_downloads(&self, limit: usize) -> Result<Vec<AttachmentJob>, StoreError> {
+        self.attachment_jobs(limit, "missing", &["present"])
+    }
+
+    fn attachment_jobs(&self, limit: usize, local: &str, remote_in: &[&str]) -> Result<Vec<AttachmentJob>, StoreError> {
+        let placeholders = remote_in.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT sha256, size, media_type FROM attachments
+              WHERE local_state IN ('{local}','partial','error')
+                AND remote_state IN ({ph})
+                AND deleted_at IS NULL
+              ORDER BY size ASC LIMIT ?",
+            local = if local == "available" { "available" } else { "missing" },
+            ph = placeholders
+        );
+        let conn = self.read()?;
+        let mut stmt = conn.prepare(&sql)?;
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = remote_in.iter().map(|s| Box::new(s.to_string()) as _).collect();
+        args.push(Box::new(limit as i64));
+        let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|a| a.as_ref()).collect();
+        let rows = stmt.query_map(rusqlite::params_from_iter(refs), |r| {
+            Ok(AttachmentJob { sha256: r.get(0)?, size: r.get::<_, i64>(1)?, media_type: r.get(2)? })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+
+    /// 记下"远端有、本地还没有"的附件（清单/记录里读到引用时调用）。
+    /// 只登记元数据与 `local_state='missing'`，**绝不**创建空 blob 占位。
+    pub fn register_remote_attachment(&self, sha256: &str, size: i64, media_type: &str) -> Result<(), StoreError> {
+        let sha = sha256.to_string();
+        let media = if media_type.trim().is_empty() { "application/octet-stream".to_string() } else { media_type.to_string() };
+        self.write_tx(|tx, now| {
+            tx.execute(
+                "INSERT INTO attachments (sha256, size, media_type, local_state, remote_state, created_at)
+                 VALUES (?1,?2,?3,'missing','present',?4)
+                 ON CONFLICT(sha256) DO UPDATE SET
+                   size = MAX(attachments.size, excluded.size),
+                   remote_state = 'present',
+                   deleted_at = NULL",
+                params![sha, size, media, now],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// 附件传输结束后把它的 outbox 行落到 done/failed。
+    /// 状态机以 `local_state/remote_state` 为准，outbox 行只是"有活要干"的账；
+    /// 不关掉它们，`outbox_pending` 会一直虚高，看起来像同步卡住。
+    pub fn finish_attachment_ops(&self, sha256: &str, ok: bool) -> Result<(), StoreError> {
+        let sha = sha256.to_string();
+        self.write_tx(|tx, now| {
+            tx.execute(
+                "UPDATE sync_operations SET state = ?2, updated_at = ?3
+                  WHERE entity_type = 'attachment' AND entity_id = ?1
+                    AND state IN ('pending','inflight')",
+                params![sha, if ok { "done" } else { "failed" }, now],
+            )?;
+            Ok(())
+        })
+    }
+
     /// 附件在本地的引用计数（由 `note_attachments` 派生，**不存 ref_count 列**，§8）。
     pub fn attachment_refs(&self, sha256: &str) -> Result<u32, StoreError> {
         let sha = sha256.to_string();

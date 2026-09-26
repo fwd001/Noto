@@ -429,3 +429,11 @@ pub struct TombstoneRow {
     pub title_snap: Option<String>,
     pub created_at: String,
 }
+
+/// 一次附件传输的最小信息（队列按体积排序，预算按字节数截断）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttachmentJob {
+    pub sha256: String,
+    pub size: i64,
+    pub media_type: String,
+}
