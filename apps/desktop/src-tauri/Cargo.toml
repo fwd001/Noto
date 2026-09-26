@@ -7,7 +7,11 @@ description = "Notera 桌面/移动外壳（Tauri 2）"
 
 [lib]
 name = "notera_desktop_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# 实测：Windows GNU 工具链下 cdylib 的 PE 导出表超限
+# （`ld.exe: error: export ordinal too large: 119477`），桌面产物根本链不出来。
+# Tauri 模板给移动端用的 staticlib/cdylib 在这里是纯负担 —— 移动壳（Phase 6）
+# 由它自己的 crate 承担，桌面只要 rlib + bin。
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

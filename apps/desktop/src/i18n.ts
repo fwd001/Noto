@@ -238,6 +238,12 @@ const MESSAGES: Record<MessageKey, string> = {
   'error.unknown_command': '这个操作在当前版本里不存在。',
   'error.serialize': '数据没能整理成可保存的形式，已取消，未改动任何数据。',
   'error.handler_panic': '这一步异常中止了，可以再试一次；本机数据未受影响。',
+  'error.bad_device': '本机设备标识不可用，同步已暂停；笔记照常保存在本机。',
+  'error.net_config': '网络出口没有配置好，这一轮同步跳过。',
+  'error.invalid_account': '这台同步服务器的地址或参数不可用，请在设置里检查。',
+  'error.save_failed': '设置没能保存，改动还留在这台设备上。',
+  'error.proxy_credentials_pending': '代理需要账号与口令，当前版本还不能安全地保存它们。',
+  'sync.needsCredentials': '还没有可用的登录凭据。笔记照常保存在本机，配好凭据后会自动开始同步。',
 };
 
 const TOAST_PREFIXES = ['notera.', 'error.', 'sync.', 'toast.', 'state.', 'note.', 'link.', 'settings.', 'cmd.'];

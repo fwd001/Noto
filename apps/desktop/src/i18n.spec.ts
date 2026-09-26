@@ -23,6 +23,11 @@ const COMMAND_CODES = [
   'unknown_command',
   'no_account',
   'multi_account_unsupported',
+  'invalid_account',
+  'save_failed',
+  'bad_device',
+  'net_config',
+  'proxy_credentials_pending',
   'serialize',
   'handler_panic',
 ];

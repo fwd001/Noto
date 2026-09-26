@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** 工作区：列表 + 编辑器（编辑器再窄也占满剩余宽度）。 */
-import { computed } from 'vue';
+import { computed, watch } from 'vue';
 import NoteList from '../components/NoteList.vue';
 import RichEditor from '../components/RichEditor.vue';
 import EmptyState from '../components/EmptyState.vue';
@@ -21,6 +21,11 @@ const title = computed(() => currentRow.value?.title || t('editor.untitled'));
 const folderId = computed(() => currentRow.value?.folderId ?? '');
 const pinned = computed(() => currentRow.value?.pinned === true);
 const canEdit = computed(() => notes.selectedId !== null && !editor.loading);
+
+// 选中即打开：编辑器跟着 selectedId 走，只此一处。
+// 之前只有"点列表行"这一条路径会 open()，其它入口（新建、列表自动选中、刷新后恢复）
+// 留下一块"标题在、正文空、只显示正在读取本地库"的面板 —— 用户看到的就是卡住。
+watch(() => notes.selectedId, (id) => { void editor.open(id); }, { immediate: true });
 
 function onFolderChange(event: Event): void {
   const id = notes.selectedId;

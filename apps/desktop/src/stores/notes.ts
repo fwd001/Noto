@@ -12,6 +12,7 @@ import {
 import { createDebounced, SEARCH_DEBOUNCE_MS, type Debounced } from '../util/timing';
 import { asBridgeError } from '../util/errors';
 import { emptyDoc } from '../editor/model';
+import { useEditorStore } from './editor';
 
 export type ListMode = { kind: 'all' } | { kind: 'folder'; folderId: string | null } | { kind: 'trash' };
 
@@ -174,6 +175,9 @@ export const useNoteStore = defineStore('notes', () => {
       else await load();
       selectedId.value = note.id;
       titles.value = { ...titles.value, [note.id]: note.title };
+      // 新建之后立刻打开编辑器：只"选中"不"打开"，用户看到的是一块空白面板，
+      // 连字都打不进去（真浏览器实测踩过：列表里有了条目，中间却没有光标）。
+      await useEditorStore().open(note.id);
       return note;
     } catch (error) {
       errorKey.value = asBridgeError(error).messageKey;
