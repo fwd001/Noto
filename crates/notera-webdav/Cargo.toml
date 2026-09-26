@@ -4,19 +4,25 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# 本 crate 是 `notera_sync::RemotePort` 的实现方，因此依赖方向是
+# webdav → sync（端口 trait）→ core；反过来绝不成立。
+# 出口只有 notera-net：这里**不得**出现 reqwest（PROXY.md §1 铁律 + CI 架构测试）。
 [dependencies]
 notera-core = { workspace = true }
 notera-net = { workspace = true }
 notera-crypto = { workspace = true }
+notera-sync = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-bytes = "1"
-quick-xml = "0.37"
+base64 = { workspace = true }
+bytes = { workspace = true }
+quick-xml = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 notera-test-webdav = { workspace = true }
 tokio = { workspace = true }
+async-trait = { workspace = true }

@@ -11,9 +11,8 @@ notera-crypto = { workspace = true }
 notera-store = { workspace = true }
 notera-sync = { workspace = true }
 notera-config = { workspace = true }
-notera-importer = { workspace = true }
-notera-webdav = { workspace = true }
 notera-net = { workspace = true }
+notera-webdav = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -21,6 +20,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
+# 只做一件事：给 RemoteBorrow 的转发 impl 用（引擎的 port 是 async trait）
+async-trait = { workspace = true }
 
 [dev-dependencies]
 notera-test-webdav = { workspace = true }

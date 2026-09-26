@@ -11,11 +11,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-bytes = "1"
-quick-xml = "0.37"
+bytes = { workspace = true }
+quick-xml = { workspace = true }
 tracing = { workspace = true }
 sha2 = { workspace = true }
-percent-encoding = "2"
+percent-encoding = { workspace = true }
 
 [dev-dependencies]
 notera-test-webdav = { workspace = true }

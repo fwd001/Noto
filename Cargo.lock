@@ -2718,7 +2718,6 @@ dependencies = [
  "notera-store",
  "notera-sync",
  "notera-test-webdav",
- "notera-webdav",
  "serde",
  "serde_json",
  "tokio",
@@ -2786,10 +2785,10 @@ dependencies = [
 name = "notera-host"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "notera-config",
  "notera-core",
  "notera-crypto",
- "notera-importer",
  "notera-net",
  "notera-richtext",
  "notera-store",
@@ -2899,10 +2898,12 @@ name = "notera-webdav"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "notera-core",
  "notera-crypto",
  "notera-net",
+ "notera-sync",
  "notera-test-webdav",
  "quick-xml 0.37.5",
  "serde",

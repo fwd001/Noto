@@ -16,4 +16,4 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }

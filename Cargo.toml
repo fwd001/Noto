@@ -56,6 +56,10 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 async-trait = "0.1"
 dashmap = "6"
+bytes = "1"
+quick-xml = "0.37"
+percent-encoding = "2"
+tempfile = "3"
 
 [profile.dev]
 opt-level = 0
