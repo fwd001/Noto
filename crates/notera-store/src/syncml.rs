@@ -784,6 +784,23 @@ impl Store {
 
     // ----------------------------------------------------------- 冲突收件箱 -----
 
+    /// 收件箱里是否已经有一张**同样的**未处理卡片（同实体、同一对哈希）。
+    ///
+    /// 去重用的。`UpdateDelete` / `DeleteUpdate`（P11）这类判定引擎**故意**不自动收敛
+    /// （保留哪一边要用户决定），所以只要用户没处理，每一轮都会再判出同一件事 ——
+    /// 每轮多一张卡片是骚扰，每轮多造一篇"本地副本"更是往用户库里塞垃圾（实测真发生过）。
+    /// 只对"完全同一对哈希"去重：任意一侧又改了，那就是新事实，该再进一张。
+    pub fn open_conflict_exists(&self, kind: EntityKind, id: &EntityId, local_hash: &str, remote_hash: &str) -> Result<bool, StoreError> {
+        let conn = self.read()?;
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sync_conflicts
+              WHERE entity_type = ?1 AND entity_id = ?2 AND state = 'open'
+                AND local_hash = ?3 AND remote_hash = ?4)",
+            params![rows::kind_tag(kind), id.as_str(), local_hash, remote_hash],
+            |r| r.get::<_, i64>(0),
+        )? == 1)
+    }
+
     pub fn record_conflict(&self, c: &ConflictRecord) -> Result<i64, StoreError> {
         let c = c.clone();
         self.write_tx(|tx, now| {

@@ -323,6 +323,42 @@ async fn a_real_divergence_records_one_conflict_and_keeps_both_texts() {
     srv.stop().await;
 }
 
+/// 删除 vs 修改（P11）：引擎**故意**不自动采纳这一类（保留哪一边该由用户决定），
+/// 所以只要用户没处理，它每轮都会再被判出来。这条钉的是"重复判出同一件事"不许留下
+/// 重复痕迹：收件箱每轮多一张一样的卡片是骚扰，每轮多造一篇副本笔记是往用户库里塞垃圾。
+#[tokio::test]
+async fn a_recurring_conflict_is_recorded_once_and_makes_exactly_one_copy() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let a = Device::boot("dup-a", &url);
+    let folder = a.app.default_folder_id().unwrap();
+    let note = a.app.create_note(&folder, doc("共同起点")).unwrap();
+    let id = notera_core::EntityId::parse(&note.id).unwrap();
+    a.app.sync_once().await.expect("A 把起点推上去");
+
+    let b = Device::boot("dup-b", &url);
+    b.app.sync_once().await.expect("B 拉到起点");
+    let b_head = b.app.store().get_note(&id).unwrap().unwrap();
+    b.app.store().edit_note(&id, doc("乙改过的一版"), b_head.rev).unwrap();
+    b.app.sync_once().await.expect("B 把改动推上去");
+
+    a.app.store().delete_note(&id).expect("A 删掉它（删除还没传播）");
+    let first = a.app.sync_once().await.expect("A 的第一轮");
+    assert_eq!(first.conflicts, 1, "删除 vs 修改要进收件箱：{first:?}");
+    let rows = a.app.store().open_conflicts().unwrap().len();
+    let notes = a.app.store().list_notes(&NoteQuery::all()).unwrap().len();
+    assert_eq!(rows, 1, "第一轮就该只有一张卡片：{rows}");
+
+    // 后面几轮仍会判出同一件事（P11 由引擎故意不自动收敛：留哪一边要用户决定）。
+    // 这里不问 outcome，只盯"重复判定不许留下重复痕迹"—— 见下面两条断言。
+    for round in 2..=4 {
+        a.app.sync_once().await.unwrap_or_else(|e| panic!("第 {round} 轮不该失败：{e:?}"));
+    }
+    assert_eq!(a.app.store().open_conflicts().unwrap().len(), rows, "同一件事不许逐轮再登记一次");
+    assert_eq!(a.app.store().list_notes(&NoteQuery::all()).unwrap().len(), notes, "副本笔记不许逐轮多造一篇");
+    srv.stop().await;
+}
+
 // ---------------------------------------------------------------- §11.4 租约 ---
 
 /// 清单 index.json 的 sha（内容指纹）。公告了就会变，没公告就不该变。

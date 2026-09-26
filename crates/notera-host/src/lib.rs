@@ -1752,6 +1752,17 @@ impl LocalPort for HostLocalPort {
     fn record_conflict(&self, d: &Decision, l: &LocalView, r: &RemoteView) -> Result<(), LocalError> {
         let kind = EntityKind::from_tag(&l.kind).ok_or_else(|| LocalError::Storage(format!("未知 kind: {}", l.kind)))?;
         let id = EntityId::parse(&l.id).map_err(|e| LocalError::Storage(e.to_string()))?;
+        // 同一对哈希已经有张未处理的卡片 → 这一轮什么都不做。不这么做就会每轮多一张卡片、
+        // 每轮多造一篇"本地副本"（P11 这类引擎故意不收敛的判定实测真出现过两篇同名副本）。
+        if self
+            .0
+            .store()
+            .open_conflict_exists(kind, &id, &l.content_hash, r.hash.as_deref().unwrap_or_default())
+            .map_err(store_err)?
+        {
+            tracing::debug!(rule = d.rule, id = %l.id, "这条冲突已有未处理卡片，跳过重复登记");
+            return Ok(());
+        }
         // CONFLICT-RESOLUTION §6：进收件箱的**同一刻**先把本地未合并版本存一份副本。
         // 用户之后无论选哪一边，这一份都不会丢 —— 副本不是提醒，是保底。
         let mut copy_note_id = None;
