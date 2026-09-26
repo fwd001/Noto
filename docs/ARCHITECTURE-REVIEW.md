@@ -309,6 +309,7 @@ TLS 四档：`strict` / `ca_bundle`（内网自签主路径）/ `pin`（指纹�
 | **D8** | Apple 开发者证书与 Android release keystore 归属？ | 待定 | 无证书 → macOS 产物 Gatekeeper 拦截，需文档说明；keystore 不可换，丢失即无法覆盖升级 |
 | **D9** | 是否 v1 支持多账户（同设备两个 WebDAV）？ | 数据模型已预留 `account_id`，UI 延后 | 若 v1 要，需补 UI 与切换语义 |
 | **D10** | 代号 `Notera` 是否可用（商标/域名核查）？ | 改名只影响 brand 层 | 现在改成本≈0，1.0 后改成本高 |
+| **D11** | 编辑器的"插入图片/附件"该怎么拿到用户选的文件？（**当前功能不可用，等你拍板**） | 存储/同步/导出这条链已完成并有测试；断在入口：`attach_file` 要 `localPath`+`mediaType`，前端只发 `{noteId, blockId, role}` → 必然 `bad_args`。壳里 `tauri-plugin-dialog` 已 init，但前端没有它的 JS 绑定 | ① **加 `@tauri-apps/plugin-dialog`（npm 依赖）**：前端直接开原生选择器，把路径交给 `attach_file`。最原生，但要动依赖图（按 §9 走），且浏览器 dev 桥没有这个插件 → 端到端门禁测不到这一步。② **壳里加一个平台命令**返回所选路径：不多 npm 依赖，但破坏"UI 与核心只有 `notera_command` 一条通道"这条不变式（ARCHITECTURE-MAP §5），需要同时改写那条规矩。③ **前端 `<input type="file">` 读字节 → base64 走 `attach_file`**：零新依赖、Tauri 与 dev 桥**同一条代码路径**、能被端到端门禁真的点一遍（唯一需要重测的是大图的 IPC 体积/耗时）。代价是"选文件"这一步不再是原生对话框，且前端做了一次文件读取 |
 
 ---
 

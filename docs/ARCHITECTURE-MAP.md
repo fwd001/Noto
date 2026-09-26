@@ -207,7 +207,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | 多服务器同时启用 | 按 ADR-0018 拒绝 | 确认点 `sync_rev` 是全局列，需要迁到按账户表 |
 | 备份 / 恢复（§15） | 已实现 | `VACUUM INTO` 一致快照 + sha256/integrity_check 闸门 + 替换前留当前库 + 下次启动落地；恢复不在进程内换库（见 DATA-MODEL §15） |
 | 导出 / 导入（ZIP bundle） | 已实现 | `notera-importer/bundle.rs`；导入走 `apply_remote` 同一条冲突安全路径，删除事实随包带走（防复活）。附件按**库**枚举（`Store::local_attachment_shas`）——曾经按一层目录名筛 64hex，而 blob 在 `<attachments>/<2hex>/<sha>` 两层里，于是"含附件的导出"其实一个附件都没有（见 CHANGELOG） |
-| 编辑器"插入图片 / 附件"的入口 | 未接通 | 存储、队列、同步、导出/导入这条链全都在并有测试，但 `attach_file` 需要 `localPath` + `mediaType`，前端只发 `{noteId, blockId, role}` → 必然 `bad_args`。壳里 `tauri-plugin-dialog` 已 init，前端却没有对应的 JS 绑定（`package.json` 只有 `@tauri-apps/api`）。**待定方案（属平台工作，按 §9 走）**：① 前端加 `@tauri-apps/plugin-dialog` 依赖；② 由壳出一个"选文件"命令返回路径，前端把路径交给 `attach_file`。②不多一个 npm 依赖，且浏览器 dev 桥可以走同一形状。失败路径本身是干净的：占位块撤掉 + 提示，不会留下半个附件块或脏文档 |
+| 编辑器"插入图片 / 附件"的入口 | 未接通 | 存储、队列、同步、导出/导入这条链全都在并有测试，但 `attach_file` 需要 `localPath` + `mediaType`，前端只发 `{noteId, blockId, role}` → 必然 `bad_args`。壳里 `tauri-plugin-dialog` 已 init，前端却没有对应的 JS 绑定（`package.json` 只有 `@tauri-apps/api`）。**待定方案（属平台工作，按 §9 走）**：① 前端加 `@tauri-apps/plugin-dialog` 依赖；② 由壳出一个"选文件"命令返回路径，前端把路径交给 `attach_file`。②不多一个 npm 依赖，且浏览器 dev 桥可以走同一形状。失败路径本身是干净的：占位块撤掉 + 提示，不会留下半个附件块或脏文档。**等你拍板 → ARCHITECTURE-REVIEW §14 D11**（三条路：加 npm 插件 / 加壳的平台命令 / 前端 file input 走同一条 `attach_file`） |
 | 按文件夹部分导出、`.enex` 结构化导入 | 未实现 | 前者需要文件夹子树 + 外键闭包，目前**明确拒绝**（`folder_scope_unsupported`）而不是假装做了；后者需要 XML 依赖 + ENML 映射与夹具 |
 | macOS / Android / iOS 产物与签名 | BLOCKED | 需要对应硬件、证书与工具链；本机只有 Windows |
 | CI workflow 文件 | 未创建 | 推送渠道待决（ARCHITECTURE-REVIEW §14）；本地等价检查已全部脚本化 |
