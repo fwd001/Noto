@@ -45,6 +45,8 @@
 
 ### 修掉的静默错误（都是"看着在用、其实没接线"）
 
+- **§23 要求的"真黑盒 UAT"落地**（`scripts/verify-blackbox.mjs`，9 步）。与 `verify-app` 的分工是刻意的：那一步用本地桥复核**库里的真实状态**（界面说成功而库里没有就算失败），因此它不算黑盒；这一步**只用点击 / 输入 / 键盘 / 刷新**，断言只读屏幕上显示出来的文字与几何，全脚本没有一次 `/cmd/*` 调用。覆盖：首帧不是白屏 → 新建并敲正文 → 列表立刻可见 → 侧栏建子文件夹 → "移动到"选它、进子文件夹看到它 → 输入即搜恰好 1 行 → 删除 / 回收站 / 恢复 → 刷新（等价重启 App）后列表与正文都在 → Esc/Tab 焦点不失控 → 全程零 console error、零 4xx。它第一遍就跑出自己的一处假绿：收起状态的 `<select>` 上点 option 元素**不触发 change**，`option.click()` 静默无效（换成 `selectOption` 后那一步才真的动，顺带消掉一个 400）。反空转已证：把回收站"恢复"那颗按钮的 `v-if` 废掉，9/9 立刻掉到 6/9
+
 - **正式构建会开出一个空白窗口**（P0，生产阻塞级）：`apps/desktop/src-tauri/Cargo.toml` 里**根本没有 `[features]` 段**，`tauri/custom-protocol` 因此从未开启 —— 而没有它，壳不会把 `frontendDist` 内嵌进去，窗口启动后去连 `devUrl`（`127.0.0.1:5173`）。今天所有"真窗口 8/8"跑的都是 **debug + vite 在跑**，所以这条从没暴露：`cargo build --release` 出来的 exe 在 vite 停掉的情况下停在 `chrome-error://chromewebdata/`，控制台两声 500，`page.reload()` 直接 `ERR_CONNECTION_REFUSED`。补上官方模板那一段（`default = ["custom-protocol"]`）之后，**release 产物在开发服务器关闭的状态下 8/8 通过**，页面是 `http://tauri.localhost/`，走真 `invoke`、真 SQLite、CSP 真生效。顺带记下：`notera-cli serve` 在 release 里明确拒绝（`dev 桥只在 debug 构建启用`，退出码 2，端口不绑定）—— 无鉴权本地桥不会带进正式产物
 
 - **§20 崩溃注入第一次真的落地**（`NOTERA_CRASH_AT` 此前在整个 `crates/` 里一次都没出现过，而协议把"每一步失败之后数据仍可恢复"写成硬约束）。`notera_core::crash_point(点名)` + 九个提交点插桩：`after_local_write`（`write_tx` 唯一写入口，commit 之后）、`before/after_records_push`、`before/after_apply`、`before/after_manifest_commit`、`before/after_attachment_upload`。测试**真的 spawn 子进程**再用 `process::exit(77)` 杀死自己：在同一进程里 panic + `catch_unwind` 会跑析构，那测的不是"断电级"中途死亡。只活在 debug 构建里（正式产物不留"一个环境变量就能让应用自杀"的开关），且注入点名单一处在 `CRASH_POINTS`，文档/插桩/测试共用，防"点名拼错却照样绿"。每个点都要求**死法正确**（退出码 77）：正常退出说明这点没人经过，panic 说明进程是被别的原因弄挂的 —— 两种都判红
@@ -105,7 +107,7 @@
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
 
 - **`cargo fmt --check` 本机跑不了 → BLOCKED**：原因 = `stable-x86_64-pc-windows-gnu` 工具链没装 `rustfmt` 组件（`error: 'cargo-fmt.exe' is not installed`）；影响 = CI-CD 的 `format` 那一环没有本地等价证据，格式漂移只会在 CI 上第一次暴露；解除条件 = `rustup component add --toolchain stable-x86_64-pc-windows-gnu rustfmt`（要联网，且会改本机工具链，所以没有擅自动手）
-- **`scripts/verify-app.mjs` 不是纯黑盒**：总指令 §23 要求核心 UAT 只用点击/输入/键盘/拖放，禁止直接调 Rust command；这一步今天大量用 `callBridge(...)` 复核库内真实状态（这是它值钱的地方，界面说成功而库里没有就算失败）。要按 §23 再立一条**只碰界面**的黑盒 lane，而不是把现有的状态复核拆掉 —— 两者用途不同，都留着
+- **黑盒 UAT 有两道，用途不同，都得跑**：`verify-blackbox.mjs` 是 §23 要的纯黑盒（只用界面，只断言屏幕上看得见的文字）；`verify-app.mjs` 会用本地桥复核**库里的真实状态**，因此**不算**黑盒 —— 但它证明的是"界面说的"与"库里有的"一致，这一条黑盒给不了。两道互补，不能用一道替代另一道
 
 - **文件夹树在界面上截断到 64 个**：`flattenTree(roots, limit = 64)` 是侧栏"移动到"和导出选择器共用的上限，超过 64 个文件夹的库会**静默少列**后面的（不报错、不提示）。深层子树现在能正常出现了，这个上限才第一次真正生效，因此必须记下来：要么去掉上限并改为虚拟列表，要么在界面上明说"只显示前 64 个"。属于交互取舍，按 §9 走人工评审，不在本轮自行改
 
