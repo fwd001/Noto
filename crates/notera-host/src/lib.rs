@@ -10,7 +10,7 @@
 pub mod commands;
 pub mod devserver;
 
-use commands::{AccountDraftCmd, AccountDto, CmdError, ConflictDto, FolderDto, ListNotesCmd, NoteDto, NoteListDto, SearchCmd, SearchHitDto, SyncStatusDto};
+use commands::{AccountDraftCmd, AccountDto, CmdError, ConflictDto, ExportCmd, FolderDto, ImportCmd, ListNotesCmd, NoteDto, NoteListDto, SearchCmd, SearchHitDto, SyncStatusDto};
 use notera_config::{AccountConfig, AppConfig, ConfigRepository, ProxyMode, ProxyProfile, TlsPolicyKind};
 use notera_core::{Clock, DeviceId, EntityId, EntityKind, Rev, SystemClock};
 use notera_store::{ApplyOp as StoreApplyOp, ConflictRow, Folder, Note, NoteListRow, NoteQuery, SearchPath, Store, StoreError};
@@ -545,6 +545,114 @@ impl App {
         self.inner.store.get_prefs().map_err(CmdError::from)
     }
 
+    /// 导出整库为自描述 ZIP（DATA-MODEL §15）。
+    ///
+    /// 记录由 `Store::all_records()` 用**与上传同一套**信封构造函数产出，
+    /// 所以导入侧可以直接走 `apply_remote`，不必为导出另写一条写入路径。
+    pub fn export_data(&self, c: ExportCmd) -> Result<serde_json::Value, CmdError> {
+        if !c.folder_ids.is_empty() {
+            // 只导出部分文件夹需要连带祖先与外键闭包。没做之前宁可明确拒绝，
+            // 也不能"用户勾了两个文件夹、结果把整库交出去"。
+            return Err(CmdError::of("bad_args", false).with(serde_json::json!({ "detail": "folder_scope_unsupported" })));
+        }
+        let records = self.inner.store.all_records().map_err(CmdError::from)?;
+        let purged = |r: &serde_json::Value| r.get("purged").and_then(|p| p.as_bool()).unwrap_or(false);
+        let bundle = notera_importer::Bundle {
+            manifest: Some(notera_importer::Manifest {
+                format: notera_importer::BUNDLE_FORMAT,
+                protocol: 1,
+                exported_at: self.inner.store.now(),
+                app_version: env!("CARGO_PKG_VERSION").to_string(),
+                root_id: None,
+                counts: std::collections::BTreeMap::new(),
+            }),
+            folders: records.iter().filter(|r| r.get("kind").and_then(|k| k.as_str()) == Some("folder") && !purged(r)).cloned().collect(),
+            notes: records.iter().filter(|r| r.get("kind").and_then(|k| k.as_str()) == Some("note") && !purged(r)).cloned().collect(),
+            tombstones: records.iter().filter(|r| purged(r)).cloned().collect(),
+            attachments: Vec::new(),
+        };
+        let mut attachments = Vec::new();
+        if c.include_attachments {
+            for sha in list_blob_names(&self.inner.store.attachments_dir())? {
+                match std::fs::read(self.inner.store.blob_path(&sha)) {
+                    Ok(bytes) => attachments.push((sha, bytes)),
+                    // 读不到就少传一个附件：报告里如实记数，不静默当成功
+                    Err(e) => tracing::warn!(%sha, error = %e, "附件读不到，本次导出不含它"),
+                }
+            }
+        }
+        let bundle = notera_importer::Bundle { attachments, ..bundle };
+        let path = match c.path.as_deref() {
+            Some(p) => std::path::PathBuf::from(p),
+            None => {
+                let dir = self.inner.data_dir.join("exports");
+                std::fs::create_dir_all(&dir).map_err(|e| CmdError::of("storage", false).with(serde_json::json!({ "detail": e.to_string() })))?;
+                // 时间戳里的 `:`/`-` 在 Windows 文件名里不安全，只留字母数字
+                dir.join(format!("notera-{}.zip", self.inner.store.now().replace(|c: char| !c.is_ascii_alphanumeric(), "")))
+            }
+        };
+        if path.exists() {
+            // 绝不覆盖已有文件：用户指哪儿就写哪儿，指到一份备份上就是毁掉那次备份。
+            return Err(CmdError::of("save_failed", false).with(serde_json::json!({
+                "detail": format!("导出目标已存在，未覆盖：{}", path.display()),
+            })));
+        }
+        notera_importer::write_bundle(&path, &bundle).map_err(|e| CmdError::of("save_failed", false).with(serde_json::json!({ "detail": e.to_string() })))?;
+        let counts = serde_json::json!({
+            "notes": bundle.notes.len(),
+            "folders": bundle.folders.len(),
+            "tombstones": bundle.tombstones.len(),
+            "attachments": bundle.attachments.len(),
+        });
+        Ok(serde_json::json!({
+            "path": path.to_string_lossy(),
+            "created": bundle.notes.len(),
+            "counts": counts,
+        }))
+    }
+
+    /// 导入一个 bundle。`intoEmpty` 只在库真的为空时放行；`merge` 走同步的
+    /// 三方判定，绝不静默覆盖（§15 / I3）。
+    pub fn import_data(&self, c: ImportCmd) -> Result<serde_json::Value, CmdError> {
+        let path = std::path::PathBuf::from(c.path.ok_or_else(|| CmdError::of("bad_args", false))?);
+        let bundle = notera_importer::read_bundle(&path)
+            .map_err(|e| CmdError::of("save_failed", false).with(serde_json::json!({ "detail": e.to_string() })))?;
+        let stats = self.inner.store.stats().map_err(CmdError::from)?;
+        if c.mode.as_deref() == Some("intoEmpty") && (stats.notes > 0 || stats.folders > 1) {
+            return Err(CmdError::of("save_failed", false).with(serde_json::json!({
+                "detail": format!("目标库非空（笔记 {} / 文件夹 {}），intoEmpty 拒绝写入", stats.notes, stats.folders),
+            })));
+        }
+        for (sha, bytes) in &bundle.attachments {
+            self.inner.store.ingest_blob(sha, bytes).map_err(CmdError::from)?;
+        }
+        let mut ops = Vec::new();
+        for env in bundle.records_in_apply_order() {
+            let kind = env.get("kind").and_then(|k| k.as_str()).unwrap_or_default();
+            let id = env.get("id").and_then(|i| i.as_str()).ok_or_else(|| CmdError::of("bad_args", false))?;
+            let entity = EntityId::parse(id).map_err(|_| CmdError::of("bad_id", false))?;
+            ops.push(if env.get("purged").and_then(|p| p.as_bool()).unwrap_or(false) {
+                notera_store::ApplyOp::Purge {
+                    kind: if kind == "folder" { notera_core::EntityKind::Folder } else { notera_core::EntityKind::Note },
+                    id: entity,
+                }
+            } else if kind == "folder" {
+                notera_store::ApplyOp::UpsertFolder { env }
+            } else {
+                notera_store::ApplyOp::UpsertNote { env }
+            });
+        }
+        let report = self.inner.store.apply_remote(&ops).map_err(CmdError::from)?;
+        let conflicts = self.inner.store.open_conflicts().map(|v| v.len()).unwrap_or(0);
+        Ok(serde_json::json!({
+            "path": path.to_string_lossy(),
+            "merged": report.applied,
+            "skipped": report.skipped,
+            "conflicts": conflicts,
+            "restoredAttachments": bundle.attachments.len(),
+        }))
+    }
+
     /// 一致性快照（DATA-MODEL §15）。产物自带 sha256 与 user_version，恢复闸门靠它们。
     pub fn backup_db(&self, dest_dir: Option<&std::path::Path>) -> Result<notera_store::BackupInfo, CmdError> {
         self.inner.store.create_backup(dest_dir).map_err(CmdError::from)
@@ -1050,8 +1158,25 @@ impl App {
     }
 }
 
-fn store_err(e: StoreError) -> LocalError {
-    match e {
+/// 附件目录里的 blob 文件名（就是 sha256）。目录不存在 = 还没有任何附件。
+fn list_blob_names(dir: &std::path::Path) -> Result<Vec<String>, CmdError> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(CmdError::of("storage", false).with(serde_json::json!({ "detail": e.to_string() }))),
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.len() == 64 && name.chars().all(|c| c.is_ascii_hexdigit()) {
+            out.push(name);
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+fn store_err(e: StoreError) -> LocalError {    match e {
         StoreError::ReadOnly { .. } => LocalError::ReadOnly,
         other => LocalError::Storage(other.to_string()),
     }

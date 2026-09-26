@@ -185,11 +185,11 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 
 | 门禁 | 结果 | 怎么复现 |
 |---|---|---|
-| Rust 测试 | 397 通过 / 0 失败 / 0 ignored（45 个测试二进制） | `cargo test --workspace` |
+| Rust 测试 | 407 通过 / 0 失败 / 0 ignored（47 个测试二进制） | `cargo test --workspace` |
 | 前端 | 121 通过（12 文件）、`vue-tsc` 无错误、构建 199 KB→gzip 68 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
 | 架构适应度 | 18/18 | `node scripts/arch-check.mjs` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
-| 浏览器端到端 | 27/27（真 Rust 核心，非 mock） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
+| 浏览器端到端 | 28/28（真 Rust 核心，非 mock） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
 | 真窗口 | 8/8（invoke 建笔记→落库→刷新读回→点开正文，控制台 0 error） | `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223 target/debug/notera-desktop.exe` + `node scripts/verify-tauri-window.mjs` |
 
 **已建立**：12 个 crate + `apps/desktop`（Tauri 壳 + Vue 前端）+ `migrations/0001..0005` + 自建测试 WebDAV 服务器 + 上述四套验证脚本 + `docs/` 全套规格与 ADR-0001…0019。
@@ -202,7 +202,8 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | 协议 §5 能力探测、§11.3 租约 | 未接入 | `RemotePort` 这 7 个方法表达不了它们；需要扩端口或加 host 侧编排 |
 | 多服务器同时启用 | 按 ADR-0018 拒绝 | 确认点 `sync_rev` 是全局列，需要迁到按账户表 |
 | 备份 / 恢复（§15） | 已实现 | `VACUUM INTO` 一致快照 + sha256/integrity_check 闸门 + 替换前留当前库 + 下次启动落地；恢复不在进程内换库（见 DATA-MODEL §15） |
-| 导出 / 导入（ZIP bundle）、`.enex` 结构化导入 | 未实现 | bundle 需要 `manifest.json` + 逐条冲突求解的导入路径；`.enex` 需要 XML 依赖 + ENML 映射与夹具。设置页的"导出/导入"两个按钮目前会返回 `unknown_command` |
+| 导出 / 导入（ZIP bundle） | 已实现 | `notera-importer/bundle.rs`；导入走 `apply_remote` 同一条冲突安全路径，删除事实随包带走（防复活） |
+| 按文件夹部分导出、`.enex` 结构化导入 | 未实现 | 前者需要文件夹子树 + 外键闭包，目前**明确拒绝**（`folder_scope_unsupported`）而不是假装做了；后者需要 XML 依赖 + ENML 映射与夹具 |
 | macOS / Android / iOS 产物与签名 | BLOCKED | 需要对应硬件、证书与工具链；本机只有 Windows |
 | CI workflow 文件 | 未创建 | 推送渠道待决（ARCHITECTURE-REVIEW §14）；本地等价检查已全部脚本化 |
 | 真实公网 WebDAV 端点验证 | 未做 | 需要一个可写的真实服务器（现仅对自建测试服务器验证） |

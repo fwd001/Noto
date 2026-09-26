@@ -43,6 +43,11 @@ pub enum ImportError {
     /// 存储层拒绝（I6 闸门、约束、SQL）。
     #[error(transparent)]
     Store(#[from] notera_store::StoreError),
+
+    /// 导出 bundle 自己不对：格式号不认识、manifest 缺失、附件内容与文件名不符……
+    /// 单列一个变体是因为这些必须**整包拒绝**，而不是像单文件那样跳过继续。
+    #[error("导出包不可用（未导入任何数据）: {0}")]
+    Bundle(String),
 }
 
 impl ImportError {

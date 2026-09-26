@@ -21,6 +21,7 @@ const shell = useShellStore();
 const bypassText = ref('');
 const savedAt = ref<number | null>(null);
 const dataPath = ref('');
+const outPath = ref('');
 const restoreHint = ref('');
 const importMode = ref<'intoEmpty' | 'merge'>('merge');
 
@@ -92,7 +93,7 @@ async function doExport(): Promise<void> {
     folderIds: [],
     includeAttachments: true,
     includeTrash: true,
-    ...(dataPath.value.trim() ? { path: dataPath.value.trim() } : {}),
+    ...(outPath.value.trim() ? { path: outPath.value.trim() } : {}),
   });
   await settings.loadStats();
 }
@@ -107,8 +108,9 @@ async function doImport(): Promise<void> {
 }
 
 async function doBackup(): Promise<void> {
-  const info = await settings.backupDb(dataPath.value.trim() ? dataPath.value.trim() : undefined);
-  // 备份成功后把路径回填：下一步点"恢复"默认就是刚这份，不必手抄长路径
+  const info = await settings.backupDb(outPath.value.trim() ? outPath.value.trim() : undefined);
+  // 备份成功后把产物填进"输入路径"：下一步点恢复默认就是刚这一份，不必手抄长路径。
+  // 绝不回填到"输出路径"——那会让下一次导出正好盖掉这份备份。
   if (info) dataPath.value = info.path;
 }
 
@@ -298,12 +300,16 @@ function keyHint(): string {
         <div class="card">
           <h2 class="card__title">{{ t('settings.data') }}</h2>
           <label class="field">
-            <span>{{ t('settings.export') }} · path</span>
-            <input v-model="dataPath" class="input" type="text" spellcheck="false" data-testid="data-path" placeholder="留空由本地核心决定位置" />
+            <span>{{ t('settings.exportPathLabel') }}</span>
+            <input v-model="outPath" class="input" type="text" spellcheck="false" data-testid="export-path" :placeholder="t('settings.exportPathHint')" />
+          </label>
+          <label class="field">
+            <span>{{ t('settings.inputPathLabel') }}</span>
+            <input v-model="dataPath" class="input" type="text" spellcheck="false" data-testid="data-path" :placeholder="t('settings.inputPathHint')" />
           </label>
           <div class="row">
             <button type="button" class="btn" :disabled="settings.dataBusy" data-testid="export-data" @click="doExport">{{ t('settings.export') }}</button>
-            <button type="button" class="btn" :disabled="settings.dataBusy" @click="doImport">{{ t('settings.import') }}</button>
+            <button type="button" class="btn" :disabled="settings.dataBusy" data-testid="import-data" @click="doImport">{{ t('settings.import') }}</button>
             <button type="button" class="btn" :disabled="settings.dataBusy" data-testid="backup-db" @click="doBackup">{{ t('settings.backup') }}</button>
             <button type="button" class="btn btn--danger" :disabled="settings.dataBusy" data-testid="restore-db" @click="doRestore">{{ t('settings.restore') }}</button>
           </div>

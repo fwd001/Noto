@@ -369,6 +369,7 @@ fn files_on_disk_hit_the_three_gates_in_order() {
             ImportError::FolderNotFound(_) => "FolderNotFound",
             ImportError::InvalidDoc(_) => "InvalidDoc",
             ImportError::Store(_) => "Store",
+            ImportError::Bundle(_) => "Bundle",
         })
         .collect();
     assert_eq!(kinds, vec!["TooLarge", "Binary", "InvalidEncoding"], "实得 {kinds:?}");

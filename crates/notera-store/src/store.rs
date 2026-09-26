@@ -183,7 +183,9 @@ impl Store {
         self.readers.get()
     }
 
-    pub(crate) fn now(&self) -> String {
+    /// 全库统一的时间源（墙上时间只用于展示与诊断，永不参与新旧判定）。
+    /// 公开它是为了让导出文件名/manifest 与库内时间戳出自同一个时钟，不再各引一份 chrono。
+    pub fn now(&self) -> String {
         self.clock.now().as_str().to_string()
     }
 

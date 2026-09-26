@@ -708,6 +708,45 @@ impl Store {
         })
     }
 
+    /// 全库记录（导出用）。信封与上传时**同一套构造函数** —— 导出的东西必须能被
+    /// 同步层原样吃回去，否则"导出→清空→导入"会走一条和同步不同的写入路径，
+    /// 那正是"防复活"最容易漏的地方。
+    ///
+    /// `include_trash=false` 时软删的笔记仍会出现（它带着 `deleted_at`），
+    /// 因为删掉的事实本身就是内容的一部分；只有 purged 的靠墓碑公告。
+    pub fn all_records(&self) -> Result<Vec<serde_json::Value>, StoreError> {
+        let device = self.device.to_string();
+        let mut out = Vec::new();
+        for folder in self.list_folders()? {
+            out.push(folder_wire(&folder, &device));
+        }
+        let ids: Vec<EntityId> = {
+            let conn = self.read()?;
+            let mut stmt = conn.prepare("SELECT id FROM notes ORDER BY id")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            rows.map(|row| rows::parse_id(&row?)).collect::<Result<_, _>>()?
+        };
+        for id in ids {
+            if let Some(note) = self.get_note(&id)? {
+                out.push(note_wire(&note, &device)?);
+            }
+        }
+        let conn = self.read()?;
+        let mut stmt = conn.prepare("SELECT entity_type, entity_id FROM tombstones WHERE purged = 1 ORDER BY entity_type, entity_id")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (tag, id) = row?;
+            let kind = rows::kind_from_tag(&tag)?;
+            if kind == EntityKind::Attachment {
+                continue;
+            }
+            if let Some(env) = tombstone_wire(&conn, kind, &rows::parse_id(&id)?, &device)? {
+                out.push(env);
+            }
+        }
+        Ok(out)
+    }
+
     pub fn open_conflicts(&self) -> Result<Vec<ConflictRow>, StoreError> {
         let conn = self.read()?;
         conflicts_where(&conn, "state = 'open'")
@@ -760,8 +799,7 @@ fn wire_bytes(v: &serde_json::Value) -> Result<Vec<u8>, StoreError> {
 /// `sync_rev` 是设备态、按 §6 不参与同步判定；带着它只为与规范示例一致，
 /// `apply_remote` 不读该字段。墓碑公告没有行，故省略。
 #[allow(clippy::too_many_arguments)]
-fn envelope(
-    kind: EntityKind,
+fn envelope(    kind: EntityKind,
     id: &EntityId,
     rev: Rev,
     sync_rev: Option<Rev>,

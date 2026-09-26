@@ -29,9 +29,13 @@ page.on('console', (m) => {
 });
 page.on('pageerror', (e) => pageErrors.push(String(e)));
 page.on('requestfailed', (r) => failedRequests.push(`${r.method()} ${r.url()} → ${r.failure()?.errorText}`));
-// 4xx/5xx 不是"请求失败"，但同样是坏了：只盯 requestfailed 会漏掉整类静默错误
+// 4xx/5xx 不是"请求失败"，但同样是坏了：只盯 requestfailed 会漏掉整类静默错误。
+// 记下响应体里的 code，好把"业务上正当的拒绝"和"真的坏了"区分开。
 page.on('response', (r) => {
-  if (r.status() >= 400) failedRequests.push(`${r.request().method()} ${r.url()} → HTTP ${r.status()}`);
+  if (r.status() < 400) return;
+  r.text()
+    .then((body) => failedRequests.push(`${r.request().method()} ${r.url()} → HTTP ${r.status()} ${body.slice(0, 120)}`))
+    .catch(() => failedRequests.push(`${r.request().method()} ${r.url()} → HTTP ${r.status()}`));
 });
 
 const rows = [];
@@ -358,6 +362,46 @@ await step('恢复：只排期并留下可核对的标记，不静默改库', as
   fs.rmSync(markerPath);
   const toast = await page.locator('[data-testid="data-report"], .toast').allInnerTexts();
   return `已排期且现库未动 ${toast.join(' ').slice(0, 40)}`;
+});
+
+/** 直接问本地核心要活笔记列表：比"数界面上的行"稳，不受当前停在哪个视图影响。 */
+const callBridge = async (name, args = {}) => {
+  const r = await fetch(`http://127.0.0.1:17323/cmd/${name}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: URL_BASE },
+    body: JSON.stringify(args),
+  });
+  return r.json();
+};
+const liveNotes = async () => {
+  const rows = await callBridge('list_notes');
+  if (!Array.isArray(rows)) throw new Error(`list_notes 没返回数组：${JSON.stringify(rows).slice(0, 120)}`);
+  return rows;
+};
+
+await step('导出：真产出一个能读回来的 ZIP，且不盖掉刚才的备份', async () => {
+  const backup = (await page.locator('[data-testid="data-path"]').inputValue()).trim();
+  const before = (await liveNotes()).length;
+  await page.locator('[data-testid="export-data"]').click();
+  await page.waitForTimeout(1800);
+  const report = await page.locator('[data-testid="data-report"]').innerText();
+  const zip = report.match(/[A-Za-z]:[^\s]*\.zip/)?.[0];
+  if (!zip) throw new Error(`导出报告里没有给出 ZIP 路径：${report}`);
+  if (!fs.existsSync(zip)) throw new Error(`界面说导出到 ${zip}，盘上没有`);
+  if (fs.readFileSync(zip).subarray(0, 2).toString('latin1') !== 'PK') throw new Error('导出的不是真 ZIP');
+  if (fs.statSync(zip).size < 1024) throw new Error('包太小，不像装了整库');
+  // 这条钉住一个真实事故：备份路径被回填到"输出位置"后，导出会正好盖掉那份备份
+  if (!fs.existsSync(backup)) throw new Error(`导出把备份文件弄没了：${backup}`);
+  if (fs.readFileSync(backup).subarray(0, 15).toString('latin1') !== 'SQLite format 3') throw new Error('备份文件被导出覆盖了');
+
+  await page.locator('[data-testid="data-path"]').fill(zip);
+  await page.locator('[data-testid="import-data"]').click();
+  await page.waitForTimeout(2000);
+  const after = (await liveNotes()).length;
+  if (after !== before) throw new Error(`把同一个库导回自己，笔记数从 ${before} 变成 ${after}（应幂等）`);
+  const ids = new Set((await liveNotes()).map((r) => r.id));
+  if (ids.size !== after) throw new Error('id 集合与条数不符，说明有副本被造出来');
+  return `${zip.split(/[\\/]/).pop()} · ${fs.statSync(zip).size} 字节 · 导入后仍 ${after} 条`;
 });
 
 await step('桌面视口无横向溢出', async () => {

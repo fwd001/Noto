@@ -13,6 +13,7 @@ notera-sync = { workspace = true }
 notera-config = { workspace = true }
 notera-net = { workspace = true }
 notera-webdav = { workspace = true }
+notera-importer = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

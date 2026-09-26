@@ -2789,6 +2789,7 @@ dependencies = [
  "notera-config",
  "notera-core",
  "notera-crypto",
+ "notera-importer",
  "notera-net",
  "notera-richtext",
  "notera-store",

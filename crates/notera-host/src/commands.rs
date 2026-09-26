@@ -269,6 +269,28 @@ pub struct PathCmd {
     pub path: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportCmd {
+    #[serde(default)]
+    pub folder_ids: Vec<String>,
+    #[serde(default)]
+    pub include_attachments: bool,
+    #[serde(default)]
+    pub include_trash: bool,
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportCmd {
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
 fn default_limit() -> u32 {
     200
 }
@@ -445,8 +467,18 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
         }
         "get_prefs" => j(app.get_prefs()?),
         "platform_caps" => j(app.platform_caps()),
-        "backup_db" => {
-            let c: PathCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+        // 前端把整份请求包在 `req` 里（沿用旧契约），这里剥一层再反序列化。
+        "export_data" => {
+            let body = args.get("req").cloned().unwrap_or(args);
+            let c: ExportCmd = serde_json::from_value(body).map_err(|_| CmdError::of("bad_args", false))?;
+            j(app.export_data(c)?)
+        }
+        "import_data" => {
+            let body = args.get("req").cloned().unwrap_or(args);
+            let c: ImportCmd = serde_json::from_value(body).map_err(|_| CmdError::of("bad_args", false))?;
+            j(app.import_data(c)?)
+        }
+        "backup_db" => {            let c: PathCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.backup_db(c.path.as_ref().map(std::path::Path::new))?)
         }
         "list_backups" => j(app.list_backups()?),
