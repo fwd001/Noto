@@ -34,16 +34,19 @@ page.on('requestfailed', (r) => failedRequests.push(`${r.method()} ${r.url()} �
 page.on('response', (r) => {
   if (r.status() < 400) return;
   r.text()
-    .then((body) => failedRequests.push(`${r.request().method()} ${r.url()} → HTTP ${r.status()} ${body.slice(0, 120)}`))
-    .catch(() => failedRequests.push(`${r.request().method()} ${r.url()} → HTTP ${r.status()}`));
+    .then((body) => failedRequests.push(`${r.request().method()} ${r.url()} → HTTP ${r.status()} [步骤：${currentStepName}] ${body.slice(0, 120)}`))
+    .catch(() => failedRequests.push(`${r.request().method()} ${r.url()} → HTTP ${r.status()} [步骤：${currentStepName}]`));
 });
 
 const rows = [];
+// 失败请求要能归位到"哪一步在做" —— 偶发的 4xx 只报 URL 与状态码，下次复现时仍然无从下手。
+let currentStepName = '(未进入任何步骤)';
 function record(step, ok, detail) {
   rows.push({ step, ok, detail });
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${step}${detail ? `  —— ${detail}` : ''}`);
 }
 async function step(name, fn) {
+  currentStepName = name;
   try {
     const detail = await fn();
     record(name, true, detail ?? '');
@@ -440,6 +443,14 @@ await step('导出：真产出一个能读回来的 ZIP，且不盖掉刚才的�
   if (!fs.existsSync(zip)) throw new Error(`界面说导出到 ${zip}，盘上没有`);
   if (fs.readFileSync(zip).subarray(0, 2).toString('latin1') !== 'PK') throw new Error('导出的不是真 ZIP');
   if (fs.statSync(zip).size < 1024) throw new Error('包太小，不像装了整库');
+  // 附件必须真的在包里。设置页那条边写死了 `includeAttachments: true`，而这里曾经
+  // 只看"包能不能打开"，于是"一个附件都没带"的导出照样算绿（实测踩过：blob 落在
+  // `<attachments>/<2hex>/<sha>` 两层目录里，按一层目录名筛 64hex 永远筛不到）。
+  // 库里的附件数直接从刚才那张统计卡读 —— 顺带也证明那张卡接的是真数。
+  const statsText = (await page.locator('.stats').innerText()).replace(/\s+/g, ' ');
+  const wantAtt = Number((statsText.match(/(\d+) 个附件/) || [])[1] ?? 0);
+  const hasAtt = fs.readFileSync(zip).subarray(0, 200000).includes('attachments/');
+  if (wantAtt > 0 && !hasAtt) throw new Error(`库里有 ${wantAtt} 个附件，导出的包里却没有 attachments/ 条目（${statsText}）`);
   // 这条钉住一个真实事故：备份路径被回填到"输出位置"后，导出会正好盖掉那份备份
   if (!fs.existsSync(backup)) throw new Error(`导出把备份文件弄没了：${backup}`);
   if (fs.readFileSync(backup).subarray(0, 15).toString('latin1') !== 'SQLite format 3') throw new Error('备份文件被导出覆盖了');

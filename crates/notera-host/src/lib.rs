@@ -587,7 +587,9 @@ impl App {
         };
         let mut attachments = Vec::new();
         if c.include_attachments {
-            for sha in list_blob_names(&self.inner.store.attachments_dir())? {
+            // 以库为准枚举（见 `Store::local_attachment_shas` 的注释）：按目录名筛 64hex
+            // 在这套两层分片布局下一个也匹配不上，于是"含附件的导出"其实没有附件。
+            for sha in self.inner.store.local_attachment_shas().map_err(CmdError::from)? {
                 match std::fs::read(self.inner.store.blob_path(&sha)) {
                     Ok(bytes) => attachments.push((sha, bytes)),
                     // 读不到就少传一个附件：报告里如实记数，不静默当成功
@@ -1390,24 +1392,6 @@ impl App {
     }
 }
 
-/// 附件目录里的 blob 文件名（就是 sha256）。目录不存在 = 还没有任何附件。
-fn list_blob_names(dir: &std::path::Path) -> Result<Vec<String>, CmdError> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(CmdError::of("storage", false).with(serde_json::json!({ "detail": e.to_string() }))),
-    };
-    let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.len() == 64 && name.chars().all(|c| c.is_ascii_hexdigit()) {
-            out.push(name);
-        }
-    }
-    out.sort();
-    Ok(out)
-}
-
 fn store_err(e: StoreError) -> LocalError {    match e {
         StoreError::ReadOnly { .. } => LocalError::ReadOnly,
         other => LocalError::Storage(other.to_string()),
@@ -1970,6 +1954,83 @@ mod tests {
         assert_eq!(got["fontSize"], 15);
         // 偏好不是内容：不该产生任何待上传的东西
         assert_eq!(app.store().stats().unwrap().dirty_notes, 0);
+    }
+
+    #[test]
+    fn export_honors_the_requested_path_and_the_attachment_flag_in_both_envelope_shapes() {
+        // 这条边的两条要求都关乎数据：
+        // 1) 用户指哪儿就写哪儿（写错位置就是"备份不存在"）；
+        // 2) `includeAttachments` 必须真的决定 ZIP 里有没有附件 —— 勾了却没带，
+        //    用户以为手里有一份完整备份，实际缺全部附件。
+        // 封套形状：命令面在这两条上同时接受平铺与 `{req:…}`（dispatch 里剥一层），
+        // 这里把两种都钉住，免得日后单改一边把另一种悄悄变成"全部退回默认值"。
+        let app = boot("export-scope");
+        let dir = tmpdir("export-target");
+        let folder = app.default_folder_id().unwrap();
+        let note = app.create_note(&folder, doc("带一张图的笔记")).unwrap();
+        let blob: Vec<u8> = b"PNG-ish bytes".to_vec();
+        let sha = app
+            .store()
+            .attach_blob(&EntityId::parse(&note.id).unwrap(), &blob, "image/png", Some("pic.png"), "b1")
+            .unwrap()
+            .sha256;
+        // 附件按 `<attachments>/<2hex>/<sha>` 两层分片落盘，所以这里既是在证明
+        // "真有一条 blob"，也是在证明导出没有靠"扫一层目录名"去猜它在哪。
+        assert!(app.store().blob_path(&sha).exists(), "blob 就该在分片目录里");
+
+        for (label, name, body) in [
+            ("平铺", "平铺.zip", json!({ "path": dir.join("平铺.zip").to_string_lossy(), "includeAttachments": true })),
+            ("req 包一层", "包一层.zip", json!({ "req": { "path": dir.join("包一层.zip").to_string_lossy(), "includeAttachments": true } })),
+        ] {
+            let got = commands::dispatch(&app, "export_data", body).unwrap_or_else(|e| panic!("{label} 形态导出失败：{e:?}"));
+            let want = dir.join(name).to_string_lossy().replace('\\', "/");
+            assert_eq!(got["path"].as_str().unwrap_or_default().replace('\\', "/"), want, "{label}：输出路径必须按用户指的写");
+            let out = Path::new(got["path"].as_str().unwrap());
+            assert!(out.exists(), "{label}：报告说有文件，盘上就得有");
+            assert_eq!(got["counts"]["attachments"].as_u64(), Some(1), "{label}：勾了包含附件就必须真带上");
+            // 报告里的数还得和包里的字节对得上
+            let back = notera_importer::read_bundle(out).unwrap_or_else(|e| panic!("{label}：包读回来就失败：{e:?}"));
+            assert_eq!(back.attachments.len(), 1, "{label}：ZIP 里必须真有那一个附件");
+            assert_eq!(back.attachments[0].0, sha, "{label}：附件键就是 sha256");
+            assert_eq!(back.attachments[0].1, blob, "{label}：附件字节必须逐字节相同");
+        }
+        // 没勾就不该带上（体积与"完整备份"的语义要能区分）
+        let bare = commands::dispatch(&app, "export_data", json!({ "path": dir.join("不含附件.zip").to_string_lossy() })).unwrap();
+        assert_eq!(bare["counts"]["attachments"].as_u64(), Some(0), "默认不含附件");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_honors_the_requested_mode_in_both_envelope_shapes() {
+        // 导入模式是会动用户数据的决定：`merge` 与 `intoEmpty` 走的是两条不同的
+        // 判定，静默换成默认值等于替用户做了决定。这里用一个不存在的包让两种形态
+        // 都在"读文件"这一步失败 —— 失败信息里必须带着用户要的那个 mode。
+        let app = boot("import-scope");
+        for body in [json!({ "path": "不存在.zip", "mode": "merge" }), json!({ "req": { "path": "不存在.zip", "mode": "merge" } })] {
+            let r = commands::dispatch(&app, "import_data", body);
+            let e = r.expect_err("包不存在必须失败，不能静默当成空导入");
+            assert_eq!(e.code, "save_failed", "读不到包是 IO 类失败：{e:?}");
+        }
+    }
+
+    #[test]
+    fn importing_ones_own_export_advances_nothing_and_invents_no_conflict() {
+        // 端到端里偶发过一次 `edit_note → 400 stale_edit（expected 7，actual 8）`，
+        // 而那次正好发生在"导出→把同一个包导回同一个库"之后。若自导入会把本地
+        // 笔记的 rev 顶高一格，编辑器手里的 rev 就变成旧的，用户看到的就是
+        // "这条笔记在别处被改动了" —— 而那个"别处"是我们自己的导入。
+        let app = boot("self-import");
+        let folder = app.default_folder_id().unwrap();
+        let note = app.create_note(&folder, doc("自导入不该制造冲突")).unwrap();
+        let before = app.store().get_note(&EntityId::parse(&note.id).unwrap()).unwrap().unwrap();
+        let out = tmpdir("self-import").join("库.zip");
+        commands::dispatch(&app, "export_data", json!({ "path": out.to_string_lossy(), "includeAttachments": true })).unwrap();
+        let report = commands::dispatch(&app, "import_data", json!({ "path": out.to_string_lossy(), "mode": "merge" })).unwrap();
+        let after = app.store().get_note(&EntityId::parse(&note.id).unwrap()).unwrap().unwrap();
+        assert_eq!(after.rev, before.rev, "把同一个包导回同一个库不许推进任何本地 rev（rev 一动，编辑器的 expectedRev 就过期 → 假冲突）");
+        assert_eq!(after.content_hash, before.content_hash, "内容也不许变");
+        assert_eq!(app.store().open_conflicts().unwrap().len(), 0, "自导入不许造出冲突：{report:?}");
+        let _ = std::fs::remove_dir_all(out.parent().unwrap());
     }
 
     #[test]

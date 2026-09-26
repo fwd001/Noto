@@ -300,6 +300,13 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
                     match notera_importer::read_bundle(&out) {
                         Ok(b) => {
                             println!("回读校验通过: {} 条笔记 / {} 个附件", b.notes.len(), b.attachments.len());
+                            // 数量也要对得上：这里曾经只打印不判定，于是"包能打开但一个附件
+                            // 都没有"的导出照样算通过 —— 用户手里是一份缺全部附件的"完整备份"。
+                            let want = app.store().local_attachment_shas().map(|v| v.len()).unwrap_or(usize::MAX);
+                            if b.attachments.len() < want {
+                                eprintln!("导出的包里少了附件：库里有 {want} 个，包里只有 {} 个（ASSERT_FAIL）", b.attachments.len());
+                                return EXIT_FAIL;
+                            }
                             EXIT_OK
                         }
                         Err(e) => {

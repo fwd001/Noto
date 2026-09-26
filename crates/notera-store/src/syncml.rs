@@ -707,6 +707,17 @@ impl Store {
         )? as u32)
     }
 
+    /// 本地**已知**的附件 sha 清单（导出用）。以库为准，不以目录遍历为准：
+    /// blob 落在 `<attachments>/<2hex>/<sha>` 的两层结构里，"扫一层目录"这种写法
+    /// 只会看到 2 字符的分片目录名，于是导出的 ZIP 里一个附件都没有，而报告说成功
+    /// （实测踩过）。库里没有的行不属于任何笔记，不该混进用户的备份。
+    pub fn local_attachment_shas(&self) -> Result<Vec<String>, StoreError> {
+        let conn = self.read()?;
+        let mut stmt = conn.prepare("SELECT sha256 FROM attachments ORDER BY sha256")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect::<Result<_, _>>().map_err(Into::into)
+    }
+
     // ------------------------------------------------- push 侧：记录 wire ---
 
     /// 笔记记录的 wire 字节（DATA-MODEL §11 / SYNC-PROTOCOL §3）：同步引擎 PUT 的就是这份。

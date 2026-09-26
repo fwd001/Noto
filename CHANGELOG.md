@@ -8,7 +8,7 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 435 通过 / 0 失败 / 0 ignored（50 个测试二进制） |
+| `cargo test --workspace` | 438 通过 / 0 失败 / 0 ignored（50 个测试二进制） |
 | 前端 | 140 通过（14 文件）；`vue-tsc --noEmit` 无错误；构建 206 KB → gzip 70 KB |
 | `scripts/arch-check.mjs` | 22/22 |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
@@ -54,6 +54,7 @@
 - **待办结清用错了 kind 词汇，每一行都永远停在 inflight**：引擎交给适配器的 `kind` 是**线上短标记**（`n/f/a`，它同时是远端路径 `/.notes/n/<id>.json` 的一段），而 `sync_operations.entity_type` 存的是长标记（`note/folder/attachment`）。`outbox_settle` 拿短标记去 UPDATE：匹配 0 行、返回 `Ok(())`、留一条 warn，于是设置页的"待处理任务"永远不掉、`sync_operations` 只增不清、崩溃恢复也判断不了从哪重放。修法是把参数类型从 `&str` 改成 `EntityKind` —— 词汇翻译从此是**编译期**的事，store 内部只认一种词汇，host 适配器用 `EntityKind::from_tag` 显式翻并认不出就放弃（绝不"猜一行"标完成）。**store 的单测当时是绿的**，因为它自己传的就是长标记：单测用错词汇不会失败，只有真跑一轮才会。顺带把"待同步"的口径定清 —— 只统计**启用中的账户**，本地哨兵账户（`enabled=0`）是"提交即入 outbox"的留痕账、引擎永不消费它，把它算进来这个数就永远归不了零，长得像同步卡死（本地有没有未上传改动由 `dirty_notes` 表达，两者不混）
 - **设置页的"最近删除 / 本地占用 / 待处理任务"恒为占位符 `—`，侧栏回收站恒为 0**：`App::stats` 是命令面里唯一没走 DTO 的一条 —— 它把 `notera_store::StoreStats` 原样序列化，wire 上是 snake_case 的 `notes_trash / fts_rows / outbox_pending`，而契约图与前端读的是 `notesInTrash / ftsEntries / inflightOps`，于是全是 `undefined`。TypeScript 的类型是断言不是校验，`formatNumber(undefined)` 很诚实地给出 `—`；而 `app.spec.ts` 喂的 mock 恰好是 camelCase —— 假数据把这个洞完整盖住了。现在命令面补 `StatsDto`（8 个契约字段 + `From<StoreStats>` 一处翻译），三处一起钉住：Rust 用真 `dispatch("stats")` 断言键集合、arch-check 新增 `edge:stats-dto-covers-ui-reads`（扫前端每一处 `settings.stats.X` 与 `StoreStats` 声明，核心发不出就判红；删掉 `#[serde(rename_all)]` 或改任一个字段名都会变红，两条都实测过）、端到端新增一步在浏览器里断言这五行全是数字
 - **通用门禁 `edge:command-wire-is-camelCase`**：上一条是逐键核对，这一条把整类挡掉 —— 命令面每一个 `j(app.x()?)` 出参的结构体都必须**显式**声明 `#[serde(rename_all = "camelCase")]`，否则判红并指名是哪个命令、哪个类型。审计顺带查了另一处同源风险（`backup_db`/`list_backups` 发的是 store 的 `BackupInfo`），它本来就带这个属性所以界面没坏；门禁的作用是不许下一个人在没注意的时候漏掉它（变异测过：删掉那个属性 → `backup_db → BackupInfo（缺 #[serde(rename_all = "camelCase")]）` 立刻变红）
+- **导出说"含附件"，包里一个附件都没有**：附件按 DATA-MODEL §5.1 落在 `<attachments>/<2hex>/<sha>` 两层分片目录里，而导出用的是"读一层目录、按 64hex 筛文件名"—— 那一层里只有 2 字符的分片目录名，所以过滤器**永远筛不到任何东西**。后果不是报错而是安心感被偷走：`include_attachments: true`（设置页写死 true）、`notera-cli export`、以及备份语义都指向"这份包里有我的文件"，实际交出去的是一个只有文字的空壳，而且回读校验只检查"包能不能打开"，于是 `附件 0` 也照样算通过。改成以库为准（新增 `Store::local_attachment_shas()`），并补三处判定：命令面测试真挂一个 blob 并断言包里的条目数/字节（变异测过：换回旧的扫目录写法 → `left: Some(0) right: Some(1)`）、CLI 导出后**比对数量**而不只是打开、端到端在统计卡与包之间对账。顺带发现：编辑器"插入图片/附件"这条 UI 入口至今没有文件选择器接上（`attach_file` 需要 `localPath`/`mediaType`，前端只发 `{noteId, blockId, role}` → 必然 `bad_args`），失败路径本身是干净的（占位块会撤掉并提示），但功能确实不可用 —— 见 §尚未做
 - `WorkspaceView` 不跟随 `selectedId` 打开编辑器（选中了却一片空白）、`create()` 不打开新笔记、冲突动词表三处不一致、`create_note` 拒绝 `folderId: null`、`/favicon.ico` 404
 - **架构适应度检查** `scripts/arch-check.mjs`：22 条机器可判定的层次约束（依赖边、唯一出口、SQL 只出现在 store、前端无协议词汇、端口边越界引用、命令面 DTO 覆盖界面读的每一个键…）
 - **端到端等价** `scripts/verify-app.mjs`：Playwright 驱动同一份前端 + 同一份 Rust 核心的 31 步 UAT
