@@ -76,8 +76,17 @@ pub fn run() {
             // 没配服务器或凭据还没接入钥匙串 → 引擎不启动，本地照常写（I8）。
             match app.sync_remote() {
                 Ok(Some(remote)) => {
-                    let scheduler = app.as_ref().clone().start_sync(remote);
-                    tauri::async_runtime::spawn(scheduler.run());
+                    // 协商在启动调度器**之前**：两个库指向同一目录、或服务器上的
+                    // 协议区间不相交时，必须一次都不写，而不是先同步了再解释。
+                    let host = app.as_ref().clone();
+                    tauri::async_runtime::spawn(async move {
+                        match host.negotiate(&remote).await {
+                            Ok(()) => host.start_sync(remote).run().await,
+                            Err(key) => {
+                                host.emit(BusEvent::Toast { message_key: key.to_string(), level: "warn".into() });
+                            }
+                        }
+                    });
                 }
                 Ok(None) => {}
                 Err(e) => app.emit(BusEvent::Toast { message_key: e.message_key, level: "warn".into() }),
