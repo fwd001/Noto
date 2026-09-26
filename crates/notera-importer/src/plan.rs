@@ -392,6 +392,18 @@ fn existing_content_hashes(store: &Store, folder: &EntityId) -> Result<HashSet<S
     Ok(out)
 }
 
+/// 单文件一步到位（预览请用 [`plan`] + [`apply`]）。
+pub fn import_paths(store: &Store, folder: &FolderTarget, paths: &[&Path]) -> Result<(ImportPlan, ApplyReport), ImportError> {
+    let plan = ImportPlan::from_paths(paths);
+    let report = apply(store, folder, &plan)?;
+    Ok((plan, report))
+}
+
+/// 由源构造文档（导出侧/测试用的最小入口）。
+pub fn document_for(src: &ImportSource) -> Result<Document, ImportError> {
+    Ok(plan_one(src)?.doc)
+}
+
 // ============================================================ 单元测试 ===
 
 #[cfg(test)]
@@ -470,16 +482,4 @@ mod tests {
         assert_eq!(a.content_hash, b.content_hash);
         assert_eq!(notera_richtext::canonical(&a.doc), notera_richtext::canonical(&b.doc));
     }
-}
-
-/// 单文件一步到位（预览请用 [`plan`] + [`apply`]）。
-pub fn import_paths(store: &Store, folder: &FolderTarget, paths: &[&Path]) -> Result<(ImportPlan, ApplyReport), ImportError> {
-    let plan = ImportPlan::from_paths(paths);
-    let report = apply(store, folder, &plan)?;
-    Ok((plan, report))
-}
-
-/// 由源构造文档（导出侧/测试用的最小入口）。
-pub fn document_for(src: &ImportSource) -> Result<Document, ImportError> {
-    Ok(plan_one(src)?.doc)
 }

@@ -513,7 +513,7 @@ fn configure(
             .danger_accept_invalid_hostnames(true),
     };
     if force_direct {
-        return Ok(b.no_proxy().build().map_err(build_err)?);
+        return b.no_proxy().build().map_err(build_err);
     }
     match proxy.mode {
         ProxyMode::Direct => b = b.no_proxy(),
@@ -539,7 +539,7 @@ fn configure(
             b = b.proxy(p);
         }
     }
-    Ok(b.build().map_err(build_err)?)
+    b.build().map_err(build_err)
 }
 
 fn build_err(e: reqwest::Error) -> NetError {

@@ -86,7 +86,7 @@ fn note_wire_survives_apply_remote_on_another_device_with_same_rev_and_hash() {
     let env = wire_to_json(&w);
     assert_eq!(env["kind"], "note", "§3：kind 必须与远端目录一致");
     assert_eq!(env["id"], note.id.as_str());
-    assert_eq!(env["rev"], note.rev.get() as u64);
+    assert_eq!(env["rev"], note.rev.get());
     assert_eq!(env["hash"], note.content_hash.as_str(), "hash 就是行上的 content_hash");
     assert_eq!(env["purged"], false);
     assert_eq!(env["ct"], Value::Null, "alg=none 时 payload 与 ct 恰好一个非空");
@@ -156,7 +156,7 @@ fn deleted_note_wire_carries_deleted_at_and_purge_is_an_announcement() {
     let ann = wire_to_json(&ann);
     assert_eq!(ann["purged"], true);
     assert!(ann["payload"].is_null(), "§3：purged 记录 payload 为 null");
-    assert_eq!(ann["rev"], tomb.rev.get() as u64);
+    assert_eq!(ann["rev"], tomb.rev.get());
     assert_eq!(ann["deleted_at"], tomb.deleted_at.as_str());
 
     // 对端应用公告后：读不到行，而且旧内容再 PUT 上来必须被拒

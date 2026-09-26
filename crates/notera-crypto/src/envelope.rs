@@ -119,6 +119,9 @@ impl Envelope {
         )
     }
 
+    // 形参就是 `note_revisions` 那一行的列。收成一个参数结构体不会少一个字段，
+    // 只会多一处"把字段从结构体搬到形参"的样板 —— 那里才是会漏的地方。
+    #[allow(clippy::too_many_arguments)]
     fn for_entity(
         kind: EntityKind,
         id: &EntityId,
@@ -815,7 +818,7 @@ mod tests {
         // ct 长度 = canonical(payload) 长度 + 16（INV-12 在信封层的表现）。
         assert_eq!(
             b64::decode(back.ct.as_deref().unwrap()).unwrap().len(),
-            canonical_json(&doc()).as_bytes().len() + 16
+            canonical_json(&doc()).len() + 16
         );
     }
 

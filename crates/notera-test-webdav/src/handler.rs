@@ -412,7 +412,7 @@ fn destination(req: &Request) -> Option<String> {
     let decoded = percent_encoding::percent_decode_str(&path_part)
         .decode_utf8_lossy()
         .into_owned();
-    normalize(&decoded.split_once('?').map(|(p, _)| p).unwrap_or(&decoded))
+    normalize(decoded.split_once('?').map(|(p, _)| p).unwrap_or(&decoded))
 }
 
 /// ETag 列表匹配：`*`、逗号分隔、弱 `W/` 前缀容忍。

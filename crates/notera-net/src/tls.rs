@@ -23,9 +23,10 @@
 
 
 /// 证书/传输安全策略。
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum TlsPolicy {
     /// 系统信任库严格校验（默认）。
+    #[default]
     Strict,
     /// 在系统信任库之上**追加** PEM 根证书（内网自签根）。
     CaBundle(String),
@@ -33,12 +34,6 @@ pub enum TlsPolicy {
     Pin(Vec<String>),
     /// 跳过校验 —— 仅 loopback。
     InsecureLocal,
-}
-
-impl Default for TlsPolicy {
-    fn default() -> Self {
-        TlsPolicy::Strict
-    }
 }
 
 impl TlsPolicy {

@@ -38,9 +38,10 @@ pub enum ConfigError {
 
 // ---------------------------------------------------------------- 类型 ---
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum TlsPolicyKind {
     /// 系统信任库严格校验（公网默认）
+    #[default]
     Strict,
     /// 追加/替换为给定 PEM 根证书（内网自签主路径）
     CaBundle,
@@ -50,11 +51,6 @@ pub enum TlsPolicyKind {
     InsecureLocal,
 }
 
-impl Default for TlsPolicyKind {
-    fn default() -> Self {
-        TlsPolicyKind::Strict
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ProxyMode {
@@ -656,8 +652,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("notera-cfg2-{}", new_id()));
         let repo = ConfigRepository::new(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let mut cfg = AppConfig::default();
-        cfg.version = CONFIG_VERSION + 5;
+        let cfg = AppConfig { version: CONFIG_VERSION + 5, ..Default::default() };
         std::fs::write(repo.path(), serde_json::to_string(&cfg).unwrap()).unwrap();
         match repo.load() {
             Err(ConfigError::TooNew { .. }) => {}

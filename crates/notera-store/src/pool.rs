@@ -94,12 +94,11 @@ impl ReaderPool {
             // 而 WAL 下只读事务会把它开始时刻的快照钉住：这条连接下次被借出时，
             // 读到的是过期数据而不是已提交的新状态。实测表现为"同一个 COUNT(*)
             // 先返回 1、紧接着返回 0"——取决于这次借到哪个连接。
-            if !c.is_autocommit() {
-                if c.execute_batch("ROLLBACK;").is_err() {
+            if !c.is_autocommit()
+                && c.execute_batch("ROLLBACK;").is_err() {
                     // 回滚不掉就丢弃它，宁可新开一条，也不能把脏快照交出去
                     continue;
                 }
-            }
             return Ok(c);
         }
     }

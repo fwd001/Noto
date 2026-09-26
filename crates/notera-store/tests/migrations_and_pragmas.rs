@@ -12,8 +12,9 @@ fn user_version(file: &std::path::Path) -> u32 {
 /// 期望的迁移序列：`from..=支持版本` 连续递增。
 /// 不写死 `[1,2,3,4,5]` —— 那样每加一个迁移就得改测试，很容易顺手改成"少一个也过"。
 /// 下限断言保证真有人删迁移号时这里仍然会红。
+/// 写成 `const`：编译期就红，不用等测试被跑到。
+const _: () = assert!(SUPPORTED_SCHEMA_VERSION >= 5, "支持版本不该低于 5，迁移序列被截断了？");
 fn contiguous_from(from: u32) -> Vec<u32> {
-    assert!(SUPPORTED_SCHEMA_VERSION >= 5, "支持版本不该低于 5，迁移序列被截断了？");
     (from..=SUPPORTED_SCHEMA_VERSION).collect()
 }
 

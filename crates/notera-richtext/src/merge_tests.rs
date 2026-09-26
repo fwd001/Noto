@@ -631,7 +631,7 @@ fn rand_block(rng: &mut Rng, id: &str) -> Value {
 }
 
 fn rand_doc(rng: &mut Rng) -> Document {
-    let mut picked: Vec<&str> = IDS.iter().copied().collect();
+    let mut picked: Vec<&str> = IDS.to_vec();
     // 洗牌后截断：顺序与集合都随机，但每个 id 至多出现一次。
     for i in (1..picked.len()).rev() {
         let j = rng.below(i + 1);

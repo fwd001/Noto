@@ -314,7 +314,7 @@ fn extract_counts_chinese_by_codepoint_not_byte() {
     assert!(!x.has_attachment);
     // summary 跳过标题。
     assert_eq!(x.summary, "中文 abc");
-    let bytes = x.plain_text.as_bytes().len();
+    let bytes = x.plain_text.len();
     assert_eq!(bytes, 23, "顺带确认字节数远大于码点数：{bytes} vs {}", x.char_count);
 }
 
@@ -410,5 +410,5 @@ fn attachments_lists_what_the_document_references_and_nothing_else() {
     assert_eq!(got[0].filename.as_deref(), Some("shot.png"));
     // 角色词汇之外的值一律丢回 None，由存储层按媒体类型判（表上有 CHECK(role IN (inline,file)))
     assert_eq!(got[1].role, None);
-    assert_eq!(extract(&parse_from_value(&v).unwrap()).has_attachment, true, "畸形 sha 仍算\"这篇有附件\"，只是登记不了");
+    assert!(extract(&parse_from_value(&v).unwrap()).has_attachment, "畸形 sha 仍算\"这篇有附件\"，只是登记不了");
 }

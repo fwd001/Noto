@@ -347,11 +347,11 @@ fn unknown_markup_stays_literal_text() {
 #[test]
 fn files_on_disk_hit_the_three_gates_in_order() {
     let tmp = Tmp::new("gates");
-    let big = tmp.write("big.md", &vec![b'a'; MAX_SOURCE_BYTES as usize + 1]);
+    let big = tmp.write("big.md", vec![b'a'; MAX_SOURCE_BYTES as usize + 1]);
     let mut bin_bytes = "# 标题\n".as_bytes().to_vec();
     bin_bytes.extend([0u8, 1, 2, 3]);
     let bin = tmp.write("bin.md", &bin_bytes);
-    let gbk = tmp.write("gbk.md", &[0xD6u8, 0xD0, 0xCE, 0xC4]);
+    let gbk = tmp.write("gbk.md", [0xD6u8, 0xD0, 0xCE, 0xC4]);
     let ok = tmp.write("ok.md", "# 能进\n");
 
     let paths: Vec<&Path> = vec![&big, &bin, &gbk, &ok];
@@ -406,7 +406,7 @@ fn reading_a_missing_or_oversize_file_is_a_typed_error() {
     let tmp = Tmp::new("typed");
     let missing = tmp.dir().join("nope.md");
     assert!(matches!(ImportSource::read(&missing), Err(ImportError::Io { .. })));
-    let big = tmp.write("big.txt", &vec![b'x'; MAX_SOURCE_BYTES as usize + 1]);
+    let big = tmp.write("big.txt", vec![b'x'; MAX_SOURCE_BYTES as usize + 1]);
     match ImportSource::read(&big) {
         Err(ImportError::TooLarge { path, size, limit }) => {
             assert_eq!(path, "big.txt");

@@ -712,7 +712,7 @@ fn left_flanking(before: Option<char>, after: Option<char>) -> bool {
         None => false,
         Some(a) => {
             !a.is_whitespace()
-                && (!is_punct(a) || before.map_or(true, |b| b.is_whitespace() || is_punct(b)))
+                && (!is_punct(a) || before.is_none_or(|b| b.is_whitespace() || is_punct(b)))
         }
     }
 }
@@ -722,7 +722,7 @@ fn right_flanking(before: Option<char>, after: Option<char>) -> bool {
         None => false,
         Some(b) => {
             !b.is_whitespace()
-                && (!is_punct(b) || after.map_or(true, |a| a.is_whitespace() || is_punct(a)))
+                && (!is_punct(b) || after.is_none_or(|a| a.is_whitespace() || is_punct(a)))
         }
     }
 }
@@ -733,7 +733,7 @@ fn can_emph_open(c: char, before: Option<char>, after: Option<char>) -> bool {
         return false;
     }
     if c == '_' {
-        return !right_flanking(before, after) || before.map_or(true, is_punct);
+        return !right_flanking(before, after) || before.is_none_or(is_punct);
     }
     true
 }
@@ -743,7 +743,7 @@ fn can_emph_close(c: char, before: Option<char>, after: Option<char>) -> bool {
         return false;
     }
     if c == '_' {
-        return !left_flanking(before, after) || after.map_or(true, is_punct);
+        return !left_flanking(before, after) || after.is_none_or(is_punct);
     }
     true
 }

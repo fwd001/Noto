@@ -98,7 +98,7 @@ impl NetError {
             507 | 509 => NetError::Quota,
             301 | 302 | 303 | 307 | 308 => NetError::RedirectCrossOrigin,
             500..=599 => NetError::Server,
-            s if s >= 400 && s < 500 => NetError::Protocol(format!("未预期客户端侧状态 {s}")),
+            s if (400..500).contains(&s) => NetError::Protocol(format!("未预期客户端侧状态 {s}")),
             // 2xx/1xx 不是错误；调用方拿它当"成功"来用。
             s => NetError::Protocol(format!("{s} 不是错误状态")),
         }

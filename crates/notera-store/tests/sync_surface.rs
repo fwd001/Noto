@@ -330,7 +330,7 @@ fn apply_folder_tombstone_and_purge_from_remote() {
     store.apply_remote(&[ApplyOp::Tombstone { kind: EntityKind::Folder, id: f.id.clone(), rev: Rev(5) }]).unwrap();
     let after = store.get_folder(&f.id).unwrap().unwrap();
     assert!(after.deleted_at.is_some());
-    assert!(store.get_tombstone(EntityKind::Folder, &f.id).unwrap().unwrap().purged == false);
+    assert!(!store.get_tombstone(EntityKind::Folder, &f.id).unwrap().unwrap().purged);
     assert!(store.get_note(&n.id).unwrap().is_some(), "远端删文件夹也不能级联删笔记");
     assert!(store.verify().is_empty(), "{:?}", store.verify());
 

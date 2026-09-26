@@ -9,6 +9,7 @@
 | 门禁 | 结果 |
 |---|---|
 | `cargo test --workspace` | 457 通过 / 0 失败 / 0 ignored（50 个测试二进制） |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
 | 前端 | 169 通过（17 文件）；`vue-tsc --noEmit` 无错误；构建 212 KB → gzip 73 KB |
 | `scripts/arch-check.mjs` | 24/24 |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
@@ -42,6 +43,8 @@
 - **删除按钮对屏幕阅读器念的是"删除文件夹"**：笔记行内那颗"把这条移到最近删除"的按钮，`aria-label`/`title` 复用了 `sidebar.deleteFolder` —— 读屏用户听到的是错的动词和错的对象；而编辑器工具栏那颗直接把导航项的名字（"最近删除"）当成动作按钮的文案，看不出点了会发生什么。改成 `list.moveToTrash`（移到最近删除，作可访问名与悬停提示）+ 可见文案"删除"（比原来更短，不吃窄栏的行宽）
 
 ### 修掉的静默错误（都是"看着在用、其实没接线"）
+
+- **CI-CD 规定的那条 lint 门禁此前根本跑不起来**：`cargo clippy --workspace --all-targets -- -D warnings` 先是报 **3 条编译错误**（`notera-richtext` 的零宽字符测试用字面不可见字符写夹具，触发 `invisible_character_location`），修掉后又露出 40 条 warning。现在按 CI-CD 那一行原样实测 `exit=0`。分两类处理：能真修的直接修（`sort_by_key`、`map_or`→`is_some_and`、`entry` 的 vacant 分支、`Ok(x?)`→`x?`、重复的 `#[derive(Default)]`、`as_bytes().len()`、以及把"常量断言"改成 `const _: () = assert!(…)` —— 从"跑到才红"提前到**编译不过**）；三类"照 clippy 建议改就要动结构"的加**带理由的窄范围 allow**：形参本身就是表列的三个内部写入函数（`too_many_arguments`）、两处以"复杂类型"为被测对象的签名哨兵（`type_complexity`：抽成别名等于用被检查的写法去检查它）、能力探测那处"一项一次往返、失败就地早退"的增量填充（`field_reassign_with_default`）。没有一处是为了变绿而关掉真问题
 
 - **清单公告失败的那一轮，改动已经被标成已同步了**：引擎在每条记录 PUT 成功后立刻 `MarkSynced` + outbox `Done`，可清单要等本轮最后一步才提交。CAS 失败、网络在最后一步断掉、或（新增的）租约让路 —— 这批实体就"本地已同步、服务器公告板没有"，别的设备**永远**看不见它们，而崩溃恢复矩阵 §11.3 C4 写的恰恰是"清单重放"。现在标 synced 与结清 outbox 都挪到清单提交成功之后，让路/失败的轮次一律保持 dirty 等下一轮重发。这条是写租约时顺带发现的真丢数据路径，比租约本身更要紧
 - **设置页的"保存服务器"从来没成功过**：前端把草案包成 `{draft:{…}}` 而核心的命令参数是**平铺**的，`tlsPolicy` 发的是 `{kind:'caBundle'}` 对象而核心要 `"ca_bundle"` 字符串，回填又按 `account.proxy.host` 读嵌套而核心发的是 `proxyHost`。三处不一致叠在一起：点保存回一句 `bad_args`，而且即便存成功，改过的 TLS/代理设置也会在下次打开页面时静默变回默认。现在整条边集中到 `sync/accountWire.ts` 一份翻译 + 11 条线格式契约测试；顺带让核心把 `username` 回发（它不是秘密，而不回发就意味着改一次设置要重填用户名，漏填还会把配置静默退回"需要凭据"）。端到端新增一步真的走"填表→保存→读回→清理"
@@ -93,6 +96,10 @@
 - `Tauri` 壳配置里 `bundle.targets` 含协议外的取值，构建脚本直接失败
 
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
+
+- **`cargo fmt --check` 本机跑不了 → BLOCKED**：原因 = `stable-x86_64-pc-windows-gnu` 工具链没装 `rustfmt` 组件（`error: 'cargo-fmt.exe' is not installed`）；影响 = CI-CD 的 `format` 那一环没有本地等价证据，格式漂移只会在 CI 上第一次暴露；解除条件 = `rustup component add --toolchain stable-x86_64-pc-windows-gnu rustfmt`（要联网，且会改本机工具链，所以没有擅自动手）
+- **崩溃注入（§20 / TEST-PLAN L5）尚未实现**：`NOTERA_CRASH_AT` 在整个 `crates/` 里一次都没出现过 —— 协议把"每一步失败之后数据仍可恢复"写成硬约束，而今天没有任何机器证据证明它在写本地/写附件/写 manifest/pull/apply/commit 这些点上真的成立。已有的是**中途失败**类证据（`notera-test-webdav` 的注入开关、412/降级、断网），不是**进程被杀**类证据。这是接下来第一优先要补的洞
+- **`scripts/verify-app.mjs` 不是纯黑盒**：总指令 §23 要求核心 UAT 只用点击/输入/键盘/拖放，禁止直接调 Rust command；这一步今天大量用 `callBridge(...)` 复核库内真实状态（这是它值钱的地方，界面说成功而库里没有就算失败）。要按 §23 再立一条**只碰界面**的黑盒 lane，而不是把现有的状态复核拆掉 —— 两者用途不同，都留着
 
 - **文件夹树在界面上截断到 64 个**：`flattenTree(roots, limit = 64)` 是侧栏"移动到"和导出选择器共用的上限，超过 64 个文件夹的库会**静默少列**后面的（不报错、不提示）。深层子树现在能正常出现了，这个上限才第一次真正生效，因此必须记下来：要么去掉上限并改为虚拟列表，要么在界面上明说"只显示前 64 个"。属于交互取舍，按 §9 走人工评审，不在本轮自行改
 

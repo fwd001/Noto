@@ -10,6 +10,9 @@ use notera_crypto::{
 };
 use notera_core::{EntityId, EntityKind, Rev};
 
+// 这里的"复杂类型"就是要断言的东西本身：把它抽成 `type` 别名，等于让被检查的
+// 形状和检查它的表达式写成同一份，漂了就再也看不出来。
+#[allow(clippy::type_complexity)]
 #[test]
 fn function_signatures_are_exactly_the_contract() {
     let _: u16 = PROTOCOL;

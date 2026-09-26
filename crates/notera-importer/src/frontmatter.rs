@@ -116,8 +116,8 @@ fn fold(map: &mut BTreeMap<String, String>, key: &str, val: &str) {
     }
     for n in 1..=u32::MAX {
         let alt = format!("{key}#{n}");
-        if !map.contains_key(&alt) {
-            map.insert(alt, val.to_string());
+        if let std::collections::btree_map::Entry::Vacant(e) = map.entry(alt) {
+            e.insert(val.to_string());
             return;
         }
     }

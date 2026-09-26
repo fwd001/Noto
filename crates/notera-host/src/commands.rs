@@ -577,5 +577,7 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
 }
 
 // 让编译器盯住这些类型确实被用到（也作为"契约字段没漂"的哨兵）
+// 元组里的类型再"复杂"也是被测对象本身：抽成别名就等于用被检查的写法去检查它。
+#[allow(clippy::type_complexity)]
 const _: fn() -> (NoteDto, NoteListDto, FolderDto, SearchHitDto, ConflictDto, AccountDto, SyncStatusDto, StoreStats, NoteQuery, SearchQuery, ConflictRow) =
     || unreachable!();

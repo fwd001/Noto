@@ -310,7 +310,7 @@ impl App {
     pub fn create_note(&self, folder_id: &EntityId, doc: serde_json::Value) -> Result<NoteDto, CmdError> {
         let n = self.inner.store.create_note(folder_id, doc)?;
         self.note_saved(&n);
-        Ok(self.to_dto(n)?)
+        self.to_dto(n)
     }
 
     /// 没选文件夹时的落点：默认本。规则放在核心，UI 不猜。
@@ -327,7 +327,7 @@ impl App {
     pub fn edit_note(&self, id: &EntityId, doc: serde_json::Value, expected: Rev) -> Result<NoteDto, CmdError> {
         let n = self.inner.store.edit_note(id, doc, expected)?;
         self.note_saved(&n);
-        Ok(self.to_dto(n)?)
+        self.to_dto(n)
     }
 
     /// 本地写入成功 = 同步被"需要跑一轮"标记。**这里绝不碰网络**（I8/P1）。
@@ -342,7 +342,7 @@ impl App {
     }
 
     pub fn get_note(&self, id: &EntityId) -> Result<Option<NoteDto>, CmdError> {
-        Ok(self.inner.store.get_note(id)?.map(|n| self.to_dto(n)).transpose()?)
+        self.inner.store.get_note(id)?.map(|n| self.to_dto(n)).transpose()
     }
 
     pub fn list_notes(&self, c: ListNotesCmd) -> Result<Vec<serde_json::Value>, CmdError> {
@@ -601,7 +601,7 @@ impl App {
             local_rev: r.local_rev.get(),
             remote_rev: r.remote_rev.get(),
             copy_note_id: r.copy_note_id.as_ref().map(|i| i.to_string()),
-            copy_rev: copy_rev,
+            copy_rev,
             created_at: r.created_at,
         })
     }
@@ -937,7 +937,7 @@ impl App {
         let device = DeviceId::parse(&cfg.device_id)
             .map_err(|e| CmdError::of("bad_device", false).with(serde_json::json!({ "why": e.to_string() })))?;
         let creds = self
-            .secret_for(&acct)
+            .secret_for(acct)
             .map(|(user, secret)| {
                 notera_webdav::Credentials::new(user, secret)
                     .map_err(|e| CmdError::of("invalid_account", false).with(serde_json::json!({ "why": e.to_string() })))
@@ -955,7 +955,7 @@ impl App {
         // §5：探测过一次就把结果用到底 —— 不这么做，一台支持条件写的服务器会被
         // 永久按保守默认对待，S1/S2 的好处一辈子拿不到。
         let caps = self.stored_caps(&acct.id);
-        Self::build_remote(&acct, device, credentials, caps).map(Some)
+        Self::build_remote(acct, device, credentials, caps).map(Some)
     }
 
     /// 已探测过就用实测位图；没探测过退回保守默认（`conventional`）。
@@ -1070,7 +1070,7 @@ impl App {
     /// §11.4 的开关：**只在别的保护缺位时**才花这两次请求。
     /// * 写入策略 S3（条件写与不覆盖式 MOVE 都没有）→ 记录写全靠复验，让路有意义；
     /// * 探不到强 ETag → 清单 CAS 形同虚设，公告可能互相覆盖，同样要让路。
-    /// 两者都不成立时（S1/S2 + 强 ETag）服务器自己就拦并发写，开租约只是白多两个请求。
+    ///   两者都不成立时（S1/S2 + 强 ETag）服务器自己就拦并发写，开租约只是白多两个请求。
     fn engine_config(&self) -> EngineConfig {
         EngineConfig { lease: self.lease_policy(), ..EngineConfig::default() }
     }
@@ -1611,7 +1611,7 @@ fn net_proxy(p: &ProxyProfile) -> Result<notera_net::ProxyProfile, CmdError> {
 }
 
 fn net_tls(acct: &AccountConfig) -> notera_net::TlsPolicy {
-    match acct.tls_policy.clone() {
+    match acct.tls_policy {
         TlsPolicyKind::Strict => notera_net::TlsPolicy::Strict,
         // 选了 CaBundle 却没给 PEM：退回严格校验，而不是"什么都不校验"。
         TlsPolicyKind::CaBundle => acct

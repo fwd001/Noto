@@ -62,7 +62,7 @@ fn handle(app: App, mut stream: TcpStream) -> std::io::Result<()> {
     if reader.read_line(&mut line)? == 0 {
         return Ok(());
     }
-    let mut parts = line.trim_end().split_whitespace();
+    let mut parts = line.split_whitespace();
     let method = parts.next().unwrap_or("GET").to_string();
     let target = parts.next().unwrap_or("/").to_string();
 

@@ -369,6 +369,8 @@ pub(crate) fn supersede_pending(conn: &Connection, now: &str, kind: EntityKind, 
 
 // -------------------------------------------------------------- revisions --
 
+// 形参就是 `note_revisions` 的列：包一层结构体不会少一个字段，只会多一处搬运。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_revision(
     conn: &Connection,
     note_id: &EntityId,

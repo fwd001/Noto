@@ -201,7 +201,7 @@ impl Manifest {
             window.insert(w.key(), w.clone());
         }
         let mut entries: Vec<EntryRef> = window.into_values().collect();
-        entries.sort_by(|a, b| a.key().cmp(&b.key()));
+        entries.sort_by_key(|a| a.key());
         next.window = Window { since_seq: self.window.since_seq, complete: true, entries };
         next.recount();
         next.refresh_checksum();
@@ -275,7 +275,7 @@ impl Manifest {
             }
         }
         for bucket in new_segments.values_mut() {
-            bucket.sort_by(|a, b| a.key().cmp(&b.key()));
+            bucket.sort_by_key(|a| a.key());
         }
         let mut next = self.clone();
         next.seq = self.seq + 1;

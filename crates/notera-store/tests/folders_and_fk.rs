@@ -37,7 +37,7 @@ fn delete_folder_moves_children_up_and_never_cascades_notes() {
     assert_eq!(st.tombstones_purged, 0, "软删文件夹不写 purged");
     let t = store.get_tombstone(EntityKind::Folder, &child.id).unwrap().expect("文件夹墓碑");
     assert_eq!(t.title_snap.as_deref(), Some("子项目"));
-    assert_eq!(t.purged, false);
+    assert!(!t.purged);
 
     // 文件夹行进回收站，子内容不跟着消失
     assert!(store.get_folder(&child.id).unwrap().unwrap().deleted_at.is_some());

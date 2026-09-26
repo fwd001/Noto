@@ -114,7 +114,7 @@ impl Store {
 
     pub fn account_ids(&self) -> Result<Vec<String>, StoreError> {
         let conn = self.read()?;
-        Ok(rows::enabled_accounts(&conn)?)
+        rows::enabled_accounts(&conn)
     }
 
     pub fn account_exists(&self, id: &str) -> Result<bool, StoreError> {

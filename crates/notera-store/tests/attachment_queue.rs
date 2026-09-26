@@ -15,7 +15,7 @@ fn uploads_are_selected_by_state_and_sorted_by_size() {
     let store = fx.open();
     let folder = default_folder(&store);
     let big = attach(&store, &folder, &vec![7u8; 4096], "blkbig01");
-    let small = attach(&store, &folder, &vec![9u8; 16], "blksml01");
+    let small = attach(&store, &folder, &[9u8; 16], "blksml01");
     store.set_attachment_states(&big, None, Some("present")).unwrap();
 
     let jobs = store.attachment_uploads(10).unwrap();
@@ -43,7 +43,7 @@ fn downloads_only_pick_rows_the_remote_claims_to_have() {
     let jobs: Vec<AttachmentJob> = store.attachment_downloads(5).unwrap();
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].sha256, sha);
-    assert_eq!(store.blob_path(&sha).exists(), false, "登记只写元数据，绝不造空 blob");
+    assert!(!store.blob_path(&sha).exists(), "登记只写元数据，绝不造空 blob");
     // 幂等：重复登记不产生第二行，也不把已下载的态改回 missing
     store.set_attachment_states(&sha, Some("available"), None).unwrap();
     store.register_remote_attachment(&sha, 128, "image/png").unwrap();
@@ -64,7 +64,7 @@ fn ingest_verifies_sha256_before_touching_the_disk() {
     assert_eq!(store.attachment_for_state(&sha).0, "error", "拒收必须留下可见的失败态");
 
     store.ingest_blob(&sha, &bytes).unwrap();
-    assert_eq!(store.blob_path(&sha).exists(), true);
+    assert!(store.blob_path(&sha).exists());
     assert_eq!(std::fs::read(store.blob_path(&sha)).unwrap(), bytes);
     let (local, remote) = store.attachment_for_state(&sha);
     assert_eq!((local.as_str(), remote.as_str()), ("available", "present"));

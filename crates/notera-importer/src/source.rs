@@ -278,9 +278,9 @@ mod tests {
     fn invalid_utf8_is_not_guessed_away() {
         // GB18030 的"中文"：既不猜编码也不当二进制，报 InvalidEncoding 让用户转 UTF-8。
         let gbk = [0xD6u8, 0xD0, 0xCE, 0xC4];
-        assert!(matches!(src("note.md", &gbk), Err(ImportError::InvalidEncoding { .. })));
+        assert!(matches!(src("note.md", gbk), Err(ImportError::InvalidEncoding { .. })));
         let broken = [0xFFu8, 0xBB, 0xBF, b'a'];
-        assert!(matches!(src("note.md", &broken), Err(ImportError::InvalidEncoding { .. })));
+        assert!(matches!(src("note.md", broken), Err(ImportError::InvalidEncoding { .. })));
     }
 
     #[test]

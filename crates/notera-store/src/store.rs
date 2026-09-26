@@ -836,6 +836,8 @@ impl Store {
         rows::read_folder(tx, &cur.id)?.ok_or_else(|| StoreError::not_found(EntityKind::Folder, cur.id.clone()))
     }
 
+    // 形参就是 `tombstones` 的列：包一层结构体不会少一个字段，只会多一处搬运。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn write_tombstone(
         &self,
         tx: &Connection,
@@ -955,17 +957,17 @@ impl Store {
              )
              SELECT id FROM sub",
         )?;
-        Ok(collect_ids(&mut stmt, &[id.as_str()])?)
+        collect_ids(&mut stmt, [id.as_str()])
     }
 
     fn note_ids_in(conn: &Connection, folder: &EntityId) -> Result<Vec<EntityId>, StoreError> {
         let mut stmt = conn.prepare("SELECT id FROM notes WHERE folder_id = ?1 ORDER BY id")?;
-        Ok(collect_ids(&mut stmt, &[folder.as_str()])?)
+        collect_ids(&mut stmt, [folder.as_str()])
     }
 
     fn child_folder_ids(conn: &Connection, parent: &EntityId) -> Result<Vec<EntityId>, StoreError> {
         let mut stmt = conn.prepare("SELECT id FROM folders WHERE parent_id = ?1 ORDER BY id")?;
-        Ok(collect_ids(&mut stmt, &[parent.as_str()])?)
+        collect_ids(&mut stmt, [parent.as_str()])
     }
 
     pub(crate) fn default_folder_id(conn: &Connection) -> Result<EntityId, StoreError> {
@@ -1450,7 +1452,7 @@ fn bootstrap(conn: &mut Connection, device_id: &DeviceId) -> Result<DeviceId, St
     } else {
         let id = EntityId::new();
         let rev = next_rev(Rev::ZERO, Rev::ZERO);
-        let hash = folder_hash(&DEFAULT_FOLDER_NAME.to_string(), &None, &None, 0, &Some("default".to_string()));
+        let hash = folder_hash(DEFAULT_FOLDER_NAME, &None, &None, 0, &Some("default".to_string()));
         tx.execute(
             "INSERT INTO folders
                (id, parent_id, name, color, system_kind, sort_order, rev, sync_rev, sync_hash,

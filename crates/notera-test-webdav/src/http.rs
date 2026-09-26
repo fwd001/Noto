@@ -232,7 +232,7 @@ async fn read_line(r: &mut Reader) -> Result<Option<String>, ReadError> {
             }
             Ok(_) => {
                 if byte[0] == b'\n' {
-                    if buf.ends_with(&[b'\r']) {
+                    if buf.ends_with(b"\r") {
                         buf.pop();
                     }
                     return Ok(Some(String::from_utf8_lossy(&buf).into_owned()));

@@ -570,8 +570,8 @@ fn fold_json(attrs: &mut BTreeMap<String, serde_json::Value>, key: &str, val: se
     }
     for n in 1..=u32::MAX {
         let alt = format!("{key}#{n}");
-        if !attrs.contains_key(&alt) {
-            attrs.insert(alt, val);
+        if let std::collections::btree_map::Entry::Vacant(e) = attrs.entry(alt) {
+            e.insert(val);
             return;
         }
     }

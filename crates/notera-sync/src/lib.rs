@@ -249,17 +249,13 @@ pub struct EngineConfig {
 }
 
 /// 租约策略。默认关：它只在保护缺位时才有意义。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum LeasePolicy {
+    #[default]
     Off,
     On { ttl_ms: i64 },
 }
 
-impl Default for LeasePolicy {
-    fn default() -> Self {
-        LeasePolicy::Off
-    }
-}
 
 impl Default for EngineConfig {
     fn default() -> Self {

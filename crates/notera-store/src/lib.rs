@@ -5,7 +5,7 @@
 //!   只提供同步引擎需要的持久化协作面（outbox / 远端清单缓存 / 墓碑 / apply 闸门）。
 //! * **唯一写入口**：所有权威表写入都经 `Store` 的方法，且 `notes` + `note_revisions`
 //!   + 派生列 + `notes_fts` + `sync_operations` 在**同一事务**内完成（I5）。
-//!   共享实现是 [`store::Store::commit_edit`]。
+//!     共享实现是 [`store::Store::commit_edit`]。
 //! * **rev 只能由 `notera_core::next_rev` 推进**（I2），禁止任何手写 `+1`。
 //! * **校验失败的数据永不进入权威表**（I6）：写入前 `richtext::parse` + canonical 哈希核对。
 //! * 列表查询**不读 `doc`**（DATA-MODEL §13 性能约束）。

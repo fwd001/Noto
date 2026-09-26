@@ -64,6 +64,9 @@ const BODY2: &[u8] = b"0123456789";
 
 impl WebDavRemote {
     /// 跑完 §5 的五项探测。整体一次往返失败（服务器不可达）会返回 `Err` 而不是"全 false"。
+    /// 一项一次往返、一条 `?` 就地早退：写成结构体字面量会把五次往返捆成
+    /// "全成功才构造"，中途失败时连"探到哪一步了"都留不下来。
+    #[allow(clippy::field_reassign_with_default)]
     pub async fn probe_caps(&self) -> Result<ProbeReport, RemoteError> {
         let mut r = ProbeReport::default();
         r.strong_etag = self.probe_strong_etag().await?;
