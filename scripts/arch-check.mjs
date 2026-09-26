@@ -44,8 +44,17 @@ const desktop = ['notera-desktop', cargoDeps(join(ROOT, 'apps/desktop/src-tauri/
 const all = [...crates, desktop];
 const byName = Object.fromEntries(all);
 
-/** 收集源文件（.rs / .ts / .vue），排除测试与目标目录。 */
-function sources(dir, exts, { includeTests = true } = {}) {
+/**
+ * 收集源文件（.rs / .ts / .vue），排除测试与目标目录。
+ * 外层包一层"扫描台账"：递归的子目录不该记账，只记调用方要扫的那一个根。
+ */
+const scans = [];
+function sources(dir, exts, opts = {}) {
+  const out = walkSources(dir, exts, opts);
+  scans.push({ dir, files: out.length });
+  return out;
+}
+function walkSources(dir, exts, { includeTests = true } = {}) {
   const out = [];
   // 必须传 `true`：`statSafe(p)` 默认判的是"不是目录"，用它当入口守卫会
   // 让每次遍历都在第一行返回空表 —— 那等于所有基于源码的门禁全是摆设（实测过）。
@@ -54,7 +63,7 @@ function sources(dir, exts, { includeTests = true } = {}) {
     if (['node_modules', 'dist', 'target', 'target-gnu', '.logs', 'fixtures'].includes(entry)) continue;
     const p = join(dir, entry);
     if (statSafe(p, true)) {
-      out.push(...sources(p, exts, { includeTests }));
+      out.push(...walkSources(p, exts, { includeTests }));
     } else if (exts.some((e) => entry.endsWith(e))) {
       const isTest = !includeTests && (p.includes(`${sep()}tests`) || entry.includes('.spec.') || entry.includes('test'));
       if (!isTest) out.push(p);
@@ -156,8 +165,11 @@ check('hygiene:rust-message-keys-registered', 'ARCHITECTURE-MAP §5（文案键�
   `核心发出了未登记的 messageKey（界面会退化成兜底文案）：\n    ${[...new Set(unregistered)].join('\n    ')}`);
 
 const RAW_SOCKET = /std::net::(TcpListener|TcpStream|UdpSocket)|std::net::\{[^}]*\b(TcpListener|TcpStream|UdpSocket)\b/;
+// 桌面壳不在 crates/ 下：按名字取源码目录，否则 `crates/notera-desktop/src` 这个
+// 不存在的目录会让"壳有没有自己开 socket"这条检查空转（实测就是这样漏的）。
+const srcDirOf = (n) => (n === 'notera-desktop' ? join(ROOT, 'apps/desktop/src-tauri/src') : join(ROOT, 'crates', n, 'src'));
 const rawNet = all.filter(([n]) => n !== 'notera-net' && !n.startsWith('notera-test-'))
-  .map(([n]) => [n, sources(join(ROOT, 'crates', n, 'src'), ['.rs'])])
+  .map(([n]) => [n, sources(srcDirOf(n), ['.rs'])])
   .flatMap(([n, files]) => files.filter((f) => RAW_SOCKET.test(read(f))).map((f) => `${rel(f)}  [${n}]`));
 check('egress:raw-socket', 'PROXY.md §1（唯一出口；devserver 必须 debug-only）', rawNet.filter((f) => !f.includes('/devserver.rs')),
   `notera-net 之外直接开 socket：\n    ${rawNet.join('\n    ')}`);
@@ -219,6 +231,12 @@ function fsInUx(list) {
 }
 
 // ------------------------------------------------------------------------- 输出 ---
+
+// "扫了 0 个文件"和"扫了但没问题"必须能区分开：前者是门禁在空转，
+// 历史上真出过这种事（入口守卫写反 → 8 条源码规则全绿却一条没看）。
+const vacuous = scans.filter((s) => s.files === 0).map((s) => rel(s.dir));
+check('hygiene:no-vacuous-source-scan', 'ARCHITECTURE-MAP §8（门禁必须真的看了文件）', vacuous,
+  `这些源码扫描一个文件都没看到，等于没检查：\n    ${vacuous.join('\n    ')}`);
 
 let failed = 0;
 for (const r of results) {

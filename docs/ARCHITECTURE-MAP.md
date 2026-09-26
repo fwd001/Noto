@@ -187,7 +187,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 |---|---|---|
 | Rust 测试 | 417 通过 / 0 失败 / 0 ignored（49 个测试二进制） | `cargo test --workspace` |
 | 前端 | 121 通过（12 文件）、`vue-tsc` 无错误、构建 199 KB→gzip 68 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
-| 架构适应度 | 19/19（19 条里有 8 条要扫源码 —— `sources()` 曾空转，见 CHANGELOG） | `node scripts/arch-check.mjs` |
+| 架构适应度 | 20/20（最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
 | 浏览器端到端 | 29/29（真 Rust 核心，非 mock） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
 | 真窗口 | 8/8（invoke 建笔记→落库→刷新读回→点开正文，控制台 0 error） | `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223 target/debug/notera-desktop.exe` + `node scripts/verify-tauri-window.mjs` |

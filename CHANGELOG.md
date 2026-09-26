@@ -10,7 +10,7 @@
 |---|---|
 | `cargo test --workspace` | 417 通过 / 0 失败 / 0 ignored（49 个测试二进制） |
 | 前端 | 121 通过（12 文件）；`vue-tsc --noEmit` 无错误；构建 199 KB → gzip 68 KB |
-| `scripts/arch-check.mjs` | 19/19 |
+| `scripts/arch-check.mjs` | 20/20 |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
 | `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 29/29 |
 | `scripts/verify-tauri-window.mjs`（真窗口，走真 `invoke`） | 8/8，控制台 0 error |
@@ -37,7 +37,8 @@
 ### 修掉的静默错误（都是"看着在用、其实没接线"）
 
 - **架构门禁里有 8 条一直在空转**：`scripts/arch-check.mjs` 的 `sources()` 用 `statSafe(dir)` 当入口守卫，而 `statSafe(p)` 默认判的是"这不是目录" —— 于是每次遍历都在第一行返回空表，`layer:sql-literal`（host/UI 不得写 SQL）、`layer:ui-protocol-vocab`（前端不得出现协议词汇）、`egress:raw-socket`、`edge:webdav-uses-only-ports`、`hygiene:ui-no-node-apis` 等 8 条**全绿但什么都没看**。修好之后立刻炸出两条真实越界：`notera-webdav` re-export 了 `SyncEngine`（引擎入口该只有 sync 一处，已删），以及核心错误词表有 8 个 messageKey 前端没登记。这条是"绿灯不等于检查过"的最坏样子
-- **核心错误词表里 8 个键没登记，提示全部退化成"操作没有成功"**：`sync.forbidden / sync.precondition / sync.unsupported / sync.divergence / sync.cancelled / app.db_too_new / attach.missing / proxy.cert_untrusted` —— 都是会直接讲给用户的话（"服务器拒绝了这次写入"和"操作没成功，稍后再试"完全不是一回事）。现在补进 `i18n.ts`，并新增第 19 条门禁 `hygiene:rust-message-keys-registered` 把这条边钉住（双向变异测过：改 Rust 侧键名或改登记表都会变红）
+- **门禁自己不会说"我没检查到东西"**：修好 `sources()` 之后加了两条自我约束 —— `hygiene:no-vacuous-source-scan`（任何源码扫描扫到 0 个文件即判失败）与"按名字取源码目录"（桌面壳在 `apps/desktop/src-tauri/src`，不在 `crates/` 下）。后者一上来就抓到 `egress:raw-socket` 从来没扫过壳代码：它扫的是不存在的 `crates/notera-desktop/src`
+- **核心错误词表里 8 个键没登记，提示全部退化成"操作没有成功"**：`sync.forbidden / sync.precondition / sync.unsupported / sync.divergence / sync.cancelled / app.db_too_new / attach.missing / proxy.cert_untrusted` —— 都是会直接讲给用户的话（"服务器拒绝了这次写入"和"操作没成功，稍后再试"完全不是一回事）。现在补进 `i18n.ts`，并新增门禁 `hygiene:rust-message-keys-registered` 把这条边钉住（双向变异测过：改 Rust 侧键名或改登记表都会变红）
 - **不带 id 的账户草案会配出"永不出站"的账户**：`upsert_account` 遇到空 id 会自己生成一个存进配置，host 却继续拿**空串**去 `register_account` —— 于是 `sync_accounts` 里那行的键和配置里的键根本不是同一个，outbox 按账户扇出时找不到目标，用户看到"已配置、已同步"而一个字节都没出去。是 §5 的端到端测试第一次跑起来时以"账户不存在: <uuid>"炸出来的；现在 id 在装配前就定下来，两处用的是同一个值
 - **动态拼出来的文案键把键名直接印到界面上**：`MessageKey` 只是 `string` 别名，`t()` 查不到就原样返回 —— 工具条上写着 `editor.blockCodeBlock`，设置页写着 `settings.rootPrefix`。改成查表，并加两层门禁（扫源码的键登记测试 + 端到端看渲染文本）
 - **两条自动保存并发出发，自己造出一条假"在别处被改动了"**：`save()` 无互斥，防抖那一发和 blur 的 flush 带着同一个 `expectedRev` 同时上路，先回来的把 rev 推进、后回来的被核心判成 stale_edit。核心没错，错在前端让自己的两个保存互相打架
