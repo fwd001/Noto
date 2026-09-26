@@ -75,6 +75,9 @@ const MESSAGES: Record<MessageKey, string> = {
   'editor.blockImage': '图片',
   'editor.blockAttachment': '附件',
   'editor.deleteBlock': '删除这一块',
+  'editor.insertBelow': '在下方插入块',
+  'editor.dragHandle': '拖拽重排（也可用上下方向键）',
+  'editor.dragHint': '按住拖动重排 · Alt+↑/↓ 也可',
 
   /* 工具条 */
   'tb.bold': '加粗',
@@ -309,3 +312,6 @@ export function t(key: MessageKey, params?: Record<string, string | number>): st
 export function hasMessage(key: MessageKey): boolean {
   return MESSAGES[key] !== undefined;
 }
+
+/** 全部已登记文案键。存在的理由只有一个：让测试能扫源码，找出"用了但没登记"的键。 */
+export const MESSAGE_KEYS: readonly string[] = Object.keys(MESSAGES);

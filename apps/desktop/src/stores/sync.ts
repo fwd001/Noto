@@ -77,6 +77,15 @@ export function foldLinkState(state: FoldedSyncState, link: LinkState): FoldedSy
   return state;
 }
 
+/** 四态 → 文案键。写成表而不是 `sync.${badge}` 拼接：拼出来的键查不到就静默印键名，
+ *  而 Record 的键是联合类型，少一态编译期就报错。 */
+const BADGE_LABEL_KEYS: Record<SyncBadgeKind, string> = {
+  synced: 'sync.synced',
+  syncing: 'sync.syncing',
+  offline: 'sync.offline',
+  failed: 'sync.failed',
+};
+
 export const useSyncStore = defineStore('sync', () => {
   const state = ref<FoldedSyncState>({ badge: 'syncing', progress: null, messageKey: null, retryable: false, finishedAt: null, rounds: 0 });
   const link = ref<LinkState>('unknown');
@@ -84,7 +93,7 @@ export const useSyncStore = defineStore('sync', () => {
 
   const badge = computed(() => state.value.badge);
   const dbTooNew = ref(false);
-  const label = computed(() => messageFor(`sync.${state.value.badge}`));
+  const label = computed(() => messageFor(BADGE_LABEL_KEYS[state.value.badge]));
   const detail = computed(() => (state.value.messageKey ? messageFor(state.value.messageKey) : null));
   const showRetry = computed(() => state.value.badge === 'failed' && state.value.retryable);
   const percent = computed(() => {

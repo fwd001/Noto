@@ -142,7 +142,7 @@ function keyHint(): string {
           </div>
 
           <label class="field">
-            <span>{{ t('settings.rootPrefix') }}</span>
+            <span>{{ t('settings.accountRootPrefix') }}</span>
             <input v-model="settings.draft.rootPrefix" class="input" type="text" spellcheck="false" data-testid="account-rootPrefix" />
           </label>
 

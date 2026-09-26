@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 编辑器工具条：全部动作以事件抛给 RichEditor（选区只有它知道）。 */
 import { computed, ref } from 'vue';
-import { t } from '../i18n';
+import { t, type MessageKey } from '../i18n';
 import type { TextBlockType } from '../editor/model';
 
 const props = withDefaults(
@@ -33,10 +33,27 @@ const linkOpen = ref(false);
 const linkValue = ref('');
 const showTypeMenu = ref(false);
 
+/**
+ * 块型 → 文案键。必须写成表：之前这里是 `t(\`editor.block${Type}\`)`，
+ * 而 MessageKey 就是 string，拼错/漏键编译期一声不响，7 种块型里 5 种在工具条上
+ * 直接显示成 "editor.blockCodeBlock"。未知块型宁可显示原始类型名，也不假装是正文。
+ */
+const TYPE_LABELS: Record<string, MessageKey> = {
+  paragraph: 'editor.blockParagraph',
+  heading: 'editor.blockHeading',
+  bulletList: 'editor.blockListBullet',
+  orderedList: 'editor.blockListOrdered',
+  checklistItem: 'editor.blockChecklist',
+  blockquote: 'editor.blockQuote',
+  codeBlock: 'editor.blockCode',
+  image: 'editor.blockImage',
+  attachment: 'editor.blockAttachment',
+  rule: 'editor.blockRule',
+};
+
 const typeLabel = computed(() => {
   if (props.blockType === 'heading') return t('editor.blockHeading', { level: props.headingLevel });
-  const key = `editor.block${props.blockType.charAt(0).toUpperCase()}${props.blockType.slice(1)}`;
-  return t(key);
+  return TYPE_LABELS[props.blockType] ? t(TYPE_LABELS[props.blockType]) : props.blockType;
 });
 
 const markButtons: Array<{ kind: string; glyph: string; label: string }> = [
@@ -48,14 +65,12 @@ const markButtons: Array<{ kind: string; glyph: string; label: string }> = [
   { kind: 'highlight', glyph: 'H', label: 'tb.highlight' },
 ];
 
-const typeOptions: Array<{ value: TextBlockType; label: string }> = [
-  { value: 'paragraph', label: 'editor.blockParagraph' },
-  { value: 'blockquote', label: 'editor.blockQuote' },
-  { value: 'codeBlock', label: 'editor.blockCode' },
-  { value: 'orderedList', label: 'editor.blockListOrdered' },
-  { value: 'bulletList', label: 'editor.blockListBullet' },
-  { value: 'checklistItem', label: 'editor.blockChecklist' },
-];
+/** 类型菜单只列可切换的文本块型；顺序即菜单顺序。 */
+const TEXT_TYPE_ORDER: readonly TextBlockType[] = ['paragraph', 'blockquote', 'codeBlock', 'orderedList', 'bulletList', 'checklistItem'];
+const typeOptions: Array<{ value: TextBlockType; label: MessageKey }> = TEXT_TYPE_ORDER.map((value) => ({
+  value,
+  label: TYPE_LABELS[value] ?? 'editor.blockParagraph',
+}));
 
 function onMark(kind: string): void {
   emit('mark', kind);
