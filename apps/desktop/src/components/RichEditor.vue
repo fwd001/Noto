@@ -6,7 +6,9 @@
 import { computed, nextTick, onMounted, ref } from 'vue';
 import EditorToolbar from './EditorToolbar.vue';
 import { vEditable, markAsParsed } from '../editor/editableDirective';
-import { applySelection, parseEditable, safeHref, selectionIn } from '../editor/dom';
+import { applySelection, parseEditable, safeHref, selectionBoxIn, selectionIn } from '../editor/dom';
+import { placeBar, type Box } from '../editor/selectionBar';
+import { MARK_BUTTONS } from '../editor/marks';
 import { applySlash, filterSlash, markdownShortcut, slashQuery, type SlashItem } from '../editor/quickInsert';
 import { destinationFor, gapAt } from '../editor/interaction';
 import {
@@ -197,7 +199,37 @@ async function capture(index: number): Promise<void> {
     if (hasMarkInRange(block.content, range.value.start, range.value.end, kind)) marks.push(kind);
   }
   activeMarks.value = marks;
+  await updateSelBar(el);
 }
+
+/**
+ * 浮动选区条：选中文字就浮到选区上方（AppFlowy 的做法），而不是逼人去够顶部工具条。
+ * 位置按编辑区自己的矩形算，所以它永远盖不住顶部工具条，也永远不出可视区。
+ */
+const BAR_ITEMS = MARK_BUTTONS;
+const selBox = ref<Box | null>(null);
+const barEl = ref<HTMLElement | null>(null);
+const barStyle = ref<Record<string, string>>({});
+
+async function updateSelBar(el: HTMLElement): Promise<void> {
+  const box = readOnly.value || slashQ.value !== null ? null : selectionBoxIn(el);
+  selBox.value = box;
+  if (!box) return;
+  await nextTick();
+  const view = docEl.value?.getBoundingClientRect();
+  if (!view) return;
+  const place = placeBar(
+    box,
+    { width: barEl.value?.offsetWidth || 260, height: barEl.value?.offsetHeight || 40 },
+    { top: view.top, bottom: view.bottom, left: view.left, right: view.right },
+  );
+  barStyle.value = { top: `${place.top}px`, left: `${place.left}px` };
+}
+
+function hideSelBar(): void {
+  selBox.value = null;
+}
+
 
 async function focusBlock(id: string, caret: number): Promise<void> {
   const el = elOf(id);
@@ -213,6 +245,7 @@ async function focusBlock(id: string, caret: number): Promise<void> {
 }
 
 async function run(edit: BlockEdit): Promise<void> {
+  hideSelBar();
   store.commitStructural(edit.blocks, edit.focusId, edit.caret);
   await nextTick();
   if (edit.focusId) await focusBlock(edit.focusId, edit.caret);
@@ -376,6 +409,9 @@ async function onBlurBlock(index: number): Promise<void> {
     if (JSON.stringify(content) !== JSON.stringify(block.content)) store.updateBlock({ ...block, content });
   }
   await store.flush();
+  // flush 是异步的：这期间用户可能已经点到别的块并选中了文字，
+  // 无条件收起会把刚浮出来的工具条抹掉。只有焦点确实离开编辑区才收。
+  if (!docEl.value?.contains(document.activeElement)) hideSelBar();
 }
 
 function onCheckbox(block: EditorBlock, index: number): void {
@@ -566,6 +602,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
             @blur="onBlurBlock(index)"
             @click="capture(index)"
             @keyup="capture(index)"
+            @mouseup="capture(index)"
           />
 
           <figure v-else-if="block.shape === 'image'" class="nb-media">
@@ -619,6 +656,30 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
         {{ t('editor.deleteBlock') }}
       </button>
     </div>
+    <div
+      v-if="selBox"
+      ref="barEl"
+      class="sel-bar"
+      :style="barStyle"
+      role="toolbar"
+      :aria-label="t('editor.selectionBar')"
+      data-testid="selection-bar"
+    >
+      <button
+        v-for="item in BAR_ITEMS"
+        :key="item.kind"
+        type="button"
+        class="sel-bar__btn"
+        :class="{ 'sel-bar__btn--on': activeMarks.includes(item.kind) }"
+        :aria-pressed="activeMarks.includes(item.kind) ? 'true' : 'false'"
+        :aria-label="t(item.label)"
+        :data-testid="`sel-${item.kind}`"
+        @mousedown.prevent
+        @click="toggleMarkKind(item.kind)"
+      >
+        {{ item.glyph }}
+      </button>
+    </div>
   </div>
 </template>
 
@@ -663,5 +724,57 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
 
 .editor-corner [data-save-state='saved'] {
   color: var(--success);
+}
+
+/* 浮动选区条：fixed 定位（坐标按视口算），层级压在正文与侧栏之上 */
+.sel-bar {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-2);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-2);
+}
+
+.sel-bar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-1);
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sel-bar__btn:hover {
+  background: var(--bg-hover);
+}
+
+.sel-bar__btn--on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.sel-bar__btn:focus-visible {
+  outline: var(--focus-width) solid var(--border-focus);
+  outline-offset: 1px;
+}
+
+@media (pointer: coarse) {
+  .sel-bar__btn {
+    min-width: var(--touch-min);
+    height: var(--touch-min);
+  }
 }
 </style>

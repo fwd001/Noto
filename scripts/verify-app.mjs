@@ -201,6 +201,43 @@ await step('把手"+"：在当前块下方插入空块并聚焦', async () => {
   return `${before} → ${after.length} 块，焦点在新块`;
 });
 
+await step('选中文字 → 浮动工具条出现、位置不压工具条、能加粗', async () => {
+  const field = page.locator('[data-testid="editor-doc"] [data-type="heading"] [contenteditable="true"]').first();
+  await field.click();
+  await page.keyboard.press('Home');
+  await page.keyboard.down('Shift');
+  for (let i = 0; i < 3; i += 1) await page.keyboard.press('ArrowRight');
+  await page.keyboard.up('Shift');
+  await page.waitForTimeout(300);
+  const bar = page.locator('[data-testid="selection-bar"]');
+  const shown = await bar.waitFor({ timeout: 4000 }).then(() => true).catch(() => false);
+  if (!shown) {
+    const why = await page.evaluate(() => {
+      const sel = window.getSelection();
+      return {
+        inDom: document.querySelectorAll('[data-testid="selection-bar"]').length,
+        rangeCount: sel ? sel.rangeCount : -1,
+        collapsed: sel ? sel.isCollapsed : null,
+        text: sel ? String(sel).slice(0, 20) : null,
+        anchorInContent: sel && sel.rangeCount
+          ? !!sel.getRangeAt(0).commonAncestorContainer.parentElement?.closest('.nb-content')
+          : null,
+      };
+    });
+    throw new Error(`浮动条没出现：${JSON.stringify(why)}`);
+  }
+  const box = await bar.boundingBox();
+  const doc = await page.locator('[data-testid="editor-doc"]').boundingBox();
+  if (!box || !doc) throw new Error('量不到浮动条或编辑区');
+  if (box.y < doc.y) throw new Error(`浮动条跑到了编辑区上方（y=${Math.round(box.y)} < ${Math.round(doc.y)}）`);
+  await page.screenshot({ path: `${OUT}/app-selection-bar.png` });
+  await page.locator('[data-testid="sel-bold"]').click();
+  await page.waitForTimeout(700);
+  if ((await page.locator('[data-testid="editor-doc"] strong').count()) === 0) throw new Error('点加粗没有生效');
+  if ((await page.locator('[data-testid="selection-bar"]').count()) > 0) throw new Error('动作后浮动条应收起');
+  return '出现 → 加粗生效 → 收起';
+});
+
 const orderBeforeReload = await blockSig();
 
 await step('回列表能看到这条笔记', async () => {
@@ -237,7 +274,10 @@ await step('重排落到库里了：刷新重开后块顺序与刷新前一致',
   if (after.join('|') !== orderBeforeReload.join('|')) {
     throw new Error(`顺序没持久化：\n      前 ${JSON.stringify(orderBeforeReload)}\n      后 ${JSON.stringify(after)}`);
   }
-  return `${after.length} 块同序`;
+  if ((await page.locator('[data-testid="editor-doc"] strong').count()) === 0) {
+    throw new Error('加粗没落库：刷新后 strong 不见了');
+  }
+  return `${after.length} 块同序，加粗仍在`;
 });
 
 await step('界面上没有漏出文案键名（编辑器 + 工具条）', async () => {

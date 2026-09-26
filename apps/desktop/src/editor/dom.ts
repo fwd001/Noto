@@ -305,8 +305,18 @@ export function selectionIn(root: HTMLElement): { start: number; end: number } |
   return { start: Math.min(start, end), end: Math.max(start, end) };
 }
 
-export function applySelection(root: HTMLElement, start: number, end = start): void {
-  const measure = measureEditable(root);
+/** 当前选区在视口里的盒子；折叠或不在 root 内则 null。浮动工具条按它定位。 */
+export function selectionBoxIn(root: HTMLElement): { top: number; bottom: number; left: number; right: number } | null {
+  const selection = typeof window === 'undefined' ? null : window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.commonAncestorContainer)) return null;
+  const rect = range.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return null;
+  return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right };
+}
+
+export function applySelection(root: HTMLElement, start: number, end = start): void {  const measure = measureEditable(root);
   const from = toDomPoint(measure, start);
   const to = toDomPoint(measure, end);
   if (from.node === null || to.node === null) return;

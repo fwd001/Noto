@@ -78,6 +78,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'editor.insertBelow': '在下方插入块',
   'editor.dragHandle': '拖拽重排（也可用上下方向键）',
   'editor.dragHint': '按住拖动重排 · Alt+↑/↓ 也可',
+  'editor.selectionBar': '选区格式',
 
   /* 工具条 */
   'tb.bold': '加粗',

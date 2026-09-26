@@ -2,6 +2,7 @@
 /** 编辑器工具条：全部动作以事件抛给 RichEditor（选区只有它知道）。 */
 import { computed, ref } from 'vue';
 import { t, type MessageKey } from '../i18n';
+import { MARK_BUTTONS } from '../editor/marks';
 import type { TextBlockType } from '../editor/model';
 
 const props = withDefaults(
@@ -56,14 +57,8 @@ const typeLabel = computed(() => {
   return TYPE_LABELS[props.blockType] ? t(TYPE_LABELS[props.blockType]) : props.blockType;
 });
 
-const markButtons: Array<{ kind: string; glyph: string; label: string }> = [
-  { kind: 'bold', glyph: 'B', label: 'tb.bold' },
-  { kind: 'italic', glyph: 'I', label: 'tb.italic' },
-  { kind: 'underline', glyph: 'U', label: 'tb.underline' },
-  { kind: 'strike', glyph: 'S', label: 'tb.strike' },
-  { kind: 'code', glyph: '</>', label: 'tb.code' },
-  { kind: 'highlight', glyph: 'H', label: 'tb.highlight' },
-];
+/** 与浮动选区条同一份定义：glyph、文案键、顺序只有一处真相。 */
+const markButtons = MARK_BUTTONS;
 
 /** 类型菜单只列可切换的文本块型；顺序即菜单顺序。 */
 const TEXT_TYPE_ORDER: readonly TextBlockType[] = ['paragraph', 'blockquote', 'codeBlock', 'orderedList', 'bulletList', 'checklistItem'];
