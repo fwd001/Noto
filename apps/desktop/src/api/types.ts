@@ -236,6 +236,9 @@ export interface Report {
   conflicts?: number;
   restoredAttachments?: number;
   counts?: Record<string, number>;
+  /** 导出范围：`full` = 整库，`folders` = 按文件夹的子树包（不能当整库备份用）。 */
+  scope?: string;
+  scopeFolders?: number;
   abortedReason?: string | null;
   ok?: boolean;
 }

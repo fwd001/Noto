@@ -188,10 +188,10 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | 门禁 | 结果 | 怎么复现 |
 |---|---|---|
 | Rust 测试 | 457 通过 / 0 失败 / 0 ignored（50 个测试二进制） | `cargo test --workspace` |
-| 前端 | 162 通过（15 文件）、`vue-tsc` 无错误、构建 206 KB→gzip 70 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
+| 前端 | 169 通过（17 文件）、`vue-tsc` 无错误、构建 212 KB→gzip 73 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
 | 架构适应度 | 24/24（最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
-| 浏览器端到端 | 33/33（真 Rust 核心，非 mock；含"设置页存服务器 → 能力块读回"、"库统计五行全是数字"、"删除 → 回收站 → 恢复 → 永久删除"三条真实往返） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
+| 浏览器端到端 | 35/35（真 Rust 核心，非 mock；含"设置页存服务器 → 能力块读回"、"库统计五行全是数字"、"删除 → 回收站 → 恢复 → 永久删除"、"勾一个文件夹 → 包就只有那一棵子树"、"侧栏建子文件夹 → '移动到'选得到"五条真实往返） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
 | 真窗口 | 8/8（invoke 的 `stats` 键集合 == 契约那 8 个 → 建笔记→落库→刷新读回→点开正文，控制台 0 error） | `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223 target/debug/notera-desktop.exe` + `node scripts/verify-tauri-window.mjs` |
 
 **已建立**：12 个 crate + `apps/desktop`（Tauri 壳 + Vue 前端）+ `migrations/0001..0006` + 自建测试 WebDAV 服务器 + 上述四套验证脚本 + `docs/` 全套规格与 ADR-0001…0019。
@@ -209,7 +209,8 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | 导出 / 导入（ZIP bundle） | 已实现 | `notera-importer/bundle.rs`；导入走 `apply_remote` 同一条冲突安全路径，删除事实随包带走（防复活）。附件按**库**枚举（`Store::local_attachment_shas`）——曾经按一层目录名筛 64hex，而 blob 在 `<attachments>/<2hex>/<sha>` 两层里，于是"含附件的导出"其实一个附件都没有（见 CHANGELOG） |
 | 编辑器"插入图片 / 附件"的入口 | **已接通**（按 D11 的 ③ 走） | 隐藏的 `<input type=file>` 取文件（WebView 里就是系统原生选择器），前端只负责把 File 变成 base64；sha256、落盘、`attachments`/`note_attachments`、上传队列仍全在核心。零新依赖，且**浏览器 dev 桥与真窗口是同一条代码路径** → 端到端真的点了一遍（`verify-app` 第 15 步）。形状集中在 `editor/attachmentWire.ts`；显示用的 data URL 只活在内存表里，**绝不写进块属性**（那等于把附件在正文里再存一份并跟着同步走）。顺序坑也在这里：首次挂载会翻转 `has_attachment` 并**推进笔记 rev**，所以必须"先落编辑 → 再写附件 → 接住新 rev → 才把块写进正文" |
 | 冲突并排预览 `preview_text` | 已实现 | 前端一直在调、核心一直没有这条分支 → 每次 `unknown_command`，被"退回卡片摘要"的兜底盖住了。现在按 `(id, rev)` 取 revision 抽纯文本，并加门禁 `edge:declared-commands-exist`（前端声明的每个命令名，核心必须有分支） |
-| 按文件夹部分导出 | 已实现 | `Store::folder_closure` = 子树 + 祖先链；笔记按父本是否在范围内筛，附件按范围内的笔记筛（`attachment_shas_in_folders`）。包自己声明 `manifest.partial`，**因此禁止**用它走"仅在空库时导入"：`tombstones` 不记父本，笔记的永久删除公告无法归属到文件夹，当成整库还原就会让已删的笔记从别的设备回流（§8 硬性要求 6）。范围里出现未知文件夹 id → 拒绝，不是忽略 |
+| 按文件夹部分导出 | 已实现 | **两个集合两种用途**：`Store::folder_closure`（子树 + 祖先链）只决定"哪些文件夹行要进包"（缺祖先就是外键接不上的废包），`Store::folder_subtree`（子树，不含祖先）决定"哪些内容算这一棵"——笔记按父本是否在子树里筛，附件按这些笔记筛（`attachment_shas_in_folders`）。曾用同一个闭包筛内容，于是勾一个子层会把默认本里那篇无关笔记连它的图片字节一起带走。包自己声明 `manifest.partial`，**因此禁止**用它走"仅在空库时导入"：`tombstones` 不记父本，笔记的永久删除公告无法归属到文件夹，当成整库还原就会让已删的笔记从别的设备回流（§8 硬性要求 6）。范围里出现未知文件夹 id → 拒绝，不是忽略 |
+| 文件夹树的跨语言形状 | 已对齐 | `/cmd/list_folders` 下发**嵌套树**（`children`），前端 `stores/folders.ts::buildTree` 必须两种形状通吃（树 / 平铺）：它曾经先清空 `children` 再按顶层数组重建，等于把树里的子层全部丢弃 → 侧栏、"移动到"下拉、导出选择器一起失去子文件夹，而唯一的三级树测试喂的是平铺输入所以照绿。现在契约测试用真桥原样输出的 JSON；`flattenTree` 的 64 项上限见 CHANGELOG 已知限制 |
 | 附件的第二条登记入口：从**清单**读引用 | 未做（已知缺口） | doc 这条路现在是通的（收到记录 → 按块上的 `sha256` 登记，见 DATA-MODEL §8，并有跨设备真服务器测试）。剩下的窗口是：A 上 `attach_blob` 成功了、但把引用写进正文的那一次保存没发生（崩溃 / 强杀）—— blob 已上传、`note_attachments` 有行，而**没有任何 doc 引用它**，B 侧因此无从得知。影响：A 上留一个既不回收也不分享的孤儿（不是数据丢失，也不覆盖任何东西）。补法需要 SYNC-PROTOCOL §13 的清单侧附件条目 + 在清单解析处调 `Store::register_remote_attachment`（那个函数的注释本来就写着"清单/记录里读到引用时调用"，清单那一半一直没人做）—— 属于协议改动，走 §9 评审 |
 | 冲突：远端那一版真的来到本机 | 已实现（本轮补上） | 判出 `UpdateUpdate` 时引擎**真的去取那条记录**并发 `ApplyOp::AdoptConflict`：`apply_remote` 的"冲突采纳"分支是唯一允许 `rev` 相等而内容不同的写入口（前提是本机那份已先存成副本笔记），采纳后 `rev == sync_rev` 因此本机不会把自己那一版推回去盖掉别人。面板两栏：右 `(noteId, remoteRev)`、左 `(copyNoteId, copyRev)`。证据：两台设备 + 真 TCP 服务器的分叉测试（去掉采纳就红）。仍欠的一块记在 CHANGELOG §已知限制：P11（删除 vs 修改）的服务器那一版同样没来到本机，右栏只有哈希。`用我这一版` 已不是空操作 —— `swap_conflict_sides` 真的把正文与副本互换并重新公告 |
 | `.enex` 结构化导入 | 未实现 | 需要 XML 依赖 + ENML 映射与夹具 —— 动依赖图，按 §9 走人工评审 |

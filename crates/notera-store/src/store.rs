@@ -887,6 +887,27 @@ impl Store {
         Ok(out)
     }
 
+    /// 内容归属范围：选中项 + 全部后代，**不含祖先**。
+    ///
+    /// 与 `folder_closure` 的分工：祖先只是外键骨架（文件夹行要跟着走），但祖先自己
+    /// 的笔记不属于这一棵子树。两者若共用一个集合，勾一个子层就会把上层（乃至默认本）
+    /// 的笔记与附件字节一起带走 —— 用户以为导的是"这一棵"，拿到的却掺了别处的东西。
+    pub fn folder_subtree(&self, ids: &[EntityId]) -> Result<std::collections::BTreeSet<String>, StoreError> {
+        let conn = self.read()?;
+        let mut out = std::collections::BTreeSet::new();
+        for id in ids {
+            let exists: i64 = conn.query_row("SELECT EXISTS(SELECT 1 FROM folders WHERE id = ?1)", [id.as_str()], |r| r.get(0))?;
+            if exists == 0 {
+                return Err(StoreError::Rejected(format!("文件夹不存在，无法按其范围导出：{id}")));
+            }
+            out.insert(id.to_string());
+            for d in Self::descendant_ids(&conn, id)? {
+                out.insert(d.to_string());
+            }
+        }
+        Ok(out)
+    }
+
     /// 文件夹导出范围：选中项 + 全部后代 + 祖先链（外键闭包）。
     ///
     /// 为什么要祖先：包里那条子文件夹的 `parent_id` 指向祖先，导入端若没有祖先行就

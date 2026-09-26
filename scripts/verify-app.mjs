@@ -548,6 +548,66 @@ await step('导出：真产出一个能读回来的 ZIP，且不盖掉刚才的�
   return `${zip.split(/[\\/]/).pop()} · ${fs.statSync(zip).size} 字节 · 导入后仍 ${after} 条`;
 });
 
+await step('按文件夹导出：勾一个文件夹，包就只有那一棵子树', async () => {
+  // 核心会算子树 + 祖先链，但"能不能用到"取决于界面有没有入口。这一步真的点一遍：
+  // 打开开关 → 勾那个新文件夹 → 导出 → 报告必须自己说是子树包，而且内容确实只有那一棵。
+  const name = `子树验证 ${Date.now()}`;
+  const roots = await callBridge('list_folders', {});
+  const sub = await callBridge('create_folder', { parentId: roots[0].id, name });
+  await callBridge('create_note', {
+    folderId: sub.id,
+    doc: { v: 1, content: [{ id: 'blk000001', type: 'paragraph', content: [{ text: '只属于这棵子树' }] }] },
+  });
+  await page.locator('[data-testid="export-scoped"]').check();
+  await page.locator(`[data-testid="export-folder-${sub.id}"]`).check();
+  await page.locator('[data-testid="export-data"]').click();
+  await page.waitForTimeout(1800);
+  const report = await page.locator('[data-testid="data-report"]').innerText();
+  if (!report.includes('子树')) throw new Error(`报告没说自己导的是子树包：${report}`);
+  const direct = await callBridge('export_data', { folderIds: [sub.id], includeAttachments: true, path: `${DATA_DIR}/scoped-${Date.now()}.zip` });
+  if (direct.scope !== 'folders') throw new Error(`core 报的范围不对：${JSON.stringify(direct)}`);
+  if (direct.counts.notes !== 1) throw new Error(`子树包里就该只有那一篇：${JSON.stringify(direct.counts)}`);
+  // 祖先链带着走，否则这份包导回干净库会因外键缺失整体失败
+  if (direct.counts.folders < 2) throw new Error(`子树 + 祖先链至少两个文件夹：${JSON.stringify(direct.counts)}`);
+  await page.locator('[data-testid="export-scoped"]').uncheck();
+  return `子树 · ${direct.counts.folders} 个文件夹 · ${direct.counts.notes} 篇笔记`;
+});
+
+await step('子文件夹在界面上是看得见的：侧栏有它，"移动到"也选得到', async () => {
+  // 后端把文件夹作为**嵌套树**下发，前端要规范化成自己的树。这一步走真 UI：
+  // 在默认本下建一个子层 → 侧栏必须出现它 → 笔记的"移动到"下拉必须选得到它。
+  // 曾经规范化只认平铺输入、把树里的 children 抹掉：单元测试全绿，产品里子文件夹整个隐形。
+  await page.locator('[data-testid="nav-all"]').click();
+  await page.waitForTimeout(500);
+  const root = (await callBridge('list_folders', {}))[0];
+  const name = `深层子夹 ${Date.now()}`;
+  await page.locator(`[data-testid="folder-${root.id}"]`).hover();
+  await page.locator(`[data-testid="folder-new-sub-${root.id}"]`).click();
+  await page.fill('[data-testid="folder-create-input"]', name);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(900);
+  const labels = (await page.locator('.tree__label').allInnerTexts()).map((l) => l.trim());
+  if (!labels.includes(name)) throw new Error(`侧栏没有刚建的子文件夹，只有：${labels.join(' / ')}`);
+  // 建完子夹后当前视图就落到那个空文件夹上了，要验"移动到"得先回"全部"
+  await page.locator('[data-testid="nav-all"]').click();
+  await page.waitForTimeout(700);
+  const listText = async () => (await page.locator('[data-testid="note-list"]').innerText().catch(() => '(没有列表区)')).replace(/\s+/g, ' ').slice(0, 160);
+  let rows = page.locator('[data-testid^="note-row-"]');
+  if ((await rows.count()) === 0) {
+    // 前序步骤会删笔记、导包，列表空不空不该由本步赌运气：自己造一条
+    await page.locator('[data-testid="new-note"]').click();
+    await page.waitForTimeout(900);
+    rows = page.locator('[data-testid^="note-row-"]');
+  }
+  if ((await rows.count()) === 0) throw new Error(`点了「新建笔记」列表还是空：${await listText()}`);
+  await rows.first().click();
+  await page.waitForTimeout(700);
+  const options = (await page.locator('[data-testid="move-folder"] option').allInnerTexts()).map((o) => o.trim());
+  if (options.length === 0) throw new Error(`打开笔记后没有「移动到」下拉：${await listText()}`);
+  if (!options.some((o) => o.includes(name))) throw new Error(`"移动到"下拉里找不到这个子文件夹：${options.join(' | ')}`);
+  return `侧栏与下拉都认得「${name}」（路径 ${options.find((o) => o.includes(name))}）`;
+});
+
 await step('桌面视口无横向溢出', async () => {
   const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
   if (m.sw > m.cw + 1) throw new Error(`scrollWidth ${m.sw} > clientWidth ${m.cw}`);

@@ -648,9 +648,14 @@ impl App {
             .iter()
             .map(|s| EntityId::parse(s).map_err(|_| CmdError::of("bad_id", false)))
             .collect::<Result<_, _>>()?;
-        let scope: Option<std::collections::BTreeSet<String>> =
+        // 两个范围、两种用途：文件夹行要按外键闭包带上祖先骨架，
+        // 笔记与附件只认这一棵子树 —— 否则祖先（默认本）里的东西会被顺手带走。
+        let skeleton: Option<std::collections::BTreeSet<String>> =
             if ids.is_empty() { None } else { Some(self.inner.store.folder_closure(&ids).map_err(CmdError::from)?) };
-        let in_scope = |id: &str| scope.as_ref().is_none_or(|s| s.contains(id));
+        let content: Option<std::collections::BTreeSet<String>> =
+            if ids.is_empty() { None } else { Some(self.inner.store.folder_subtree(&ids).map_err(CmdError::from)?) };
+        let in_skeleton = |id: &str| skeleton.as_ref().is_none_or(|s| s.contains(id));
+        let in_content = |id: &str| content.as_ref().is_none_or(|s| s.contains(id));
 
         let records = self.inner.store.all_records().map_err(CmdError::from)?;
         let kind_of = |r: &serde_json::Value| r.get("kind").and_then(|k| k.as_str()).unwrap_or_default().to_string();
@@ -664,8 +669,9 @@ impl App {
         };
         let purged = |r: &serde_json::Value| r.get("purged").and_then(|p| p.as_bool()).unwrap_or(false);
         // 按文件夹导时：
-        //   文件夹 → 子树 + 祖先链（`folder_closure` 的键集就是它）
-        //   笔记   → 父本在范围内的（软删的跟着走：删除事实是内容的一部分）
+        //   文件夹 → 子树 + 祖先链（`folder_closure` 的键集就是它：祖先只是外键骨架）
+        //   笔记   → 父本在**子树**里的（`folder_subtree`，祖先自己的笔记不算这一棵的内容）
+        //            软删的跟着走：删除事实是内容的一部分
         //   墓碑   → 只带**文件夹**的永久删除公告。`tombstones` 表不记父本，笔记的
         //            永久删除公告无法归属到某个文件夹 —— 宁可标 `partial` 让导入端拒绝
         //            "导进空库"，也不能猜：猜错就是把别人库里的一条笔记删掉。
@@ -677,22 +683,23 @@ impl App {
                 app_version: env!("CARGO_PKG_VERSION").to_string(),
                 root_id: None,
                 counts: std::collections::BTreeMap::new(),
-                partial: scope.is_some(),
+                partial: skeleton.is_some(),
             }),
-            folders: records.iter().filter(|r| kind_of(r) == "folder" && !purged(r) && in_scope(&id_of(r))).cloned().collect(),
-            notes: records.iter().filter(|r| kind_of(r) == "note" && !purged(r) && in_scope(&folder_of(r))).cloned().collect(),
+            folders: records.iter().filter(|r| kind_of(r) == "folder" && !purged(r) && in_skeleton(&id_of(r))).cloned().collect(),
+            notes: records.iter().filter(|r| kind_of(r) == "note" && !purged(r) && in_content(&folder_of(r))).cloned().collect(),
             tombstones: records
                 .iter()
-                .filter(|r| purged(r) && (scope.is_none() || (kind_of(r) == "folder" && in_scope(&id_of(r)))))
+                .filter(|r| purged(r) && (skeleton.is_none() || (kind_of(r) == "folder" && in_skeleton(&id_of(r)))))
                 .cloned()
                 .collect(),
             attachments: Vec::new(),
         };
-        let shas: Vec<String> = if scope.is_none() {
-            self.inner.store.local_attachment_shas().map_err(CmdError::from)?
-        } else {
-            let folders: Vec<String> = scope.clone().unwrap_or_default().into_iter().collect();
-            self.inner.store.attachment_shas_in_folders(&folders).map_err(CmdError::from)?
+        let shas: Vec<String> = match &content {
+            None => self.inner.store.local_attachment_shas().map_err(CmdError::from)?,
+            Some(set) => {
+                let folders: Vec<String> = set.iter().cloned().collect();
+                self.inner.store.attachment_shas_in_folders(&folders).map_err(CmdError::from)?
+            }
         };
         let mut attachments = Vec::new();
         if c.include_attachments {
@@ -705,7 +712,7 @@ impl App {
             }
         }
         let bundle = notera_importer::Bundle { attachments, ..bundle };
-        let scope_size = scope.map(|s| s.len()).unwrap_or(0);
+        let scope_size = skeleton.map(|s| s.len()).unwrap_or(0);
         let path = match c.path.as_deref() {
             Some(p) => std::path::PathBuf::from(p),
             None => {
@@ -2266,6 +2273,8 @@ mod tests {
     }
 
     /// 造一个"默认本 / 项目 / 项目·子夹"加上平级的"别的"，各放笔记与附件。
+    /// 默认本自己也有一篇带附件的笔记 —— 只放子层的话，"祖先链"就看不出是
+    /// 文件夹跟着走还是笔记也跟着走（实测踩过：勾一个子夹，祖先的笔记和字节一起被带走）。
     fn scoped_tree(app: &App) -> (EntityId, EntityId, EntityId, EntityId) {
         let root = app.default_folder_id().unwrap();
         let parent = app.store().create_folder(Some(&root), "项目").unwrap();
@@ -2273,15 +2282,25 @@ mod tests {
         let other = app.store().create_folder(Some(&root), "别的").unwrap();
         let in_kid = EntityId::parse(&app.create_note(&kid.id, doc("范围内的笔记")).unwrap().id).unwrap();
         app.create_note(&other.id, doc("范围外的笔记")).unwrap();
+        let ancestor_note = app.create_note(&root, doc("祖先自己的笔记")).unwrap();
         let blob: Vec<u8> = b"in-scope attachment bytes".to_vec();
         app.store().attach_blob(&in_kid, &blob, "image/png", Some("a.png"), "b1").unwrap();
+        app.store()
+            .attach_blob(
+                &EntityId::parse(&ancestor_note.id).unwrap(),
+                b"ancestor attachment bytes",
+                "image/png",
+                Some("z.png"),
+                "b9",
+            )
+            .unwrap();
         (root, kid.id, other.id, in_kid)
     }
 
     #[test]
     fn exporting_a_folder_yields_a_subtree_that_a_clean_library_can_actually_import() {
         let app = boot("scoped-a");
-        let (_root, kid, other, in_kid) = scoped_tree(&app);
+        let (root, kid, other, in_kid) = scoped_tree(&app);
         let out = tmpdir("scoped-export").join("子树.zip");
         let got = commands::dispatch(&app, "export_data", json!({ "path": out.to_string_lossy(), "folderIds": [kid.to_string()], "includeAttachments": true })).unwrap();
         assert_eq!(got["scope"], "folders", "报告必须自己说清这是子树包");
@@ -2294,6 +2313,8 @@ mod tests {
         assert!(b.manifest.as_ref().unwrap().partial, "包自己也得标 partial");
         assert!(b.notes.iter().any(|n| n["id"] == json!(in_kid.to_string())));
         assert!(!b.notes.iter().any(|n| n["payload"]["folder_id"] == json!(other.to_string())), "平级文件夹的内容不许混进来");
+        assert!(!b.notes.iter().any(|n| n["payload"]["folder_id"] == json!(root.to_string())), "祖先文件夹自己的笔记不许混进来");
+        assert!(b.folders.iter().any(|f| f["id"] == json!(root.to_string())), "祖先链的文件夹行得在，否则外键接不上");
 
         // 真正的验收：干净库能把它导回来，且层级完整。
         let fresh = boot("scoped-b");
@@ -2309,9 +2330,11 @@ mod tests {
         let shas = fresh.store().local_attachment_shas().unwrap();
         assert_eq!(shas.len(), 1, "还原后账上必须认得这一个附件：{shas:?}");
         let data = commands::dispatch(&fresh, "attachment_data", json!({ "sha256": shas[0] })).expect("还原出来的附件必须读得出来");
-        let source = app.store().local_attachment_shas().unwrap();
-        let original = std::fs::read(app.store().blob_path(&source[0])).unwrap();
-        assert_eq!(notera_crypto::b64::decode(data["bytesBase64"].as_str().unwrap()).unwrap(), original, "字节要一字不差");
+        // 源库里现在有两个附件，"随手取第一个 sha"就会比错对象（实测踩过）——
+        // 直接和已知字节比，并且钉住祖先那份不许跟着子树包走。
+        assert_eq!(notera_crypto::b64::decode(data["bytesBase64"].as_str().unwrap()).unwrap(), b"in-scope attachment bytes".to_vec(), "字节要一字不差");
+        let ancestor_sha = notera_crypto::sha256_hex(b"ancestor attachment bytes");
+        assert!(!shas.contains(&ancestor_sha), "祖先文件夹的附件不该跟着子树包走：{shas:?}");
         let (local, remote) = fresh.store().attachment_for_state(&shas[0]);
         assert_eq!((local.as_str(), remote.as_str()), ("available", "unknown"), "还原的附件不得谎报服务器已有");
         let _ = std::fs::remove_file(&out);

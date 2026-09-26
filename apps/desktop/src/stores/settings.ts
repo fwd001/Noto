@@ -282,10 +282,14 @@ export const useSettingsStore = defineStore('settings', () => {
     if (typeof report.skipped === 'number') parts.push(`跳过 ${report.skipped}`);
     if (typeof report.conflicts === 'number' && report.conflicts > 0) parts.push(`需要处理 ${report.conflicts}`);
     if (typeof report.restoredAttachments === 'number') parts.push(`附件 ${report.restoredAttachments}`);
-    if (report.path) parts.push(report.path);
-    if (parts.length === 0 && report.counts) {
-      for (const [key, value] of Object.entries(report.counts)) parts.push(`${key} ${value}`);
+    // 导出报告必须自己说清这是整库还是子树：拿一份子树包当"整库备份"是最危险的误用。
+    if (report.scope === 'folders') parts.push(`子树 · ${report.scopeFolders ?? '?'} 个文件夹 · 不能用于整库还原`);
+    else if (report.scope === 'full') parts.push('整库');
+    if (report.counts) {
+      const c = report.counts;
+      parts.push(`笔记 ${c.notes ?? 0} · 文件夹 ${c.folders ?? 0} · 附件 ${c.attachments ?? 0}`);
     }
+    if (report.path) parts.push(report.path);
     return parts.join(' · ');
   }
 

@@ -48,10 +48,14 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// 导出整库为自描述 ZIP，写完立刻回读校验
+    /// 导出为自描述 ZIP（整库，或按文件夹的子树），写完立刻回读校验
     Export {
         #[arg(long)]
         out: PathBuf,
+        /// 只导这些文件夹（自动带上祖先链，否则导回去是外键失败）。留空 = 整库。
+        /// 注意：子树包缺库内其它内容与"无法归属到文件夹"的永久删除公告，不能当整库备份用。
+        #[arg(long, use_value_delimiter = true)]
+        folders: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -276,13 +280,13 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
             }
         }
 
-        Cmd::Export { out, json } => {
+        Cmd::Export { out, folders, json } => {
             let app = match boot(&dir) {
                 Ok(a) => a,
                 Err(c) => return c,
             };
             let cmd = notera_host::commands::ExportCmd {
-                folder_ids: vec![],
+                folder_ids: folders.clone(),
                 include_attachments: true,
                 include_trash: true,
                 path: Some(out.to_string_lossy().to_string()),
@@ -293,7 +297,7 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
                         println!("{}", serde_json::to_string(&v).unwrap_or_else(|_| "{}".into()));
                     } else {
                         println!("已导出: {}", v["path"].as_str().unwrap_or(""));
-                        println!("计数: {}", v["counts"]);
+                        println!("范围: {} · 计数: {}", v["scope"], v["counts"]);
                     }
                     // 导出的东西必须真的是个能打开的包：写完立刻回读校验，
                     // 否则"文件存在"就成了"数据可恢复"的假证据。
@@ -302,7 +306,26 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
                             println!("回读校验通过: {} 条笔记 / {} 个附件", b.notes.len(), b.attachments.len());
                             // 数量也要对得上：这里曾经只打印不判定，于是"包能打开但一个附件
                             // 都没有"的导出照样算通过 —— 用户手里是一份缺全部附件的"完整备份"。
-                            let want = app.store().local_attachment_shas().map(|v| v.len()).unwrap_or(usize::MAX);
+                            // 按文件夹导时基准必须是**那一棵子树**的附件：直接拿勾选的那几个
+                            // id 去数会漏掉子层里的附件（基准偏低 → 缺附件也判通过），
+                            // 而拿全库去数又会把一次正常的部分导出误判成失败。
+                            let want = if folders.is_empty() {
+                                app.store().local_attachment_shas()
+                            } else {
+                                let ids: Vec<notera_core::EntityId> = folders
+                                    .iter()
+                                    .filter_map(|s| notera_core::EntityId::parse(s).ok())
+                                    .collect();
+                                match app.store().folder_subtree(&ids) {
+                                    Ok(set) => app.store().attachment_shas_in_folders(&set.into_iter().collect::<Vec<_>>()),
+                                    Err(e) => {
+                                        eprintln!("导出范围算不出来：{e}（ASSERT_FAIL）");
+                                        return EXIT_FAIL;
+                                    }
+                                }
+                            }
+                            .map(|v| v.len())
+                            .unwrap_or(usize::MAX);
                             if b.attachments.len() < want {
                                 eprintln!("导出的包里少了附件：库里有 {want} 个，包里只有 {} 个（ASSERT_FAIL）", b.attachments.len());
                                 return EXIT_FAIL;

@@ -7,6 +7,7 @@ import type { ProxyMode, TlsPolicyKind } from '../api/types';
 import { useSettingsStore } from '../stores/settings';
 import { useSyncStore } from '../stores/sync';
 import { useNoteStore } from '../stores/notes';
+import { useFolderStore } from '../stores/folders';
 import { useShellStore } from '../stores/shell';
 import { shortcutsFor, type PlatformCaps } from '../platform/caps';
 import { t, messageFor } from '../i18n';
@@ -17,6 +18,7 @@ import { capChips, capsState } from '../sync/serverCaps';
 const settings = useSettingsStore();
 const sync = useSyncStore();
 const notes = useNoteStore();
+const folders = useFolderStore();
 const shell = useShellStore();
 
 const bypassText = ref('');
@@ -25,6 +27,22 @@ const dataPath = ref('');
 const outPath = ref('');
 const restoreHint = ref('');
 const importMode = ref<'intoEmpty' | 'merge'>('merge');
+// 按文件夹导出：勾了才发 folderIds，不勾就是整库。默认整库 —— 备份的语义不该被误点改窄。
+const exportScoped = ref(false);
+const pickedFolders = ref<string[]>([]);
+
+function toggleScoped(on: boolean): void {
+  exportScoped.value = on;
+  // 每次打开都重拉："非空"不等于"最新" —— 同步刚从另一台设备带过来的文件夹，
+  // 或这次会话里新建的，都可能在旧快照里没有，于是选择器少一项、用户导不全。
+  if (on) void folders.load();
+}
+
+function togglePicked(id: string): void {
+  pickedFolders.value = pickedFolders.value.includes(id)
+    ? pickedFolders.value.filter((picked) => picked !== id)
+    : [...pickedFolders.value, id];
+}
 
 // §5 的判定：核心算好策略发下来，这里只负责把它讲成人话（不许前端自己反推）。
 const capsStateOf = computed(() => capsState(settings.account));
@@ -99,7 +117,7 @@ async function syncNow(): Promise<void> {
 
 async function doExport(): Promise<void> {
   await settings.exportData({
-    folderIds: [],
+    folderIds: exportScoped.value ? pickedFolders.value : [],
     includeAttachments: true,
     includeTrash: true,
     ...(outPath.value.trim() ? { path: outPath.value.trim() } : {}),
@@ -343,6 +361,24 @@ function keyHint(): string {
             <span>{{ t('settings.exportPathLabel') }}</span>
             <input v-model="outPath" class="input" type="text" spellcheck="false" data-testid="export-path" :placeholder="t('settings.exportPathHint')" />
           </label>
+          <div class="field">
+            <label class="pick">
+              <input type="checkbox" data-testid="export-scoped" :checked="exportScoped" @change="toggleScoped((($event.target as HTMLInputElement).checked))" />
+              <span class="text-sm">{{ t('settings.exportScoped') }}</span>
+            </label>
+            <div v-if="exportScoped" class="folder-pick" data-testid="export-folder-list">
+              <label v-for="f in folders.flat" :key="f.node.id" class="pick" :style="{ paddingLeft: `${0.5 + f.depth * 0.75}rem` }">
+                <input
+                  type="checkbox"
+                  :data-testid="`export-folder-${f.node.id}`"
+                  :checked="pickedFolders.includes(f.node.id)"
+                  @change="togglePicked(f.node.id)"
+                />
+                <span class="text-sm">{{ f.node.name }}</span>
+              </label>
+              <p class="field-hint">{{ t('settings.exportScopedHint') }}</p>
+            </div>
+          </div>
           <label class="field">
             <span>{{ t('settings.inputPathLabel') }}</span>
             <input v-model="dataPath" class="input" type="text" spellcheck="false" data-testid="data-path" :placeholder="t('settings.inputPathHint')" />
@@ -386,6 +422,20 @@ function keyHint(): string {
 .settings {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* 导出范围的勾选行：行高按触摸目标下限（44pt）给，鼠标用户也不会觉得挤。 */
+.pick {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.folder-pick {
+  margin-top: 0.25rem;
+  border-left: 2px solid var(--line);
+  padding-left: 0.25rem;
 }
 
 .settings__body {
