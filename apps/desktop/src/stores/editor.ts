@@ -70,6 +70,9 @@ export const useEditorStore = defineStore('editor', () => {
     void save();
   }, AUTOSAVE_DEBOUNCE_MS);
 
+  /** 所有 save 依次排队，杜绝两条自动保存同时出发把彼此打成"冲突"。 */
+  let saveChain: Promise<void> = Promise.resolve();
+
   function hydrate(note: Note): void {
     noteId.value = note.id;
     rev.value = typeof note.rev === 'number' ? note.rev : 0;
@@ -167,6 +170,18 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   async function save(): Promise<void> {
+    // 串行化：并发两次 save 会都带着同一个 expectedRev 出发，先回来的把 rev 推进，
+    // 后回来的就被核心判成 stale_edit —— 于是用户看到一条"这条笔记在别处被改动了"，
+    // 而"别处"其实是我们自己的第二次自动保存。
+    const next = saveChain.then(() => doSave());
+    saveChain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  async function doSave(): Promise<void> {
     if (noteId.value === null || !dirty.value || writeBlocked.value) return;
     const doc = currentDoc();
     const targetId = noteId.value;
