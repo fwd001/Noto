@@ -132,6 +132,9 @@
   --titlebar-height: 40px;
   --toolbar-height: 48px;
   --editor-measure: 68ch;
+  /* 块把手：正文左侧留白，同时也是拖拽指示线的可用宽度 */
+  --nb-handle-gutter: 52px;
+  --nb-hit: 24px;
   --focus-width: 2px;
 
   --dur-fast: 120ms;

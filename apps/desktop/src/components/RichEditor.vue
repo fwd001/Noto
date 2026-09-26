@@ -8,14 +8,17 @@ import EditorToolbar from './EditorToolbar.vue';
 import { vEditable, markAsParsed } from '../editor/editableDirective';
 import { applySelection, parseEditable, safeHref, selectionIn } from '../editor/dom';
 import { applySlash, filterSlash, markdownShortcut, slashQuery, type SlashItem } from '../editor/quickInsert';
+import { destinationFor, gapAt } from '../editor/interaction';
 import {
   applyMark,
   backspace,
   changeType,
   cycleChecklist,
+  insertBelow,
   insertRule,
   insertText,
   mergeWithPrevious,
+  moveBlock,
   orderedNumbers,
   removeBlockAt,
   setChecked,
@@ -62,6 +65,86 @@ async function chooseSlash(item: SlashItem | undefined): Promise<void> {
   slashQ.value = null;
   if (!item) return;
   await run(applySlash(blocks.value, activeIndex.value, item));
+}
+
+/**
+ * 块把手：拖拽重排走 pointer 事件而不是 HTML5 DnD —— 后者在触摸端基本不触发，
+ * 手机上就没了重排。落点用"块中线"判定，绘制一条插入指示线。
+ */
+const dragFrom = ref<number | null>(null);
+const dropGap = ref(0);
+
+function blockBoxes(): { top: number; bottom: number }[] {
+  const root = docEl.value;
+  if (!root) return [];
+  return Array.from(root.querySelectorAll<HTMLElement>('.nb-block')).map((element) => {
+    const rect = element.getBoundingClientRect();
+    return { top: rect.top, bottom: rect.bottom };
+  });
+}
+
+/** 拖到可视区上下边缘时滚动，长笔记里不必把块拖出屏幕就断掉。 */
+function autoScroll(clientY: number): void {
+  const root = docEl.value;
+  if (!root) return;
+  const rect = root.getBoundingClientRect();
+  const edge = 40;
+  if (clientY < rect.top + edge) root.scrollTop -= Math.ceil((rect.top + edge - clientY) / 4);
+  else if (clientY > rect.bottom - edge) root.scrollTop += Math.ceil((clientY - (rect.bottom - edge)) / 4);
+}
+
+async function commitDrop(): Promise<void> {
+  const from = dragFrom.value;
+  dragFrom.value = null;
+  if (from === null) return;
+  const to = destinationFor(dropGap.value, from);
+  if (to === from) return;
+  await run(moveBlock(blocks.value, from, to));
+}
+
+function onGripPointerDown(index: number, event: PointerEvent): void {
+  if (readOnly.value) return;
+  event.preventDefault();
+  const grip = event.currentTarget as HTMLElement | null;
+  grip?.setPointerCapture?.(event.pointerId);
+  dragFrom.value = index;
+  dropGap.value = index;
+}
+
+function onGripPointerMove(event: PointerEvent): void {
+  if (dragFrom.value === null) return;
+  dropGap.value = gapAt(blockBoxes(), event.clientY);
+  autoScroll(event.clientY);
+}
+
+function onGripPointerUp(event: PointerEvent): void {
+  const grip = event.currentTarget as HTMLElement | null;
+  if (grip?.hasPointerCapture?.(event.pointerId)) grip.releasePointerCapture(event.pointerId);
+  void commitDrop();
+}
+
+/** 键盘重排：把手聚焦后用上下方向键移动。拖拽不是唯一入口，也是无障碍兜底。 */
+async function onGripKeydown(index: number, event: KeyboardEvent): Promise<void> {
+  if (readOnly.value) return;
+  if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+  event.preventDefault();
+  const to = index + (event.key === 'ArrowUp' ? -1 : 1);
+  if (to < 0 || to >= blocks.value.length) return;
+  await run(moveBlock(blocks.value, index, to));
+}
+
+function onInsertBelow(index: number): void {
+  void run(insertBelow(blocks.value, index));
+}
+
+/** 指示线画在哪：落在自己原来的缝就不画，免得看着像在动。 */
+function dropMarker(index: number): 'before' | 'after' | undefined {
+  const from = dragFrom.value;
+  if (from === null) return undefined;
+  const total = blocks.value.length;
+  if (destinationFor(dropGap.value, from) === from) return undefined;
+  if (dropGap.value < total && dropGap.value === index) return 'before';
+  return dropGap.value === total && index === total - 1 ? 'after' : undefined;
 }
 
 const currentBlock = computed<EditorBlock | null>(() => blocks.value[activeIndex.value] ?? blocks.value[0] ?? null);
@@ -220,6 +303,17 @@ async function onKeydown(index: number, event: KeyboardEvent): Promise<void> {
       await run(setHeading(index, Number(lower)));
       return;
     }
+  }
+
+  // Alt+↑/↓：不离开正文就能把当前块上移/下移一行，光标停在原列
+  if (event.altKey && !mod && (key === 'ArrowUp' || key === 'ArrowDown')) {
+    event.preventDefault();
+    const to = index + (key === 'ArrowUp' ? -1 : 1);
+    if (to < 0 || to >= blocks.value.length) return;
+    const edit = moveBlock(blocks.value, index, to);
+    edit.caret = range.value.start;
+    await run(edit);
+    return;
   }
 
   if (key === 'Enter' && !event.shiftKey && block.type !== 'codeBlock') {
@@ -381,8 +475,42 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
           :data-checked="block.type === 'checklistItem' ? (isChecked(block) ? 'true' : 'false') : undefined"
           :data-readonly="readOnly ? 'true' : 'false'"
           :data-conflict="store.hasDraftConflict && index === 0 ? 'true' : 'false'"
+          :data-drop="dropMarker(index)"
+          :class="{ 'nb-block--drag': dragFrom === index }"
           :style="{ marginLeft: `calc(${indentOf(block)} * var(--space-4))` }"
         >
+          <div
+            v-if="!readOnly"
+            class="nb-handles"
+            :class="{ 'nb-handles--on': dragFrom === index || activeIndex === index }"
+          >
+            <button
+              type="button"
+              class="nb-handle nb-handle--add"
+              data-testid="insert-below"
+              tabindex="-1"
+              :aria-label="t('editor.insertBelow')"
+              :title="t('editor.insertBelow')"
+              @mousedown.prevent
+              @click="onInsertBelow(index)"
+            >
+              +
+            </button>
+            <span
+              class="nb-handle nb-grip"
+              role="button"
+              tabindex="0"
+              data-testid="drag-handle"
+              :aria-label="t('editor.dragHandle')"
+              :title="t('editor.dragHint')"
+              @pointerdown="onGripPointerDown(index, $event)"
+              @pointermove="onGripPointerMove"
+              @pointerup="onGripPointerUp"
+              @pointercancel="onGripPointerUp"
+              @keydown="onGripKeydown(index, $event)"
+            >⠿</span>
+          </div>
+
           <span v-if="block.type === 'orderedList'" class="nb-gutter" aria-hidden="true">{{ numbers[index] }}.</span>
           <span v-else-if="block.type === 'bulletList'" class="nb-gutter" aria-hidden="true">•</span>
 

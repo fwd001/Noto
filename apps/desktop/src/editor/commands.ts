@@ -172,13 +172,26 @@ export function removeBlockAt(blocks: readonly EditorBlock[], index: number): Bl
   return { blocks: next, focusId: focus?.id ?? null, caret: focus ? blockText(focus).length : 0 };
 }
 
-export function moveBlock(blocks: readonly EditorBlock[], index: number, delta: number): BlockEdit {
-  const target = index + delta;
-  if (target < 0 || target >= blocks.length) return { blocks: [...blocks], focusId: blocks[index]?.id ?? null, caret: 0 };
+/**
+ * 重排：把 from 处的块搬到目标下标 to（to 是"移除之后"的位置，与拖拽落点同语义）。
+ * 越界夹到两端；原地重排返回同内容但 focus 落在该块，调用方据此早退。
+ */
+export function moveBlock(blocks: readonly EditorBlock[], from: number, to: number): BlockEdit {
+  const current = blocks[from];
+  if (!current) return { blocks: [...blocks], focusId: null, caret: 0 };
+  const target = Math.max(0, Math.min(to, blocks.length - 1));
   const next = [...blocks];
-  const [moved] = next.splice(index, 1);
-  next.splice(target, 0, moved ?? blocks[index] as EditorBlock);
-  return { blocks: next, focusId: blocks[index]?.id ?? null, caret: 0 };
+  next.splice(from, 1);
+  next.splice(target, 0, current);
+  return { blocks: next, focusId: current.id, caret: blockText(current).length };
+}
+
+/** 把手上"+"：在当前块下方插入空段并聚焦——替代"点到行尾再敲回车"。 */
+export function insertBelow(blocks: readonly EditorBlock[], index: number): BlockEdit {
+  const block = emptyParagraph();
+  const next = [...blocks];
+  next.splice(Math.min(index + 1, next.length), 0, block);
+  return { blocks: next, focusId: block.id, caret: 0 };
 }
 
 /** 编号列表的可见序号：按"同缩进连续同类型"分组计数。 */

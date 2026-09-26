@@ -8,7 +8,8 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: var(--space-5) var(--space-5) var(--space-8);
+  /* 左侧多留一条把手道：悬浮控件和指示线画在这条留白里，不遮正文 */
+  padding: var(--space-5) var(--space-5) var(--space-8) calc(var(--space-5) + var(--nb-handle-gutter));
   overscroll-behavior: contain;
 }
 
@@ -36,6 +37,106 @@
 
 .nb-block:hover {
   background: var(--bg-sunken);
+}
+
+/* ---- 块把手：悬浮在左侧留白里，拖拽重排 + 在此下方插入 ---- */
+.nb-handles {
+  position: absolute;
+  top: 0;
+  left: calc(-1 * var(--nb-handle-gutter));
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.nb-block:hover .nb-handles,
+.nb-handles--on {
+  opacity: 1;
+}
+
+.nb-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--nb-hit);
+  height: var(--nb-hit);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-1);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  /* 手势交给把手自己：否则浏览器会把它当成滚动或文本选择，拖不起来 */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.nb-handle:hover {
+  background: var(--bg-sunken);
+  color: var(--text-primary);
+}
+
+.nb-handle:focus-visible {
+  outline: var(--focus-width) solid var(--border-focus);
+  outline-offset: 1px;
+}
+
+.nb-grip {
+  cursor: grab;
+  letter-spacing: -2px;
+}
+
+.nb-block--drag {
+  opacity: 0.45;
+}
+
+.nb-block[data-drop='before']::before,
+.nb-block[data-drop='after']::after {
+  content: '';
+  position: absolute;
+  left: calc(-1 * var(--nb-handle-gutter));
+  right: 0;
+  height: var(--focus-width);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.nb-block[data-drop='before']::before {
+  top: calc(-1 * var(--space-1));
+}
+
+.nb-block[data-drop='after']::after {
+  bottom: calc(-1 * var(--space-1));
+}
+
+/* 触摸端没有 hover：只有当前块显控件，且命中区放大到 44px；"插入下方"由回车替代 */
+@media (pointer: coarse) {
+  .editor-scroll {
+    --nb-handle-gutter: var(--touch-min);
+  }
+
+  .nb-handle {
+    width: var(--touch-min);
+    height: var(--touch-min);
+  }
+
+  .nb-handle--add {
+    display: none;
+  }
+
+  .nb-block:hover .nb-handles {
+    opacity: 0;
+  }
+
+  .nb-handles--on {
+    opacity: 1;
+  }
 }
 
 .nb-content {
