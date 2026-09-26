@@ -170,19 +170,17 @@ fn both_present(l: &LocalView, r: &RemoteView) -> Decision {
     if !local_changed && remote_changed {
         return Decision { key: l.key(), action: Action::Pull, rule: "P6" };
     }
-    // P7/P8 两侧都改：内容相同即收敛，不同才是真冲突
+    // P7/P8 两侧都改：内容相同即收敛，不同才是真冲突。
+    // 比较走 `same_content_hash`：远端索引带的是 12 位短哈希，本地行上是全哈希，
+    // 直接 `==` 会让 P7 永远不成立 —— 两侧内容一样也会被判成冲突（实测就是这样）。
     let same = match (&r.hash, Some(&l.content_hash)) {
-        (Some(h), Some(mine)) => norm(h) == norm(mine),
+        (Some(h), Some(mine)) => notera_core::same_content_hash(h, mine),
         _ => false,
     };
     if same {
         return Decision { key: l.key(), action: Action::NoOp, rule: "P7" };
     }
     Decision { key: l.key(), action: Action::Conflict(ConflictKind::UpdateUpdate), rule: "P8" }
-}
-
-fn norm(h: &str) -> &str {
-    h.strip_prefix("sha256:").unwrap_or(h)
 }
 
 /// 从两侧视图生成整轮计划。
@@ -310,6 +308,32 @@ mod tests {
         let d = decide(Some(&l(7, 5, "same")), Some(&r(8, "same")));
         assert_eq!(d.action, Action::NoOp, "内容相同必须判收敛");
         assert_eq!(d.rule, "P7");
+    }
+
+    #[test]
+    fn p7_converges_with_the_hash_shapes_production_actually_uses() {
+        // 上面那条 p7 两侧都用同一个假串，所以它测不到真正的形状差：
+        // 生产里本地行上是**整条** sha256，远端索引/清单上是**12 位短哈希**。
+        // 拿这两者直接 `==`，P7 永远不成立 —— 两侧内容完全一样也会发一张冲突卡片。
+        let full = format!("abc123def456{}", "0".repeat(52));
+        let short = full[..12].to_string();
+        let local = l(7, 5, &full);
+        let remote = RemoteView {
+            kind: "n".into(),
+            id: "x".into(),
+            rev: 8,
+            hash: Some(short.clone()),
+            deleted_at: None,
+            purged: false,
+        };
+        let d = decide(Some(&local), Some(&remote));
+        assert_eq!((d.action, d.rule), (Action::NoOp, "P7"), "短哈希与全哈希同值必须算收敛");
+
+        // 而真的不一样时不许因为"前 12 位相同"就收敛掉：短哈希只用于同一版判定，
+        // 这里给的是两个不同的完整值，必须仍然判成冲突。
+        let other = RemoteView { hash: Some("ff00ee001122".to_string()), ..remote };
+        let e = decide(Some(&local), Some(&other));
+        assert_eq!((e.action, e.rule), (Action::Conflict(ConflictKind::UpdateUpdate), "P8"));
     }
 
     #[test]

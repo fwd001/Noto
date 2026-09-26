@@ -143,6 +143,30 @@ pub fn next_rev(local: Rev, observed_remote: Rev) -> Rev {
 #[serde(transparent)]
 pub struct ContentHash(String);
 
+/// 两个内容哈希是否可视为"同一版内容"：允许 `sha256:` 前缀有无与大小写，并允许清单里
+/// 那种**短形式**（前 12 位十六进制）与全哈希相比。
+///
+/// 为什么需要它：远端索引 `sync_remote_index.hash12` 存的是 12 位短哈希，本地行上是全哈希。
+/// 判定表 P7（两侧都改但内容相同 → 收敛，不算冲突）原先拿两者直接 `==`，于是它**永远不
+/// 成立** —— 内容完全一样的两侧也会被记成一次冲突，用户收到一张没有意义的卡片。
+/// 短哈希只用于"要不要重新公告 / 这是不是同一版"这类收敛判定，绝不当防伪手段：真正写库的
+/// 闸门始终是 I6 那条整值复核（`content_hash == sha256(canonical(doc))`）。
+pub fn same_content_hash(a: &str, b: &str) -> bool {
+    let norm = |s: &str| {
+        let t = s.trim();
+        t.strip_prefix("sha256:").unwrap_or(t).to_ascii_lowercase()
+    };
+    let (x, y) = (norm(a), norm(b));
+    if x.is_empty() || y.is_empty() {
+        return false;
+    }
+    let (short, long) = if x.len() <= y.len() { (x.as_str(), y.as_str()) } else { (y.as_str(), x.as_str()) };
+    if short.len() == long.len() {
+        return short == long;
+    }
+    short.len() >= 12 && long.starts_with(short)
+}
+
 impl ContentHash {
     pub fn from_hex(hex64: &str) -> Result<Self, HashError> {
         if hex64.len() != 64 || !hex64.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -380,6 +404,36 @@ pub fn assert_id_valid(id: &EntityId) -> Result<(), InvariantViolation> {
 pub struct InvariantViolation {
     pub id: &'static str,
     pub detail: String,
+}
+
+#[cfg(test)]
+mod hash_shape_tests {
+    use super::same_content_hash;
+
+    const FULL: &str = "abc123def4560000000000000000000000000000000000000000000000000000";
+
+    #[test]
+    fn full_hashes_match_regardless_of_prefix_and_case() {
+        assert!(same_content_hash(FULL, &format!("sha256:{FULL}")));
+        assert!(same_content_hash(&format!("sha256:{}", FULL.to_ascii_uppercase()), FULL));
+    }
+
+    #[test]
+    fn a_12_char_manifest_hash_matches_the_full_hash_it_came_from() {
+        // 生产形状：远端索引 `hash12` 存 12 位，本地行上存整条。
+        assert!(same_content_hash(&FULL[..12], &format!("sha256:{FULL}")));
+        assert!(same_content_hash(&format!("sha256:{FULL}"), &FULL[..12]), "两侧谁长谁短都要成立");
+    }
+
+    #[test]
+    fn different_content_never_matches_and_short_or_empty_never_matches() {
+        assert!(!same_content_hash(FULL, &"f".repeat(64)));
+        assert!(!same_content_hash(&FULL[..12], &FULL[6..18]));
+        // 短到不像清单哈希（<12 位）就不许当"同一版"，否则两位前缀就能互相冒充
+        assert!(!same_content_hash(&FULL[..6], FULL));
+        assert!(!same_content_hash("", FULL));
+        assert!(!same_content_hash("sha256:", FULL));
+    }
 }
 
 #[cfg(test)]
