@@ -10,7 +10,7 @@
 |---|---|
 | `cargo test --workspace` | 435 通过 / 0 失败 / 0 ignored（50 个测试二进制） |
 | 前端 | 140 通过（14 文件）；`vue-tsc --noEmit` 无错误；构建 206 KB → gzip 70 KB |
-| `scripts/arch-check.mjs` | 21/21 |
+| `scripts/arch-check.mjs` | 22/22 |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
 | `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 31/31 |
 | `scripts/verify-tauri-window.mjs`（真窗口，走真 `invoke`） | 8/8，控制台 0 error |
@@ -53,8 +53,9 @@
 - **端到端门禁漏掉整类 4xx**：只盯 `requestfailed`，而本地桥把业务拒绝映射成 HTTP 400 → 真错误（上面那条 stale_edit）被当成功放过
 - **待办结清用错了 kind 词汇，每一行都永远停在 inflight**：引擎交给适配器的 `kind` 是**线上短标记**（`n/f/a`，它同时是远端路径 `/.notes/n/<id>.json` 的一段），而 `sync_operations.entity_type` 存的是长标记（`note/folder/attachment`）。`outbox_settle` 拿短标记去 UPDATE：匹配 0 行、返回 `Ok(())`、留一条 warn，于是设置页的"待处理任务"永远不掉、`sync_operations` 只增不清、崩溃恢复也判断不了从哪重放。修法是把参数类型从 `&str` 改成 `EntityKind` —— 词汇翻译从此是**编译期**的事，store 内部只认一种词汇，host 适配器用 `EntityKind::from_tag` 显式翻并认不出就放弃（绝不"猜一行"标完成）。**store 的单测当时是绿的**，因为它自己传的就是长标记：单测用错词汇不会失败，只有真跑一轮才会。顺带把"待同步"的口径定清 —— 只统计**启用中的账户**，本地哨兵账户（`enabled=0`）是"提交即入 outbox"的留痕账、引擎永不消费它，把它算进来这个数就永远归不了零，长得像同步卡死（本地有没有未上传改动由 `dirty_notes` 表达，两者不混）
 - **设置页的"最近删除 / 本地占用 / 待处理任务"恒为占位符 `—`，侧栏回收站恒为 0**：`App::stats` 是命令面里唯一没走 DTO 的一条 —— 它把 `notera_store::StoreStats` 原样序列化，wire 上是 snake_case 的 `notes_trash / fts_rows / outbox_pending`，而契约图与前端读的是 `notesInTrash / ftsEntries / inflightOps`，于是全是 `undefined`。TypeScript 的类型是断言不是校验，`formatNumber(undefined)` 很诚实地给出 `—`；而 `app.spec.ts` 喂的 mock 恰好是 camelCase —— 假数据把这个洞完整盖住了。现在命令面补 `StatsDto`（8 个契约字段 + `From<StoreStats>` 一处翻译），三处一起钉住：Rust 用真 `dispatch("stats")` 断言键集合、arch-check 新增 `edge:stats-dto-covers-ui-reads`（扫前端每一处 `settings.stats.X` 与 `StoreStats` 声明，核心发不出就判红；删掉 `#[serde(rename_all)]` 或改任一个字段名都会变红，两条都实测过）、端到端新增一步在浏览器里断言这五行全是数字
+- **通用门禁 `edge:command-wire-is-camelCase`**：上一条是逐键核对，这一条把整类挡掉 —— 命令面每一个 `j(app.x()?)` 出参的结构体都必须**显式**声明 `#[serde(rename_all = "camelCase")]`，否则判红并指名是哪个命令、哪个类型。审计顺带查了另一处同源风险（`backup_db`/`list_backups` 发的是 store 的 `BackupInfo`），它本来就带这个属性所以界面没坏；门禁的作用是不许下一个人在没注意的时候漏掉它（变异测过：删掉那个属性 → `backup_db → BackupInfo（缺 #[serde(rename_all = "camelCase")]）` 立刻变红）
 - `WorkspaceView` 不跟随 `selectedId` 打开编辑器（选中了却一片空白）、`create()` 不打开新笔记、冲突动词表三处不一致、`create_note` 拒绝 `folderId: null`、`/favicon.ico` 404
-- **架构适应度检查** `scripts/arch-check.mjs`：21 条机器可判定的层次约束（依赖边、唯一出口、SQL 只出现在 store、前端无协议词汇、端口边越界引用、命令面 DTO 覆盖界面读的每一个键…）
+- **架构适应度检查** `scripts/arch-check.mjs`：22 条机器可判定的层次约束（依赖边、唯一出口、SQL 只出现在 store、前端无协议词汇、端口边越界引用、命令面 DTO 覆盖界面读的每一个键…）
 - **端到端等价** `scripts/verify-app.mjs`：Playwright 驱动同一份前端 + 同一份 Rust 核心的 31 步 UAT
 
 ### 修复（都是会静默丢数据或静默错的那些，不是整理）

@@ -266,6 +266,51 @@ const statsDrift = statsHeader
 check('edge:stats-dto-covers-ui-reads', 'ARCHITECTURE-MAP §5（命令面 DTO = 界面读到的键）', [...new Set(statsDrift)],
   `界面读到/声明了核心发不出的 stats 键（会静默变成 — 或 0）：\n    ${[...new Set(statsDrift)].join('\n    ')}`);
 
+// 命令面发出去的每一个结构体都必须**显式**声明 camelCase。
+// Rust 的默认是 snake_case，`StoreStats` 就是这么把 notes_trash / outbox_pending 漏到
+// 界面上的（见上一条规则）。这条不看具体字段，只把"存储层类型没声明视图命名策略就直接
+// 上 wire"这一整类挡掉 —— 命中面比逐字段核对更宽，误报为零（`serde_json::Value` 是手搓的，跳过）。
+const TYPE_NOISE = new Set(['Result', 'Vec', 'Option', 'Some', 'Ok', 'serde_json', 'Value', 'String', 'str', 'bool',
+  'u8', 'u16', 'u32', 'u64', 'i32', 'i64', 'f32', 'f64', 'usize', 'Arc', 'Box', 'HashMap', 'BTreeMap', 'PathBuf', 'CmdError']);
+const structSources = [
+  ...sources(join(ROOT, 'crates/notera-host/src'), ['.rs']),
+  ...sources(join(ROOT, 'crates/notera-store/src'), ['.rs']),
+  ...sources(join(ROOT, 'crates/notera-core/src'), ['.rs']),
+  ...sources(join(ROOT, 'crates/notera-config/src'), ['.rs']),
+].map((f) => [rel(f), read(f)]);
+function typeReturnOf(name) {
+  const [, body] = structSources.find(([r]) => r.endsWith('notera-host/src/lib.rs')) ?? [];
+  if (!body) return null;
+  const at = body.indexOf(`pub fn ${name}(`);
+  if (at < 0) return null;
+  const brace = body.indexOf('{', at);
+  const sig = body.slice(at, brace < 0 ? at + 400 : brace);
+  const arrow = sig.lastIndexOf('->');
+  return arrow < 0 ? null : sig.slice(arrow + 2).trim();
+}
+function structAttrs(name) {
+  for (const [, text] of structSources) {
+    const at = text.search(new RegExp(`pub (struct|enum) ${name}\\b`));
+    if (at < 0) continue;
+    if (/pub enum/.test(text.slice(at, at + 12))) return 'enum';
+    const head = text.slice(Math.max(0, text.lastIndexOf('\n\n', at)), at);
+    return head.split(/\r?\n/).filter((l) => !l.trim().startsWith('///')).join('\n');
+  }
+  return null;
+}
+const camelArmViolations = [];
+for (const arm of commandsSrc.matchAll(/j\(app\.([a-z_]+)\(/g)) {
+  const ret = typeReturnOf(arm[1]);
+  if (!ret) continue;
+  for (const t of new Set([...ret.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)].map((m) => m[0]).filter((n) => !TYPE_NOISE.has(n)))) {
+    const attrs = structAttrs(t);
+    if (attrs === null || attrs === 'enum') continue;
+    if (!/rename_all\s*=\s*"camelCase"/.test(attrs)) camelArmViolations.push(`${arm[1]} → ${t}（缺 #[serde(rename_all = "camelCase")]）`);
+  }
+}
+check('edge:command-wire-is-camelCase', 'ARCHITECTURE-MAP §5（命令面出参的键名是契约）', [...new Set(camelArmViolations)],
+  `这些命令出参的类型没声明 camelCase，wire 上会是 snake_case 而界面按 camelCase 取值：\n    ${[...new Set(camelArmViolations)].join('\n    ')}`);
+
 // ------------------------------------------------------------------------- 输出 ---
 
 // "扫了 0 个文件"和"扫了但没问题"必须能区分开：前者是门禁在空转，

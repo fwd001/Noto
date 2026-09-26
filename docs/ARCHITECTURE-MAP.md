@@ -131,7 +131,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | 把 mock 当真实 HTTP 测同步 | 需求明令禁止假 API | 测试层约束：L2 以上必须真 socket |
 | 在 UI 线程调用 argon2id / 全量校验 | 实测 ≈400 ms，会卡 | 性能断言 |
 | 让清单成为正确性来源（如"清单没有就当用户删了"） | 违反 R1/C2/C3 | 协议测试用例 |
-| 命令面直接把 store/core 的类型序列化给界面 | 存储层字段名会漏到 wire 上，而界面按契约名取值 → 静默 `undefined`（曾让设置页三行统计恒为 `—`） | `arch-check` 的 `edge:stats-dto-covers-ui-reads` + 真 `invoke` 的键集合断言 |
+| 命令面直接把 store/core 的类型序列化给界面 | 存储层字段名会漏到 wire 上，而界面按契约名取值 → 静默 `undefined`（曾让设置页三行统计恒为 `—`） | `edge:command-wire-is-camelCase`（出参类型必须显式声明 camelCase）+ `edge:stats-dto-covers-ui-reads`（界面读的每个键都要发得出）+ 真 `invoke` 的键集合断言 |
 | 跨 host↔store 边界传 `kind` 用裸字符串 | 同一实体有两套词汇（线上短标记 `n/f/a` ↔ 库里长标记 `note/…`），传错词汇编译能过、UPDATE 匹配 0 行、待办静默停在 inflight | 参数类型是 `EntityKind`（词汇翻译只能在适配器一处发生） |
 
 ---
@@ -189,7 +189,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 |---|---|---|
 | Rust 测试 | 435 通过 / 0 失败 / 0 ignored（50 个测试二进制） | `cargo test --workspace` |
 | 前端 | 140 通过（14 文件）、`vue-tsc` 无错误、构建 206 KB→gzip 70 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
-| 架构适应度 | 21/21（最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |
+| 架构适应度 | 22/22（最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
 | 浏览器端到端 | 31/31（真 Rust 核心，非 mock；含"设置页存服务器 → 能力块读回"与"库统计五行全是数字"两条真实往返） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
 | 真窗口 | 8/8（invoke 的 `stats` 键集合 == 契约那 8 个 → 建笔记→落库→刷新读回→点开正文，控制台 0 error） | `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223 target/debug/notera-desktop.exe` + `node scripts/verify-tauri-window.mjs` |
