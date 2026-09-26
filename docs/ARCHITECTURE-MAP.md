@@ -189,7 +189,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | 前端 | 121 通过（12 文件）、`vue-tsc` 无错误、构建 199 KB→gzip 68 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
 | 架构适应度 | 18/18 | `node scripts/arch-check.mjs` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
-| 浏览器端到端 | 28/28（真 Rust 核心，非 mock） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
+| 浏览器端到端 | 29/29（真 Rust 核心，非 mock） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
 | 真窗口 | 8/8（invoke 建笔记→落库→刷新读回→点开正文，控制台 0 error） | `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223 target/debug/notera-desktop.exe` + `node scripts/verify-tauri-window.mjs` |
 
 **已建立**：12 个 crate + `apps/desktop`（Tauri 壳 + Vue 前端）+ `migrations/0001..0005` + 自建测试 WebDAV 服务器 + 上述四套验证脚本 + `docs/` 全套规格与 ADR-0001…0019。

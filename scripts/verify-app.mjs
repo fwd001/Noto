@@ -297,6 +297,21 @@ await step('界面上没有漏出文案键名（编辑器 + 工具条）', async
   return 'clean';
 });
 
+await step('工具条不靠滚动条腾地方（窄栏下也不吃掉一行）', async () => {
+  // 就在编辑器已经打开的地方量：设置页会藏掉侧栏，1100 以下也藏
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await page.waitForTimeout(500);
+  const m = await page.locator('.tb').first().evaluate((el) => ({
+    lost: el.offsetHeight - el.clientHeight,
+    scrollable: el.scrollWidth > el.clientWidth,
+    w: el.clientWidth,
+  }));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForTimeout(300);
+  if (m.lost > 2) throw new Error(`工具条被横向滚动条吃掉 ${m.lost}px（应 0–2px 边框），栏宽 ${m.w}`);
+  return m.scrollable ? `栏宽 ${m.w}px：溢出但滚动条不占布局（仍可滚）` : `栏宽 ${m.w}px：无需滚动`;
+});
+
 await step('搜索能命中这条笔记', async () => {
   const box = page.locator('input[type="search"], [data-testid="search-input"], input[placeholder*="搜索"]').first();
   await box.waitFor({ timeout: 4000 });

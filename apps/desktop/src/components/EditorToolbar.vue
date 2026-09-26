@@ -175,10 +175,19 @@ function applyLink(): void {
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-pane);
   overflow-x: auto;
+  /* 窄栏里工具条横向可滚，但不给那条滚动条留位置：
+     一个 17px 的常驻横条会把编辑区第一行整个顶下去，而工具条本来就能滚。 */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   flex: 0 0 auto;
 }
 
+.tb::-webkit-scrollbar {
+  display: none;
+}
+
 .tb__btn {
+  flex: 0 0 auto;
   min-width: var(--touch-min);
   min-height: var(--touch-min);
   display: inline-flex;

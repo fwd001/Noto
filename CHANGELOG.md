@@ -12,7 +12,7 @@
 | 前端 | 121 通过（12 文件）；`vue-tsc --noEmit` 无错误；构建 199 KB → gzip 68 KB |
 | `scripts/arch-check.mjs` | 18/18 |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
-| `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 28/28 |
+| `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 29/29 |
 | `scripts/verify-tauri-window.mjs`（真窗口，走真 `invoke`） | 8/8，控制台 0 error |
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8。
