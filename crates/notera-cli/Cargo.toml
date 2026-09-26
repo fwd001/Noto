@@ -9,6 +9,7 @@ notera-core = { workspace = true }
 notera-host = { workspace = true }
 notera-store = { workspace = true }
 notera-sync = { workspace = true }
+notera-importer = { workspace = true }
 notera-net = { workspace = true }
 notera-config = { workspace = true }
 serde = { workspace = true }

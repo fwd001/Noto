@@ -19,7 +19,11 @@ fn backup_is_a_self_describing_consistent_snapshot() {
     assert!(info.path.is_file(), "备份文件必须真的在盘上");
     assert_eq!(info.sha256.len(), 64, "sha256 是裸 64 hex");
     assert!(info.bytes > 0);
-    assert_eq!(info.user_version, 5, "备份要带上 schema 版本，恢复闸门靠它");
+    assert_eq!(
+        info.user_version, store.migration_report().to,
+        "备份要带上 schema 版本，恢复闸门靠它（写死数字会让每次迁移都误报）"
+    );
+    assert!(info.user_version > 0, "user_version 必须已推进，不能是 0");
 
     // 备份产物自己必须能通过 integrity_check —— 坏文件当备份是最危险的假安心
     let again = inspect_backup(&info.path).unwrap();

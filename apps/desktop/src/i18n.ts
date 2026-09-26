@@ -275,6 +275,21 @@ const MESSAGES: Record<MessageKey, string> = {
   'slash.code': '代码块',
   'slash.codeHint': '保留缩进与换行，不套行内格式',
   'sync.needsCredentials': '还没有可用的登录凭据。笔记照常保存在本机，配好凭据后会自动开始同步。',
+  // 键名与核心侧逐字一致（`notera-core` 的 ErrorCode 与 host 的 Toast 都发这个键）：
+  // 之前它没登记，"有版本要你决定"的提示会退化成一句通用兜底文案。
+  'sync.conflict_attention': '有内容在两台设备上改得不一样，需要你决定保留哪一份。冲突不会自动覆盖任何东西。',
+  'sync.probeDeferred': '这次没能完成服务器能力探测，已按最保守的方式继续同步（不会覆盖你的数据），下次启动会再试一次。',
+  // 以下 8 条是核心的错误词表（`notera-core` 的 `ErrorCode::message_key()`）会发出去的键。
+  // 它们原先没登记，于是这些提示全部退化成一句"操作没有成功" —— `arch-check` 的
+  // hygiene:rust-message-keys-registered 现在守着这条边，漏一个就红。
+  'sync.forbidden': '服务器拒绝了这次写入，本机内容没有改动。',
+  'sync.precondition': '服务器上的这份内容已经变了，这一轮会重算后再写。',
+  'sync.unsupported': '这台服务器不支持这项操作，已按它支持的方式继续。',
+  'sync.divergence': '远端的清单与本地记录对不上，已暂停写入以保护现有数据。',
+  'sync.cancelled': '这一轮同步被取消，本机内容没有改动。',
+  'app.db_too_new': '本地数据来自更新版本的 Notera，已按只读方式打开。',
+  'attach.missing': '附件暂时不可用，正文不受影响。',
+  'proxy.cert_untrusted': '服务器证书校验未通过。若确认是自签证书，可在设置里调整校验方式。',
 };
 
 const TOAST_PREFIXES = ['notera.', 'error.', 'sync.', 'toast.', 'state.', 'note.', 'link.', 'settings.', 'cmd.'];

@@ -243,6 +243,11 @@ impl Timestamp {
     pub fn parse(s: &str) -> Option<Self> {
         chrono::DateTime::parse_from_rfc3339(s).ok().map(|d| Self::new(d.with_timezone(&chrono::Utc)))
     }
+    /// 毫秒刻度。只用于**缓存有效期**这类墙上时间差（探测节奏、退避），
+    /// 不参与记录新旧判定（I4/R3 约束的是数据，不是时钟）。
+    pub fn as_millis(&self) -> Option<i64> {
+        chrono::DateTime::parse_from_rfc3339(&self.0).ok().map(|d| d.timestamp_millis())
+    }
 }
 
 impl fmt::Display for Timestamp {

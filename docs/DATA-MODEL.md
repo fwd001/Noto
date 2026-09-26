@@ -265,7 +265,9 @@ CREATE TABLE sync_accounts (
   protocol_min   INTEGER,
   protocol_max   INTEGER,
   enabled        INTEGER NOT NULL DEFAULT 1,
-  created_at     TEXT NOT NULL
+  created_at     TEXT NOT NULL,
+  cap_mask       INTEGER,      -- 0006：§5 探测到的能力位图；NULL = 从未探测（≠ 0 = 全不支持）
+  caps_probed_at TEXT          -- 0006：上次探测时刻，驱动"每日一次"
 );
 
 CREATE TABLE sync_state (                     -- 每账户一行，同步引擎权威状态

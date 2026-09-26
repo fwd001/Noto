@@ -2714,6 +2714,7 @@ dependencies = [
  "notera-config",
  "notera-core",
  "notera-host",
+ "notera-importer",
  "notera-net",
  "notera-store",
  "notera-sync",

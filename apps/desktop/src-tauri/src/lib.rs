@@ -75,11 +75,22 @@ pub fn run() {
             // 窗口已经出首帧，**这时**才允许碰网络（PLATFORM.md §3）。
             // 没配服务器或凭据还没接入钥匙串 → 引擎不启动，本地照常写（I8）。
             match app.sync_remote() {
-                Ok(Some(remote)) => {
+                Ok(Some(_)) => {
                     // 协商在启动调度器**之前**：两个库指向同一目录、或服务器上的
                     // 协议区间不相交时，必须一次都不写，而不是先同步了再解释。
                     let host = app.as_ref().clone();
                     tauri::async_runtime::spawn(async move {
+                        // §5「首次连接与每日一次」：探测必须在装适配器**之前**完成，
+                        // 否则这次会话仍按保守默认写，探到的能力要等下次启动才生效。
+                        let remote = match host.remote_for_sync().await {
+                            Ok(Some(r)) => r,
+                            // 配置在启动期间被改掉（拔了账户）：静默退回"只用本地"。
+                            Ok(None) => return,
+                            Err(e) => {
+                                host.emit(BusEvent::Toast { message_key: e.message_key, level: "warn".into() });
+                                return;
+                            }
+                        };
                         match host.negotiate(&remote).await {
                             Ok(()) => {
                                 // 附件走自己的循环（§13）：与文本轮次互不等待、互不阻塞，

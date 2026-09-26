@@ -12,7 +12,7 @@ pub mod devserver;
 
 use commands::{AccountDraftCmd, AccountDto, CmdError, ConflictDto, ExportCmd, FolderDto, ImportCmd, ListNotesCmd, NoteDto, NoteListDto, SearchCmd, SearchHitDto, SyncStatusDto};
 use notera_config::{AccountConfig, AppConfig, ConfigRepository, ProxyMode, ProxyProfile, TlsPolicyKind};
-use notera_core::{Clock, DeviceId, EntityId, EntityKind, Rev, SystemClock};
+use notera_core::{Clock, DeviceId, EntityId, EntityKind, Rev, SystemClock, Timestamp};
 use notera_store::{ApplyOp as StoreApplyOp, ConflictRow, Folder, Note, NoteListRow, NoteQuery, SearchPath, Store, StoreError};
 use notera_sync::{ApplyOp, EngineConfig, LocalError, LocalPort, Phase, RoundStats, SyncEvent};
 use notera_sync::plan::{Decision, LocalView, RemoteView};
@@ -703,8 +703,13 @@ impl App {
         if others_enabled > 0 {
             return Err(CmdError::of("multi_account_unsupported", false));
         }
+        // 账户 id 必须在这里就定下来。`upsert_account` 遇到空 id 也会自己生成一个，
+        // 但那是**它那一份**：host 若继续拿空串去 `register_account`，配置里的账户在
+        // `sync_accounts` 里就没有对应行 —— 本地写入永远不会排队给这台服务器，
+        // 用户看到的却是"已配置、已同步"。（端到端测试 sync_once 抓到的静默不同步）
+        let id = if draft.id.is_empty() { EntityId::new().to_string() } else { draft.id.clone() };
         let acct = AccountConfig {
-            id: draft.id.clone(),
+            id: id.clone(),
             label: draft.label,
             base_url: draft.base_url,
             root_prefix: draft.root_prefix.unwrap_or_else(|| "/.notes".into()),
@@ -714,7 +719,7 @@ impl App {
             },
             username: draft.username.clone(),
             credential_ref: if draft.password.is_some() || draft.username.is_some() {
-                format!("keychain:{}", draft.id)
+                format!("keychain:{id}")
             } else {
                 String::new()
             },
@@ -736,8 +741,8 @@ impl App {
                 },
                 host: draft.proxy_host,
                 port: draft.proxy_port,
-                username_ref: draft.proxy_username.map(|_| format!("keychain:proxy-user:{}", draft.id)),
-                password_ref: draft.proxy_password.map(|_| format!("keychain:proxy-pass:{}", draft.id)),
+                username_ref: draft.proxy_username.map(|_| format!("keychain:proxy-user:{id}")),
+                password_ref: draft.proxy_password.map(|_| format!("keychain:proxy-pass:{id}")),
                 bypass: draft.bypass.unwrap_or_default(),
                 resolve_remote_dns: true,
             },
@@ -795,7 +800,147 @@ impl App {
             });
             return Ok(None);
         };
-        Self::build_remote(&acct, device, credentials).map(Some)
+        // §5：探测过一次就把结果用到底 —— 不这么做，一台支持条件写的服务器会被
+        // 永久按保守默认对待，S1/S2 的好处一辈子拿不到。
+        let caps = self.stored_caps(&acct.id);
+        Self::build_remote(&acct, device, credentials, caps).map(Some)
+    }
+
+    /// 已探测过就用实测位图；没探测过退回保守默认（`conventional`）。
+    /// 读失败也退回默认 —— 探测结果只是优化写路径，不该因为它读不到就阻塞同步。
+    fn stored_caps(&self, account_id: &str) -> notera_webdav::Caps {
+        match self.inner.store.account_caps(account_id) {
+            Ok(Some(mask)) => notera_webdav::Caps::from_mask(mask),
+            _ => notera_webdav::Caps::conventional(),
+        }
+    }
+
+    /// §5：跑一次能力探测并写回 `sync_accounts.cap_mask`。
+    /// 探测失败必须冒出去 —— 把"连不上"当成"什么都不支持"会把服务器降级到 S3 盲写。
+    pub async fn probe_and_store_caps(&self) -> Result<serde_json::Value, CmdError> {
+        let remote = self
+            .sync_remote()?
+            .ok_or_else(|| CmdError::of("no_account", false))?;
+        let report = remote.probe_caps().await.map_err(|e| {
+            CmdError::of("net_config", true).with(serde_json::json!({ "why": e.to_string() }))
+        })?;
+        let cfg = self.config();
+        let acct = ConfigRepository::active(&cfg).ok_or_else(|| CmdError::of("no_account", false))?;
+        let mask = report.to_caps().mask();
+        self.inner.store.set_account_caps(&acct.id, mask).map_err(CmdError::from)?;
+        Ok(serde_json::json!({
+            "capMask": mask,
+            "writeStrategy": format!("{:?}", report.to_caps().write_strategy()),
+            "strongEtag": report.strong_etag,
+            "conditionalPut": report.conditional_put,
+            "overwriteFMove": report.overwrite_f_move,
+            "depthInfinity": report.depth_infinity,
+            "range": report.range,
+            "describe": report.describe(),
+        }))
+    }
+
+    /// §5「首次连接与每日一次探测」：该不该现在探测。
+    /// 时间戳读不懂也算到期 —— 宁可多探一次，也不要把一台好服务器永久锁在 S3。
+    fn caps_probe_due(&self) -> Result<bool, CmdError> {
+        let cfg = self.config();
+        let Some(acct) = ConfigRepository::active(&cfg) else {
+            return Ok(false);
+        };
+        let prev = self.inner.store.account_caps_probed_at(&acct.id).map_err(CmdError::from)?;
+        let Some(prev) = prev else {
+            return Ok(true);
+        };
+        let Some(prev_ms) = Timestamp::parse(&prev).and_then(|t| t.as_millis()) else {
+            return Ok(true);
+        };
+        let now_ms = Timestamp::parse(&self.inner.store.now())
+            .and_then(|t| t.as_millis())
+            .unwrap_or_default();
+        Ok(now_ms - prev_ms >= Self::CAPS_PROBE_TTL_MS)
+    }
+
+    /// 启动/手动同步的统一入口：**先按需探测能力，再装适配器**。
+    ///
+    /// 顺序不能反 —— 先装后用，探测到的"这台服务器支持条件写"要等下次启动才生效，
+    /// 本次会话仍然走保守盲写（§5 的优化白做）。
+    /// 探测失败**不是**错误：记一条提示并以保守默认继续（拿不到结论 ≠ 连不上）。
+    pub async fn remote_for_sync(&self) -> Result<Option<Arc<notera_webdav::WebDavRemote>>, CmdError> {
+        if self.caps_probe_due()? {
+            if let Err(e) = self.probe_and_store_caps().await {
+                tracing::warn!(code = %e.code, "§5 能力探测未完成，本轮按保守默认走");
+                self.emit(BusEvent::Toast {
+                    message_key: "sync.probeDeferred".into(),
+                    level: "warn".into(),
+                });
+            }
+        }
+        self.sync_remote()
+    }
+
+    /// 跑**一轮**同步（§6）。调度器与 `notera-cli sync-once` 共用这一条路径 ——
+    /// 否则 CLI 测出来的绿灯和产品行为根本不是同一个绿灯。
+    /// `None` = 已有一轮在跑（§6.4 单轮并发上限 = 1）。
+    pub(crate) async fn run_round<R: notera_sync::RemotePort + 'static>(
+        &self,
+        remote: &Arc<R>,
+    ) -> Option<RoundStats> {
+        if self.inner.syncing.swap(true, Ordering::SeqCst) {
+            return None;
+        }
+        self.set_sync_public(Badge::Syncing);
+        // §6.3：带上轮的 etag 才可能拿到 304（空轮 1 请求 0 字节正文）
+        let etag = self.manifest_etag();
+        let engine = notera_sync::SyncEngine::new(self.local_port(), RemoteBorrow(remote.as_ref()), EngineConfig::default());
+        let (st, evs) = engine.run_round(etag.as_deref()).await;
+        for e in evs {
+            self.apply_sync_event(e);
+        }
+        self.apply_round_stats(&st);
+        self.inner.syncing.store(false, Ordering::SeqCst);
+        Some(st)
+    }
+
+    /// 按需探测 → 协商 → 跑一轮，返回这一轮的统计（CLI `sync-once` 的落点）。
+    /// 没配账户/凭据 → `Err`：诊断工具宁可不报，也不许拿"零请求"冒充同步成功。
+    pub async fn sync_once(&self) -> Result<RoundStats, CmdError> {
+        let Some(remote) = self.remote_for_sync().await? else {
+            return Err(CmdError::of("no_account", false));
+        };
+        if let Err(key) = self.negotiate(&remote).await {
+            return Err(CmdError::of("sync_refused", false).with(serde_json::json!({ "reason": key })));
+        }
+        self.run_round(&remote).await.ok_or_else(|| CmdError::of("sync_busy", true))
+    }
+
+    /// §5 的"每日一次"。
+    const CAPS_PROBE_TTL_MS: i64 = 24 * 60 * 60 * 1000;
+
+    /// PROXY.md §9 证据链③：按**当前配置**判定这个 URL 会走哪条出口。
+    /// 纯判定，一个包都不发（`HttpClient::probe` 的性质），因此离线可跑。
+    /// 没配账户时按"直连 + 严格 TLS"判定 —— 那正是产品此时真正的出口。
+    pub fn route_for(&self, url: &str) -> Result<serde_json::Value, CmdError> {
+        let cfg = self.config();
+        let (proxy, tls, from) = match ConfigRepository::active(&cfg) {
+            Some(acct) => (net_proxy(&acct.proxy)?, net_tls(acct), format!("account:{}", acct.id)),
+            None => (
+                notera_net::ProxyProfile::direct(),
+                notera_net::TlsPolicy::Strict,
+                "default-direct".to_string(),
+            ),
+        };
+        let http = notera_net::HttpClient::build(&proxy, &tls, notera_net::Timeouts::default())
+            .map_err(|e| CmdError::of("net_config", true).with(serde_json::json!({ "why": e.to_string() })))?;
+        let proof = http
+            .probe(url)
+            .map_err(|e| CmdError::of("net_config", false).with(serde_json::json!({ "why": e.to_string() })))?;
+        Ok(serde_json::json!({
+            "url": url,
+            "configFrom": from,
+            "oneLine": proof.one_line(),
+            "endpoint": proof.endpoint,
+            "bypassed": proof.bypassed,
+        }))
     }
 
     /// 装配一个真适配器：地址/前缀/凭据/代理/TLS 全来自配置，出口只有 `notera-net`。
@@ -804,6 +949,7 @@ impl App {
         acct: &AccountConfig,
         device: DeviceId,
         credentials: notera_webdav::Credentials,
+        caps: notera_webdav::Caps,
     ) -> Result<Arc<notera_webdav::WebDavRemote>, CmdError> {
         let proxy = net_proxy(&acct.proxy)?;
         let http = Arc::new(
@@ -814,7 +960,8 @@ impl App {
             notera_webdav::WebDavConfig::new(acct.base_url.clone())
                 .with_root_prefix(acct.root_prefix.clone())
                 .with_credentials(credentials)
-                .with_device(device),
+                .with_device(device)
+                .with_caps(caps),
             http,
         )
         .map_err(|e| CmdError::of("invalid_account", false).with(serde_json::json!({ "why": e.to_string() })))?;
@@ -1554,19 +1701,7 @@ impl<R: notera_sync::RemotePort + 'static> Scheduler<R> {
             if stop.load(Ordering::SeqCst) {
                 break;
             }
-            if app.inner.syncing.swap(true, Ordering::SeqCst) {
-                continue; // 单轮并发上限 = 1
-            }
-            app.set_sync_public(Badge::Syncing);
-            // §6.3：带上轮的 etag 才可能拿到 304（空轮 1 请求 0 字节正文）
-            let etag = app.manifest_etag();
-            let engine = notera_sync::SyncEngine::new(app.local_port(), RemoteBorrow(remote.as_ref()), EngineConfig::default());
-            let (st, evs) = engine.run_round(etag.as_deref()).await;
-            for e in evs {
-                app.apply_sync_event(e);
-            }
-            app.apply_round_stats(&st);
-            app.inner.syncing.store(false, Ordering::SeqCst);
+            app.run_round(&remote).await;
         }
     }
 }
@@ -1982,6 +2117,24 @@ mod tests {
         assert_eq!(n.rev, 1, "拿不到凭据绝不能挡住本地写入（I8）");
     }
 
+    /// 空 id 的草案必须在**两个地方**落在同一个 id 上。`upsert_account` 碰到空 id 会
+    /// 自己生成一个，host 若继续拿空串去 `register_account`，`sync_accounts` 里就没有
+    /// 这台服务器那一行 → 本地写入永远不排队给它 → 配了服务器却静默不同步。
+    /// （端到端测试 `sync_once` 第一次跑就撞见了这个）
+    #[test]
+    fn a_draft_without_id_still_registers_the_account_row() {
+        let app = boot("draft-id");
+        let dto = app.configure_account(draft("", "https://dav.home.example/dav", Some("notera"))).unwrap();
+        let active = app.current_account().unwrap().expect("活跃账户").id.to_string();
+        assert_eq!(active, dto.id.as_str(), "返回的 id 与配置里的 id 必须是一个");
+        assert!(!active.is_empty(), "id 不能是空串");
+        assert!(app.store().account_exists(&active).unwrap(), "配置里的账户要在 sync_accounts 有对应行（否则不出站）");
+        assert!(!app.store().account_exists("").unwrap(), "不该留下空 id 的幽灵行");
+        // 探测结果也要写到这一行上，而不是写到空串那行
+        app.store().set_account_caps(&active, 0b000101).unwrap();
+        assert_eq!(app.store().account_caps(&active).unwrap(), Some(0b000101));
+    }
+
     /// 装配路径本身要能被测到（钥匙串还没接入，不能等它才有测试）。
     #[test]
     fn build_remote_makes_a_real_adapter_from_config() {
@@ -1991,7 +2144,7 @@ mod tests {
         let acct = cfg.accounts.iter().find(|a| a.id == acct.id).unwrap().clone();
         let device = DeviceId::parse(&cfg.device_id).unwrap();
         let creds = notera_webdav::Credentials::new("notera", "hunter2").unwrap();
-        let remote = App::build_remote(&acct, device, creds).unwrap();
+        let remote = App::build_remote(&acct, device, creds, notera_webdav::Caps::conventional()).unwrap();
         // base_url 里的路径会被并进前缀（`https://h/dav` + `/.notes` → `.../dav/.notes`），
         // 所以这里断言的是合并后的 origin+path，不是原始输入字符串。
         assert_eq!(remote.paths().base_url(), "https://dav.home.example/dav");
@@ -2016,7 +2169,7 @@ mod tests {
             let cfg = app.config();
             let acct = ConfigRepository::active(&cfg).unwrap().clone();
             let device = DeviceId::parse(&cfg.device_id).unwrap();
-            std::sync::Arc::new(App::build_remote(&acct, device, Credentials::new("u", "p").unwrap()).unwrap())
+            std::sync::Arc::new(App::build_remote(&acct, device, Credentials::new("u", "p").unwrap(), notera_webdav::Caps::conventional()).unwrap())
         };
         let (ra, rb) = (remote_for(&a), remote_for(&b));
         a.negotiate(&ra).await.unwrap();
@@ -2068,7 +2221,7 @@ mod tests {
             let cfg = app.config();
             let acct = ConfigRepository::active(&cfg).unwrap().clone();
             let device = DeviceId::parse(&cfg.device_id).unwrap();
-            App::build_remote(&acct, device, Credentials::new("u", "p").unwrap()).unwrap()
+            App::build_remote(&acct, device, Credentials::new("u", "p").unwrap(), notera_webdav::Caps::conventional()).unwrap()
         };
 
         let ra = remote_for(&a);

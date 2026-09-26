@@ -8,9 +8,9 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 407 通过 / 0 失败 / 0 ignored（47 个测试二进制） |
+| `cargo test --workspace` | 417 通过 / 0 失败 / 0 ignored（49 个测试二进制） |
 | 前端 | 121 通过（12 文件）；`vue-tsc --noEmit` 无错误；构建 199 KB → gzip 68 KB |
-| `scripts/arch-check.mjs` | 18/18 |
+| `scripts/arch-check.mjs` | 19/19 |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
 | `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 29/29 |
 | `scripts/verify-tauri-window.mjs`（真窗口，走真 `invoke`） | 8/8，控制台 0 error |
@@ -19,14 +19,15 @@
 
 ### 新增
 
-- **存储层** `notera-store`：11 张表 + FTS5（trigram）迁移 0001…0005、写连接单写者 + 只读连接池、tombstone、outbox、冲突收件箱、附件内容寻址、偏好读写与记录 wire 出口
+- **存储层** `notera-store`：11 张表 + FTS5（trigram）迁移 0001…0006、写连接单写者 + 只读连接池、tombstone、outbox、冲突收件箱、附件内容寻址、偏好读写与记录 wire 出口
 - **同步引擎** `notera-sync`：清单两段式解析与压实、`P1..P18` 判定表、退避重试、CAS 提交与恢复阶梯；端口化（`LocalPort`/`RemotePort`），10 个引擎级集成测试跑真 `run_round`
 - **网络出口** `notera-net`：全系统唯一 HTTP 出口，代理四档、TLS 策略、分层超时、退避、`RouteProof` 脱敏审计（13 测试）
 - **测试基建** `notera-test-webdav`：真 TCP/HTTP 的 WebDAV 子集 + `/_control/*` 能力开关与故障注入 + `/_fs/dump`
 - **前端** `apps/desktop`：三栏 UI、独立富文本模型映射、四态同步徽标、design token 与对比度契约测试、Tauri 单命令通道及其契约测试
 - **WebDAV 适配器** `notera-webdav`：`RemotePort` 的生产实现，S1/S2/S3 写入策略与中途降级、清单 CAS（tmp → 让位 → 落地 → 复算）、目录穿越白名单闸门；33 个测试里有两条是**跨设备真同步**与**重启后仍在**
 - **导入器** `notera-importer`：Markdown/纯文本 → 富文本，无损优先（不认识的标记按字面保留）、三道入口闸门、按内容哈希幂等；64 个测试
-- **诊断入口** `notera-cli`：`serve`（dev 桥，落真实 Store）、`verify`、`conflicts`、`sync-once`、`net-probe`、`export`；退出码 0=PASS / 1=ASSERT_FAIL / 2=BLOCKED
+- **诊断入口** `notera-cli`：`serve`（dev 桥，落真实 Store）、`verify`、`conflicts`、`sync-once`、`dav-probe`、`net-probe`、`export`、`backup`；退出码 0=PASS / 1=ASSERT_FAIL / 2=BLOCKED。`sync-once` 走的是 `App::sync_once` —— 与产品调度器**同一条**代码路径，否则这里的绿灯和产品无关；`export` 写完立刻回读校验包内容，"文件存在"不当作"数据可恢复"
+- **§5 能力探测接线**：`App::remote_for_sync()` = 先按需探测、再装适配器，探测结果因此对**本次会话**的写入策略生效（先装后探就要等下次启动）；`cap_mask IS NULL`（从未探测，用保守默认）与 `= 0`（实测全不支持，落到 S3）严格分开；探测未完成时不写位图、只提示 `sync.probeDeferred`，同步照常 —— 猜低的代价是盲写覆盖，猜高最坏只是 412 后就地降级
 - **ADR-0018**：单一活跃同步账户约束（多服务器推迟到"按账户确认点"）
 - **备份 / 恢复**（DATA-MODEL §15）：`VACUUM INTO` 一致快照 + `sha256`/`integrity_check`/`user_version` 三道闸门 + 替换前留一份当前库 + 下次启动落地（不在进程内换库）。零新依赖
 - **导出 / 导入**：自描述 ZIP（`manifest.json` + `folders.json` + `notes/<id>.json` + `tombstones.json` + `attachments/<sha>`）。记录由**与上传同一套**信封构造函数产出，导入因此直接喂 `apply_remote` —— 没有第二条写入路径，"防复活"就没有第二个会漏的地方
@@ -35,6 +36,9 @@
 
 ### 修掉的静默错误（都是"看着在用、其实没接线"）
 
+- **架构门禁里有 8 条一直在空转**：`scripts/arch-check.mjs` 的 `sources()` 用 `statSafe(dir)` 当入口守卫，而 `statSafe(p)` 默认判的是"这不是目录" —— 于是每次遍历都在第一行返回空表，`layer:sql-literal`（host/UI 不得写 SQL）、`layer:ui-protocol-vocab`（前端不得出现协议词汇）、`egress:raw-socket`、`edge:webdav-uses-only-ports`、`hygiene:ui-no-node-apis` 等 8 条**全绿但什么都没看**。修好之后立刻炸出两条真实越界：`notera-webdav` re-export 了 `SyncEngine`（引擎入口该只有 sync 一处，已删），以及核心错误词表有 8 个 messageKey 前端没登记。这条是"绿灯不等于检查过"的最坏样子
+- **核心错误词表里 8 个键没登记，提示全部退化成"操作没有成功"**：`sync.forbidden / sync.precondition / sync.unsupported / sync.divergence / sync.cancelled / app.db_too_new / attach.missing / proxy.cert_untrusted` —— 都是会直接讲给用户的话（"服务器拒绝了这次写入"和"操作没成功，稍后再试"完全不是一回事）。现在补进 `i18n.ts`，并新增第 19 条门禁 `hygiene:rust-message-keys-registered` 把这条边钉住（双向变异测过：改 Rust 侧键名或改登记表都会变红）
+- **不带 id 的账户草案会配出"永不出站"的账户**：`upsert_account` 遇到空 id 会自己生成一个存进配置，host 却继续拿**空串**去 `register_account` —— 于是 `sync_accounts` 里那行的键和配置里的键根本不是同一个，outbox 按账户扇出时找不到目标，用户看到"已配置、已同步"而一个字节都没出去。是 §5 的端到端测试第一次跑起来时以"账户不存在: <uuid>"炸出来的；现在 id 在装配前就定下来，两处用的是同一个值
 - **动态拼出来的文案键把键名直接印到界面上**：`MessageKey` 只是 `string` 别名，`t()` 查不到就原样返回 —— 工具条上写着 `editor.blockCodeBlock`，设置页写着 `settings.rootPrefix`。改成查表，并加两层门禁（扫源码的键登记测试 + 端到端看渲染文本）
 - **两条自动保存并发出发，自己造出一条假"在别处被改动了"**：`save()` 无互斥，防抖那一发和 blur 的 flush 带着同一个 `expectedRev` 同时上路，先回来的把 rev 推进、后回来的被核心判成 stale_edit。核心没错，错在前端让自己的两个保存互相打架
 - **校验备份这一步破坏了被校验的备份**：`pool::open_readonly_conn` 其实不是只读，会跑 `PRAGMA journal_mode=WAL` —— 把待校验的文件就地改写并留下 `-wal` 边车，于是 sha256 永远对不上、恢复必然失败

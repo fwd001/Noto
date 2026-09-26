@@ -47,7 +47,9 @@ const byName = Object.fromEntries(all);
 /** 收集源文件（.rs / .ts / .vue），排除测试与目标目录。 */
 function sources(dir, exts, { includeTests = true } = {}) {
   const out = [];
-  if (!statSafe(dir)) return out;
+  // 必须传 `true`：`statSafe(p)` 默认判的是"不是目录"，用它当入口守卫会
+  // 让每次遍历都在第一行返回空表 —— 那等于所有基于源码的门禁全是摆设（实测过）。
+  if (!statSafe(dir, true)) return out;
   for (const entry of readdirSync(dir)) {
     if (['node_modules', 'dist', 'target', 'target-gnu', '.logs', 'fixtures'].includes(entry)) continue;
     const p = join(dir, entry);
@@ -120,6 +122,39 @@ const uiLeaks = uiFiles.filter((f) => /\b(PROPFIND|PROPPATCH|If-Match|If-None-Ma
 check('layer:ui-protocol-vocab', '主需求 §禁止把 WebDAV 同步逻辑放进前端', uiLeaks,
   `前端出现了同步协议词汇：\n    ${uiLeaks.join('\n    ')}`);
 
+// 核心发出的 messageKey 必须在 i18n 表里登记。`messageFor` 查不到就退回一句通用
+// 兜底文案 —— 于是"有版本要你决定"这种要紧的提示会安静地变成"操作未完成"。
+// 前端源码里用到的键由 vitest 扫（apps/desktop/src/i18n.spec.ts），跨语言这一侧只有这里守。
+const KEY_LINES = /message_key|Toast \{|=> "/;
+const i18nText = read(join(ROOT, 'apps/desktop/src/i18n.ts'));
+const registeredKeys = new Set([...i18nText.matchAll(/^\s*'([a-z_]+\.[A-Za-z0-9_]+)':/gm)].map((m) => m[1]));
+const normalizeKey = (k) =>
+  k
+    .replace(/^(notera|error|sync|toast|state|note|link|settings|cmd)\./, '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[\s./-]+/g, '_')
+    .toLowerCase();
+// `cmd.<code>` 是一路映射到 `error.<code>` 的，那张表由前端契约测试逐条对齐，不在这里重复判。
+const rustKeyed = [
+  ...sources(join(ROOT, 'crates/notera-host/src'), ['.rs']),
+  ...sources(join(ROOT, 'crates/notera-core/src'), ['.rs']),
+  ...sources(join(ROOT, 'apps/desktop/src-tauri/src'), ['.rs']),
+];
+const unregistered = [];
+for (const f of rustKeyed) {
+  for (const line of read(f).split(/\r?\n/)) {
+    if (!KEY_LINES.test(line)) continue;
+    for (const m of line.matchAll(/"([a-z_]+\.[A-Za-z][A-Za-z0-9_]+)"/g)) {
+      const k = m[1];
+      if (k.startsWith('cmd.') || k.startsWith('error.')) continue;
+      if (registeredKeys.has(k) || registeredKeys.has(`error.${normalizeKey(k)}`)) continue;
+      unregistered.push(`${k}  <- ${rel(f)}`);
+    }
+  }
+}
+check('hygiene:rust-message-keys-registered', 'ARCHITECTURE-MAP §5（文案键唯一登记处 = i18n.ts）', [...new Set(unregistered)],
+  `核心发出了未登记的 messageKey（界面会退化成兜底文案）：\n    ${[...new Set(unregistered)].join('\n    ')}`);
+
 const RAW_SOCKET = /std::net::(TcpListener|TcpStream|UdpSocket)|std::net::\{[^}]*\b(TcpListener|TcpStream|UdpSocket)\b/;
 const rawNet = all.filter(([n]) => n !== 'notera-net' && !n.startsWith('notera-test-'))
   .map(([n]) => [n, sources(join(ROOT, 'crates', n, 'src'), ['.rs'])])
@@ -128,9 +163,30 @@ check('egress:raw-socket', 'PROXY.md §1（唯一出口；devserver 必须 debug
   `notera-net 之外直接开 socket：\n    ${rawNet.join('\n    ')}`);
 // webdav→sync 只允许"端口契约"这一条边：越界用到 sync 的内部类型就是把同步逻辑
 // 搬进了传输适配器（那正是本仓库反复强调要避免的那类错误）。
-const PORT_ITEMS = new Set(['RemotePort', 'Commit', 'RemoteError', 'EntryRef']);
+// `Manifest` 在名单里是因为 CAS 提交要**自校验刚写出去的清单**：解析必须由 schema
+// 属主（notera-sync）来做，适配器自带第二份解析器才是数据风险。
+const PORT_ITEMS = new Set(['RemotePort', 'Commit', 'RemoteError', 'EntryRef', 'Manifest']);
+// 判定的是"紧跟在 notera_sync:: 后面的那个类型/模块"，并支持四种写法：
+//   notera_sync::RemoteError   notera_sync::{A, B}   notera_sync::manifest::{A, B}
+//   notera_sync::RemoteError::Variant（变体不算新的引用面）
+// 注释行不算引用。
+const PORT_PATH = /notera_sync::((?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]*\})(?:::(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]*\}))*)/g;
+function portItemsOf(path) {
+  const segs = path.split('::');
+  const last = segs[segs.length - 1];
+  if (last.startsWith('{')) {
+    return last.slice(1, -1).split(',').map((s) => s.trim()).filter((s) => s && s !== 'self');
+  }
+  // 模块前缀（manifest::）取末端，其余取头一个标识符
+  return [segs[0] === 'manifest' ? last : segs[0]];
+}
 const portLeaks = sources(join(ROOT, 'crates/notera-webdav/src'), ['.rs'])
-  .flatMap((f) => [...read(f).matchAll(/notera_sync::([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))
+  .flatMap((f) =>
+    read(f)
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith('//'))
+      .flatMap((line) => [...line.matchAll(PORT_PATH)].flatMap((m) => portItemsOf(m[1]))),
+  )
   .filter((n) => !PORT_ITEMS.has(n));
 check('edge:webdav-uses-only-ports', 'ARCHITECTURE-MAP §1（webdav 只见 sync 的端口契约）', [...new Set(portLeaks)],
   `notera-webdav 引用了 notera-sync 的非端口项：${[...new Set(portLeaks)].join(', ')}`);

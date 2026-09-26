@@ -184,6 +184,17 @@ D3 是数据安全的硬闸门：服务器侧异常（运维误删、挂载错�
 
 首次连接与每日一次探测，结果存 `sync_accounts.cap_mask`：
 
+> **as-built（2026-09-26）**：探测在 `notera-webdav/probe.rs`，启动路径是
+> `App::remote_for_sync()` = **先按需探测 → 再装适配器**。顺序不能反：先装后探的话，
+> 这次会话仍然按保守默认写，探到的能力要等下次启动才生效。`cap_mask IS NULL`
+> 与 `cap_mask = 0` 含义不同（前者=从未探测→用 `Caps::conventional()`，后者=实测全不支持→S3）。
+> 探测**未完成**（连接被掐/超时）时不写 `cap_mask`、不写"全 false 的结论"，只发一条
+> `sync.probeDeferred` 提示并以保守默认继续 —— 猜低的代价是掉进 S3 盲写，那才有覆盖风险。
+> 强制重探：`notera-cli dav-probe`。`CHUNKED` 一位**不探**（`RequestSpec` 的 body 是
+> `Vec<u8>`，发不出真 chunked 请求，硬凑头部只会得到假阳性）。
+> 证据：`crates/notera-webdav/tests/probe.rs`（逐项缺失单独可辨 + 不可达必须是报错）
+> 与 `crates/notera-host/tests/sync_once.rs`（请求日志里探测全部早于任何真实读写）。
+
 | 探测 | 方法 | 影响 |
 |---|---|---|
 | 强 ETag | `PUT` 后 `GET` 带 `If-None-Match` | 决定能否走 304 空轮快路径 |

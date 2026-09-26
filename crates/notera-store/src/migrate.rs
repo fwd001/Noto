@@ -26,6 +26,7 @@ pub(crate) static MIGRATIONS: &[Migration] = &[
     Migration { ver: 3, name: "0003_search", sql: include_str!("../../../migrations/0003_search.sql") },
     Migration { ver: 4, name: "0004_indexes", sql: include_str!("../../../migrations/0004_indexes.sql") },
     Migration { ver: 5, name: "0005_views", sql: include_str!("../../../migrations/0005_views.sql") },
+    Migration { ver: 6, name: "0006_caps", sql: include_str!("../../../migrations/0006_caps.sql") },
 ];
 
 pub(crate) fn supported_version() -> u32 {

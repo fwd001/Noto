@@ -36,15 +36,27 @@ enum Cmd {
     },
     /// 列出未处理冲突
     Conflicts,
-    /// 探测 WebDAV 服务器能力（cap_mask）
-    DavProbe,
-    /// 代理与出口差分探测（PROXY.md §9 证据链③）
+    /// 探测 WebDAV 服务器能力（cap_mask）并写回账户
+    DavProbe {
+        #[arg(long)]
+        json: bool,
+    },
+    /// 代理与出口差分探测（PROXY.md §9 证据链③；纯判定，不发请求）
     NetProbe {
         #[arg(long)]
         url: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
-    /// 导出/导入冒烟
+    /// 导出整库为自描述 ZIP，写完立刻回读校验
     Export {
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// 备份当前库到指定目录（`VACUUM INTO` 的一致性单文件快照）
+    Backup {
         #[arg(long)]
         out: PathBuf,
     },
@@ -72,6 +84,15 @@ fn default_data_dir() -> PathBuf {
                 .unwrap_or_else(|_| PathBuf::from("."))
                 .join(".notera-dev")
         })
+}
+
+/// 诊断命令要的只是"跑完一件事再退出"，所以是单线程、用完即弃的运行时；
+/// 产品侧的多线程运行时由壳/`devserver` 自己持有。
+fn rt() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio 运行时")
 }
 
 fn boot(dir: &std::path::Path) -> Result<App, i32> {
@@ -162,34 +183,153 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
             }
         }
 
-        // `--json` 目前无处可施：这一支在接线前恒为 BLOCKED，没有任何报告可格式化。
-        Cmd::SyncOnce { json: _ } => {
+        Cmd::SyncOnce { json } => {
             // 需要已配置账户与可达服务器；没有就报 BLOCKED，不假装成功。
             let app = match boot(&dir) {
                 Ok(a) => a,
                 Err(c) => return c,
             };
-            if app.current_account().ok().flatten().is_none() {
-                eprintln!("未配置 WebDAV 账户：无法执行 sync-once（BLOCKED，不是 PASS）");
-                return EXIT_BLOCKED;
+            // 走的是 `App::sync_once` —— 调度器每 25 秒跑的就是同一条路径，
+            // 所以这里绿了才可以说产品那一轮也绿（本文件开头的第一约束）。
+            let stats = match rt().block_on(app.sync_once()) {
+                Ok(s) => s,
+                Err(e) => {
+                    let why = e.detail.as_ref().map(|d| format!(" {}", d)).unwrap_or_default();
+                    eprintln!("sync-once 未能执行：{}{why}（BLOCKED，不是 PASS）", e.code);
+                    return EXIT_BLOCKED;
+                }
+            };
+            if json {
+                println!("{}", serde_json::to_string(&stats).unwrap_or_else(|_| "{}".into()));
+            } else {
+                println!(
+                    "一轮完成: {:?} 请求 {} 次 ↑{}B ↓{}B 推 {} 拉 {} 冲突 {} CAS 重试 {}",
+                    stats.outcome, stats.requests, stats.bytes_up, stats.bytes_down, stats.pushed, stats.pulled, stats.conflicts, stats.cas_retries
+                );
             }
-            eprintln!("sync-once 需要 RemotePort 适配器；当前构建未接线（见 notera-host::start_sync）。");
-            EXIT_BLOCKED
+            match stats.outcome {
+                // NoOp 是健康结果（空轮 1 请求 0 字节），不是"什么都没做所以失败"
+                notera_sync::RoundOutcome::NoOp | notera_sync::RoundOutcome::Converged => EXIT_OK,
+                notera_sync::RoundOutcome::Partial => EXIT_FAIL,
+                notera_sync::RoundOutcome::Failed => {
+                    eprintln!("本轮失败：见 sync_status / verify 日志");
+                    EXIT_FAIL
+                }
+            }
         }
 
-        Cmd::DavProbe | Cmd::NetProbe { .. } => {
-            eprintln!("需要 notera-webdav/net 接线完成（Phase 3）。当前标记 BLOCKED，不计通过。");
-            EXIT_BLOCKED
-        }
-
-        Cmd::Export { out } => {
+        Cmd::DavProbe { json } => {
             let app = match boot(&dir) {
                 Ok(a) => a,
                 Err(c) => return c,
             };
-            eprintln!("导出待 notera-importer 接线（Phase 7）。已启动核心：{:?}", app.stats().is_ok());
-            let _ = out;
-            EXIT_BLOCKED
+            // 强制探测（不看每日一次）：这是诊断命令，用户就是要现在的真实结论。
+            match rt().block_on(app.probe_and_store_caps()) {
+                Ok(v) => {
+                    if json {
+                        println!("{}", serde_json::to_string(&v).unwrap_or_else(|_| "{}".into()));
+                    } else {
+                        println!("{}", v["describe"].as_str().unwrap_or(""));
+                        println!("写入策略: {}", v["writeStrategy"].as_str().unwrap_or("?"));
+                    }
+                    EXIT_OK
+                }
+                Err(e) => {
+                    // 探不到就是探不到：报 BLOCKED，绝不回退成"这台服务器什么都不支持"
+                    // 那会把支持条件写的服务器降级成 S3 盲写，方向正好是丢数据的那边。
+                    eprintln!("能力探测未完成：{}（BLOCKED，不是 PASS）", e.code);
+                    EXIT_BLOCKED
+                }
+            }
+        }
+
+        Cmd::NetProbe { url, json } => {
+            let app = match boot(&dir) {
+                Ok(a) => a,
+                Err(c) => return c,
+            };
+            // PROXY.md §9 证据链③：出口判定，一个包都不发，所以离线也能跑。
+            let target = match url {
+                Some(u) => u,
+                None => match app.current_account() {
+                    Ok(Some(a)) => a.base_url,
+                    _ => {
+                        eprintln!("既没给 --url 也没配置账户，无目标可判定（BLOCKED）");
+                        return EXIT_BLOCKED;
+                    }
+                },
+            };
+            match app.route_for(&target) {
+                Ok(v) => {
+                    if json {
+                        println!("{}", serde_json::to_string(&v).unwrap_or_else(|_| "{}".into()));
+                    } else {
+                        println!("配置来源: {}", v["configFrom"].as_str().unwrap_or("?"));
+                        println!("{}", v["oneLine"].as_str().unwrap_or(""));
+                    }
+                    EXIT_OK
+                }
+                Err(e) => {
+                    eprintln!("出口判定失败：{}（BLOCKED，不是 PASS）", e.code);
+                    EXIT_BLOCKED
+                }
+            }
+        }
+
+        Cmd::Export { out, json } => {
+            let app = match boot(&dir) {
+                Ok(a) => a,
+                Err(c) => return c,
+            };
+            let cmd = notera_host::commands::ExportCmd {
+                folder_ids: vec![],
+                include_attachments: true,
+                include_trash: true,
+                path: Some(out.to_string_lossy().to_string()),
+            };
+            match app.export_data(cmd) {
+                Ok(v) => {
+                    if json {
+                        println!("{}", serde_json::to_string(&v).unwrap_or_else(|_| "{}".into()));
+                    } else {
+                        println!("已导出: {}", v["path"].as_str().unwrap_or(""));
+                        println!("计数: {}", v["counts"]);
+                    }
+                    // 导出的东西必须真的是个能打开的包：写完立刻回读校验，
+                    // 否则"文件存在"就成了"数据可恢复"的假证据。
+                    match notera_importer::read_bundle(&out) {
+                        Ok(b) => {
+                            println!("回读校验通过: {} 条笔记 / {} 个附件", b.notes.len(), b.attachments.len());
+                            EXIT_OK
+                        }
+                        Err(e) => {
+                            eprintln!("导出文件回读失败：{e}（ASSERT_FAIL）");
+                            EXIT_FAIL
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("导出失败：{}", e.code);
+                    EXIT_FAIL
+                }
+            }
+        }
+
+        Cmd::Backup { out } => {
+            let app = match boot(&dir) {
+                Ok(a) => a,
+                Err(c) => return c,
+            };
+            match app.backup_db(Some(&out)) {
+                Ok(info) => {
+                    println!("备份: {} ({} 字节, SHA-256 {}, 建于 {})", info.path.display(), info.bytes, info.sha256, info.created_at);
+                    EXIT_OK
+                }
+                Err(e) => {
+                    eprintln!("备份失败：{}", e.code);
+                    EXIT_FAIL
+                }
+            }
         }
 
         Cmd::SelfTest => {

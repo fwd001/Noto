@@ -128,7 +128,7 @@ impl WebDavRemote {
 
     // ------------------------------------------------------ 请求构造 ---
 
-    fn spec(&self, method: HttpMethod, url: &str) -> Result<RequestSpec, RemoteError> {
+    pub(crate) fn spec(&self, method: HttpMethod, url: &str) -> Result<RequestSpec, RemoteError> {
         assert_url_sane(url).map_err(RemoteError::from)?;
         let mut s = RequestSpec::new(method, url);
         if let Some(c) = &self.credentials {
@@ -137,7 +137,7 @@ impl WebDavRemote {
         Ok(s)
     }
 
-    async fn send_once(&self, s: RequestSpec) -> Result<Response, RemoteError> {
+    pub(crate) async fn send_once(&self, s: RequestSpec) -> Result<Response, RemoteError> {
         self.http.send(s).await.map_err(map_net)
     }
 
@@ -145,7 +145,7 @@ impl WebDavRemote {
         self.http.send_with_retry(s, &self.retry).await.map_err(map_net)
     }
 
-    async fn get_raw(&self, url: &str, inm: Option<&str>) -> Result<Response, RemoteError> {
+    pub(crate) async fn get_raw(&self, url: &str, inm: Option<&str>) -> Result<Response, RemoteError> {
         let mut s = self.spec(HttpMethod::Get, url)?;
         if let Some(e) = inm {
             s = s.with_if_none_match(e);
@@ -153,13 +153,13 @@ impl WebDavRemote {
         self.send_retry(s).await
     }
 
-    async fn head_raw(&self, url: &str) -> Result<Response, RemoteError> {
+    pub(crate) async fn head_raw(&self, url: &str) -> Result<Response, RemoteError> {
         let s = self.spec(HttpMethod::Head, url)?;
         self.send_retry(s).await
     }
 
     /// 无条件 `PUT`（用于我们自己独占命名的暂存对象）。
-    async fn put_plain(&self, url: &str, body: &[u8]) -> Result<Response, RemoteError> {
+    pub(crate) async fn put_plain(&self, url: &str, body: &[u8]) -> Result<Response, RemoteError> {
         let s = self
             .spec(HttpMethod::Put, url)?
             .with_header("content-type", "application/json")
@@ -186,7 +186,7 @@ impl WebDavRemote {
         }
     }
 
-    async fn move_raw(&self, from_url: &str, dest_url: &str, overwrite: bool, if_match_src: Option<&str>) -> Result<Response, RemoteError> {
+    pub(crate) async fn move_raw(&self, from_url: &str, dest_url: &str, overwrite: bool, if_match_src: Option<&str>) -> Result<Response, RemoteError> {
         // Destination 越出根 = 把库里的东西搬到库外，或把库外的东西搬进来。绝不发出。
         if !self.paths.is_in_root(dest_url) || !self.paths.is_in_root(from_url) {
             return Err(RemoteError::Protocol(format!("MOVE 端点越出远端根: {dest_url}")));
@@ -208,7 +208,7 @@ impl WebDavRemote {
     }
 
     /// 清理我们自己写的暂存对象。404 是正常结局，任何失败都不影响正确性（§11.3 C2）。
-    async fn best_effort_delete(&self, url: &str) {
+    pub(crate) async fn best_effort_delete(&self, url: &str) {
         match self.delete_raw(url).await {
             Ok(_) => {}
             Err(e) => tracing::debug!(%e, tmp = url, "暂存对象清理失败，交给维护轮"),

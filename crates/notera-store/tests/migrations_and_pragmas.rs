@@ -9,13 +9,25 @@ fn user_version(file: &std::path::Path) -> u32 {
     conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap() as u32
 }
 
+/// 期望的迁移序列：`from..=支持版本` 连续递增。
+/// 不写死 `[1,2,3,4,5]` —— 那样每加一个迁移就得改测试，很容易顺手改成"少一个也过"。
+/// 下限断言保证真有人删迁移号时这里仍然会红。
+fn contiguous_from(from: u32) -> Vec<u32> {
+    assert!(SUPPORTED_SCHEMA_VERSION >= 5, "支持版本不该低于 5，迁移序列被截断了？");
+    (from..=SUPPORTED_SCHEMA_VERSION).collect()
+}
+
 #[test]
 fn empty_db_migrates_to_latest_and_tables_exist() {
     let fx = Fix::new();
     let store = fx.open();
     assert_eq!(store.migration_report().from, 0);
     assert_eq!(store.migration_report().to, SUPPORTED_SCHEMA_VERSION);
-    assert_eq!(store.migration_report().applied, vec![1, 2, 3, 4, 5]);
+    assert_eq!(
+        store.migration_report().applied,
+        contiguous_from(1),
+        "空库必须按 1..=支持版本逐号补齐，且不能跳号"
+    );
     assert_eq!(user_version(&fx.db_file()), SUPPORTED_SCHEMA_VERSION);
 
     // 表/视图齐全（逐字照抄 DATA-MODEL §5 + §13）
@@ -101,7 +113,7 @@ fn upgrade_from_a_real_v2_database_backs_up_and_keeps_data() {
     let store = fx.reopen();
     let rep = store.migration_report();
     assert_eq!(rep.from, 2);
-    assert_eq!(rep.applied, vec![3, 4, 5], "只补缺失的后续迁移（forward-only）");
+    assert_eq!(rep.applied, contiguous_from(3), "只补缺失的后续迁移（forward-only）");
     assert_eq!(rep.backup, Some(fx.dir.join("notera.sqlite.pre-migration.2")));
     assert!(rep.backup.as_ref().unwrap().exists(), "迁移前必须有物理备份（ADR-0012）");
     assert_eq!(user_version(&db), SUPPORTED_SCHEMA_VERSION);

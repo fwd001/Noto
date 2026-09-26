@@ -75,6 +75,43 @@ impl Store {
         })
     }
 
+    /// 记下 §5 的探测结果。`mask` 是 `notera_webdav::Caps::mask()` 的值 ——
+    /// 存储层不认识那些位，只负责原样存回去。
+    pub fn set_account_caps(&self, id: &str, mask: u32) -> Result<(), StoreError> {
+        let at = self.now();
+        self.write_tx(|tx, _| {
+            let n = tx.execute("UPDATE sync_accounts SET cap_mask = ?2, caps_probed_at = ?3 WHERE id = ?1", params![id, mask as i64, at])?;
+            if n == 0 {
+                return Err(StoreError::Constraint(format!("账户不存在: {id}")));
+            }
+            Ok(())
+        })
+    }
+
+    /// `None` = 从未探测过（调用方应使用保守默认，而不是当成"全不支持"）。
+    pub fn account_caps(&self, id: &str) -> Result<Option<u32>, StoreError> {
+        let conn = self.read()?;
+        let v = conn.query_row("SELECT cap_mask FROM sync_accounts WHERE id = ?1", [id], |r| r.get::<_, Option<i64>>(0));
+        match v {
+            Ok(Some(m)) => Ok(Some(m.max(0) as u32)),
+            Ok(None) => Ok(None),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Err(StoreError::Constraint(format!("账户不存在: {id}"))),
+            Err(e) => Err(StoreError::from(e)),
+        }
+    }
+
+    /// 上次 §5 探测的时刻（`None` = 从未探测）。存的是字符串，"多久算过期"
+    /// 是同步侧的策略，不放进存储层。
+    pub fn account_caps_probed_at(&self, id: &str) -> Result<Option<String>, StoreError> {
+        let conn = self.read()?;
+        let v = conn.query_row("SELECT caps_probed_at FROM sync_accounts WHERE id = ?1", [id], |r| r.get::<_, Option<String>>(0));
+        match v {
+            Ok(t) => Ok(t),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Err(StoreError::Constraint(format!("账户不存在: {id}"))),
+            Err(e) => Err(StoreError::from(e)),
+        }
+    }
+
     pub fn account_ids(&self) -> Result<Vec<String>, StoreError> {
         let conn = self.read()?;
         Ok(rows::enabled_accounts(&conn)?)

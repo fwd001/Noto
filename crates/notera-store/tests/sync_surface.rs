@@ -467,3 +467,25 @@ fn conflicts_are_recorded_and_openable_then_resolved() {
     assert!(matches!(store.resolve_conflict(id, "乱写"), Err(StoreError::Constraint(_))));
     let _ = NoteQuery::all();
 }
+
+#[test]
+fn probed_caps_survive_a_restart_and_null_means_never_probed() {
+    // §5 的探测结果必须能存下来：否则每次启动都退回保守默认，
+    // 一台真的支持条件写的服务器会被永久当成 S3 盲写。
+    let fx = Fix::new();
+    let store = fx.open();
+    store.register_account("acct-c", "c", "https://dav.example/dav").unwrap();
+
+    assert_eq!(store.account_caps("acct-c").unwrap(), None, "新登记的账户应当是『从未探测』，而不是『零能力』");
+    store.set_account_caps("acct-c", 0b101).unwrap();
+    assert_eq!(store.account_caps("acct-c").unwrap(), Some(0b101));
+
+    // 0 是合法值（什么都不支持），必须与 NULL 区分开
+    store.set_account_caps("acct-c", 0).unwrap();
+    assert_eq!(store.account_caps("acct-c").unwrap(), Some(0), "全不支持被存成了从未探测");
+
+    drop(store);
+    let again = fx.open();
+    assert_eq!(again.account_caps("acct-c").unwrap(), Some(0), "重启后探测结果必须还在");
+    assert!(matches!(again.set_account_caps("nope", 1), Err(StoreError::Constraint(_))), "不存在的账户要报错");
+}

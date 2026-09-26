@@ -20,6 +20,7 @@ mod caps;
 mod client;
 mod error;
 mod path;
+mod probe;
 mod record;
 
 pub use auth::Credentials;
@@ -27,7 +28,10 @@ pub use caps::{Caps, WriteStrategy};
 pub use client::{WebDavConfig, WebDavRemote, MAX_RECORD_BYTES};
 pub use error::{map_net, map_status, PathError, WebDavError};
 pub use path::{kind_dir, kind_matches, RecordPath, RemotePath, DEFAULT_ROOT_PREFIX};
+pub use probe::ProbeReport;
 pub use record::WireMeta;
 
 /// 本 crate 实现的端口（re-export 只为让集成侧一行看全）。
-pub use notera_sync::{RemotePort, SyncEngine};
+/// 只 re-export **端口**：`SyncEngine` 是 sync 的东西，从传输适配器这里冒出去
+/// 等于给集成侧第二个"引擎入口"，而 ARCHITECTURE-MAP §1 规定这条边只有契约。
+pub use notera_sync::RemotePort;

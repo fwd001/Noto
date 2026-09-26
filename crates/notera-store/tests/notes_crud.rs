@@ -89,7 +89,11 @@ fn restart_keeps_data_identical_and_does_not_reapply_migrations() {
     let note_id;
     {
         let store = fx.open();
-        assert_eq!(store.migration_report().applied, vec![1, 2, 3, 4, 5], "空库必须一路迁到最新");
+        assert_eq!(
+            store.migration_report().applied,
+            (1..=SUPPORTED_SCHEMA_VERSION).collect::<Vec<_>>(),
+            "空库必须一路迁到最新"
+        );
         assert_eq!(store.stats().unwrap().user_version, SUPPORTED_SCHEMA_VERSION);
         folder = default_folder(&store);
         let n = create(&store, &folder, "重启后还在");
