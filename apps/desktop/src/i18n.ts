@@ -243,6 +243,9 @@ const MESSAGES: Record<MessageKey, string> = {
   'error.invalid_account': '这台同步服务器的地址或参数不可用，请在设置里检查。',
   'error.save_failed': '设置没能保存，改动还留在这台设备上。',
   'error.proxy_credentials_pending': '代理需要账号与口令，当前版本还不能安全地保存它们。',
+  'sync.root_mismatch': '这个服务器上已经是另一个 Notera 库了，已停止同步以免把两个库混在一起。请改用该库原本的路径。',
+  'sync.foreign_root': '这个目录里已有别的数据，但不是本库的目录，已停止同步。请换一个根路径。',
+  'sync.protocol_unreadable': '暂时读不到服务器上的协议信息，这一轮不写入。请稍后重试。',
   'sync.needsCredentials': '还没有可用的登录凭据。笔记照常保存在本机，配好凭据后会自动开始同步。',
 };
 

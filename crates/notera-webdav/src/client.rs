@@ -766,3 +766,80 @@ fn parse_segment(body: &[u8], name: &str) -> Result<Vec<EntryRef>, RemoteError> 
     }
     Ok(out)
 }
+
+// ------------------------------------------------- §2 协议协商（装配根用）---
+//
+// 这三个方法**不在** `RemotePort` 上：同步引擎每轮不需要它们，
+// 需要它们的是"要不要开始同步、能不能写这个目录"这个启动期判定。
+impl WebDavRemote {
+    /// GET `protocol.json`。`Ok(None)` 只表示 404（不存在）。
+    /// 存在但解析不了 → `Protocol` 错误：§2 明令**不得**把这种情况当成"空根"重新初始化，
+    /// 那等于把别人现有的库清空。
+    pub async fn fetch_protocol(&self) -> Result<Option<serde_json::Value>, RemoteError> {
+        let url = self.paths.protocol_json();
+        let resp = self.get_raw(&url, None).await?;
+        if resp.status == 404 {
+            return Ok(None);
+        }
+        if !resp.is_success() {
+            return Err(crate::error::map_status(resp.status));
+        }
+        let v: serde_json::Value = serde_json::from_slice(&resp.body)
+            .map_err(|e| RemoteError::Protocol(format!("protocol.json 不是合法 JSON：{e}")))?;
+        Ok(Some(v))
+    }
+
+    /// 创建语义写 `protocol.json`（Overwrite:F）。已存在 → `Ok(false)`，
+    /// 由调用方去读并**接受**那一份，绝不覆盖。
+    pub async fn provision_protocol(&self, doc: &serde_json::Value) -> Result<bool, RemoteError> {
+        let url = self.paths.protocol_json();
+        let bytes = serde_json::to_vec_pretty(doc).map_err(|e| RemoteError::Protocol(e.to_string()))?;
+        match self.put_cond(&url, &bytes, Cond::CreateOnly).await {
+            Ok(r) if r.is_success() => Ok(true),
+            // 412 = 有别的客户端先建好了：这不是失败，是"去接受它的那一份"
+            Ok(r) if r.status == 412 => Ok(false),
+            // 服务器不认 If 头：退回"暂存 + MOVE Overwrite:F"的创建语义
+            Ok(r) if matches!(r.status, 405 | 501) => self.provision_protocol_by_move(&url, &bytes).await,
+            Ok(r) => Err(crate::error::map_status(r.status)),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn provision_protocol_by_move(&self, dest: &str, bytes: &[u8]) -> Result<bool, RemoteError> {
+        let tmp = self.paths.tmp(&self.device, self.next_nonce())?;
+        self.put_plain(&tmp, bytes).await?;
+        let moved = self.move_raw(&tmp, dest, false, None).await;
+        match moved {
+            Ok(r) if r.is_success() => Ok(true),
+            // 目标已存在时 MOVE F 会 405/412：同样是"别人先建了"
+            Ok(r) if matches!(r.status, 405 | 412) => {
+                self.best_effort_delete(&tmp).await;
+                Ok(false)
+            }
+            Ok(r) => {
+                self.best_effort_delete(&tmp).await;
+                Err(crate::error::map_status(r.status))
+            }
+            Err(e) => {
+                self.best_effort_delete(&tmp).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// "这个根是不是已经被用过了"的保守判据：`protocol.json` 不在，
+    /// 但清单或上一版清单在 → 认定非空，不允许就地初始化。
+    ///
+    /// 不用 `PROPFIND` 全量列举：那需要扫 `records/`，代价与库规模同阶，
+    /// 而"有没有清单"已经足以区分"全新目录"与"别人的目录少了 protocol.json"。
+    pub async fn root_looks_used(&self) -> Result<bool, RemoteError> {
+        for url in [self.paths.manifest_index(), self.paths.manifest_prev()] {
+            match self.head_raw(&url).await {
+                Ok(r) if r.status == 200 => return Ok(true),
+                Ok(_) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(false)
+    }
+}

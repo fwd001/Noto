@@ -608,12 +608,18 @@ impl App {
             .map_err(|e| CmdError::of("invalid_account", false).with(serde_json::json!({ "why": e.to_string() })))?;
         self.inner
             .config_repo
-            .upsert_account(&mut cfg, acct)
+            .upsert_account(&mut cfg, acct.clone())
             .map_err(|e| CmdError::of("invalid_account", false).with(serde_json::json!({ "why": e.to_string() })))?;
         self.inner.config_repo.save(&cfg).map_err(|e| {
             CmdError::of("save_failed", false).with(serde_json::json!({ "why": e.to_string() }))
         })?;
         *self.inner.config.lock().unwrap() = cfg.clone();
+        // 配置里的账户必须在存储层落一行：outbox 是按 `sync_accounts` 扇出的，
+        // 没这一行 = 本地写入永远不会排队给这台服务器（静默不同步）。
+        self.inner
+            .store
+            .register_account(&acct.id, &acct.label, &acct.base_url)
+            .map_err(|e| CmdError::of("invalid_account", false).with(serde_json::json!({ "why": e.to_string() })))?;
         self.set_sync(|v| v.phase = Phase::Provisioning);
         ConfigRepository::active(&cfg).map(account_dto).ok_or_else(|| CmdError::of("no_account", false))
     }
@@ -685,6 +691,114 @@ impl App {
         }
         let secret = std::env::var("NOTERA_DEV_WEBDAV_SECRET").ok()?;
         (!secret.is_empty()).then_some((user, secret))
+    }
+
+    /// SYNC-PROTOCOL §2 的启动期协商。返回 `Err(文案键)` 意思是**不许开始同步**，
+    /// 调用方必须把它显示出来 —— "静默地不同步"和"静默地同步错"一样不可接受。
+    ///
+    /// 判据顺序按规范：读 `protocol.json` → 版本区间 → `root_id` 是否同一个库。
+    /// 缺 `protocol.json` 时先看根是不是已被用过（有清单）：用过就拒，
+    /// 绝不当成"空库就地初始化"（那等于清空别人现有的库）。
+    pub async fn negotiate(&self, remote: &notera_webdav::WebDavRemote) -> Result<(), &'static str> {
+        let cfg = self.config();
+        let acct = ConfigRepository::active(&cfg).ok_or("sync.no_account")?;
+        let mut state = self
+            .inner
+            .store
+            .sync_state(&acct.id)
+            .map_err(|_| "sync.storage_unavailable")?
+            .ok_or("sync.state_missing")?;
+        let observed = remote.fetch_protocol().await.map_err(|_| "sync.protocol_unreadable")?;
+        let mine = self.default_folder_id().map_err(|_| "sync.no_default_folder")?;
+        let ours = notera_sync::SYNC_PROTOCOL_VERSION as u64;
+        match observed {
+            Some(doc) => {
+                let server = doc.get("protocol").and_then(|v| v.as_u64()).unwrap_or(0);
+                let server_min = doc.get("min_protocol").and_then(|v| v.as_u64()).unwrap_or(server);
+                if server_min > ours || server < ours {
+                    self.set_sync(|v| {
+                        v.phase = Phase::ReadOnly;
+                        v.badge = Badge::Offline;
+                        v.message_key = Some("sync.protocol_mismatch".into());
+                    });
+                    return Err("sync.protocol_mismatch");
+                }
+                let remote_root = doc.get("root_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if remote_root.is_empty() {
+                    return Err("sync.protocol_mismatch");
+                }
+                match state.root_id.as_deref() {
+                    None if self.local_library_is_empty() => state.root_id = Some(remote_root),
+                    None => {
+                        // 本机已经是一个有内容的库，却要接受另一个库的 root_id ——
+                        // 这就是 §2 说的"两库并一库"。停手，让用户改路径或改配置。
+                        self.set_sync(|v| {
+                            v.phase = Phase::Error;
+                            v.badge = Badge::Failed;
+                            v.message_key = Some("sync.root_mismatch".into());
+                        });
+                        return Err("sync.root_mismatch");
+                    }
+                    Some(local) if local != remote_root => {
+                        // 两个库指向了同一个目录：停，绝不合并（§2）
+                        self.set_sync(|v| {
+                            v.phase = Phase::Error;
+                            v.badge = Badge::Failed;
+                            v.message_key = Some("sync.root_mismatch".into());
+                        });
+                        return Err("sync.root_mismatch");
+                    }
+                    Some(_) => {}
+                }
+            }
+            None => {
+                if remote.root_looks_used().await.map_err(|_| "sync.protocol_unreadable")? {
+                    self.set_sync(|v| {
+                        v.phase = Phase::Error;
+                        v.badge = Badge::Failed;
+                        v.message_key = Some("sync.foreign_root".into());
+                    });
+                    return Err("sync.foreign_root");
+                }
+                let doc = serde_json::json!({
+                    "protocol": ours,
+                    "min_protocol": ours,
+                    "layout": "v1",
+                    "root_id": mine.as_str(),
+                    "created_at": SystemClock.now().to_string(),
+                    "created_by": cfg.device_id,
+                    "software": format!("notera {}", env!("CARGO_PKG_VERSION")),
+                    "segment_target_entries": 2000,
+                    "window_max_entries": 200,
+                    "capabilities_hint": { "conditional_put": null },
+                });
+                let created = remote.provision_protocol(&doc).await.map_err(|_| "sync.protocol_unreadable")?;
+                state.root_id = Some(if created {
+                    mine.as_str().to_string()
+                } else {
+                    // 抢输的一方必须接受对方那一份，而不是继续按自己的 root_id 写
+                    let other = remote.fetch_protocol().await.map_err(|_| "sync.protocol_unreadable")?.ok_or("sync.protocol_mismatch")?;
+                    other.get("root_id").and_then(|v| v.as_str()).ok_or("sync.protocol_mismatch")?.to_string()
+                });
+            }
+        }
+        state.phase = "online".into();
+        self.inner.store.set_sync_state(&state).map_err(|_| "sync.storage_unavailable")?;
+        // 协商通过才把可见状态推进同步态；否则徽标会停在"未配置"，用户不知道为什么没动。
+        self.set_sync(|v| {
+            v.phase = Phase::Online;
+            v.message_key = None;
+        });
+        Ok(())
+    }
+
+    /// "本机还是个空库"= 除了开库自带的默认本，没有任何笔记/文件夹/回收站条目。
+    /// 只有空库才允许接受别人已经建好的 `root_id`（§9 的新设备加入场景）。
+    fn local_library_is_empty(&self) -> bool {
+        match self.inner.store.stats() {
+            Ok(s) => s.notes == 0 && s.notes_trash == 0 && s.folders <= 1,
+            Err(_) => false,
+        }
     }
 
     pub fn remove_account(&self, id: &str) -> Result<(), CmdError> {
@@ -1640,5 +1754,47 @@ mod tests {
         assert_eq!(remote.device_id(), cfg.device_id);
         assert_eq!(remote.paths().root_prefix(), "/.notes");
         // 适配器刻意不实现 Debug：里面藏着凭据，derive 出来就可能整条打印进日志。
+    }
+
+    /// SYNC-PROTOCOL §2：两个库指到同一个目录时必须**停手**，而不是把两库并成一库。
+    #[tokio::test]
+    async fn negotiate_refuses_to_share_a_directory_with_another_library() {
+        use notera_webdav::Credentials;
+        let srv = notera_test_webdav::TestServer::start(notera_test_webdav::Backend::Mem).await;
+        let a = boot("nego-a");
+        let b = boot("nego-b");
+        let url = srv.base_url.clone();
+        for app in [&a, &b] {
+            app.configure_account(draft("srv", &url, Some("u"))).unwrap();
+        }
+        let remote_for = |app: &App| {
+            let cfg = app.config();
+            let acct = ConfigRepository::active(&cfg).unwrap().clone();
+            let device = DeviceId::parse(&cfg.device_id).unwrap();
+            App::build_remote(&acct, device, Credentials::new("u", "p").unwrap()).unwrap()
+        };
+
+        let ra = remote_for(&a);
+        a.negotiate(&ra).await.expect("第一个库应当建好 protocol.json");
+        let root_a = a.store().sync_state("srv").unwrap().unwrap().root_id.clone();
+        assert_eq!(root_a.as_deref(), Some(a.default_folder_id().unwrap().as_str()));
+        assert_eq!(a.sync_status().unwrap().phase, "online", "协商通过才允许进入同步态");
+
+        // 情形一：本机已有自己的内容 → 必须停手，而不是接受别人的 root_id
+        let bf = b.list_folders().unwrap().remove(0);
+        b.create_note(&EntityId::parse(&bf.id).unwrap(), doc("我这台机器自己的笔记")).unwrap();
+        let rb = remote_for(&b);
+        assert_eq!(b.negotiate(&rb).await, Err("sync.root_mismatch"), "两个有内容的库不能并成一个");
+        // 拒绝之后服务器上的 protocol.json 必须仍是 A 的那一份（没有被"顺手改写"）
+        let still = rb.fetch_protocol().await.unwrap().unwrap();
+        assert_eq!(still["root_id"].as_str(), root_a.as_deref());
+        assert_eq!(b.sync_status().unwrap().phase, "error", "停手必须是可见状态，不是悄悄不干活");
+
+        // 情形二：空库允许加入既有库（§9 的新设备场景）
+        let c = boot("nego-c");
+        c.configure_account(draft("srv", &url, Some("u"))).unwrap();
+        let rc = remote_for(&c);
+        c.negotiate(&rc).await.expect("空库应当接受服务器上已有的 root_id");
+        assert_eq!(c.store().sync_state("srv").unwrap().unwrap().root_id.as_deref(), root_a.as_deref());
     }
 }
