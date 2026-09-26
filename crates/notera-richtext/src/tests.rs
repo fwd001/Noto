@@ -244,16 +244,17 @@ fn table_family_must_stay_grouped() {
 
 #[test]
 fn normalize_strips_zero_width_but_keeps_emoji_joiners() {
-    let raw = doc(vec![para(
-        "p1aaaa",
-        "零宽​﻿应被剥离，ZWJ‍家庭👨‍👩‍👧 必须原样保留",
-    )]);
+    // 零宽字符一律写成转义：字面量摆在源码里谁也看不见，改错了都不会知道。
+    let src = "零宽\u{200B}\u{FEFF}应被剥离，ZWJ\u{200D}家庭\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} 必须原样保留";
+    // 夹具自己得先真的带上这些字符，否则"剥离成功"只是因为压根没放进去
+    assert!(src.contains('\u{200B}') && src.contains('\u{FEFF}'), "夹具没带上被测的零宽字符");
+    let raw = doc(vec![para("p1aaaa", src)]);
     let d = parse(&raw.to_string()).unwrap();
     let t = d.content[0].plain_text();
-    assert!(!t.contains('​') && !t.contains('﻿'), "{t}");
-    assert!(t.contains("👨‍👩‍👧"), "剥掉 ZWJ 会摧毁 emoji 序列：{t}");
+    assert!(!t.contains('\u{200B}') && !t.contains('\u{FEFF}'), "{t}");
+    assert!(t.contains("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"), "剥离 ZWJ 会拆散 emoji 序列：{t}");
     // 只有零宽字符的行内节点会被丢弃（它不携带任何信息），但空段落本身保留。
-    let only_zw = doc(vec![para("p2aaaa", "​"), para("p3aaaa", "留着")]);
+    let only_zw = doc(vec![para("p2aaaa", "\u{200B}"), para("p3aaaa", "留着")]);
     let d2 = parse(&only_zw.to_string()).unwrap();
     assert_eq!(d2.content[0].id, "p2aaaa");
     assert!(d2.content[0].content.is_empty(), "空段落保留、空 inline 丢弃");
