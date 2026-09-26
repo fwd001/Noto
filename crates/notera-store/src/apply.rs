@@ -123,7 +123,8 @@ impl Store {
 
     fn apply_one(&self, tx: &Connection, op: &ApplyOp, now: &str, rep: &mut ApplyReport) -> Result<(), StoreError> {
         match op {
-            ApplyOp::UpsertNote { env } => self.apply_note(tx, env_of(env, "note")?, now, rep),
+            ApplyOp::UpsertNote { env } => self.apply_note(tx, env_of(env, "note")?, now, rep, false),
+            ApplyOp::AdoptConflict { env } => self.apply_note(tx, env_of(env, "note")?, now, rep, true),
             ApplyOp::UpsertFolder { env } => self.apply_folder(tx, env_of(env, "folder")?, now, rep),
             ApplyOp::SetRemote { kind, id, rev, hash12 } => {
                 if Self::set_remote_rev_tx(tx, now, *kind, id, *rev, hash12)? {
@@ -138,7 +139,9 @@ impl Store {
         }
     }
 
-    fn apply_note(&self, tx: &Connection, env: Env, now: &str, rep: &mut ApplyReport) -> Result<(), StoreError> {
+    /// `adopt = true` 只允许由 [`ApplyOp::AdoptConflict`] 传入：冲突采纳远端正文。
+    /// 它与普通 upsert 的差别只有一处 —— 允许 `rev` 相等而内容不同（见那条注释）。
+    fn apply_note(&self, tx: &Connection, env: Env, now: &str, rep: &mut ApplyReport, adopt: bool) -> Result<(), StoreError> {
         if env.purged {
             return self.apply_purge(tx, EntityKind::Note, &env.id, now, rep);
         }
@@ -232,10 +235,16 @@ impl Store {
                         rep.skipped += 1; // 幂等重放
                         return Ok(());
                     }
-                    return Err(StoreError::Rejected(format!(
-                        "笔记 {} 同 rev {} 内容不同：服务器侧异常，不覆盖本地",
-                        env.id, env.rev
-                    )));
+                    // 同一个 rev 却是两份内容：普通 upsert 一律拒绝（那是服务器侧异常，
+                    // 覆盖谁都没有依据）。唯一例外是**冲突采纳** —— 两台设备从同一个确认点
+                    // 各自推到同一个 rev，是分布式写作的正常结果，而本机那一份在调用之前
+                    // 已经存成副本笔记了（CONFLICT-RESOLUTION §6.1），所以这里换正文不丢任何东西。
+                    if !adopt {
+                        return Err(StoreError::Rejected(format!(
+                            "笔记 {} 同 rev {} 内容不同：服务器侧异常，不覆盖本地",
+                            env.id, env.rev
+                        )));
+                    }
                 }
                 let edit = Edit {
                     doc: Some(prepared),

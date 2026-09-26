@@ -17,6 +17,7 @@ function ensureCard(value: unknown): ConflictCard | null {
     conflictId,
     ...(typeof raw.noteId === 'string' ? { noteId: raw.noteId } : {}),
     ...(typeof raw.copyNoteId === 'string' ? { copyNoteId: raw.copyNoteId } : {}),
+    ...(typeof raw.copyRev === 'number' ? { copyRev: raw.copyRev } : {}),
     ...(typeof raw.noteTitle === 'string' ? { noteTitle: raw.noteTitle } : {}),
     ...(typeof raw.title === 'string' ? { title: raw.title } : {}),
     ...(typeof raw.localRev === 'number' ? { localRev: raw.localRev } : {}),
@@ -58,11 +59,19 @@ export const useConflictStore = defineStore('conflicts', () => {
     return `${card.conflictId}:${side}`;
   }
 
-  /** 并排预览：优先用 preview_text，缺失时退回卡片自带的预览文本。 */
+  /**
+   * 并排预览：优先用 preview_text，缺失时退回卡片自带的预览文本。
+   *
+   * 两栏各自读哪份文档由 CONFLICT-RESOLUTION §6.1 的落地形状决定：**正文是服务器那一版**
+   * （采纳过来的），**本机那一版活在副本笔记里**。所以
+   *   右（服务器）= noteId @ remoteRev，左（你的）= copyNoteId @ copyRev。
+   * 两边都用 noteId + 各自 rev 是不行的：采纳之后 noteId 在那个 rev 上存的就是服务器那一份，
+   * 左右两栏会显示同一段文字，用户据此做的决定也就没有依据。
+   */
   async function loadPreview(card: ConflictCard): Promise<void> {
     const sides: Array<{ side: 'local' | 'remote'; id: string | undefined; rev: number | undefined; fallback: string | undefined }> = [
-      { side: 'local', id: card.noteId ?? card.copyNoteId ?? undefined, rev: card.localRev, fallback: card.localPreview },
-      { side: 'remote', id: card.copyNoteId ?? card.noteId ?? undefined, rev: card.remoteRev, fallback: card.remotePreview },
+      { side: 'local', id: card.copyNoteId ?? undefined, rev: card.copyRev ?? undefined, fallback: card.localPreview },
+      { side: 'remote', id: card.noteId ?? undefined, rev: card.remoteRev, fallback: card.remotePreview },
     ];
     for (const entry of sides) {
       if (entry.fallback !== undefined && previews.value[previewKey(card, entry.side)] === undefined) {

@@ -254,6 +254,75 @@ async fn an_attachment_follows_its_note_to_a_second_device() {
     srv.stop().await;
 }
 
+/// 两台设备真的把同一条笔记改成分叉的两份（CONFLICT-RESOLUTION §6/§6.1 的验收）。
+///
+/// 这条测试是"冲突"这一块第一次被端到端跑起来 —— 之前只有手搓 `LocalView` 的单测，
+/// 于是"冲突到底把什么留在了这台设备上"没人验证过。跑出来的事实是：**对面那台的编辑
+/// 在这台设备上根本不存在**（只登记了两个哈希），面板左右两栏显示同一份本地内容，
+/// 而本机脏 head 下一轮会把自己的版本推上去，把别人已确认的那一份静默盖掉。
+/// 现在引擎在判出 UpdateUpdate 时真的去取远端记录并采纳为正文（本地那份先进副本）。
+#[tokio::test]
+async fn a_real_divergence_records_one_conflict_and_keeps_both_texts() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let a = Device::boot("div-a", &url);
+    let folder = a.app.default_folder_id().unwrap();
+    let note = a.app.create_note(&folder, doc("共同起点")).unwrap();
+    let id = notera_core::EntityId::parse(&note.id).unwrap();
+    a.app.sync_once().await.expect("A 先把共同起点推上去");
+
+    // A 本地改一份，先不推
+    let a_head = a.app.store().get_note(&id).unwrap().unwrap();
+    a.app.store().edit_note(&id, doc("甲设备加的段落"), a_head.rev).unwrap();
+
+    // B 拉到起点，改成另一份，并推上服务器
+    let b = Device::boot("div-b", &url);
+    b.app.sync_once().await.expect("B 拉起点");
+    let b_head = b.app.store().get_note(&id).unwrap().unwrap();
+    b.app.store().edit_note(&id, doc("乙设备加的段落"), b_head.rev).unwrap();
+    let pushed = b.app.sync_once().await.expect("B 推上去");
+    assert!(pushed.pushed >= 1, "B 的改动要真的公告出去：{pushed:?}");
+
+    // A 再同步：本地脏 + 远端也变了 → 必须进收件箱，且两份内容都不许没
+    let stats_a = a.app.sync_once().await.expect("A 的第二轮");
+    assert_eq!(stats_a.conflicts, 1, "这一轮该判出一次冲突：{stats_a:?}");
+    let cards = notera_host::commands::dispatch(&a.app, "open_conflicts", json!({})).expect("open_conflicts");
+    let row = cards.as_array().expect("卡片数组");
+    assert_eq!(row.len(), 1, "收件箱里就该一条：{row:?}");
+    let card = &row[0];
+    assert_eq!(card["noteId"], id.to_string(), "卡片得说清在跟谁打架");
+    assert!(card["copyNoteId"].is_string(), "进箱的同一刻就该有本地副本（§6：副本不是提醒，是保底）");
+
+    let copy_id = notera_core::EntityId::parse(card["copyNoteId"].as_str().unwrap()).unwrap();
+    let body = a.app.store().get_note(&id).unwrap().expect("正文还在");
+    let copy = a.app.store().get_note(&copy_id).unwrap().expect("副本还在");
+    // §6.1：正文是**已被别的设备确认的那一份**，本机那份以完整副本的形式活着。
+    assert!(body.plain_text.contains("乙设备加的段落"), "正文该是服务器那一份：{}", body.plain_text);
+    assert!(copy.plain_text.contains("甲设备加的段落"), "本机那一份必须原样在副本里：{}", copy.plain_text);
+    // 采纳之后本机正文与远端一致 → 不许再把自己的那一版推上去盖掉别人的。
+    // 这一轮**该**推的只有那篇副本（它是个新实体，别处还没有）。
+    let again = a.app.sync_once().await.expect("A 的第三轮");
+    assert_eq!(again.pushed, 1, "只该推上去那一篇副本：{again:?}");
+    assert_eq!(again.conflicts, 0, "冲突已收敛，第二轮不该再造一张卡片：{again:?}");
+    let head = a.app.store().get_note(&id).unwrap().unwrap();
+    assert_eq!(head.rev, head.sync_rev, "正文采纳后就该是已确认状态，否则下一轮它会把乙的版本盖掉");
+    assert_eq!(a.app.store().list_notes(&NoteQuery::all()).unwrap().len(), 2, "一条正文 + 一条副本，不多也不少");
+    // 并排预览的右栏必须是真的那一份服务器内容
+    let remote_preview = notera_host::commands::dispatch(&a.app, "preview_text", json!({ "id": id.to_string(), "rev": card["remoteRev"] }));
+    let shown = remote_preview.ok().and_then(|v| v.as_str().map(|s| s.to_string())).unwrap_or_default();
+    assert!(shown.contains("乙设备加的段落"), "右栏显示的不是服务器那一版：{shown}");
+    // 左栏按 (copyNoteId, copyRev) 读 —— 卡片不带 copyRev 的话，前端只能拿正文顶替，两栏就同款了
+    assert_eq!(card["copyRev"], 1, "卡片要给出副本的 rev：{card:?}");
+    let local_preview = notera_host::commands::dispatch(
+        &a.app,
+        "preview_text",
+        json!({ "id": card["copyNoteId"], "rev": card["copyRev"] }),
+    );
+    let mine = local_preview.ok().and_then(|v| v.as_str().map(|s| s.to_string())).unwrap_or_default();
+    assert!(mine.contains("甲设备加的段落"), "左栏显示的不是本机那一版：{mine}");
+    srv.stop().await;
+}
+
 // ---------------------------------------------------------------- §11.4 租约 ---
 
 /// 清单 index.json 的 sha（内容指纹）。公告了就会变，没公告就不该变。

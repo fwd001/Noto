@@ -15,7 +15,7 @@ pub mod manifest;
 pub mod plan;
 
 use manifest::{EntryRef, Manifest, ManifestError};
-use plan::{Action, Decision, LocalView, Plan, RemoteView};
+use plan::{Action, ConflictKind, Decision, LocalView, Plan, RemoteView};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -110,6 +110,9 @@ pub struct Commit {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ApplyOp {
     Upsert { kind: String, id: String, wire: Vec<u8> },
+    /// 冲突采纳：把远端那一版换成本机正文（本地那份已由 `record_conflict` 存成副本）。
+    /// 只有引擎在判出 `UpdateUpdate` 并真的取回记录时才发这条（CONFLICT-RESOLUTION §6.1）。
+    AdoptConflict { kind: String, id: String, wire: Vec<u8> },
     SetRemote { kind: String, id: String, rev: u64, hash12: String },
     MarkSynced { kind: String, id: String, rev: u64 },
     Delete { kind: String, id: String, rev: u64 },
@@ -487,10 +490,31 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                         purged,
                     });
                 }
-                Action::Conflict(_) => {
+                Action::Conflict(ck) => {
                     if let (Some(l), Some(r)) = (lmap.get(&d.key), remotes.iter().find(|x| x.key() == d.key)) {
                         let _ = self.local.record_conflict(d, l, r);
                         st.conflicts += 1;
+                        // §6.1：正文必须是**已被别的设备确认的那一份**，本机那份刚才已经进了副本。
+                        // 所以这里必须把远端记录真的取回来 —— 只登记两个哈希的冲突卡片有三个后果：
+                        //   1. 面板左右两栏显示的是同一份本机内容（"服务器那一版"根本没下来）；
+                        //   2. 对面那台的编辑在本机不存在，用户按"用服务器那一版"替换是个空操作；
+                        //   3. 最坏的一条：本机脏 head 还在，下一轮它带着更高的 rev 推上去，
+                        //      把别人已确认的那一份**静默盖掉**。
+                        // 只有 UpdateUpdate 走这条路：删除 vs 修改（P11）该保留哪一边由用户决定，
+                        // 引擎不许替他选。取不到就照旧留卡片，下一轮再试。
+                        if matches!(ck, ConflictKind::UpdateUpdate) && l.kind == "n" && st.requests < self.cfg.round_request_cap {
+                            if let Ok(Some(wire)) = self.remote.fetch_record(&l.kind, &l.id).await {
+                                st.requests += 1;
+                                st.bytes_down += wire.len() as u64;
+                                let rep = self
+                                    .local
+                                    .apply(vec![ApplyOp::AdoptConflict { kind: l.kind.clone(), id: l.id.clone(), wire }])
+                                    .unwrap_or_default();
+                                if rep.applied == 1 {
+                                    st.pulled += 1;
+                                }
+                            }
+                        }
                     }
                 }
                 _ => {}

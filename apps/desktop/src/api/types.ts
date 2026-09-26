@@ -262,6 +262,8 @@ export interface ConflictCard {
   conflictId: number;
   noteId?: Uuid;
   copyNoteId?: Uuid | null;
+  /** 副本笔记的 rev：左栏（你这一版）按 `(copyNoteId, copyRev)` 取预览，见 stores/conflicts.ts */
+  copyRev?: number | null;
   noteTitle?: string;
   title?: string;
   localRev?: number;

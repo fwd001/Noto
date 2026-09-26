@@ -588,6 +588,11 @@ impl App {
             // 附件按 sha256 寻址，不是 UUID 实体：卡片只能用哈希当前缀。
             EntityKind::Attachment => Some(r.local_hash.chars().take(12).collect()),
         };
+        // 副本还在才报得出它的 rev；副本已被删则给 None，面板那栏退回卡片自带的兜底预览。
+        let copy_rev = match &r.copy_note_id {
+            Some(cid) => self.inner.store.get_note(cid)?.map(|n| n.rev.get()),
+            None => None,
+        };
         Ok(ConflictDto {
             id: r.conflict_id,
             note_id: r.id.to_string(),
@@ -596,6 +601,7 @@ impl App {
             local_rev: r.local_rev.get(),
             remote_rev: r.remote_rev.get(),
             copy_note_id: r.copy_note_id.as_ref().map(|i| i.to_string()),
+            copy_rev: copy_rev,
             created_at: r.created_at,
         })
     }
@@ -1698,6 +1704,15 @@ impl LocalPort for HostLocalPort {
                     match kind.as_str() {
                         "f" => mapped.push(StoreApplyOp::UpsertFolder { env }),
                         _ => mapped.push(StoreApplyOp::UpsertNote { env }),
+                    }
+                }
+                ApplyOp::AdoptConflict { kind, id, wire } => {
+                    // 只有笔记有"正文"可采纳；文件夹的冲突留给用户（引擎也只会对 n 发这条）
+                    let env: serde_json::Value = serde_json::from_slice(&wire).map_err(|e| {
+                        LocalError::Storage(format!("冲突记录 {kind}/{id} 不是合法 JSON: {e}"))
+                    })?;
+                    if kind == "n" {
+                        mapped.push(StoreApplyOp::AdoptConflict { env });
                     }
                 }
                 ApplyOp::SetRemote { kind, id, rev, hash12 } => {

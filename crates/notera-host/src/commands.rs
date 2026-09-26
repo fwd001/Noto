@@ -83,6 +83,10 @@ pub struct ConflictDto {
     pub local_rev: u64,
     pub remote_rev: u64,
     pub copy_note_id: Option<String>,
+    /// 副本笔记当前的 rev。面板左栏要按 `(copyNoteId, copyRev)` 取预览 ——
+    /// 采纳远端正文之后，`noteId` 的那个 rev 已经是**服务器那一版**了，
+    /// 拿它当"本地那一版"会把左右两栏显示成同一份内容。
+    pub copy_rev: Option<u64>,
     pub created_at: String,
 }
 

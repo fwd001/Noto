@@ -188,7 +188,8 @@
 | FT-IO-08 | 一个非空的库 | 导出整库 → 把同一个包导回**同一个库**（merge） | 幂等：笔记 rev 与 content_hash 一字不动（rev 一动，编辑器手里的 `expectedRev` 就成了旧的，用户会看到"这条笔记在别处被改动了"的假冲突），且不造出任何 open 冲突行 | L2 | P6 |
 | FT-IO-09 | 「默认本 / 项目 / 项目·子夹 / 平级的别的」各带笔记与附件 | 只导「项目·子夹」→ 导进干净库 | 包里恰好 = 子夹 + 祖先链（3 个文件夹）+ 范围内 1 篇笔记 + 它引用的附件，平级文件夹的笔记一个字节都不进；报告 `scope=="folders"`；包 `manifest.partial==true`；干净库导入后按原 id 读回、父本仍是那个子夹。范围里出现不存在的文件夹 id → 拒绝而不是忽略；`partial` 包走 `intoEmpty` → 响亮拒绝（缺笔记的永久删除公告，当成整库还原会让已删的笔记从别的设备回流） | L2 | P6 |
 | FT-IO-10 | 一个只含 blob 字节、库里没有 `attachments` 行的干净库 | 还原带附件的包 | 走 `restore_blob`：校验 sha → 落盘 → **登记行**（`ingest_blob` 只会 UPDATE，行不在就整次导入失败）。远端态必须留在 `unknown` 并排进上传队列（写成 `present` = 谎报服务器已有，还原出来的附件永远不补传，第三台设备拿不到）；哈希不符一律拒收且不改已有远端态；重复还原不把 `present` 退回 `unknown` | L1,L2 | P6 |
-| FT-CONF-06 | 一条 open 冲突，双方 rev 不同 | 打开并排预览 | 两侧文本分别来自 `preview_text(id, rev)` 且**互不相同**（两版一模一样就说明面板在做样子）；核心没有的 rev 报 `not_found`，不许用空串冒充某一版；前端声明的每个命令名在核心都有分支（arch-check `edge:declared-commands-exist`） | L2 | P5 |
+| FT-CONF-06 | 一条 open 冲突 | 打开并排预览 | 两侧文本分别来自 `preview_text(id, rev)` 且**互不相同**（两版一模一样就说明面板在做样子）。注意真冲突里 `localRev` 与 `remoteRev` 常常**相等**（两侧各自从同一确认点推到同一个 rev），所以取法必须是右 `(noteId, remoteRev)` / 左 `(copyNoteId, copyRev)` —— 两栏都按 `noteId` 取就必然同款（`conflicts.spec.ts` 钉住）。核心没有的 rev 报 `not_found`，不许用空串冒充某一版；前端声明的每个命令名在核心都有分支（arch-check `edge:declared-commands-exist`） | L2 | P5 |
+| SY-CONF-07 | 两台设备真的把同一条笔记改成分叉的两份（真 TCP WebDAV，走 `App::sync_once` 这条产品路径） | 先 A 推起点 → A 本地改不推 → B 拉、改、推 → A 再同步 | A 侧恰好一张 open 卡片；**正文是 B 那一版**（§6.1 的采纳），**A 那一版完整活在副本里**；采纳后 `rev == sync_rev`，所以 A 的下一轮只推那篇副本、绝不把自己那一版盖回服务器（否则就是静默覆盖别人已确认的内容）；一次冲突只产生一篇副本，不逐轮刷；两栏预览各读各自那份 | L3 | P6 |
 | FT-SETUP-01 | 全新安装 | 配置 WebDAV URL + 账号密码（含自签 CA） → 测试连接 | 成功时有可见确认；失败时提示区分 DNS / 拒绝连接 / TLS 不受信 / 401 / 403，不得只给"网络错误" | L5 | P4 |
 | FT-SETUP-02 | 已配置 | 改为错误密码 → 同步 → 改回 | 错误期间本地不受影响且保留配置；恢复后一轮内追上；失败不删远端任何对象（`DUMP` 前后一致） | L3,L5 | P5 |
 

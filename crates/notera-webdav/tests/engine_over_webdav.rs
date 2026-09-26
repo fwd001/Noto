@@ -150,7 +150,8 @@ impl LocalPort for Device {
         let n = ops.len();
         for op in ops.clone() {
             match op {
-                ApplyOp::Upsert { kind, id, wire } => {
+                // 冲突采纳在这个假实现里与"拉到即一致点"落法相同：正文换成远端那份、rev == sync_rev
+                ApplyOp::Upsert { kind, id, wire } | ApplyOp::AdoptConflict { kind, id, wire } => {
                     let v: Value = serde_json::from_slice(&wire).map_err(|e| LocalError::Storage(e.to_string()))?;
                     let rev = v["rev"].as_u64().unwrap_or(0);
                     let hash = v["hash"].as_str().unwrap_or_default().to_string();

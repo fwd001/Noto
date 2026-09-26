@@ -326,6 +326,13 @@ pub enum ApplyOp {
     /// 存储层自行校验 `hash == sha256(canonical(payload))`，不符即整批回滚。
     UpsertNote { env: serde_json::Value },
     UpsertFolder { env: serde_json::Value },
+    /// 冲突解决的一半：**采纳服务器那一版作为正文**（CONFLICT-RESOLUTION §6.1）。
+    ///
+    /// 与 `UpsertNote` 的唯一区别是允许 `rev` 相等而内容不同 —— 普通 upsert 必须拒掉那种
+    /// 情况（"服务器侧异常"），但两侧各自从同一个确认点推到同一个 rev，正是分布式写作的
+    /// 正常结果。前提由调用方保证：**本机那一份已经在副本笔记里**，否则这条就是把用户
+    /// 输入扔掉。`rev` 依旧绝不许倒退（I2）。
+    AdoptConflict { env: serde_json::Value },
     SetRemote { kind: EntityKind, id: EntityId, rev: Rev, hash12: String },
     Tombstone { kind: EntityKind, id: EntityId, rev: Rev },
     Purge { kind: EntityKind, id: EntityId },
