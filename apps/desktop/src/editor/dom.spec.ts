@@ -73,3 +73,24 @@ describe('光标偏移映射', () => {
     }
   });
 });
+
+describe('parseEditable 跳过空块的占位 <br>', () => {
+  const box = (html: string) => {
+    const node = document.createElement('div');
+    node.innerHTML = html;
+    return node;
+  };
+
+  it('只剩一个 <br> 的空块 → 空内容，不是一条换行', () => {
+    expect(parseEditable(box('<br>'))).toEqual([]);
+    expect(inlineText(parseEditable(box('<br>')))).toBe('');
+  });
+
+  it('占位 <br> 打头时跳过，后面的文字照旧保留', () => {
+    expect(inlineText(parseEditable(box('<br>正文')))).toBe('正文');
+  });
+
+  it('文字之后的 <br> 仍然是换行（没把真换行一起砍掉）', () => {
+    expect(inlineText(parseEditable(box('甲<br>乙')))).toBe('甲\n乙');
+  });
+});

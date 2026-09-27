@@ -142,6 +142,11 @@ export function parseEditable(root: HTMLElement): Inline[] {
       if (child.nodeType !== 1) continue;
       const element = child as HTMLElement;
       if (element.tagName === 'BR') {
+        // 空块里那个 <br> 是浏览器给空行留的占位，不是用户打的换行。不跳过的话空正文会
+        // 解析成一条 \n：点编辑区空白再打字时，第一次 autosave 存出去的正文就只有那条换行
+        // （首行标题派生也跟着拿到空行）。文字之后的 <br> 照旧算换行，所以只在还没吐出
+        // 任何内容时跳过。
+        if (!emitted) continue;
         append('\n', marks);
         continue;
       }
