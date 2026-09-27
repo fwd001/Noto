@@ -31,7 +31,10 @@ pub struct BackupInfo {
 /// 备份产物必须自检通过才算"有备份"。坏文件当备份是最危险的假安心。
 pub fn inspect_backup(path: &Path) -> Result<BackupInfo, StoreError> {
     if !path.is_file() {
-        return Err(StoreError::Rejected(format!("备份不存在：{}", path.display())));
+        return Err(StoreError::Rejected(format!(
+            "备份不存在：{}",
+            path.display()
+        )));
     }
     let sha256 = notera_crypto::sha256_hex_file(path)?;
     let conn = open_read_only(path)?;
@@ -42,7 +45,10 @@ pub fn inspect_backup(path: &Path) -> Result<BackupInfo, StoreError> {
     let user_version = migrate::current_version(&conn)?;
     let supported = migrate::supported_version();
     if user_version > supported {
-        return Err(StoreError::ReadOnly { db: user_version, supported });
+        return Err(StoreError::ReadOnly {
+            db: user_version,
+            supported,
+        });
     }
     let bytes = std::fs::metadata(path)?.len();
     Ok(BackupInfo {
@@ -57,7 +63,9 @@ pub fn inspect_backup(path: &Path) -> Result<BackupInfo, StoreError> {
 impl Store {
     /// 产出一份一致快照，返回它的自证信息（路径、sha256、user_version、字节数）。
     pub fn create_backup(&self, dest_dir: Option<&Path>) -> Result<BackupInfo, StoreError> {
-        let dir = dest_dir.map(PathBuf::from).unwrap_or_else(|| self.paths.db.with_file_name(BACKUP_DIR_NAME));
+        let dir = dest_dir
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.paths.db.with_file_name(BACKUP_DIR_NAME));
         std::fs::create_dir_all(&dir)?;
         let stamp = backup_time_of(&self.paths.db);
         // 同一秒里点两次备份是常事：要的是两份备份，不是一个报错。
@@ -70,7 +78,10 @@ impl Store {
             let conn = self.write.lock().unwrap_or_else(|p| p.into_inner());
             // VACUUM INTO 不能在事务里跑，所以直接借连接而不走 write_tx。
             conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
-            conn.execute("VACUUM INTO ?1", rusqlite::params![tmp.to_string_lossy().as_ref()])?;
+            conn.execute(
+                "VACUUM INTO ?1",
+                rusqlite::params![tmp.to_string_lossy().as_ref()],
+            )?;
         }
         std::fs::rename(&tmp, &target)?;
         inspect_backup(&target)
@@ -78,11 +89,17 @@ impl Store {
 
     pub fn list_backups(&self) -> Result<Vec<BackupInfo>, StoreError> {
         let dir = self.paths.db.with_file_name(BACKUP_DIR_NAME);
-        let Ok(entries) = std::fs::read_dir(&dir) else { return Ok(Vec::new()) };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Ok(Vec::new());
+        };
         let mut out = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("notera-") && n.ends_with(".sqlite")) {
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("notera-") && n.ends_with(".sqlite"))
+            {
                 // 一份坏备份不该让"列出备份"整体失败：跳过它，恢复时再逐个校验。
                 if let Ok(info) = inspect_backup(&path) {
                     out.push(info);
@@ -97,8 +114,11 @@ impl Store {
     pub fn stage_restore(&self, path: &Path) -> Result<BackupInfo, StoreError> {
         let info = inspect_backup(path)?;
         let marker = pending_path(&self.paths.db);
-        let body = serde_json::to_vec(&PendingRestore { path: info.path.clone(), sha256: info.sha256.clone() })
-            .map_err(|e| StoreError::Rejected(format!("待恢复标记序列化失败：{e}")))?;
+        let body = serde_json::to_vec(&PendingRestore {
+            path: info.path.clone(),
+            sha256: info.sha256.clone(),
+        })
+        .map_err(|e| StoreError::Rejected(format!("待恢复标记序列化失败：{e}")))?;
         crate::store::write_atomic(&marker, &body)?;
         Ok(info)
     }
@@ -119,7 +139,10 @@ fn pending_path(db_file: &Path) -> PathBuf {
 /// `PRAGMA journal_mode=WAL`，那会把待校验的备份就地改写（还多出 `-wal`），
 /// 于是"校验"本身破坏了被校验的东西，sha256 也对不上了。
 fn open_read_only(path: &Path) -> Result<Connection, StoreError> {
-    Ok(Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?)
+    Ok(Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?)
 }
 
 /// 在 `Store::open` 之前调用：有标记就落地。返回替换前的当前库备份路径。
@@ -149,7 +172,10 @@ pub fn apply_pending_restore(data_dir: &Path) -> Result<Option<PathBuf>, StoreEr
     let mut replaced: Option<PathBuf> = None;
     if db.is_file() && std::fs::metadata(&db)?.len() > 0 {
         let here = migrate::current_version(&open_read_only(&db)?)?;
-        let keep = db.with_file_name(format!("notera.sqlite.pre-restore.{here}.{}", &info.sha256[..8]));
+        let keep = db.with_file_name(format!(
+            "notera.sqlite.pre-restore.{here}.{}",
+            &info.sha256[..8]
+        ));
         std::fs::copy(&db, &keep)?;
         replaced = Some(keep);
     }
@@ -165,7 +191,13 @@ pub fn apply_pending_restore(data_dir: &Path) -> Result<Option<PathBuf>, StoreEr
 }
 
 fn file_with_suffix(path: &Path, suffix: &str) -> PathBuf {
-    let name = format!("{}{}", path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(), suffix);
+    let name = format!(
+        "{}{}",
+        path.file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default(),
+        suffix
+    );
     path.with_file_name(name)
 }
 
@@ -182,8 +214,13 @@ fn free_name(dir: &Path, stamp: &str) -> PathBuf {
 }
 
 fn backup_time_of(path: &Path) -> String {
-    let mtime = std::fs::metadata(path).and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-    let secs = mtime.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let mtime = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    let secs = mtime
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
         .map(|d| d.format("%Y%m%dT%H%M%SZ").to_string())
         .unwrap_or_else(|| "unknown".to_string())

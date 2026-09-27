@@ -28,7 +28,9 @@ pub enum StoreError {
     Constraint(String),
 
     /// DATA-MODEL §2 / ADR-0012：库版本高于本程序支持值时**只读**，绝不降级写回。
-    #[error("数据库 schema 版本 {db} 高于本程序支持的 {supported}: 已进入只读模式，不执行迁移、不写回")]
+    #[error(
+        "数据库 schema 版本 {db} 高于本程序支持的 {supported}: 已进入只读模式，不执行迁移、不写回"
+    )]
     ReadOnly { db: u32, supported: u32 },
 
     /// 需要只读但原因不是版本（例如 `doc.v` 超前）。
@@ -54,14 +56,22 @@ pub enum StoreError {
 impl StoreError {
     /// 是否属于"I6 拒绝"类：调用方可据此只计数、不视为本地库故障。
     pub fn is_rejection(&self) -> bool {
-        matches!(self, StoreError::InvalidDoc(_) | StoreError::Rejected(_) | StoreError::DocTooNew { .. })
+        matches!(
+            self,
+            StoreError::InvalidDoc(_) | StoreError::Rejected(_) | StoreError::DocTooNew { .. }
+        )
     }
 
     pub(crate) fn not_found(kind: EntityKind, id: EntityId) -> Self {
         StoreError::NotFound { kind, id }
     }
 
-    pub(crate) fn stale_edit(entity: EntityId, expected: Rev, actual: Rev, _device: &DeviceId) -> Self {
+    pub(crate) fn stale_edit(
+        entity: EntityId,
+        expected: Rev,
+        actual: Rev,
+        _device: &DeviceId,
+    ) -> Self {
         StoreError::StaleEdit(notera_core::error::StaleEdit {
             entity,
             expected,

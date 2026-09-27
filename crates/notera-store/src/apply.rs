@@ -39,7 +39,10 @@ pub(crate) struct Env {
 impl Env {
     /// 取字段：先看 payload（包裹形态），再看信封顶层。
     fn field(&self, key: &str) -> Option<&serde_json::Value> {
-        self.payload.as_object().and_then(|m| m.get(key)).or_else(|| self.extra.get(key))
+        self.payload
+            .as_object()
+            .and_then(|m| m.get(key))
+            .or_else(|| self.extra.get(key))
     }
 }
 
@@ -49,7 +52,9 @@ pub(crate) fn env_of(v: &serde_json::Value, want: &str) -> Result<Env, StoreErro
         .ok_or_else(|| StoreError::Rejected(format!("{want} 信封不是 JSON 对象")))?;
     let protocol = obj.get("protocol").and_then(|p| p.as_u64()).unwrap_or(1);
     if protocol > MAX_PROTOCOL {
-        return Err(StoreError::Rejected(format!("协议版本 {protocol} 高于本程序支持 {MAX_PROTOCOL}，不写库")));
+        return Err(StoreError::Rejected(format!(
+            "协议版本 {protocol} 高于本程序支持 {MAX_PROTOCOL}，不写库"
+        )));
     }
     let kind = obj
         .get("kind")
@@ -57,13 +62,16 @@ pub(crate) fn env_of(v: &serde_json::Value, want: &str) -> Result<Env, StoreErro
         .ok_or_else(|| StoreError::Rejected("信封缺少 kind".into()))?
         .to_string();
     if kind != want {
-        return Err(StoreError::Rejected(format!("信封 kind={kind} 与目标表 {want} 不符")));
+        return Err(StoreError::Rejected(format!(
+            "信封 kind={kind} 与目标表 {want} 不符"
+        )));
     }
     let id_raw = obj
         .get("id")
         .and_then(|i| i.as_str())
         .ok_or_else(|| StoreError::Rejected("信封缺少 id".into()))?;
-    let id = EntityId::parse(id_raw).map_err(|e| StoreError::Rejected(format!("信封 id 非法: {e}")))?;
+    let id =
+        EntityId::parse(id_raw).map_err(|e| StoreError::Rejected(format!("信封 id 非法: {e}")))?;
     let rev = obj
         .get("rev")
         .and_then(|r| r.as_u64())
@@ -73,7 +81,10 @@ pub(crate) fn env_of(v: &serde_json::Value, want: &str) -> Result<Env, StoreErro
         .and_then(|h| h.as_str())
         .ok_or_else(|| StoreError::Rejected(format!("{kind} {id} 信封缺少 hash")))?
         .to_string();
-    let payload = obj.get("payload").cloned().unwrap_or(serde_json::Value::Null);
+    let payload = obj
+        .get("payload")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     let ct = obj.get("ct").cloned().unwrap_or(serde_json::Value::Null);
     let purged = obj.get("purged").and_then(|p| p.as_bool()).unwrap_or(false);
     let alg = obj
@@ -86,7 +97,9 @@ pub(crate) fn env_of(v: &serde_json::Value, want: &str) -> Result<Env, StoreErro
     if !purged {
         match (payload.is_null(), ct.is_null()) {
             (true, true) | (false, false) => {
-                return Err(StoreError::Rejected(format!("{kind} {id}: payload 与 ct 必须恰好一个非空")))
+                return Err(StoreError::Rejected(format!(
+                    "{kind} {id}: payload 与 ct 必须恰好一个非空"
+                )))
             }
             (false, true) => {}
             _ => {
@@ -96,16 +109,36 @@ pub(crate) fn env_of(v: &serde_json::Value, want: &str) -> Result<Env, StoreErro
             }
         }
         if alg != "none" {
-            return Err(StoreError::Rejected(format!("{kind} {id}: enc.alg={alg}，存储层不解密")));
+            return Err(StoreError::Rejected(format!(
+                "{kind} {id}: enc.alg={alg}，存储层不解密"
+            )));
         }
     }
     let deleted_at = obj
         .get("deleted_at")
         .and_then(|d| d.as_str())
-        .or_else(|| payload.as_object().and_then(|m| m.get("deleted_at")).and_then(|d| d.as_str()))
+        .or_else(|| {
+            payload
+                .as_object()
+                .and_then(|m| m.get("deleted_at"))
+                .and_then(|d| d.as_str())
+        })
         .map(|s| s.to_string());
-    let device = obj.get("device").and_then(|d| d.as_str()).map(|s| s.to_string());
-    Ok(Env { kind, id, rev: Rev(rev), hash, deleted_at, purged, device, payload, extra: obj.clone() })
+    let device = obj
+        .get("device")
+        .and_then(|d| d.as_str())
+        .map(|s| s.to_string());
+    Ok(Env {
+        kind,
+        id,
+        rev: Rev(rev),
+        hash,
+        deleted_at,
+        purged,
+        device,
+        payload,
+        extra: obj.clone(),
+    })
 }
 
 impl Store {
@@ -121,12 +154,29 @@ impl Store {
         })
     }
 
-    fn apply_one(&self, tx: &Connection, op: &ApplyOp, now: &str, rep: &mut ApplyReport) -> Result<(), StoreError> {
+    fn apply_one(
+        &self,
+        tx: &Connection,
+        op: &ApplyOp,
+        now: &str,
+        rep: &mut ApplyReport,
+    ) -> Result<(), StoreError> {
         match op {
-            ApplyOp::UpsertNote { env } => self.apply_note(tx, env_of(env, "note")?, now, rep, false),
-            ApplyOp::AdoptConflict { env } => self.apply_note(tx, env_of(env, "note")?, now, rep, true),
-            ApplyOp::UpsertFolder { env } => self.apply_folder(tx, env_of(env, "folder")?, now, rep),
-            ApplyOp::SetRemote { kind, id, rev, hash12 } => {
+            ApplyOp::UpsertNote { env } => {
+                self.apply_note(tx, env_of(env, "note")?, now, rep, false)
+            }
+            ApplyOp::AdoptConflict { env } => {
+                self.apply_note(tx, env_of(env, "note")?, now, rep, true)
+            }
+            ApplyOp::UpsertFolder { env } => {
+                self.apply_folder(tx, env_of(env, "folder")?, now, rep)
+            }
+            ApplyOp::SetRemote {
+                kind,
+                id,
+                rev,
+                hash12,
+            } => {
                 if Self::set_remote_rev_tx(tx, now, *kind, id, *rev, hash12)? {
                     rep.applied += 1;
                 } else {
@@ -134,14 +184,23 @@ impl Store {
                 }
                 Ok(())
             }
-            ApplyOp::Tombstone { kind, id, rev } => self.apply_tombstone(tx, *kind, id, *rev, now, rep),
+            ApplyOp::Tombstone { kind, id, rev } => {
+                self.apply_tombstone(tx, *kind, id, *rev, now, rep)
+            }
             ApplyOp::Purge { kind, id } => self.apply_purge(tx, *kind, id, now, rep),
         }
     }
 
     /// `adopt = true` 只允许由 [`ApplyOp::AdoptConflict`] 传入：冲突采纳远端正文。
     /// 它与普通 upsert 的差别只有一处 —— 允许 `rev` 相等而内容不同（见那条注释）。
-    fn apply_note(&self, tx: &Connection, env: Env, now: &str, rep: &mut ApplyReport, adopt: bool) -> Result<(), StoreError> {
+    fn apply_note(
+        &self,
+        tx: &Connection,
+        env: Env,
+        now: &str,
+        rep: &mut ApplyReport,
+        adopt: bool,
+    ) -> Result<(), StoreError> {
         if env.purged {
             return self.apply_purge(tx, EntityKind::Note, &env.id, now, rep);
         }
@@ -159,7 +218,9 @@ impl Store {
         if !derive::hash_matches(&env.hash, &prepared.content_hash) {
             return Err(StoreError::Rejected(format!(
                 "笔记 {} 信封哈希不符（I6）：声明 {}，实算 {}",
-                env.id, env.hash, prepared.content_hash.as_str()
+                env.id,
+                env.hash,
+                prepared.content_hash.as_str()
             )));
         }
         // doc 是外来笔记里附件引用的唯一来源：与笔记同一事务登记（DATA-MODEL §8）
@@ -167,15 +228,24 @@ impl Store {
         let folder_id: Option<EntityId> = match env.field("folder_id") {
             None => None,
             Some(v) if v.is_null() => None,
-            Some(v) => Some(EntityId::parse(
-                v.as_str().ok_or_else(|| StoreError::Rejected(format!("笔记 {} 的 folder_id 不是字符串", env.id)))?,
-            )
-            .map_err(|e| StoreError::Rejected(format!("笔记 {} 的 folder_id 非法: {e}", env.id)))?),
+            Some(v) => Some(
+                EntityId::parse(v.as_str().ok_or_else(|| {
+                    StoreError::Rejected(format!("笔记 {} 的 folder_id 不是字符串", env.id))
+                })?)
+                .map_err(|e| {
+                    StoreError::Rejected(format!("笔记 {} 的 folder_id 非法: {e}", env.id))
+                })?,
+            ),
         };
         let pinned = env.field("pinned").and_then(|v| v.as_bool());
         // 区分"字段缺失"（不动）与"字段为 null"（清空）
-        let color: Option<Option<String>> = env.field("color").map(|v| v.as_str().map(|s| s.to_string()));
-        let device = env.device.clone().unwrap_or_else(|| self.device.to_string());
+        let color: Option<Option<String>> = env
+            .field("color")
+            .map(|v| v.as_str().map(|s| s.to_string()));
+        let device = env
+            .device
+            .clone()
+            .unwrap_or_else(|| self.device.to_string());
 
         match Self::load_cur_opt(tx, &env.id)? {
             None => {
@@ -186,8 +256,11 @@ impl Store {
                     Some(f) => f.clone(),
                     None => Self::default_folder_id(tx)?,
                 };
-                let exists: i64 = tx
-                    .query_row("SELECT EXISTS(SELECT 1 FROM folders WHERE id = ?1)", [folder.as_str()], |r| r.get(0))?;
+                let exists: i64 = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM folders WHERE id = ?1)",
+                    [folder.as_str()],
+                    |r| r.get(0),
+                )?;
                 if exists == 0 {
                     return Err(StoreError::Rejected(format!(
                         "笔记 {} 指向不存在的文件夹 {folder}（I6：不写悬空记录）",
@@ -268,13 +341,22 @@ impl Store {
         Ok(())
     }
 
-    fn apply_folder(&self, tx: &Connection, env: Env, now: &str, rep: &mut ApplyReport) -> Result<(), StoreError> {
+    fn apply_folder(
+        &self,
+        tx: &Connection,
+        env: Env,
+        now: &str,
+        rep: &mut ApplyReport,
+    ) -> Result<(), StoreError> {
         if env.purged {
             return self.apply_purge(tx, EntityKind::Folder, &env.id, now, rep);
         }
         if let Some(t) = Self::tombstone_of(tx, EntityKind::Folder, &env.id)? {
             if t.purged {
-                return Err(StoreError::Rejected(format!("拒绝复活：文件夹 {} 已有 purged 墓碑", env.id)));
+                return Err(StoreError::Rejected(format!(
+                    "拒绝复活：文件夹 {} 已有 purged 墓碑",
+                    env.id
+                )));
             }
         }
         let name = env
@@ -282,19 +364,32 @@ impl Store {
             .and_then(|v| v.as_str())
             .ok_or_else(|| StoreError::Rejected(format!("文件夹 {} 缺 name", env.id)))?
             .to_string();
-        let color = env.field("color").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let sort_order = env.field("sort_order").and_then(|v| v.as_i64()).unwrap_or(0);
+        let color = env
+            .field("color")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let sort_order = env
+            .field("sort_order")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
         let parent: Option<EntityId> = match env.field("parent_id") {
             None => None,
             Some(v) if v.is_null() => None,
-            Some(v) => Some(EntityId::parse(
-                v.as_str().ok_or_else(|| StoreError::Rejected(format!("文件夹 {} 的 parent_id 不是字符串", env.id)))?,
-            )
-            .map_err(|e| StoreError::Rejected(format!("文件夹 {} 的 parent_id 非法: {e}", env.id)))?),
+            Some(v) => Some(
+                EntityId::parse(v.as_str().ok_or_else(|| {
+                    StoreError::Rejected(format!("文件夹 {} 的 parent_id 不是字符串", env.id))
+                })?)
+                .map_err(|e| {
+                    StoreError::Rejected(format!("文件夹 {} 的 parent_id 非法: {e}", env.id))
+                })?,
+            ),
         };
         if let Some(p) = &parent {
-            let exists: i64 = tx
-                .query_row("SELECT EXISTS(SELECT 1 FROM folders WHERE id = ?1)", [p.as_str()], |r| r.get(0))?;
+            let exists: i64 = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM folders WHERE id = ?1)",
+                [p.as_str()],
+                |r| r.get(0),
+            )?;
             if exists == 0 {
                 return Err(StoreError::Rejected(format!(
                     "文件夹 {} 指向不存在的父 {p}（I6：不写悬空记录）",
@@ -303,7 +398,10 @@ impl Store {
             }
         }
         let hash = folder_hash(&name, &parent, &color, sort_order, &None);
-        let device = env.device.clone().unwrap_or_else(|| self.device.to_string());
+        let device = env
+            .device
+            .clone()
+            .unwrap_or_else(|| self.device.to_string());
         match rows::read_folder(tx, &env.id)? {
             None => {
                 tx.execute(
@@ -355,9 +453,15 @@ impl Store {
         rep: &mut ApplyReport,
     ) -> Result<(), StoreError> {
         if kind == EntityKind::Attachment {
-            return Err(StoreError::Constraint("附件以 sha256 寻址：请用 Store::set_attachment_states".into()));
+            return Err(StoreError::Constraint(
+                "附件以 sha256 寻址：请用 Store::set_attachment_states".into(),
+            ));
         }
-        let table = if kind == EntityKind::Note { "notes" } else { "folders" };
+        let table = if kind == EntityKind::Note {
+            "notes"
+        } else {
+            "folders"
+        };
         let head: Option<(i64, i64)> = tx
             .query_row(
                 &format!("SELECT rev, sync_rev FROM {table} WHERE id = ?1"),
@@ -397,9 +501,15 @@ impl Store {
         rep: &mut ApplyReport,
     ) -> Result<(), StoreError> {
         if kind == EntityKind::Attachment {
-            return Err(StoreError::Constraint("附件以 sha256 寻址：请用 Store::set_attachment_states".into()));
+            return Err(StoreError::Constraint(
+                "附件以 sha256 寻址：请用 Store::set_attachment_states".into(),
+            ));
         }
-        let table = if kind == EntityKind::Note { "notes" } else { "folders" };
+        let table = if kind == EntityKind::Note {
+            "notes"
+        } else {
+            "folders"
+        };
         let head: Option<(i64, i64, Option<String>)> = tx
             .query_row(
                 &if kind == EntityKind::Note {
@@ -473,7 +583,9 @@ impl Store {
             .optional()
             .map_err(StoreError::from)
         })?;
-        let Some((live_raw, copy_raw, remote_hash)) = card else { return Ok(false) };
+        let Some((live_raw, copy_raw, remote_hash)) = card else {
+            return Ok(false);
+        };
         let live = EntityId::parse(&live_raw).map_err(|e| StoreError::Rejected(e.to_string()))?;
         let copy = EntityId::parse(&copy_raw).map_err(|e| StoreError::Rejected(e.to_string()))?;
         self.write_tx(|tx, now| {
@@ -526,14 +638,22 @@ fn note_doc(env: &Env) -> Result<serde_json::Value, StoreError> {
     if let Some(d) = map.get("doc").or_else(|| map.get("payload")) {
         return Ok(d.clone());
     }
-    Err(StoreError::Rejected(format!("笔记 {} 的 payload 里没有 Document（缺 content）", env.id)))
+    Err(StoreError::Rejected(format!(
+        "笔记 {} 的 payload 里没有 Document（缺 content）",
+        env.id
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn envelope(kind: &str, id: &EntityId, rev: u64, payload: serde_json::Value) -> serde_json::Value {
+    fn envelope(
+        kind: &str,
+        id: &EntityId,
+        rev: u64,
+        payload: serde_json::Value,
+    ) -> serde_json::Value {
         serde_json::json!({
             "protocol": 1, "kind": kind, "id": id.as_str(), "rev": rev,
             "hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -566,7 +686,12 @@ mod tests {
         let env = env_of(&plain, "note").expect("合法信封");
         assert_eq!(env.rev, Rev(3));
         assert_eq!(note_doc(&env).unwrap(), doc);
-        let wrapped = envelope("note", &id, 3, serde_json::json!({"doc": doc, "folder_id": "x", "pinned": true}));
+        let wrapped = envelope(
+            "note",
+            &id,
+            3,
+            serde_json::json!({"doc": doc, "folder_id": "x", "pinned": true}),
+        );
         assert_eq!(note_doc(&env_of(&wrapped, "note").unwrap()).unwrap(), doc);
     }
 }

@@ -10,8 +10,8 @@
 use crate::{App, BusEvent};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 pub const DEFAULT_PORT: u16 = 17323;
 
@@ -92,7 +92,12 @@ fn handle(app: App, mut stream: TcpStream) -> std::io::Result<()> {
 
     // 开发桥只接受本机来源，避免把命令面暴露到局域网
     if !same_origin_ok(&headers) {
-        return respond(&mut stream, 403, "application/json", br#"{"error":"origin"}"#);
+        return respond(
+            &mut stream,
+            403,
+            "application/json",
+            br#"{"error":"origin"}"#,
+        );
     }
 
     if method == "OPTIONS" {
@@ -100,17 +105,33 @@ fn handle(app: App, mut stream: TcpStream) -> std::io::Result<()> {
     }
 
     if target.starts_with("/cmd/") {
-        let name = target.trim_start_matches("/cmd/").split('?').next().unwrap_or("");
-        let args: serde_json::Value = if body.is_empty() { Ok(serde_json::Value::Null) } else { serde_json::from_slice(&body) }
-            .unwrap_or(serde_json::Value::Null);
+        let name = target
+            .trim_start_matches("/cmd/")
+            .split('?')
+            .next()
+            .unwrap_or("");
+        let args: serde_json::Value = if body.is_empty() {
+            Ok(serde_json::Value::Null)
+        } else {
+            serde_json::from_slice(&body)
+        }
+        .unwrap_or(serde_json::Value::Null);
         // 与 Tauri 通道**同一形状**：成功是裸 DTO（`invoke` 直接 resolve 出值），
         // 失败是 CmdError。曾经这里包了一层 {ok,value}，前端 unwrap 拿不到 payload，
         // 浏览器模式下每条命令都变成 null —— 两条通道必须是一条契约。
         let (status, payload) = match crate::commands::dispatch(&app, name, args) {
             Ok(v) => (200u16, v),
-            Err(e) => (400, serde_json::to_value(&e).unwrap_or(serde_json::json!({ "code": "storage" }))),
+            Err(e) => (
+                400,
+                serde_json::to_value(&e).unwrap_or(serde_json::json!({ "code": "storage" })),
+            ),
         };
-        return respond(&mut stream, status, "application/json", payload.to_string().as_bytes());
+        return respond(
+            &mut stream,
+            status,
+            "application/json",
+            payload.to_string().as_bytes(),
+        );
     }
 
     if target.starts_with("/events") {
@@ -144,20 +165,36 @@ fn handle(app: App, mut stream: TcpStream) -> std::io::Result<()> {
         return respond(&mut stream, 200, "application/json", br#"{"ok":true}"#);
     }
 
-    respond(&mut stream, 404, "application/json", br#"{"error":"not found"}"#)
+    respond(
+        &mut stream,
+        404,
+        "application/json",
+        br#"{"error":"not found"}"#,
+    )
 }
 
 fn same_origin_ok(headers: &[(String, String)]) -> bool {
-    let Some(origin) = headers.iter().find(|(k, _)| k == "origin").map(|(_, v)| v.clone()) else {
+    let Some(origin) = headers
+        .iter()
+        .find(|(k, _)| k == "origin")
+        .map(|(_, v)| v.clone())
+    else {
         return true; // 非浏览器客户端（curl / 测试）
     };
     let o = origin.trim_end_matches('/').to_ascii_lowercase();
-    if o == "tauri://localhost" || o == "tauri:" || o == "http://tauri.localhost" || o == "https://tauri.localhost" {
+    if o == "tauri://localhost"
+        || o == "tauri:"
+        || o == "http://tauri.localhost"
+        || o == "https://tauri.localhost"
+    {
         return true;
     }
     // 必须解析出**主机部分**再比较：`starts_with("http://127.0.0.1:")` 之外的
     // 前缀写法会放过 http://127.0.0.1.evil.example 这类仿冒域。
-    let Some(rest) = o.strip_prefix("http://").or_else(|| o.strip_prefix("https://")) else {
+    let Some(rest) = o
+        .strip_prefix("http://")
+        .or_else(|| o.strip_prefix("https://"))
+    else {
         return false;
     };
     let host_port = rest.split('/').next().unwrap_or("");
@@ -215,11 +252,26 @@ mod tests {
     fn origin_filter_blocks_external_pages() {
         // 桥只服务本机前端。任意网页都能打命令面 = 把"删库"能力开放给任何打开过的页面。
         assert!(same_origin_ok(&[]), "无 Origin 头（curl/测试）应放行");
-        assert!(same_origin_ok(&[("origin".into(), "http://127.0.0.1:5173".into())]));
-        assert!(same_origin_ok(&[("origin".into(), "http://localhost:5173".into())]));
-        assert!(same_origin_ok(&[("origin".into(), "tauri://localhost".into())]));
-        assert!(!same_origin_ok(&[("origin".into(), "http://evil.example".into())]), "外部来源必须拒绝");
-        assert!(!same_origin_ok(&[("origin".into(), "http://127.0.0.1.evil.example".into())]), "前缀匹配不得放过仿冒域");
+        assert!(same_origin_ok(&[(
+            "origin".into(),
+            "http://127.0.0.1:5173".into()
+        )]));
+        assert!(same_origin_ok(&[(
+            "origin".into(),
+            "http://localhost:5173".into()
+        )]));
+        assert!(same_origin_ok(&[(
+            "origin".into(),
+            "tauri://localhost".into()
+        )]));
+        assert!(
+            !same_origin_ok(&[("origin".into(), "http://evil.example".into())]),
+            "外部来源必须拒绝"
+        );
+        assert!(
+            !same_origin_ok(&[("origin".into(), "http://127.0.0.1.evil.example".into())]),
+            "前缀匹配不得放过仿冒域"
+        );
     }
 
     /// 两条通道必须是**一条契约**：HTTP 桥的响应体要与 Tauri `invoke` resolve 出来的值逐字节同形。
@@ -245,7 +297,9 @@ mod tests {
             .unwrap();
             let mut buf = String::new();
             c.read_to_string(&mut buf).unwrap();
-            buf.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default()
+            buf.split_once("\r\n\r\n")
+                .map(|(_, b)| b.to_string())
+                .unwrap_or_default()
         };
         let got: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(got, expected, "HTTP 通道不得再包 {{ok,value}} 一层");

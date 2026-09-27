@@ -26,7 +26,9 @@ pub use error::NetError;
 pub use proxy::{host_matches, ProxyMode, ProxyProfile};
 pub use retry::RetryPolicy;
 pub use tls::TlsPolicy;
-pub use types::{HttpMethod, RequestSpec, Response, RouteProof, Timeouts, REDACTED, REDACTED_BASIC};
+pub use types::{
+    HttpMethod, RequestSpec, Response, RouteProof, Timeouts, REDACTED, REDACTED_BASIC,
+};
 
 /// 规范默认超时（PROXY.md §7）。
 pub const DEFAULT_CONNECT: std::time::Duration = std::time::Duration::from_secs(8);

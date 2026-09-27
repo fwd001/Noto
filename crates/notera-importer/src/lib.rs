@@ -37,7 +37,7 @@ mod markdown;
 mod plan;
 mod source;
 
-pub use bundle::{Bundle, Manifest, MAX_PROTOCOL, read_bundle, write_bundle, BUNDLE_FORMAT};
+pub use bundle::{read_bundle, write_bundle, Bundle, Manifest, BUNDLE_FORMAT, MAX_PROTOCOL};
 pub use error::ImportError;
 pub use frontmatter::FrontMatter;
 pub use markdown::{id_prefix, MAX_INLINE_PARSE_CHARS};
@@ -46,9 +46,7 @@ pub use plan::{
     DuplicateNote, FailedSource, FailedWrite, FolderTarget, ImportItem, ImportPlan, SkipReason,
     SkippedSource, TitleSource,
 };
-pub use source::{
-    ImportSource, KindSource, SourceKind, BINARY_SNIFF_BYTES, MAX_SOURCE_BYTES,
-};
+pub use source::{ImportSource, KindSource, SourceKind, BINARY_SNIFF_BYTES, MAX_SOURCE_BYTES};
 
 /// 让 `notera_richtext::Document` 在本 crate 的公共签名里保持可达。
 pub use notera_richtext::Document;

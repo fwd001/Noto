@@ -259,10 +259,9 @@ pub mod b64 {
     /// nonce 必须是 12 字节（实测：AES-256-GCM-SIV 固定 12 B）。
     pub fn decode_nonce(s: &str) -> Result<[u8; 12], CryptoError> {
         let raw = decode(s)?;
-        let bytes: [u8; 12] = raw
-            .as_slice()
-            .try_into()
-            .map_err(|_| CryptoError::Malformed(format!("nonce 长度应为 12，实际 {}", raw.len())))?;
+        let bytes: [u8; 12] = raw.as_slice().try_into().map_err(|_| {
+            CryptoError::Malformed(format!("nonce 长度应为 12，实际 {}", raw.len()))
+        })?;
         Ok(bytes)
     }
 }
@@ -278,7 +277,10 @@ mod tests {
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
-        assert_eq!(sha256_hex(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 
     #[test]
@@ -305,7 +307,10 @@ mod tests {
     #[test]
     fn hash_field_splits_only_authoritative_forms() {
         let h = sha256_hex(b"x");
-        assert_eq!(split_hash(&format!("sha256:{h}")).map(|(_, r)| r), Some(h.as_str()));
+        assert_eq!(
+            split_hash(&format!("sha256:{h}")).map(|(_, r)| r),
+            Some(h.as_str())
+        );
         assert!(split_hash(&h).is_none(), "裸 hex 不是 wire 上的权威形态");
         assert!(split_hash("sha256:zz").is_none());
     }

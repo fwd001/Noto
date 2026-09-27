@@ -7,8 +7,8 @@
 
 use notera_core::{DeviceId, EntityId};
 use notera_importer::{
-    apply, document_for, hashes_in_folder, plan, ApplyReport, FolderTarget, ImportError, ImportPlan,
-    ImportSource, SourceKind, TitleSource, MAX_SOURCE_BYTES,
+    apply, document_for, hashes_in_folder, plan, ApplyReport, FolderTarget, ImportError,
+    ImportPlan, ImportSource, SourceKind, TitleSource, MAX_SOURCE_BYTES,
 };
 use notera_richtext::{canonical, extract, parse_from_value, BlockType, Document};
 use notera_store::{NoteQuery, Store};
@@ -76,7 +76,11 @@ impl Fix {
             .find(|f| f.system_kind.as_deref() == Some("default"))
             .expect("默认本必须存在")
             .id;
-        Fix { tmp, store, default_folder }
+        Fix {
+            tmp,
+            store,
+            default_folder,
+        }
     }
 
     fn folder(&self) -> FolderTarget {
@@ -86,7 +90,12 @@ impl Fix {
     /// 列表 SQL 不读 doc（DATA-MODEL §13），所以这里拿的是全库非回收站笔记数。
     fn note_count(&self) -> usize {
         self.store
-            .list_notes(&NoteQuery { folder: None, trash: false, limit: u32::MAX, offset: 0 })
+            .list_notes(&NoteQuery {
+                folder: None,
+                trash: false,
+                limit: u32::MAX,
+                offset: 0,
+            })
             .expect("list_notes")
             .len()
     }
@@ -255,7 +264,11 @@ fn words(s: &str) -> Vec<String> {
 }
 
 fn case_source(name: &str) -> &'static str {
-    CORPUS.iter().find(|c| c.name == name).unwrap_or_else(|| panic!("语料 {name} 不存在")).source
+    CORPUS
+        .iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("语料 {name} 不存在"))
+        .source
 }
 
 #[test]
@@ -277,9 +290,15 @@ fn lossless_corpus_every_word_lands_in_the_document() {
             );
         }
     }
-    assert!(checked > 60, "语料断言数只有 {checked}，说明 words() 没在真正切词");
+    assert!(
+        checked > 60,
+        "语料断言数只有 {checked}，说明 words() 没在真正切词"
+    );
     // `--nocapture` 时给出覆盖面，便于报告里说"断言了多少个 token"。
-    eprintln!("lossless 语料：{} 例 / {checked} 个 token 全部命中正文", CORPUS.len());
+    eprintln!(
+        "lossless 语料：{} 例 / {checked} 个 token 全部命中正文",
+        CORPUS.len()
+    );
 }
 
 #[test]
@@ -294,9 +313,18 @@ fn moved_tokens_land_in_attrs_instead_of_vanishing() {
         .filter(|m| m.kind.wire_name() == "link")
         .map(|m| m.attrs["href"].as_str().unwrap_or_default().to_string())
         .collect();
-    assert!(hrefs.contains(&"https://link.example/z".to_string()), "实得 {hrefs:?}");
-    assert!(hrefs.contains(&"https://angle.example/y".to_string()), "实得 {hrefs:?}");
-    assert!(hrefs.contains(&"https://bare.example/x".to_string()), "实得 {hrefs:?}");
+    assert!(
+        hrefs.contains(&"https://link.example/z".to_string()),
+        "实得 {hrefs:?}"
+    );
+    assert!(
+        hrefs.contains(&"https://angle.example/y".to_string()),
+        "实得 {hrefs:?}"
+    );
+    assert!(
+        hrefs.contains(&"https://bare.example/x".to_string()),
+        "实得 {hrefs:?}"
+    );
 
     let img = doc_of("corpus.md", case_source("inline_and_standalone_images"));
     let srcs: Vec<String> = img
@@ -305,12 +333,19 @@ fn moved_tokens_land_in_attrs_instead_of_vanishing() {
         .filter(|b| b.type_ == BlockType::Image)
         .map(|b| b.attrs["src"].as_str().unwrap_or_default().to_string())
         .collect();
-    assert_eq!(srcs, vec!["images/a.png".to_string()], "只有独占一行的图片被提升成块");
+    assert_eq!(
+        srcs,
+        vec!["images/a.png".to_string()],
+        "只有独占一行的图片被提升成块"
+    );
 
     let fm = plan_of("corpus.md", case_source("front_matter_head"));
     let item = &fm.items[0];
     assert_eq!(item.front_matter.date.as_deref(), Some("2026-03-01"));
-    assert_eq!(item.front_matter.ignored.get("author").map(String::as_str), Some("佚名"));
+    assert_eq!(
+        item.front_matter.ignored.get("author").map(String::as_str),
+        Some("佚名")
+    );
 }
 
 #[test]
@@ -323,11 +358,25 @@ fn every_corpus_document_passes_parse_and_canonical_is_stable() {
         assert_eq!(reparsed, doc, "[{}] 产物必须已经是规范化形态", case.name);
         let once = canonical(&doc);
         let twice = canonical(&notera_richtext::parse(&once).expect("canonical 文本必须可再解析"));
-        assert_eq!(once, twice, "[{}] canonical 不稳 → content_hash 不稳", case.name);
+        assert_eq!(
+            once, twice,
+            "[{}] canonical 不稳 → content_hash 不稳",
+            case.name
+        );
         let mut ids = std::collections::HashSet::new();
         for b in &doc.content {
-            assert!((8..=32).contains(&b.id.len()), "[{}] id 长度违约: {}", case.name, b.id);
-            assert!(ids.insert(b.id.clone()), "[{}] id 重复: {}", case.name, b.id);
+            assert!(
+                (8..=32).contains(&b.id.len()),
+                "[{}] id 长度违约: {}",
+                case.name,
+                b.id
+            );
+            assert!(
+                ids.insert(b.id.clone()),
+                "[{}] id 重复: {}",
+                case.name,
+                b.id
+            );
         }
     }
 }
@@ -372,7 +421,11 @@ fn files_on_disk_hit_the_three_gates_in_order() {
             ImportError::Bundle(_) => "Bundle",
         })
         .collect();
-    assert_eq!(kinds, vec!["TooLarge", "Binary", "InvalidEncoding"], "实得 {kinds:?}");
+    assert_eq!(
+        kinds,
+        vec!["TooLarge", "Binary", "InvalidEncoding"],
+        "实得 {kinds:?}"
+    );
     assert!(p.failures.iter().all(|f| f.error.is_source_rejection()));
     assert_eq!(p.items[0].title, "能进");
 }
@@ -384,28 +437,49 @@ fn bom_crlf_tabs_and_utf16_files_import_from_disk() {
     let crlf = tmp.write("crlf.md", "# 窗口\n\r\n- 项\r\n".as_bytes());
     let tabs = tmp.write("tabs.txt", "\t制表开头\n第二行\n".as_bytes());
     let mut u16: Vec<u8> = vec![0xFF, 0xFE];
-    u16.extend("# UTF16 标题\n".encode_utf16().flat_map(|c| c.to_le_bytes()));
+    u16.extend(
+        "# UTF16 标题\n"
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes()),
+    );
     let u16path = tmp.write("u16.md", &u16);
 
     let paths: Vec<&Path> = vec![&utf8bom, &crlf, &tabs, &u16path];
     let p = ImportPlan::from_paths(&paths);
-    let bad: Vec<String> = p.failures.iter().map(|f| format!("{}: {}", f.label, f.error)).collect();
+    let bad: Vec<String> = p
+        .failures
+        .iter()
+        .map(|f| format!("{}: {}", f.label, f.error))
+        .collect();
     assert!(bad.is_empty(), "不该有失败: {bad:?}");
     assert_eq!(p.items.len(), 4);
     assert_eq!(p.items[0].title, "有 BOM", "UTF-8 BOM 不得污染首个块判定");
     assert_eq!(p.items[1].title, "窗口");
-    assert_eq!(p.items[2].kind, SourceKind::PlainText, "没有任何 markdown 标记 → 纯文本");
-    assert_eq!(p.items[2].title, "tabs", "纯文本没有标题块 → 用文件名（第三档）");
+    assert_eq!(
+        p.items[2].kind,
+        SourceKind::PlainText,
+        "没有任何 markdown 标记 → 纯文本"
+    );
+    assert_eq!(
+        p.items[2].title, "tabs",
+        "纯文本没有标题块 → 用文件名（第三档）"
+    );
     assert_eq!(p.items[2].title_source, TitleSource::Filename);
     assert!(extract(&p.items[2].doc).plain_text.contains("制表开头"));
-    assert_eq!(p.items[3].title, "UTF16 标题", "带 BOM 的 UTF-16 与 UTF-8 同权");
+    assert_eq!(
+        p.items[3].title, "UTF16 标题",
+        "带 BOM 的 UTF-16 与 UTF-8 同权"
+    );
 }
 
 #[test]
 fn reading_a_missing_or_oversize_file_is_a_typed_error() {
     let tmp = Tmp::new("typed");
     let missing = tmp.dir().join("nope.md");
-    assert!(matches!(ImportSource::read(&missing), Err(ImportError::Io { .. })));
+    assert!(matches!(
+        ImportSource::read(&missing),
+        Err(ImportError::Io { .. })
+    ));
     let big = tmp.write("big.txt", vec![b'x'; MAX_SOURCE_BYTES as usize + 1]);
     match ImportSource::read(&big) {
         Err(ImportError::TooLarge { path, size, limit }) => {
@@ -438,13 +512,20 @@ fn apply_is_idempotent_by_content_hash() {
     assert_eq!(second.duplicate_count(), 3);
     assert_eq!(fx.note_count(), 3);
     assert_eq!(fx.revisions(), 3, "幂等重放不该产生任何写入");
-    assert!(second.duplicates.iter().all(|d| !d.in_plan), "撞的是库里的内容，不是计划内部");
+    assert!(
+        second.duplicates.iter().all(|d| !d.in_plan),
+        "撞的是库里的内容，不是计划内部"
+    );
     assert!(second.accounts_for(&p));
 
     // 换文件名重放同一批内容：内容哈希相同 → 仍然幂等（去重键是内容，不是路径）
     let renamed = ImportPlan::build([&source_from_str("完全不同的名字.md", "# 甲\n\n内容 A\n")]);
     let third = apply(&fx.store, &fx.folder(), &renamed).expect("apply 3");
-    assert_eq!(third.created_count(), 0, "路径改名不产生副本：去重看内容哈希");
+    assert_eq!(
+        third.created_count(),
+        0,
+        "路径改名不产生副本：去重看内容哈希"
+    );
     assert_eq!(fx.note_count(), 3);
 
     // 真正新增一条：只有 1 条增长
@@ -487,8 +568,14 @@ fn import_never_modifies_an_existing_note() {
     assert_eq!(r.created_count(), 0);
     assert_eq!(r.duplicate_count(), 1);
     assert_eq!(after.rev, before.rev, "导入绝不推进既有笔记的 rev");
-    assert_eq!(after.content_hash, before.content_hash, "导入绝不改既有笔记的内容");
-    assert_eq!(after.updated_at, before.updated_at, "导入绝不碰既有笔记的时间戳");
+    assert_eq!(
+        after.content_hash, before.content_hash,
+        "导入绝不改既有笔记的内容"
+    );
+    assert_eq!(
+        after.updated_at, before.updated_at,
+        "导入绝不碰既有笔记的时间戳"
+    );
     assert_eq!(fx.revisions(), 1, "没有任何新 revision = 一次写入都没发生");
 }
 
@@ -497,7 +584,8 @@ fn missing_folder_is_refused_and_named_folder_is_created_once() {
     let fx = Fix::open();
     let ghost = EntityId::parse("00000000-0000-0000-0000-000000000001").expect("固定 UUID");
     let p = single_note_plan("# 无处可去\n");
-    let e = apply(&fx.store, &FolderTarget::from(ghost.clone()), &p).expect_err("不存在的文件夹必须报错");
+    let e = apply(&fx.store, &FolderTarget::from(ghost.clone()), &p)
+        .expect_err("不存在的文件夹必须报错");
     assert!(matches!(e, ImportError::FolderNotFound(_)), "实得 {e:?}");
     assert_eq!(fx.note_count(), 0, "报错时一行都不该写");
 
@@ -517,7 +605,12 @@ fn missing_folder_is_refused_and_named_folder_is_created_once() {
         .filter(|f| f.name == "导入进来的")
         .count();
     assert_eq!(same_name, 1, "同名文件夹只能有一个");
-    assert_eq!(hashes_in_folder(&fx.store, &r1.target_folder).expect("hashes").len(), 1);
+    assert_eq!(
+        hashes_in_folder(&fx.store, &r1.target_folder)
+            .expect("hashes")
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -525,14 +618,27 @@ fn deleted_folder_is_not_resurrected() {
     let fx = Fix::open();
     let f = fx.store.create_folder(None, "会被删掉的").expect("建夹");
     fx.store.delete_folder(&f.id).expect("删夹");
-    let e =
-        apply(&fx.store, &FolderTarget::from(f.id.clone()), &single_note_plan("# x\n")).expect_err("回收站里的夹不能写");
+    let e = apply(
+        &fx.store,
+        &FolderTarget::from(f.id.clone()),
+        &single_note_plan("# x\n"),
+    )
+    .expect_err("回收站里的夹不能写");
     assert!(matches!(e, ImportError::FolderNotFound(_)), "实得 {e:?}");
     // 名字复用：同名的旧夹在回收站 → 新建一个，绝不改旧的那行
-    let r = apply(&fx.store, &FolderTarget::named("会被删掉的", None), &single_note_plan("# y\n")).expect("apply");
+    let r = apply(
+        &fx.store,
+        &FolderTarget::named("会被删掉的", None),
+        &single_note_plan("# y\n"),
+    )
+    .expect("apply");
     assert!(r.folder_created);
     assert_ne!(r.target_folder, f.id);
-    assert!(fx.store.list_notes(&NoteQuery::in_folder(&f.id)).expect("旧夹列表").is_empty());
+    assert!(fx
+        .store
+        .list_notes(&NoteQuery::in_folder(&f.id))
+        .expect("旧夹列表")
+        .is_empty());
 }
 
 #[test]
@@ -542,11 +648,22 @@ fn derived_title_and_body_reach_the_store_columns() {
     let item = &p.items[0];
     assert_eq!(item.title_source, TitleSource::FrontMatter);
     let r = apply(&fx.store, &fx.folder(), &p).expect("apply");
-    assert_eq!(r.created[0].stored_title, "头部来的标题", "front-matter 标题要真的落进 notes.title");
-    let note = fx.store.get_note(&r.created[0].note_id).expect("读").expect("在");
+    assert_eq!(
+        r.created[0].stored_title, "头部来的标题",
+        "front-matter 标题要真的落进 notes.title"
+    );
+    let note = fx
+        .store
+        .get_note(&r.created[0].note_id)
+        .expect("读")
+        .expect("在");
     assert!(note.plain_text.contains("正文一段"));
     assert!(note.summary.contains("正文一段"));
-    assert_eq!(note.content_hash, item.content_hash.as_str(), "计划里的 hash == Store 算出的 hash");
+    assert_eq!(
+        note.content_hash,
+        item.content_hash.as_str(),
+        "计划里的 hash == Store 算出的 hash"
+    );
     assert_eq!(note.doc, serde_json::to_value(&item.doc).expect("value"));
     assert_eq!(note.rev.get(), 1, "新建笔记 rev = 1");
     assert!(fx.store.startup_violations().is_empty(), "库不许自带违约");
@@ -565,8 +682,15 @@ fn one_bad_item_does_not_block_the_others_and_report_sums_up() {
     let r: ApplyReport = apply(&fx.store, &fx.folder(), &p).expect("apply");
     assert_eq!(r.created_count(), 1);
     assert_eq!(r.failed_count(), 1);
-    assert!(matches!(r.failed[0].error, ImportError::Store(_)), "实得 {:?}", r.failed[0].error);
-    assert!(r.accounts_for(&p), "报告必须能对上账：新增+重复+失败 = 条目数");
+    assert!(
+        matches!(r.failed[0].error, ImportError::Store(_)),
+        "实得 {:?}",
+        r.failed[0].error
+    );
+    assert!(
+        r.accounts_for(&p),
+        "报告必须能对上账：新增+重复+失败 = 条目数"
+    );
     assert_eq!(fx.note_count(), 1, "一条失败不脏整批");
 }
 
@@ -594,7 +718,11 @@ fn plan_alone_never_writes_to_the_store() {
         source_from_str("y.md", "纯文本笔记\n"),
     ]);
     assert_eq!(p.items.len(), 2);
-    assert_eq!((fx.note_count(), fx.revisions()), (before, revs), "构造计划不得碰库（纯函数）");
+    assert_eq!(
+        (fx.note_count(), fx.revisions()),
+        (before, revs),
+        "构造计划不得碰库（纯函数）"
+    );
     let r = apply(&fx.store, &fx.folder(), &p).expect("apply");
     assert_eq!(r.created_count(), 2);
     assert_eq!(fx.note_count(), before + 2);
@@ -621,7 +749,12 @@ fn importer_output_is_readable_by_the_richtext_gate() {
 fn bulk_import_of_five_hundred_files_is_idempotent() {
     let fx = Fix::open();
     let sources: Vec<ImportSource> = (0..500)
-        .map(|i| source_from_str(&format!("n{i}.md"), &format!("# 笔记 {i}\n\n第 {i} 篇的正文 *强调*\n")))
+        .map(|i| {
+            source_from_str(
+                &format!("n{i}.md"),
+                &format!("# 笔记 {i}\n\n第 {i} 篇的正文 *强调*\n"),
+            )
+        })
         .collect();
     let p = ImportPlan::build(&sources);
     assert_eq!(p.items.len(), 500);
@@ -631,14 +764,23 @@ fn bulk_import_of_five_hundred_files_is_idempotent() {
     assert_eq!(r2.created_count(), 0);
     assert_eq!(r2.duplicate_count(), 500);
     assert_eq!(fx.note_count(), 500);
-    assert_eq!(hashes_in_folder(&fx.store, &fx.default_folder).expect("hashes").len(), 500);
+    assert_eq!(
+        hashes_in_folder(&fx.store, &fx.default_folder)
+            .expect("hashes")
+            .len(),
+        500
+    );
 }
 
 #[test]
 fn block_id_derivation_is_stable_across_two_builds() {
     let a = doc_of("stable.md", "# 稳定\n\n段落\n");
     let b = doc_of("改名也不影响.md", "# 稳定\n\n段落\n");
-    assert_eq!(canonical(&a), canonical(&b), "内容相同 → 文档逐字节相同（id = 源哈希短值 + 序号）");
+    assert_eq!(
+        canonical(&a),
+        canonical(&b),
+        "内容相同 → 文档逐字节相同（id = 源哈希短值 + 序号）"
+    );
     for x in &a.content {
         assert!(x.id.starts_with("in-"), "id 形态: {}", x.id);
     }
@@ -646,7 +788,10 @@ fn block_id_derivation_is_stable_across_two_builds() {
 
 #[test]
 fn markdown_and_plain_text_produce_the_expected_block_types() {
-    let d = doc_of("t.md", "# 标题\n\n段落文字\n\n```sh\nls\n```\n\n- 无序\n1. 有序\n- [x] 任务\n\n> 引用\n\n---\n");
+    let d = doc_of(
+        "t.md",
+        "# 标题\n\n段落文字\n\n```sh\nls\n```\n\n- 无序\n1. 有序\n- [x] 任务\n\n> 引用\n\n---\n",
+    );
     let types: Vec<BlockType> = d.content.iter().map(|b| b.type_.clone()).collect();
     assert_eq!(
         types,
@@ -663,7 +808,10 @@ fn markdown_and_plain_text_produce_the_expected_block_types() {
     );
     let t = doc_of("t.txt", "只是文字\n也是文字\n");
     assert_eq!(
-        t.content.iter().map(|b| b.type_.clone()).collect::<Vec<_>>(),
+        t.content
+            .iter()
+            .map(|b| b.type_.clone())
+            .collect::<Vec<_>>(),
         vec![BlockType::Paragraph, BlockType::Paragraph]
     );
     assert_eq!(t.content[0].plain_text(), "只是文字");
@@ -674,17 +822,30 @@ fn markdown_in_a_txt_file_is_imported_as_markdown_not_rejected() {
     // 扩展名从不构成拒绝理由：.txt 里装 markdown 就按 markdown 走。
     let d = doc_of("t.txt", "# 被嗅探出来了\n\n- 项目\n");
     assert_eq!(
-        d.content.iter().map(|b| b.type_.clone()).collect::<Vec<_>>(),
+        d.content
+            .iter()
+            .map(|b| b.type_.clone())
+            .collect::<Vec<_>>(),
         vec![BlockType::Heading, BlockType::BulletList]
     );
     // 同一段内容换个 .md 名字，产物逐字节相同（差别只在探测，不在结果）
-    assert_eq!(canonical(&d), canonical(&doc_of("t.md", "# 被嗅探出来了\n\n- 项目\n")));
+    assert_eq!(
+        canonical(&d),
+        canonical(&doc_of("t.md", "# 被嗅探出来了\n\n- 项目\n"))
+    );
 }
 
 #[test]
 fn plain_text_kind_keeps_markup_literal() {
-    let s = source_from_str("calc.txt", "2 * 3 = 6 与 **两星** 与 `反引号` 与 #井号\n第二行\n");
-    assert_eq!(s.kind, SourceKind::PlainText, "没有任何块级标记 + 只有一个行内标记 → 纯文本");
+    let s = source_from_str(
+        "calc.txt",
+        "2 * 3 = 6 与 **两星** 与 `反引号` 与 #井号\n第二行\n",
+    );
+    assert_eq!(
+        s.kind,
+        SourceKind::PlainText,
+        "没有任何块级标记 + 只有一个行内标记 → 纯文本"
+    );
     let doc = document_for(&s).expect("doc");
     assert_eq!(
         extract(&doc).plain_text,
@@ -692,7 +853,10 @@ fn plain_text_kind_keeps_markup_literal() {
         "纯文本模式下标记一个都不解释"
     );
     assert!(doc.content.iter().all(|b| b.type_ == BlockType::Paragraph));
-    assert!(doc.content.iter().all(|b| b.content.iter().all(|i| i.marks.is_empty())));
+    assert!(doc
+        .content
+        .iter()
+        .all(|b| b.content.iter().all(|i| i.marks.is_empty())));
 }
 
 /// 跨重启：导入后重开库，再重放同一份计划，仍然一条都不许多。
@@ -709,7 +873,12 @@ fn idempotence_survives_a_reopen() {
             .find(|f| f.system_kind.as_deref() == Some("default"))
             .expect("默认本")
             .id;
-        assert_eq!(apply(&store, &FolderTarget::from(folder.clone()), &p).expect("1").created_count(), 1);
+        assert_eq!(
+            apply(&store, &FolderTarget::from(folder.clone()), &p)
+                .expect("1")
+                .created_count(),
+            1
+        );
     }
     let store = Store::open(&tmp.dir().join("db"), DeviceId::new()).expect("reopen");
     let folder = store
@@ -720,6 +889,16 @@ fn idempotence_survives_a_reopen() {
         .expect("默认本")
         .id;
     let r = apply(&store, &FolderTarget::from(folder.clone()), &p).expect("2");
-    assert_eq!(r.created_count(), 0, "重开库后仍要幂等（去重键在库里，不在内存里）");
-    assert_eq!(store.list_notes(&NoteQuery::in_folder(&folder)).expect("列表").len(), 1);
+    assert_eq!(
+        r.created_count(),
+        0,
+        "重开库后仍要幂等（去重键在库里，不在内存里）"
+    );
+    assert_eq!(
+        store
+            .list_notes(&NoteQuery::in_folder(&folder))
+            .expect("列表")
+            .len(),
+        1
+    );
 }

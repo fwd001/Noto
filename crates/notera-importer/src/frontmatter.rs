@@ -49,7 +49,10 @@ pub fn split(text: &str) -> (FrontMatter, String) {
         return (FrontMatter::none(), text.to_string());
     };
     let close = close + 1; // 结束线自己的绝对下标
-    let mut fm = FrontMatter { present: true, ..Default::default() };
+    let mut fm = FrontMatter {
+        present: true,
+        ..Default::default()
+    };
     collect(&lines[1..close], &mut fm);
     (fm, lines[close + 1..].join("\n"))
 }
@@ -75,7 +78,11 @@ fn collect(lines: &[&str], fm: &mut FrontMatter) {
         };
         let key = key.trim().to_string();
         let val = val.trim();
-        list_key = if val.is_empty() { Some(key.clone()) } else { None };
+        list_key = if val.is_empty() {
+            Some(key.clone())
+        } else {
+            None
+        };
         if key == "tags" {
             for t in parse_tags(val) {
                 push(fm, "tags".to_string(), t);
@@ -95,7 +102,11 @@ fn parse_tags(val: &str) -> Vec<String> {
     if inner.trim().is_empty() {
         return Vec::new();
     }
-    inner.split(',').map(|s| unquote(s.trim())).filter(|s| !s.is_empty()).collect()
+    inner
+        .split(',')
+        .map(|s| unquote(s.trim()))
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// 写入 entries，并把被理解的键抬到对应字段上。重复键不覆盖，降级为 `key#n`。
@@ -154,7 +165,10 @@ mod tests {
         assert_eq!(fm.ignored.get("slug").map(String::as_str), Some("my-note"));
         // entries 是"源顺序的全部键值对"：tags 的两个值各占一条，所以是 6 条而不是 5 条
         let keys: Vec<&str> = fm.entries.iter().map(|(k, _)| k.as_str()).collect();
-        assert_eq!(keys, vec!["title", "date", "tags", "tags", "author", "slug"]);
+        assert_eq!(
+            keys,
+            vec!["title", "date", "tags", "tags", "author", "slug"]
+        );
         assert_eq!(body, "正文第一段");
     }
 

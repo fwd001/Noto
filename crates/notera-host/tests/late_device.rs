@@ -31,7 +31,8 @@ struct Tmp(PathBuf);
 impl Tmp {
     fn new(tag: &str) -> Self {
         let n = SEQ.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("notera-late-{tag}-{}-{n}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("notera-late-{tag}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
@@ -68,7 +69,10 @@ impl Device {
         let mut rows: Vec<(String, String)> = self
             .app
             .store()
-            .list_notes(&NoteQuery { limit: ROW_CAP, ..NoteQuery::all() })
+            .list_notes(&NoteQuery {
+                limit: ROW_CAP,
+                ..NoteQuery::all()
+            })
             .unwrap()
             .into_iter()
             .map(|r| (r.title, r.content_hash))
@@ -83,7 +87,10 @@ impl Device {
         for _ in 0..cap {
             let stats = self.app.sync_once().await.expect("一轮同步");
             let st = self.app.store().stats().unwrap();
-            trace.push(format!("{:?} pushed={} pulled={} dirty={} pending={}", stats.outcome, stats.pushed, stats.pulled, st.dirty_notes, st.outbox_pending));
+            trace.push(format!(
+                "{:?} pushed={} pulled={} dirty={} pending={}",
+                stats.outcome, stats.pushed, stats.pulled, st.dirty_notes, st.outbox_pending
+            ));
             let drained = stats.outcome != notera_sync::RoundOutcome::Partial;
             if drained && st.dirty_notes == 0 && st.outbox_pending == 0 {
                 return trace;
@@ -126,11 +133,16 @@ async fn a_fresh_device_joining_an_over_window_library_gets_every_note() {
     )
     .expect("清单是 JSON");
     // 公告总数 = 窗口 + 所有分段里的条目（压实之后条目会挪进分段）
-    let mut announced = index["window"]["entries"].as_array().map(|a| a.len()).unwrap_or(0);
+    let mut announced = index["window"]["entries"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
     for seg in index["segments"].as_array().cloned().unwrap_or_default() {
         let name = seg["n"].as_str().unwrap_or_default();
-        let body = std::fs::read(root.join(format!(".notes/manifest/{name}.json"))).unwrap_or_default();
-        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+        let body =
+            std::fs::read(root.join(format!(".notes/manifest/{name}.json"))).unwrap_or_default();
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
         announced += parsed
             .as_array()
             .cloned()
@@ -138,27 +150,63 @@ async fn a_fresh_device_joining_an_over_window_library_gets_every_note() {
             .map(|a| a.len())
             .unwrap_or(0);
     }
-    assert_eq!(announced, NOTES + 1, "清单（窗口 + 分段）公告的条目数不对，后面怎么追都是徒劳");
+    assert_eq!(
+        announced,
+        NOTES + 1,
+        "清单（窗口 + 分段）公告的条目数不对，后面怎么追都是徒劳"
+    );
 
     // 追平之前那一轮必然被每轮请求预算截断（清单上 261 条）。这时界面读的
     // `sync_status.badge` 不许是 "synced" —— 库里还差着几十条，说已同步就是谎报。
     let first = b.app.sync_once().await.expect("B 的第一轮");
-    assert_eq!(first.outcome, notera_sync::RoundOutcome::Partial, "夹具要改：第一轮该被预算截断才测得到东西：{first:?}");
-    assert_eq!(b.app.sync_status().unwrap().badge, "syncing", "被截断的一轮之后，界面读到的仍是「已同步」");
+    assert_eq!(
+        first.outcome,
+        notera_sync::RoundOutcome::Partial,
+        "夹具要改：第一轮该被预算截断才测得到东西：{first:?}"
+    );
+    assert_eq!(
+        b.app.sync_status().unwrap().badge,
+        "syncing",
+        "被截断的一轮之后，界面读到的仍是「已同步」"
+    );
     let btrace = b.settle(12).await;
     let bs = b.app.store().stats().unwrap();
-    assert_eq!(bs.notes, NOTES as u32, "干净设备追完之后应有 {NOTES} 条，实际 {}：\n  A {}\n  B {}", bs.notes, trace.join("\n  "), btrace.join("\n  "));
-    assert_eq!(b.fingerprints(), a.fingerprints(), "两台设备的标题/内容哈希不一致（漏了或变了）：\n  B {btrace:?}");
-    assert_eq!(bs.fts_rows, bs.notes, "搜索索引没跟着笔记一起到位（{} vs {}）", bs.fts_rows, bs.notes);
-    assert_eq!(b.app.sync_status().unwrap().badge, "synced", "追平之后徽标没回到「已同步」");
+    assert_eq!(
+        bs.notes,
+        NOTES as u32,
+        "干净设备追完之后应有 {NOTES} 条，实际 {}：\n  A {}\n  B {}",
+        bs.notes,
+        trace.join("\n  "),
+        btrace.join("\n  ")
+    );
+    assert_eq!(
+        b.fingerprints(),
+        a.fingerprints(),
+        "两台设备的标题/内容哈希不一致（漏了或变了）：\n  B {btrace:?}"
+    );
+    assert_eq!(
+        bs.fts_rows, bs.notes,
+        "搜索索引没跟着笔记一起到位（{} vs {}）",
+        bs.fts_rows, bs.notes
+    );
+    assert_eq!(
+        b.app.sync_status().unwrap().badge,
+        "synced",
+        "追平之后徽标没回到「已同步」"
+    );
 
     // 追平之后再来一条：不能因为已经踩过"全量回退"就再也推不动
     let extra = "追平之后又写的一条";
-    b.app.create_note(&b.app.default_folder_id().unwrap(), doc(extra)).unwrap();
+    b.app
+        .create_note(&b.app.default_folder_id().unwrap(), doc(extra))
+        .unwrap();
     b.settle(6).await;
     a.settle(6).await;
     assert_eq!(a.fingerprints().len(), NOTES + 1, "A 没收到 B 后来写的那条");
-    assert!(a.fingerprints().iter().any(|(t, _)| t == extra), "后来那条标题不对");
+    assert!(
+        a.fingerprints().iter().any(|(t, _)| t == extra),
+        "后来那条标题不对"
+    );
 
     srv.stop().await;
 }

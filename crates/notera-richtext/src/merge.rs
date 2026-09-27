@@ -10,7 +10,7 @@
 //! 决定 —— 否则两台设备各算出一份、下一轮又冲突（INV-15 的收敛前提）。
 
 use crate::codec::{block_canonical, canonical, count_changed_blocks, normalize, validate};
-use crate::model::{Block, BlockType, Document, Inline, Mark, RichError, supports};
+use crate::model::{supports, Block, BlockType, Document, Inline, Mark, RichError};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// 只读降级的原因（I7 / FWD-03）。
@@ -286,7 +286,13 @@ pub fn merge(base: &Document, local: &Document, remote: &Document) -> MergeOutco
 /// 这一条不能省：调用方拿到 `AutoMerged` 就会写回权威表（I6），而"只有一侧改过"并不
 /// 保证那一侧的文档本身是合法的 —— 本机库里躺着一条历史脏数据、或者远端送来一份改了
 /// 结构但没过我们这版校验的记录，都会在这里被拦住而不是扩散出去。
-fn finish(doc: Document, base: &Document, cb: &str, taken_local: u32, taken_remote: u32) -> MergeOutcome {
+fn finish(
+    doc: Document,
+    base: &Document,
+    cb: &str,
+    taken_local: u32,
+    taken_remote: u32,
+) -> MergeOutcome {
     let mut doc = doc;
     normalize(&mut doc);
     if let Err(e) = validate(&doc) {
@@ -359,7 +365,9 @@ fn unique_in_doc_order(ids: &[String], docs: &[&Document]) -> Vec<String> {
 }
 
 fn chain(seq: &[String]) -> Vec<(String, String)> {
-    seq.windows(2).map(|w| (w[0].clone(), w[1].clone())).collect()
+    seq.windows(2)
+        .map(|w| (w[0].clone(), w[1].clone()))
+        .collect()
 }
 
 /// 两条侧序链的并集做拓扑排序；有环（= 两侧都调整了顺序且互相矛盾）返回 `None`。
@@ -378,7 +386,12 @@ fn toposort(nodes: Vec<String>, edges: Vec<(String, String)>) -> Option<Vec<Stri
             *indeg.entry(bx).or_insert(0) += 1;
         }
     }
-    let base_pos: BTreeMap<String, usize> = nodes.iter().cloned().enumerate().map(|(i, id)| (id, i)).collect();
+    let base_pos: BTreeMap<String, usize> = nodes
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(i, id)| (id, i))
+        .collect();
     let mut ready: Vec<String> = indeg
         .iter()
         .filter(|(_, d)| **d == 0)
@@ -498,11 +511,7 @@ fn degrade(base: &Block, local: &Block, remote: &Block) -> Option<(Block, Contri
     }
 
     // ── M3：两侧都是对 base 的纯追加（前缀相同）→ 拼接两侧追加内容。
-    if tx != tb
-        && ty != tb
-        && tx.starts_with(tb.as_str())
-        && ty.starts_with(tb.as_str())
-    {
+    if tx != tb && ty != tb && tx.starts_with(tb.as_str()) && ty.starts_with(tb.as_str()) {
         let sx = &tx[tb.len()..];
         let sy = &ty[tb.len()..];
         let n = tb.chars().count();
@@ -513,7 +522,11 @@ fn degrade(base: &Block, local: &Block, remote: &Block) -> Option<(Block, Contri
         };
         let mut content = prefix_chars_inlines(&prefix_src.content, n);
         // 追加段先后由文本字典序决定 —— 与"谁是 local"无关。
-        let (first, second) = if sx <= sy { (local, remote) } else { (remote, local) };
+        let (first, second) = if sx <= sy {
+            (local, remote)
+        } else {
+            (remote, local)
+        };
         content.extend(slice_inlines(&first.content, n));
         content.extend(slice_inlines(&second.content, n));
         content.retain(|i| !i.text.is_empty() || !i.marks.is_empty());
@@ -534,8 +547,7 @@ fn degrade(base: &Block, local: &Block, remote: &Block) -> Option<(Block, Contri
     // ── M4：checklist 一侧勾选、一侧改文本 → 文本取改动侧，勾选取改动侧。
     // （勾选状态本身由 `merge_attrs` 的单侧变更规则保住；两侧都改勾选时降级为
     //  "默认未勾选 + 另一状态留档"。）
-    if (is_checklist(base) || is_checklist(local) || is_checklist(remote))
-        && (tx == tb || ty == tb)
+    if (is_checklist(base) || is_checklist(local) || is_checklist(remote)) && (tx == tb || ty == tb)
     {
         let winner = if tx == tb { remote } else { local };
         let mut out = winner.clone();
@@ -557,7 +569,10 @@ fn degrade(base: &Block, local: &Block, remote: &Block) -> Option<(Block, Contri
 /// "带格式的一侧"：marks/attrs 更多者胜；平局比 canonical（对称、确定）。
 fn richer<'a>(a: &'a Block, b: &'a Block) -> (&'a Block, Contrib) {
     let score = |blk: &Block| -> (usize, usize) {
-        (blk.content.iter().map(|i| i.marks.len()).sum(), blk.attrs.len())
+        (
+            blk.content.iter().map(|i| i.marks.len()).sum(),
+            blk.attrs.len(),
+        )
     };
     let (sa, sb) = (score(a), score(b));
     if sa > sb {
@@ -578,11 +593,7 @@ fn is_checklist(b: &Block) -> bool {
 /// attrs 三方合并：单侧变更采纳；两侧都改成不同值 → 取 canonical 小者，另一值留在
 /// `conflict:<key>` 下（"属性冲突降级为审计 + 提示"，不升级为内容冲突；§4 原则）。
 /// `checked` 例外：按 M4 默认未勾选。
-fn merge_attrs(
-    base: &Block,
-    local: &Block,
-    remote: &Block,
-) -> BTreeMap<String, serde_json::Value> {
+fn merge_attrs(base: &Block, local: &Block, remote: &Block) -> BTreeMap<String, serde_json::Value> {
     let mut keys: BTreeSet<String> = BTreeSet::new();
     for m in [&base.attrs, &local.attrs, &remote.attrs] {
         keys.extend(m.keys().cloned());

@@ -39,7 +39,10 @@ struct FakeRemote {
 
 #[async_trait]
 impl RemotePort for FakeRemote {
-    async fn fetch_manifest(&self, etag: Option<&str>) -> Result<Option<(Vec<u8>, Option<String>)>, RemoteError> {
+    async fn fetch_manifest(
+        &self,
+        etag: Option<&str>,
+    ) -> Result<Option<(Vec<u8>, Option<String>)>, RemoteError> {
         self.tick()?;
         let body = self.manifest.lock().unwrap().clone();
         let cur = self.etag.lock().unwrap().clone();
@@ -59,18 +62,40 @@ impl RemotePort for FakeRemote {
     }
     async fn fetch_segment(&self, name: &str) -> Result<Vec<EntryRef>, RemoteError> {
         self.tick()?;
-        Ok(self.segments.lock().unwrap().get(name).cloned().unwrap_or_default())
+        Ok(self
+            .segments
+            .lock()
+            .unwrap()
+            .get(name)
+            .cloned()
+            .unwrap_or_default())
     }
     async fn fetch_record(&self, kind: &str, id: &str) -> Result<Option<Vec<u8>>, RemoteError> {
         self.tick()?;
         Ok(self.records.lock().unwrap().get(&path(kind, id)).cloned())
     }
-    async fn put_record(&self, kind: &str, id: &str, wire: &[u8], _if_match: Option<&str>) -> Result<Commit, RemoteError> {
+    async fn put_record(
+        &self,
+        kind: &str,
+        id: &str,
+        wire: &[u8],
+        _if_match: Option<&str>,
+    ) -> Result<Commit, RemoteError> {
         self.tick()?;
-        self.records.lock().unwrap().insert(path(kind, id), wire.to_vec());
-        Ok(Commit { etag: Some(format!("\"{id}-v1\"")), verified: true })
+        self.records
+            .lock()
+            .unwrap()
+            .insert(path(kind, id), wire.to_vec());
+        Ok(Commit {
+            etag: Some(format!("\"{id}-v1\"")),
+            verified: true,
+        })
     }
-    async fn commit_manifest(&self, wire: &[u8], cas_etag: Option<&str>) -> Result<Option<String>, RemoteError> {
+    async fn commit_manifest(
+        &self,
+        wire: &[u8],
+        cas_etag: Option<&str>,
+    ) -> Result<Option<String>, RemoteError> {
         self.tick()?;
         if self.cas_failures.load(Ordering::SeqCst) > 0 {
             self.cas_failures.fetch_sub(1, Ordering::SeqCst);
@@ -92,15 +117,28 @@ impl RemotePort for FakeRemote {
         Ok(())
     }
     async fn probe_record_etag(&self, kind: &str, id: &str) -> Result<Option<String>, RemoteError> {
-        Ok(self.records.lock().unwrap().contains_key(&path(kind, id)).then(|| format!("\"{id}-v0\"")))
+        Ok(self
+            .records
+            .lock()
+            .unwrap()
+            .contains_key(&path(kind, id))
+            .then(|| format!("\"{id}-v0\"")))
     }
 
-    async fn lease_publish(&self, token: &str, expires_at: &str, _seq: u64) -> Result<(), RemoteError> {
+    async fn lease_publish(
+        &self,
+        token: &str,
+        expires_at: &str,
+        _seq: u64,
+    ) -> Result<(), RemoteError> {
         self.tick()?;
         if self.fail_publish.load(Ordering::SeqCst) {
             return Err(RemoteError::Server);
         }
-        self.publishes.lock().unwrap().push((token.to_string(), expires_at.to_string()));
+        self.publishes
+            .lock()
+            .unwrap()
+            .push((token.to_string(), expires_at.to_string()));
         Ok(())
     }
 
@@ -177,7 +215,10 @@ impl LocalPort for FakeLocal {
         self.seq.load(Ordering::SeqCst)
     }
     fn record_lease(&self, token: &str, expires_at: &str) -> Result<(), LocalError> {
-        self.leases.lock().unwrap().push((token.to_string(), expires_at.to_string()));
+        self.leases
+            .lock()
+            .unwrap()
+            .push((token.to_string(), expires_at.to_string()));
         Ok(())
     }
     fn revision_json(&self, _id: &str, _rev: u64) -> Result<Option<serde_json::Value>, LocalError> {
@@ -196,17 +237,34 @@ impl LocalPort for FakeLocal {
             }
         }
         self.applied.lock().unwrap().extend(ops);
-        Ok(ApplyReport { applied: n, rejected: 0 })
+        Ok(ApplyReport {
+            applied: n,
+            rejected: 0,
+        })
     }
-    fn record_conflict(&self, d: &Decision, _l: &LocalView, _r: &RemoteView) -> Result<(), LocalError> {
+    fn record_conflict(
+        &self,
+        d: &Decision,
+        _l: &LocalView,
+        _r: &RemoteView,
+    ) -> Result<(), LocalError> {
         self.conflicts.lock().unwrap().push(d.key.clone());
         Ok(())
     }
     fn outbox_take(&self, _limit: usize) -> Result<Vec<OutboxItem>, LocalError> {
         Ok(Vec::new())
     }
-    fn outbox_settle(&self, kind: &str, id: &str, rev: u64, st: OutboxState) -> Result<(), LocalError> {
-        self.outbox_states.lock().unwrap().push((format!("{kind}:{id}:{rev}"), st));
+    fn outbox_settle(
+        &self,
+        kind: &str,
+        id: &str,
+        rev: u64,
+        st: OutboxState,
+    ) -> Result<(), LocalError> {
+        self.outbox_states
+            .lock()
+            .unwrap()
+            .push((format!("{kind}:{id}:{rev}"), st));
         Ok(())
     }
     fn cached_manifest(&self) -> Option<Vec<u8>> {
@@ -231,7 +289,15 @@ fn local(id: &str, rev: u64, sync_rev: u64, hash: &str) -> LocalView {
 }
 
 fn ent(i: &str, r: u64, h: &str) -> EntryRef {
-    EntryRef { i: i.into(), t: "n".into(), r, h: h.into(), s: 40, d: None, p: 0 }
+    EntryRef {
+        i: i.into(),
+        t: "n".into(),
+        r,
+        h: h.into(),
+        s: 40,
+        d: None,
+        p: 0,
+    }
 }
 
 fn base_manifest() -> Manifest {
@@ -239,9 +305,16 @@ fn base_manifest() -> Manifest {
 }
 
 async fn run(l: FakeLocal, r: FakeRemote, etag: Option<&str>) -> (RoundStats, Vec<SyncEvent>) {
-    SyncEngine::new(l, r, EngineConfig::default()).run_round(etag).await
+    SyncEngine::new(l, r, EngineConfig::default())
+        .run_round(etag)
+        .await
 }
-async fn run_with(l: FakeLocal, r: FakeRemote, etag: Option<&str>, cfg: EngineConfig) -> (RoundStats, Vec<SyncEvent>) {
+async fn run_with(
+    l: FakeLocal,
+    r: FakeRemote,
+    etag: Option<&str>,
+    cfg: EngineConfig,
+) -> (RoundStats, Vec<SyncEvent>) {
     SyncEngine::new(l, r, cfg).run_round(etag).await
 }
 
@@ -256,7 +329,10 @@ fn lease_cfg() -> EngineConfig {
 
 fn dirty_local(l: &FakeLocal, id: &str, rev: u64, hash: &str) {
     l.locals.lock().unwrap().push(local(id, rev, rev - 1, hash));
-    l.envelopes.lock().unwrap().insert(path("n", id), format!("{{\"rev\":{rev}}}").into_bytes());
+    l.envelopes
+        .lock()
+        .unwrap()
+        .insert(path("n", id), format!("{{\"rev\":{rev}}}").into_bytes());
 }
 
 // ------------------------------------------------------------------ 用例 ---
@@ -280,19 +356,32 @@ async fn empty_round_costs_exactly_one_request_and_zero_bytes() {
 async fn local_edit_is_pushed_then_announced_in_manifest() {
     let l = FakeLocal::default();
     l.locals.lock().unwrap().push(local("n1", 3, 2, "aaaa"));
-    l.envelopes.lock().unwrap().insert(path("n", "n1"), b"{\"rev\":3}".to_vec());
+    l.envelopes
+        .lock()
+        .unwrap()
+        .insert(path("n", "n1"), b"{\"rev\":3}".to_vec());
     let r = FakeRemote::default();
     r.seed(base_manifest());
     let etag = r.etag();
     let (st, _) = run(l.clone(), r.clone(), etag.as_deref()).await;
 
     assert_eq!(st.pushed, 1, "本地脏实体必须上传");
-    assert!(r.records.lock().unwrap().contains_key("n/n1"), "记录必须先于清单落远端（R2）");
+    assert!(
+        r.records.lock().unwrap().contains_key("n/n1"),
+        "记录必须先于清单落远端（R2）"
+    );
     let m = Manifest::parse(&r.manifest_bytes()).expect("提交后的清单必须自校验通过");
-    assert!(m.window.entries.iter().any(|x| x.i == "n1" && x.r == 3), "窗口应公告该变更");
+    assert!(
+        m.window.entries.iter().any(|x| x.i == "n1" && x.r == 3),
+        "窗口应公告该变更"
+    );
     assert!(m.seq > 1, "seq 必须前进");
     assert!(
-        l.applied.lock().unwrap().iter().any(|o| matches!(o, ApplyOp::MarkSynced { rev: 3, .. })),
+        l.applied
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|o| matches!(o, ApplyOp::MarkSynced { rev: 3, .. })),
         "上传成功须记 synced"
     );
 }
@@ -302,15 +391,26 @@ async fn remote_new_note_is_pulled_and_applied() {
     let l = FakeLocal::default();
     let r = FakeRemote::default();
     let mut m = base_manifest();
-    m.window = Window { since_seq: 1, complete: true, entries: vec![ent("remote1", 7, "bbbbbbbbbbbb")] };
+    m.window = Window {
+        since_seq: 1,
+        complete: true,
+        entries: vec![ent("remote1", 7, "bbbbbbbbbbbb")],
+    };
     m.refresh_checksum();
     r.seed(m);
-    r.records.lock().unwrap().insert(path("n", "remote1"), b"{\"rev\":7}".to_vec());
+    r.records
+        .lock()
+        .unwrap()
+        .insert(path("n", "remote1"), b"{\"rev\":7}".to_vec());
     // 首轮没有已知 etag：传当前 etag 会得到 304，那是正确行为但测不到 pull。
     let (st, _) = run(l.clone(), r, None).await;
     assert_eq!(st.pulled, 1, "远端新增必须被拉取");
     assert!(
-        l.applied.lock().unwrap().iter().any(|o| matches!(o, ApplyOp::Upsert { id, .. } if id == "remote1")),
+        l.applied
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|o| matches!(o, ApplyOp::Upsert { id, .. } if id == "remote1")),
         "拉到的记录必须交给 apply"
     );
 }
@@ -326,15 +426,30 @@ async fn corrupt_manifest_never_deletes_local_data() {
     let (st, ev) = run(l.clone(), r, None).await;
     assert_eq!(st.outcome, RoundOutcome::Failed, "坏清单必须终止本轮");
     assert!(st.requests <= 1, "不得继续刷后续请求，实际 {}", st.requests);
-    assert!(ev.iter().any(|x| matches!(x, SyncEvent::Failed { retryable: true, .. })), "应给出可重试失败事件");
-    assert!(l.applied.lock().unwrap().is_empty(), "坏清单情形下不得对本地做任何写入或删除");
+    assert!(
+        ev.iter().any(|x| matches!(
+            x,
+            SyncEvent::Failed {
+                retryable: true,
+                ..
+            }
+        )),
+        "应给出可重试失败事件"
+    );
+    assert!(
+        l.applied.lock().unwrap().is_empty(),
+        "坏清单情形下不得对本地做任何写入或删除"
+    );
 }
 
 #[tokio::test]
 async fn cas_conflict_is_retried_then_converges() {
     let l = FakeLocal::default();
     l.locals.lock().unwrap().push(local("n1", 4, 2, "cccc"));
-    l.envelopes.lock().unwrap().insert(path("n", "n1"), b"{\"rev\":4}".to_vec());
+    l.envelopes
+        .lock()
+        .unwrap()
+        .insert(path("n", "n1"), b"{\"rev\":4}".to_vec());
     let r = FakeRemote::default();
     r.seed(base_manifest());
     r.cas_failures.store(2, Ordering::SeqCst); // 前两次 CAS 被别人抢了
@@ -342,13 +457,19 @@ async fn cas_conflict_is_retried_then_converges() {
     let (st, _) = run(l, r.clone(), etag.as_deref()).await;
     assert_eq!(st.cas_retries, 2, "应重试两次后成功");
     let m = Manifest::parse(&r.manifest_bytes()).unwrap();
-    assert!(m.window.entries.iter().any(|x| x.i == "n1"), "最终清单必须包含本次变更");
+    assert!(
+        m.window.entries.iter().any(|x| x.i == "n1"),
+        "最终清单必须包含本次变更"
+    );
 }
 
 #[tokio::test]
 async fn remote_delete_versus_local_edit_reaches_conflict_inbox() {
     let l = FakeLocal::default();
-    l.locals.lock().unwrap().push(local("n1", 8, 5, "localhash"));
+    l.locals
+        .lock()
+        .unwrap()
+        .push(local("n1", 8, 5, "localhash"));
     let r = FakeRemote::default();
     let mut m = base_manifest();
     let mut del = ent("n1", 9, "remotehash12");
@@ -361,7 +482,11 @@ async fn remote_delete_versus_local_edit_reaches_conflict_inbox() {
     assert!(ev.contains(&SyncEvent::NeedsConflictAttention));
     assert_eq!(l.conflicts.lock().unwrap().len(), 1);
     assert!(
-        !l.applied.lock().unwrap().iter().any(|o| matches!(o, ApplyOp::Purge { .. })),
+        !l.applied
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|o| matches!(o, ApplyOp::Purge { .. })),
         "冲突情形不得静默永久删除本地"
     );
 }
@@ -379,12 +504,25 @@ async fn behind_beyond_window_fetches_changed_segments_only() {
         hash12: "123456789012".into(),
         bytes: 20,
     }];
-    m.window = Window { since_seq: 99, complete: true, entries: vec![] };
+    m.window = Window {
+        since_seq: 99,
+        complete: true,
+        entries: vec![],
+    };
     m.refresh_checksum();
     r.seed(m);
-    r.segments.lock().unwrap().insert("seg-0000".into(), vec![ent("s1", 1, "aaaaaaaaaaaa"), ent("s2", 2, "bbbbbbbbbbbb")]);
-    r.records.lock().unwrap().insert(path("n", "s1"), b"{\"i\":\"s1\"}".to_vec());
-    r.records.lock().unwrap().insert(path("n", "s2"), b"{\"i\":\"s2\"}".to_vec());
+    r.segments.lock().unwrap().insert(
+        "seg-0000".into(),
+        vec![ent("s1", 1, "aaaaaaaaaaaa"), ent("s2", 2, "bbbbbbbbbbbb")],
+    );
+    r.records
+        .lock()
+        .unwrap()
+        .insert(path("n", "s1"), b"{\"i\":\"s1\"}".to_vec());
+    r.records
+        .lock()
+        .unwrap()
+        .insert(path("n", "s2"), b"{\"i\":\"s2\"}".to_vec());
     let (st, _) = run(l, r.clone(), None).await;
     assert!(st.requests >= 3, "清单 + 分段 + 两条记录");
     assert_eq!(st.pulled, 2, "分段揭示的两条新笔记都应拉取");
@@ -404,13 +542,26 @@ async fn uncached_segment_hash_forces_refetch() {
         hash12: "newhash12345".into(),
         bytes: 10,
     }];
-    m.window = Window { since_seq: 99, complete: true, entries: vec![] };
+    m.window = Window {
+        since_seq: 99,
+        complete: true,
+        entries: vec![],
+    };
     m.refresh_checksum();
     r.seed(m);
-    r.segments.lock().unwrap().insert("seg-0000".into(), vec![ent("s9", 1, "cccccccccccc")]);
-    r.records.lock().unwrap().insert(path("n", "s9"), b"{}".to_vec());
+    r.segments
+        .lock()
+        .unwrap()
+        .insert("seg-0000".into(), vec![ent("s9", 1, "cccccccccccc")]);
+    r.records
+        .lock()
+        .unwrap()
+        .insert(path("n", "s9"), b"{}".to_vec());
     // 缓存里是同名的旧 hash → 必须重拉
-    l.seg_hashes.lock().unwrap().insert("seg-0000".into(), "oldhash12345".into());
+    l.seg_hashes
+        .lock()
+        .unwrap()
+        .insert("seg-0000".into(), "oldhash12345".into());
     let (st, _) = run(l, r.clone(), None).await;
     assert!(st.pulled >= 1, "hash 变化必须触发分段重取");
     assert!(r.req() >= 3);
@@ -420,14 +571,23 @@ async fn uncached_segment_hash_forces_refetch() {
 async fn auth_failure_halts_round_and_reports_reauth() {
     let l = FakeLocal::default();
     l.locals.lock().unwrap().push(local("n1", 2, 1, "dddd"));
-    l.envelopes.lock().unwrap().insert(path("n", "n1"), b"{\"rev\":2}".to_vec());
+    l.envelopes
+        .lock()
+        .unwrap()
+        .insert(path("n", "n1"), b"{\"rev\":2}".to_vec());
     let r = FakeRemote::default();
     r.seed(base_manifest());
     r.deny_auth.store(true, Ordering::SeqCst);
     let (st, ev) = run(l, r.clone(), None).await;
     assert_eq!(st.outcome, RoundOutcome::Failed);
     assert_eq!(r.req(), 1, "401 必须停轮，不得继续刷请求，实际 {}", r.req());
-    assert!(ev.iter().any(|x| matches!(x, SyncEvent::Failed { retryable: false, message_key: "sync.auth_required" })));
+    assert!(ev.iter().any(|x| matches!(
+        x,
+        SyncEvent::Failed {
+            retryable: false,
+            message_key: "sync.auth_required"
+        }
+    )));
 }
 
 #[tokio::test]
@@ -436,11 +596,18 @@ async fn no_push_means_no_manifest_commit() {
     let l = FakeLocal::default();
     let r = FakeRemote::default();
     let mut m = base_manifest();
-    m.window = Window { since_seq: 1, complete: true, entries: vec![ent("only", 1, "dddddddddddd")] };
+    m.window = Window {
+        since_seq: 1,
+        complete: true,
+        entries: vec![ent("only", 1, "dddddddddddd")],
+    };
     m.refresh_checksum();
     let before = m.to_wire();
     r.seed(m);
-    r.records.lock().unwrap().insert(path("n", "only"), b"{\"i\":\"only\"}".to_vec());
+    r.records
+        .lock()
+        .unwrap()
+        .insert(path("n", "only"), b"{\"i\":\"only\"}".to_vec());
     let etag = r.etag();
     let (st, _) = run(l, r.clone(), etag.as_deref()).await;
     assert_eq!(st.pushed, 0);
@@ -455,12 +622,27 @@ async fn an_enabled_lease_is_published_before_the_round_reads_anything() {
     r.seed(base_manifest());
     let etag = r.etag();
     let (st, _) = run_with(l.clone(), r.clone(), etag.as_deref(), lease_cfg()).await;
-    assert_eq!(r.publishes.lock().unwrap().len(), 1, "开了租约就得贴自己的，否则别人看不见我");
+    assert_eq!(
+        r.publishes.lock().unwrap().len(),
+        1,
+        "开了租约就得贴自己的，否则别人看不见我"
+    );
     let (token, expires) = &r.publishes.lock().unwrap()[0];
     assert!(!token.is_empty());
-    assert!(expires.ends_with('Z'), "过期时刻得是可解析的时间串：{expires}");
-    assert_eq!(l.leases.lock().unwrap().len(), 1, "贴上的租约要记进本地状态（sync_state 的那两列）");
-    assert_eq!(st.outcome, RoundOutcome::NoOp, "空轮不该因为租约变成别的结论");
+    assert!(
+        expires.ends_with('Z'),
+        "过期时刻得是可解析的时间串：{expires}"
+    );
+    assert_eq!(
+        l.leases.lock().unwrap().len(),
+        1,
+        "贴上的租约要记进本地状态（sync_state 的那两列）"
+    );
+    assert_eq!(
+        st.outcome,
+        RoundOutcome::NoOp,
+        "空轮不该因为租约变成别的结论"
+    );
 }
 
 #[tokio::test]
@@ -479,13 +661,25 @@ async fn a_fresh_peer_lease_defers_the_announcement_but_keeps_the_upload() {
 
     assert_eq!(st.pushed, 1, "记录照旧先推上去（清单才是公告板）");
     let m = Manifest::parse(&r.manifest_bytes()).expect("清单仍要可解析");
-    assert!(!m.window.entries.iter().any(|x| x.i == "n1"), "让路时**不能**提交清单，否则并发公告互相覆盖");
+    assert!(
+        !m.window.entries.iter().any(|x| x.i == "n1"),
+        "让路时**不能**提交清单，否则并发公告互相覆盖"
+    );
     assert_eq!(m.seq, 1, "seq 不该前进，实际 {}", m.seq);
     assert!(
-        !l.applied.lock().unwrap().iter().any(|o| matches!(o, ApplyOp::MarkSynced { .. })),
+        !l.applied
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|o| matches!(o, ApplyOp::MarkSynced { .. })),
         "没公告就不能把改动标成已同步 —— 那会变成静默丢失",
     );
-    assert!(ev.contains(&SyncEvent::Deferred { device: "dev-2".into() }), "让路必须让用户看得见：{ev:?}");
+    assert!(
+        ev.contains(&SyncEvent::Deferred {
+            device: "dev-2".into()
+        }),
+        "让路必须让用户看得见：{ev:?}"
+    );
     assert_eq!(st.outcome, RoundOutcome::Partial);
 }
 
@@ -494,12 +688,27 @@ async fn an_expired_or_self_owned_lease_does_not_block_the_announcement() {
     for (label, lease) in [
         (
             "过期了（设备崩溃留下的那份）",
-            PeerLease { device: "dev-2".into(), expires_at: "2020-01-01T00:00:00.000Z".into(), seq: 1 },
+            PeerLease {
+                device: "dev-2".into(),
+                expires_at: "2020-01-01T00:00:00.000Z".into(),
+                seq: 1,
+            },
         ),
-        ("是自己的", PeerLease { device: "dev-1".into(), expires_at: "2099-01-01T00:00:00.000Z".into(), seq: 1 }),
+        (
+            "是自己的",
+            PeerLease {
+                device: "dev-1".into(),
+                expires_at: "2099-01-01T00:00:00.000Z".into(),
+                seq: 1,
+            },
+        ),
         (
             "时间读不出来",
-            PeerLease { device: "dev-2".into(), expires_at: "不是时间".into(), seq: 1 },
+            PeerLease {
+                device: "dev-2".into(),
+                expires_at: "不是时间".into(),
+                seq: 1,
+            },
         ),
     ] {
         let (l, r) = (FakeLocal::default(), FakeRemote::default());
@@ -510,8 +719,14 @@ async fn an_expired_or_self_owned_lease_does_not_block_the_announcement() {
         let (st, ev) = run_with(l, r.clone(), etag.as_deref(), lease_cfg()).await;
         assert_eq!(st.pushed, 1, "{label}");
         let m = Manifest::parse(&r.manifest_bytes()).expect("清单");
-        assert!(m.window.entries.iter().any(|x| x.i == "n1"), "{label}：这类租约不该挡住公告");
-        assert!(!ev.iter().any(|e| matches!(e, SyncEvent::Deferred { .. })), "{label}");
+        assert!(
+            m.window.entries.iter().any(|x| x.i == "n1"),
+            "{label}：这类租约不该挡住公告"
+        );
+        assert!(
+            !ev.iter().any(|e| matches!(e, SyncEvent::Deferred { .. })),
+            "{label}"
+        );
     }
 }
 
@@ -525,7 +740,10 @@ async fn an_unreadable_lease_directory_must_not_stop_the_announcement() {
     let etag = r.etag();
     let (st, ev) = run_with(l, r.clone(), etag.as_deref(), lease_cfg()).await;
     let m = Manifest::parse(&r.manifest_bytes()).expect("清单");
-    assert!(m.window.entries.iter().any(|x| x.i == "n1"), "租约读不出来仍要公告：{st:?} {ev:?}");
+    assert!(
+        m.window.entries.iter().any(|x| x.i == "n1"),
+        "租约读不出来仍要公告：{st:?} {ev:?}"
+    );
     assert!(!ev.iter().any(|e| matches!(e, SyncEvent::Deferred { .. })));
 }
 
@@ -540,9 +758,15 @@ async fn a_failed_publish_never_aborts_the_round() {
     let (st, _) = run_with(l.clone(), r.clone(), etag.as_deref(), lease_cfg()).await;
     assert_eq!(st.pushed, 1, "贴不上租约也要照常上传");
     let m = Manifest::parse(&r.manifest_bytes()).expect("清单");
-    assert!(m.window.entries.iter().any(|x| x.i == "n1"), "贴不上租约也要照常公告");
+    assert!(
+        m.window.entries.iter().any(|x| x.i == "n1"),
+        "贴不上租约也要照常公告"
+    );
     assert!(r.publishes.lock().unwrap().is_empty());
-    assert!(l.leases.lock().unwrap().is_empty(), "没贴成功就别记本地状态");
+    assert!(
+        l.leases.lock().unwrap().is_empty(),
+        "没贴成功就别记本地状态"
+    );
 }
 
 #[tokio::test]
@@ -550,10 +774,17 @@ async fn with_the_lease_off_the_round_touches_no_locks_at_all() {
     let (l, r) = (FakeLocal::default(), FakeRemote::default());
     r.seed(base_manifest());
     dirty_local(&l, "n1", 3, "aaaa");
-    r.leases.lock().unwrap().push(PeerLease { device: "dev-2".into(), expires_at: "2099-01-01T00:00:00.000Z".into(), seq: 1 });
+    r.leases.lock().unwrap().push(PeerLease {
+        device: "dev-2".into(),
+        expires_at: "2099-01-01T00:00:00.000Z".into(),
+        seq: 1,
+    });
     let etag = r.etag();
     let (_, ev) = run(l, r.clone(), etag.as_deref()).await;
-    assert!(r.publishes.lock().unwrap().is_empty(), "没开就不要发任何租约请求（省请求，也省一次误判）");
+    assert!(
+        r.publishes.lock().unwrap().is_empty(),
+        "没开就不要发任何租约请求（省请求，也省一次误判）"
+    );
     let m = Manifest::parse(&r.manifest_bytes()).expect("清单");
     assert!(m.window.entries.iter().any(|x| x.i == "n1"));
     assert!(!ev.iter().any(|e| matches!(e, SyncEvent::Deferred { .. })));
@@ -572,11 +803,19 @@ async fn a_failed_manifest_commit_leaves_the_edit_pending_so_the_next_round_repl
 
     assert_eq!(st.pushed, 1, "记录该推还是推了");
     assert!(
-        !l.applied.lock().unwrap().iter().any(|o| matches!(o, ApplyOp::MarkSynced { .. })),
+        !l.applied
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|o| matches!(o, ApplyOp::MarkSynced { .. })),
         "公告没成功就不许标 synced —— 这是这一条测试唯一真正要证的东西",
     );
     assert!(
-        !l.applied.lock().unwrap().iter().any(|o| matches!(o, ApplyOp::StoreManifest { .. })),
+        !l.applied
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|o| matches!(o, ApplyOp::StoreManifest { .. })),
         "公告没成功也不该缓存一份新清单"
     );
     assert_eq!(st.outcome, RoundOutcome::Partial, "本轮得如实报『没做完』");

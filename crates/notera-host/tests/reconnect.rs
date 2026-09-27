@@ -29,7 +29,8 @@ struct Tmp(PathBuf);
 impl Tmp {
     fn new(tag: &str) -> Self {
         let n = SEQ.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("notera-reconnect-{tag}-{}-{n}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("notera-reconnect-{tag}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
@@ -104,7 +105,10 @@ async fn a_flaky_link_still_converges_without_losing_or_duplicating_notes() {
         match mode {
             0 => srv.stop().await,
             1 => srv.inject(Injection::abort_after(0)).await,
-            _ => srv.inject(Injection::status("GET /.notes/manifest/*", 500)).await,
+            _ => {
+                srv.inject(Injection::status("GET /.notes/manifest/*", 500))
+                    .await
+            }
         }
         let text = format!("第 {round} 轮写的正文");
         a.app.create_note(&folder, doc(&text)).unwrap();
@@ -126,12 +130,23 @@ async fn a_flaky_link_still_converges_without_losing_or_duplicating_notes() {
             .unwrap()
             .iter()
             .any(|r| r.title == text);
-        assert!(readable, "第 {round} 轮（模式 {mode}）写的笔记在本机读不回来：{text}");
+        assert!(
+            readable,
+            "第 {round} 轮（模式 {mode}）写的笔记在本机读不回来：{text}"
+        );
         // 更关键的是**账要挂着**：这一轮没上去，outbox 就必须还欠着，
         // 否则界面报"已同步"而服务器上没有，换设备时这条就消失了。
         let st = a.app.store().stats().unwrap();
-        assert!(st.outbox_pending >= 1, "坏链路那轮之后本机没记账（模式 {mode}，outbox_pending={})", st.outbox_pending);
-        assert!(st.dirty_notes >= 1, "坏链路那轮之后改动被判成已公告（模式 {mode}，dirty_notes={})", st.dirty_notes);
+        assert!(
+            st.outbox_pending >= 1,
+            "坏链路那轮之后本机没记账（模式 {mode}，outbox_pending={})",
+            st.outbox_pending
+        );
+        assert!(
+            st.dirty_notes >= 1,
+            "坏链路那轮之后改动被判成已公告（模式 {mode}，dirty_notes={})",
+            st.dirty_notes
+        );
         down_rounds += 1;
         match mode {
             0 => srv.start_server().await,
@@ -148,23 +163,37 @@ async fn a_flaky_link_still_converges_without_losing_or_duplicating_notes() {
     for _ in 0..8 {
         let stats = a.app.sync_once().await.expect("恢复后的轮次");
         let st = a.app.store().stats().unwrap();
-        tail.push(format!("{:?} dirty={} pending={}", stats.outcome, st.dirty_notes, st.outbox_pending));
+        tail.push(format!(
+            "{:?} dirty={} pending={}",
+            stats.outcome, st.dirty_notes, st.outbox_pending
+        ));
         if st.dirty_notes == 0 && st.outbox_pending == 0 {
             settled = true;
             break;
         }
     }
-    assert!(settled, "链路恢复后本机一直没能结清：\n  {}", tail.join("\n  "));
+    assert!(
+        settled,
+        "链路恢复后本机一直没能结清：\n  {}",
+        tail.join("\n  ")
+    );
     let st = a.app.store().stats().unwrap();
     assert_eq!(st.notes, 6, "本机应有六条（六轮各一条）：{st:?}");
 
     b.app.sync_once().await.expect("B 拉一轮");
     b.app.sync_once().await.expect("B 补一轮");
-    assert_eq!(a.fingerprints(), b.fingerprints(), "两台设备的标题/内容哈希不一致（丢了或重了）");
+    assert_eq!(
+        a.fingerprints(),
+        b.fingerprints(),
+        "两台设备的标题/内容哈希不一致（丢了或重了）"
+    );
     assert_eq!(b.fingerprints().len(), 6);
 
     // 断线那几轮不许在服务器上留下半截东西：临时对象、或同一篇的第二份记录文件
-    let entries = srv.fs_dump()["entries"].as_array().expect("entries").clone();
+    let entries = srv.fs_dump()["entries"]
+        .as_array()
+        .expect("entries")
+        .clone();
     let strays: Vec<String> = entries
         .iter()
         .filter(|e| e["path"].as_str().unwrap_or_default().contains(".tmp-"))
@@ -179,7 +208,11 @@ async fn a_flaky_link_still_converges_without_losing_or_duplicating_notes() {
     let mut uniq = records.clone();
     uniq.sort();
     uniq.dedup();
-    assert_eq!(records.len(), uniq.len(), "同一个 id 出现多份记录文件：{records:?}");
+    assert_eq!(
+        records.len(),
+        uniq.len(),
+        "同一个 id 出现多份记录文件：{records:?}"
+    );
 
     srv.stop().await;
 }

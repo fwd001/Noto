@@ -210,7 +210,15 @@ pub fn href_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':'
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'.'
+            | b'_'
+            | b'~'
+            | b'/'
+            | b':'
             | b'@' => out.push(b as char),
             _ => out.push_str(&format!("%{b:02X}")),
         }
@@ -252,7 +260,10 @@ pub fn multistatus(entries: &[MsEntry], requested: &PropFind) -> String {
             }
         }
         if wants(requested, "getcontentlength") && !e.is_dir {
-            xml.push_str(&format!("<D:getcontentlength>{}</D:getcontentlength>\n", e.len));
+            xml.push_str(&format!(
+                "<D:getcontentlength>{}</D:getcontentlength>\n",
+                e.len
+            ));
         }
         if wants(requested, "getlastmodified") {
             xml.push_str(&format!(
@@ -261,7 +272,12 @@ pub fn multistatus(entries: &[MsEntry], requested: &PropFind) -> String {
             ));
         }
         if wants(requested, "displayname") {
-            let name = e.href.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+            let name = e
+                .href
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or("");
             xml.push_str(&format!("<D:displayname>{}</D:displayname>\n", esc(name)));
         }
         for (k, v) in &e.props {
@@ -295,7 +311,10 @@ mod tests {
         assert_eq!(parse_propfind(body), PropFind::AllProp);
         let body = br#"<propfind xmlns="DAV:"><prop><getetag xmlns="DAV:"/><x:custom xmlns:x="urn:x"/></prop></propfind>"#;
         match parse_propfind(body) {
-            PropFind::Prop(v) => assert!(v.contains(&"getetag".to_string()) && v.contains(&"custom".to_string()), "{v:?}"),
+            PropFind::Prop(v) => assert!(
+                v.contains(&"getetag".to_string()) && v.contains(&"custom".to_string()),
+                "{v:?}"
+            ),
             other => panic!("unexpected {other:?}"),
         }
     }

@@ -136,13 +136,28 @@ pub struct NoteQuery {
 
 impl NoteQuery {
     pub fn all() -> Self {
-        Self { folder: None, trash: false, limit: 0, offset: 0 }
+        Self {
+            folder: None,
+            trash: false,
+            limit: 0,
+            offset: 0,
+        }
     }
     pub fn in_folder(folder: &EntityId) -> Self {
-        Self { folder: Some(folder.clone()), trash: false, limit: 0, offset: 0 }
+        Self {
+            folder: Some(folder.clone()),
+            trash: false,
+            limit: 0,
+            offset: 0,
+        }
     }
     pub fn trash() -> Self {
-        Self { folder: None, trash: true, limit: 0, offset: 0 }
+        Self {
+            folder: None,
+            trash: true,
+            limit: 0,
+            offset: 0,
+        }
     }
 }
 
@@ -154,7 +169,10 @@ pub struct SearchQuery {
 
 impl SearchQuery {
     pub fn new(text: impl Into<String>) -> Self {
-        Self { text: text.into(), limit: 0 }
+        Self {
+            text: text.into(),
+            limit: 0,
+        }
     }
 }
 
@@ -334,18 +352,36 @@ pub struct SyncOperation {
 pub enum ApplyOp {
     /// `env` = 记录信封（DATA-MODEL §11 / SYNC-PROTOCOL §3）。
     /// 存储层自行校验 `hash == sha256(canonical(payload))`，不符即整批回滚。
-    UpsertNote { env: serde_json::Value },
-    UpsertFolder { env: serde_json::Value },
+    UpsertNote {
+        env: serde_json::Value,
+    },
+    UpsertFolder {
+        env: serde_json::Value,
+    },
     /// 冲突解决的一半：**采纳服务器那一版作为正文**（CONFLICT-RESOLUTION §6.1）。
     ///
     /// 与 `UpsertNote` 的唯一区别是允许 `rev` 相等而内容不同 —— 普通 upsert 必须拒掉那种
     /// 情况（"服务器侧异常"），但两侧各自从同一个确认点推到同一个 rev，正是分布式写作的
     /// 正常结果。前提由调用方保证：**本机那一份已经在副本笔记里**，否则这条就是把用户
     /// 输入扔掉。`rev` 依旧绝不许倒退（I2）。
-    AdoptConflict { env: serde_json::Value },
-    SetRemote { kind: EntityKind, id: EntityId, rev: Rev, hash12: String },
-    Tombstone { kind: EntityKind, id: EntityId, rev: Rev },
-    Purge { kind: EntityKind, id: EntityId },
+    AdoptConflict {
+        env: serde_json::Value,
+    },
+    SetRemote {
+        kind: EntityKind,
+        id: EntityId,
+        rev: Rev,
+        hash12: String,
+    },
+    Tombstone {
+        kind: EntityKind,
+        id: EntityId,
+        rev: Rev,
+    },
+    Purge {
+        kind: EntityKind,
+        id: EntityId,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

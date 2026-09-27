@@ -123,7 +123,8 @@ impl HttpClient {
                 return Err(NetError::Timeout);
             }
             let request = build_request(&spec, url.clone(), remaining)?;
-            let outcome = tokio::time::timeout(remaining, self.inner_client(&url).execute(request)).await;
+            let outcome =
+                tokio::time::timeout(remaining, self.inner_client(&url).execute(request)).await;
             let resp = match outcome {
                 Err(_) => {
                     proof.detail.push_str(" outcome=timeout");
@@ -131,7 +132,9 @@ impl HttpClient {
                     return Err(NetError::Timeout);
                 }
                 Ok(Err(e)) => {
-                    proof.detail.push_str(&format!(" outcome={}", classify_name(&e)));
+                    proof
+                        .detail
+                        .push_str(&format!(" outcome={}", classify_name(&e)));
                     self.record(proof);
                     return Err(transport_error(&e));
                 }
@@ -152,9 +155,9 @@ impl HttpClient {
                         Ok(next) => {
                             let cross_origin = origin_of(&url) != origin_of(&next);
                             if cross_origin && spec.carries_credentials() {
-                                proof.detail.push_str(&format!(
-                                    " outcome=cross-origin-redirect->{next}"
-                                ));
+                                proof
+                                    .detail
+                                    .push_str(&format!(" outcome=cross-origin-redirect->{next}"));
                                 self.record(proof);
                                 return Err(NetError::RedirectCrossOrigin);
                             }
@@ -170,9 +173,7 @@ impl HttpClient {
                             hops += 1;
                             continue;
                         }
-                        Err(e) => {
-                            return Err(NetError::Protocol(format!("Location 非法: {e}")))
-                        }
+                        Err(e) => return Err(NetError::Protocol(format!("Location 非法: {e}"))),
                     }
                 }
             }
@@ -220,7 +221,9 @@ impl HttpClient {
                 proof.detail.push_str(" verified=SKIPPED(仅 loopback)");
             }
 
-            proof.detail.push_str(&format!(" status={status} bytes={}", body.len()));
+            proof
+                .detail
+                .push_str(&format!(" status={status} bytes={}", body.len()));
             self.record(proof);
             if status == 304 {
                 body.clear();
@@ -320,7 +323,10 @@ impl HttpClient {
             return Err(NetError::Unsupported);
         }
         if url.scheme() != "http" && url.scheme() != "https" {
-            return Err(NetError::Protocol(format!("不支持的 scheme {}", url.scheme())));
+            return Err(NetError::Protocol(format!(
+                "不支持的 scheme {}",
+                url.scheme()
+            )));
         }
         Ok(())
     }
@@ -328,13 +334,15 @@ impl HttpClient {
     fn route_of(&self, url: &reqwest::Url) -> RouteProof {
         let host = url.host_str().unwrap_or_default();
         let port = url.port_or_known_default().unwrap_or(0);
-        let bypassed = self.proxy.is_bypassed(host)
-            || self.proxy.is_bypassed(&format!("{host}:{port}"));
+        let bypassed =
+            self.proxy.is_bypassed(host) || self.proxy.is_bypassed(&format!("{host}:{port}"));
         let uses_proxy = self.proxy.mode.uses_proxy();
         let endpoint = if bypassed || !uses_proxy {
             format!("{host}:{port}")
         } else {
-            self.proxy.endpoint().unwrap_or_else(|| format!("{host}:{port}"))
+            self.proxy
+                .endpoint()
+                .unwrap_or_else(|| format!("{host}:{port}"))
         };
         RouteProof {
             mode: self.proxy.mode,
@@ -346,7 +354,11 @@ impl HttpClient {
                 if bypassed { "string-match" } else { "no" },
                 self.tls.name(),
                 if url.scheme() == "http" { "yes" } else { "no" },
-                if bypassed || !uses_proxy { "direct" } else { "proxied" }
+                if bypassed || !uses_proxy {
+                    "direct"
+                } else {
+                    "proxied"
+                }
             ),
         }
     }

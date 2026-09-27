@@ -21,7 +21,9 @@ use serde_json::Value;
 use crate::auth::Credentials;
 use crate::caps::{Caps, WriteStrategy};
 use crate::error::{map_net, map_status, WebDavError};
-use crate::path::{assert_url_sane, kind_dir, kind_matches, RecordPath, RemotePath, DEFAULT_ROOT_PREFIX};
+use crate::path::{
+    assert_url_sane, kind_dir, kind_matches, RecordPath, RemotePath, DEFAULT_ROOT_PREFIX,
+};
 use crate::record::WireMeta;
 
 /// 单条记录的体积上限：把 §6.3 的"单轮硬上限 8 MiB"落到单对象粒度。
@@ -142,10 +144,17 @@ impl WebDavRemote {
     }
 
     async fn send_retry(&self, s: RequestSpec) -> Result<Response, RemoteError> {
-        self.http.send_with_retry(s, &self.retry).await.map_err(map_net)
+        self.http
+            .send_with_retry(s, &self.retry)
+            .await
+            .map_err(map_net)
     }
 
-    pub(crate) async fn get_raw(&self, url: &str, inm: Option<&str>) -> Result<Response, RemoteError> {
+    pub(crate) async fn get_raw(
+        &self,
+        url: &str,
+        inm: Option<&str>,
+    ) -> Result<Response, RemoteError> {
         let mut s = self.spec(HttpMethod::Get, url)?;
         if let Some(e) = inm {
             s = s.with_if_none_match(e);
@@ -186,10 +195,18 @@ impl WebDavRemote {
         }
     }
 
-    pub(crate) async fn move_raw(&self, from_url: &str, dest_url: &str, overwrite: bool, if_match_src: Option<&str>) -> Result<Response, RemoteError> {
+    pub(crate) async fn move_raw(
+        &self,
+        from_url: &str,
+        dest_url: &str,
+        overwrite: bool,
+        if_match_src: Option<&str>,
+    ) -> Result<Response, RemoteError> {
         // Destination 越出根 = 把库里的东西搬到库外，或把库外的东西搬进来。绝不发出。
         if !self.paths.is_in_root(dest_url) || !self.paths.is_in_root(from_url) {
-            return Err(RemoteError::Protocol(format!("MOVE 端点越出远端根: {dest_url}")));
+            return Err(RemoteError::Protocol(format!(
+                "MOVE 端点越出远端根: {dest_url}"
+            )));
         }
         let mut s = self
             .spec(HttpMethod::Move, from_url)?
@@ -217,7 +234,11 @@ impl WebDavRemote {
 
     // ------------------------------------------------------ 读对象 ---
 
-    pub(crate) async fn read_object(&self, url: &str, inm: Option<&str>) -> Result<Object, RemoteError> {
+    pub(crate) async fn read_object(
+        &self,
+        url: &str,
+        inm: Option<&str>,
+    ) -> Result<Object, RemoteError> {
         let r = self.get_raw(url, inm).await?;
         Ok(Object::of(&r))
     }
@@ -248,7 +269,10 @@ impl WebDavRemote {
     }
 
     /// tmp+MOVE / 条件 PUT / 盲写三选一，服务器回 405/501 就降级到下一级。
-    pub(crate) async fn atomic_write(&self, w: &AtomicWrite<'_>) -> Result<Option<String>, RemoteError> {
+    pub(crate) async fn atomic_write(
+        &self,
+        w: &AtomicWrite<'_>,
+    ) -> Result<Option<String>, RemoteError> {
         let mut degraded = false;
         for strat in self.attempts() {
             match self.try_write(strat, w).await {
@@ -342,16 +366,28 @@ impl WebDavRemote {
     /// [`notera_sync::Commit::verified`] 要的是"远端这一条就是我发的这一条"，所以 S2 也补一次。
     /// `verified = false` 只出现在**复验没能确认**的情形（读回 404，或内容与发出不一致 ——
     /// S3 的覆盖窗口就靠这一条检出）；传输/权限类失败直接以 `Err` 上抛，不伪装成"写完了"。
-    async fn confirm_record(&self, url: &str, want: &WireMeta, wire: &[u8], etag: Option<String>) -> Result<Commit, RemoteError> {
+    async fn confirm_record(
+        &self,
+        url: &str,
+        want: &WireMeta,
+        wire: &[u8],
+        etag: Option<String>,
+    ) -> Result<Commit, RemoteError> {
         let got = self.read_object(url, None).await?;
         if got.status == 404 {
-            return Ok(Commit { etag, verified: false });
+            return Ok(Commit {
+                etag,
+                verified: false,
+            });
         }
         if !got.is_success() {
             return Err(map_status(got.status));
         }
         let stored = WireMeta::parse_lenient(&got.body);
-        let verified = got.body == wire && stored.as_ref().is_some_and(|m| m.rev == want.rev && m.hash == want.hash);
+        let verified = got.body == wire
+            && stored
+                .as_ref()
+                .is_some_and(|m| m.rev == want.rev && m.hash == want.hash);
         if !verified {
             tracing::warn!(url, "写后复验不一致：判定被覆盖，交回上层重算计划");
         }
@@ -362,12 +398,18 @@ impl WebDavRemote {
     }
 
     /// prev 的退化写法：没有可用的 MOVE 时，把第 ① 步读到的旧正文原样 PUT 上去。
-    async fn put_prev_from_observed(&self, prev_url: &str, bytes: Option<&[u8]>) -> Result<(), RemoteError> {
+    async fn put_prev_from_observed(
+        &self,
+        prev_url: &str,
+        bytes: Option<&[u8]>,
+    ) -> Result<(), RemoteError> {
         let Some(b) = bytes else { return Ok(()) };
         let r = self.put_plain(prev_url, b).await?;
         match judge_write(&r) {
             Ok(()) => Ok(()),
-            Err(WriteFail::Unsupported) => Err(RemoteError::Protocol("服务器无法保留上一版清单（prev 写不进去）".into())),
+            Err(WriteFail::Unsupported) => Err(RemoteError::Protocol(
+                "服务器无法保留上一版清单（prev 写不进去）".into(),
+            )),
             Err(WriteFail::Lost) => Err(RemoteError::Precondition),
             Err(WriteFail::Other(e)) => Err(map_net(e)),
         }
@@ -378,15 +420,25 @@ impl WebDavRemote {
     /// 第 ④ 步已经把 `index.json` 腾空，所以这里"应当不存在"是成立的前提 ——
     /// 有条件 PUT 就用 `If-None-Match: *` 把它变成真的 CAS（有人抢建就 412）；
     /// 连条件 PUT 都没有才退到 §5 的盲写，覆盖风险由第 ⑥ 步复验检出。
-    async fn publish_manifest_by_put(&self, index: &str, wire: &[u8]) -> Result<Option<String>, RemoteError> {
-        let cond = if self.caps.has(Caps::CONDITIONAL_PUT) { Cond::CreateOnly } else { Cond::None };
+    async fn publish_manifest_by_put(
+        &self,
+        index: &str,
+        wire: &[u8],
+    ) -> Result<Option<String>, RemoteError> {
+        let cond = if self.caps.has(Caps::CONDITIONAL_PUT) {
+            Cond::CreateOnly
+        } else {
+            Cond::None
+        };
         if matches!(cond, Cond::None) {
             tracing::debug!("MOVE 与条件 PUT 都不可用，清单降级为盲 PUT 发布");
         }
         let r = self.put_cond(index, wire, cond).await?;
         match judge_write(&r) {
             Ok(()) => Ok(etag_of(&r)),
-            Err(WriteFail::Unsupported) => Err(RemoteError::Protocol("服务器不接受清单写入（405/501）".into())),
+            Err(WriteFail::Unsupported) => Err(RemoteError::Protocol(
+                "服务器不接受清单写入（405/501）".into(),
+            )),
             Err(WriteFail::Lost) => Err(RemoteError::Precondition),
             Err(WriteFail::Other(e)) => Err(map_net(e)),
         }
@@ -438,7 +490,9 @@ fn judge_write(resp: &Response) -> Result<(), WriteFail> {
 }
 
 fn etag_of(resp: &Response) -> Option<String> {
-    resp.etag.clone().or_else(|| resp.header("etag").map(str::to_string))
+    resp.etag
+        .clone()
+        .or_else(|| resp.header("etag").map(str::to_string))
 }
 
 /// 一个远端对象的读结果（状态 + 原文 + etag）。
@@ -471,12 +525,17 @@ impl RemotePort for WebDavRemote {
     /// `Ok(None)` = "本轮拿不到新的清单正文"，涵盖两种形态：304（远端未变）与 404
     /// （根还没初始化）。清单是公告板不是数据源（§0 R1），所以两者都**绝不**被解读成
     /// "远端是空的"；引擎在 `None` 分支回落到 `LocalPort::cached_manifest`。
-    async fn fetch_manifest(&self, etag: Option<&str>) -> Result<Option<(Vec<u8>, Option<String>)>, RemoteError> {
+    async fn fetch_manifest(
+        &self,
+        etag: Option<&str>,
+    ) -> Result<Option<(Vec<u8>, Option<String>)>, RemoteError> {
         let url = self.paths.manifest_index();
         let o = self.read_object(&url, etag).await?;
         match o.status {
             304 | 404 => Ok(None),
-            200..=299 if o.body.is_empty() => Err(RemoteError::Protocol("index.json 为空，拒绝当成空清单".into())),
+            200..=299 if o.body.is_empty() => Err(RemoteError::Protocol(
+                "index.json 为空，拒绝当成空清单".into(),
+            )),
             200..=299 => Ok(Some((o.body, o.etag))),
             s => Err(map_status(s)),
         }
@@ -488,7 +547,9 @@ impl RemotePort for WebDavRemote {
         let o = self.read_object(&url, None).await?;
         match o.status {
             404 => Err(RemoteError::NotFound),
-            200..=299 if o.body.is_empty() => Err(RemoteError::Protocol(format!("分段 {name} 内容为空"))),
+            200..=299 if o.body.is_empty() => {
+                Err(RemoteError::Protocol(format!("分段 {name} 内容为空")))
+            }
             200..=299 => parse_segment(&o.body, name),
             s => Err(map_status(s)),
         }
@@ -506,16 +567,28 @@ impl RemotePort for WebDavRemote {
     }
 
     // §11.4 尽力而为租约：实现在 `lease.rs`，这里只是端口落点。
-    async fn lease_publish(&self, token: &str, expires_at: &str, seq: u64) -> Result<(), RemoteError> {
+    async fn lease_publish(
+        &self,
+        token: &str,
+        expires_at: &str,
+        seq: u64,
+    ) -> Result<(), RemoteError> {
         WebDavRemote::lease_publish(self, self.device_id(), token, expires_at, seq).await
     }
 
-    async fn lease_holders(&self, known: &[String]) -> Result<Vec<notera_sync::PeerLease>, RemoteError> {
+    async fn lease_holders(
+        &self,
+        known: &[String],
+    ) -> Result<Vec<notera_sync::PeerLease>, RemoteError> {
         let me = self.device_id().to_string();
         Ok(WebDavRemote::lease_peers(self, &me, known)
             .await?
             .into_iter()
-            .map(|d| notera_sync::PeerLease { device: d.device, expires_at: d.expires_at, seq: d.seq })
+            .map(|d| notera_sync::PeerLease {
+                device: d.device,
+                expires_at: d.expires_at,
+                seq: d.seq,
+            })
             .collect())
     }
 
@@ -524,10 +597,19 @@ impl RemotePort for WebDavRemote {
     /// rev 闸门需要知道远端当前的 rev，而 HTTP 没有 `If-Rev` —— 因此"更新写"
     /// （`if_match` 非空）与 S3 一律先 `GET` 一次；纯创建写不花这一趟（服务器用
     /// `If-None-Match: *` / `Overwrite: F` 替我们守住"不许覆盖"）。
-    async fn put_record(&self, kind: &str, id: &str, wire: &[u8], if_match: Option<&str>) -> Result<Commit, RemoteError> {
+    async fn put_record(
+        &self,
+        kind: &str,
+        id: &str,
+        wire: &[u8],
+        if_match: Option<&str>,
+    ) -> Result<Commit, RemoteError> {
         let rp: RecordPath = self.paths.record(kind, id)?;
         if wire.len() > MAX_RECORD_BYTES {
-            return Err(RemoteError::Protocol(format!("记录 {} 字节，超过单对象上限", wire.len())));
+            return Err(RemoteError::Protocol(format!(
+                "记录 {} 字节，超过单对象上限",
+                wire.len()
+            )));
         }
         let want = WireMeta::parse_outgoing(wire)?;
         check_envelope_identity(&want, kind, id)?;
@@ -546,7 +628,10 @@ impl RemotePort for WebDavRemote {
                         Some(m) => {
                             if m.is_same_commit(&want) {
                                 // §11.1：上一轮写了、确认丢了。内容一致即直接判成功，不重复写。
-                                return Ok(Commit { etag: o.etag, verified: true });
+                                return Ok(Commit {
+                                    etag: o.etag,
+                                    verified: true,
+                                });
                             }
                             if let (Some(e), Some(fresh)) = (if_match, o.etag.as_deref()) {
                                 if fresh != e {
@@ -574,7 +659,9 @@ impl RemotePort for WebDavRemote {
                 s => return Err(map_status(s)),
             }
         }
-        let tmp = self.paths.record_tmp(kind, id, &self.device, self.next_nonce())?;
+        let tmp = self
+            .paths
+            .record_tmp(kind, id, &self.device, self.next_nonce())?;
         let w = AtomicWrite {
             dest: &rp.url,
             tmp: &tmp,
@@ -593,8 +680,13 @@ impl RemotePort for WebDavRemote {
     /// 存的是**上一版**。把新内容移进去会当场毁掉那份唯一能在清单损坏时回退的副本，
     /// 所以这里做的是轮转：`index.json → index.json.prev`，再把暂存移进 `index.json`
     /// （也因此只需一次暂存上传，不需要文档里的 `.tmp-*2`）。
-    async fn commit_manifest(&self, wire: &[u8], cas_etag: Option<&str>) -> Result<Option<String>, RemoteError> {
-        let staged = Manifest::parse(wire).map_err(|e| RemoteError::Protocol(format!("清单自校验失败，拒绝公告: {e}")))?;
+    async fn commit_manifest(
+        &self,
+        wire: &[u8],
+        cas_etag: Option<&str>,
+    ) -> Result<Option<String>, RemoteError> {
+        let staged = Manifest::parse(wire)
+            .map_err(|e| RemoteError::Protocol(format!("清单自校验失败，拒绝公告: {e}")))?;
         let index = self.paths.manifest_index();
 
         // ① 读当前 index.json 取 E0 —— 调用方已给出 E0 时不重读（§6.3 的请求预算）。
@@ -606,7 +698,8 @@ impl RemotePort for WebDavRemote {
             match o.status {
                 404 => {}
                 200..=299 => {
-                    let cur = Manifest::parse(&o.body).map_err(|e| RemoteError::Protocol(format!("服务器上的清单不可信: {e}")))?;
+                    let cur = Manifest::parse(&o.body)
+                        .map_err(|e| RemoteError::Protocol(format!("服务器上的清单不可信: {e}")))?;
                     if staged.seq <= cur.seq {
                         // 清单落后于实体是安全的（R2），倒退不是：拒绝并让上层重算。
                         return Err(RemoteError::Precondition);
@@ -617,9 +710,15 @@ impl RemotePort for WebDavRemote {
         }
         let e0: Option<String> = match cas_etag {
             Some(e) => Some(e.to_string()),
-            None => observed.as_ref().filter(|o| o.is_success()).and_then(|o| o.etag.clone()),
+            None => observed
+                .as_ref()
+                .filter(|o| o.is_success())
+                .and_then(|o| o.etag.clone()),
         };
-        let prev_bytes: Option<Vec<u8>> = observed.as_ref().filter(|o| o.status == 200).map(|o| o.body.clone());
+        let prev_bytes: Option<Vec<u8>> = observed
+            .as_ref()
+            .filter(|o| o.status == 200)
+            .map(|o| o.body.clone());
 
         // ③ PUT 暂存 → 回读校验 checksum：半写/截断在这里被拦住，而不是在别的设备上。
         let tmp = self.paths.manifest_tmp(&self.device, self.next_nonce())?;
@@ -661,7 +760,8 @@ impl RemotePort for WebDavRemote {
                 }
             }
         } else {
-            self.put_prev_from_observed(&prev, prev_bytes.as_deref()).await?;
+            self.put_prev_from_observed(&prev, prev_bytes.as_deref())
+                .await?;
             if prev_bytes.is_some() {
                 // 服务器不肯给 ETag → 没有 If-Match 可用的轮转。保住 prev 之后把 index 腾空，
                 // 让第 ⑤ 步的"创建语义"仍然是一个真的 CAS（抢不过别人就 412）。
@@ -681,7 +781,9 @@ impl RemotePort for WebDavRemote {
                     self.best_effort_delete(&tmp).await;
                     match f {
                         WriteFail::Lost => return Err(RemoteError::Precondition),
-                        WriteFail::Unsupported => self.publish_manifest_by_put(&index, wire).await?,
+                        WriteFail::Unsupported => {
+                            self.publish_manifest_by_put(&index, wire).await?
+                        }
                         WriteFail::Other(err) => return Err(map_net(err)),
                     }
                 }
@@ -695,7 +797,8 @@ impl RemotePort for WebDavRemote {
         if !done.is_success() {
             return Err(map_status(done.status));
         }
-        let published = Manifest::parse(&done.body).map_err(|e| RemoteError::Protocol(format!("提交后的清单不可信: {e}")))?;
+        let published = Manifest::parse(&done.body)
+            .map_err(|e| RemoteError::Protocol(format!("提交后的清单不可信: {e}")))?;
         if done.body != wire || published.seq != staged.seq {
             // 公告被别人覆盖了（或服务器只落了半份）：判"远端领先"，重算计划。
             return Err(RemoteError::Precondition);
@@ -741,12 +844,16 @@ impl RemotePort for WebDavRemote {
 fn check_envelope_identity(want: &WireMeta, kind: &str, id: &str) -> Result<(), RemoteError> {
     if let Some(k) = &want.kind {
         if !kind_matches(kind, k) {
-            return Err(RemoteError::Protocol(format!("信封 kind {k:?} 与目录 {kind:?} 不一致")));
+            return Err(RemoteError::Protocol(format!(
+                "信封 kind {k:?} 与目录 {kind:?} 不一致"
+            )));
         }
     }
     if let Some(i) = &want.id {
         if i != id {
-            return Err(RemoteError::Protocol(format!("信封 id {i:?} 与文件名 {id:?} 不一致")));
+            return Err(RemoteError::Protocol(format!(
+                "信封 id {i:?} 与文件名 {id:?} 不一致"
+            )));
         }
     }
     if want.purged && kind_dir(kind).is_err() {
@@ -765,17 +872,24 @@ fn checksum_matches(bytes: &[u8]) -> bool {
 
 /// 分段文件的两种可接受形态：裸条目数组，或 `{"entries": [...]}`。
 fn parse_segment(body: &[u8], name: &str) -> Result<Vec<EntryRef>, RemoteError> {
-    let v: Value = serde_json::from_slice(body).map_err(|e| RemoteError::Protocol(format!("分段 {name} 不是合法 JSON: {e}")))?;
+    let v: Value = serde_json::from_slice(body)
+        .map_err(|e| RemoteError::Protocol(format!("分段 {name} 不是合法 JSON: {e}")))?;
     let arr = match &v {
         Value::Array(a) => a.clone(),
-        Value::Object(o) => o.get("entries").and_then(Value::as_array).cloned().unwrap_or_default(),
+        Value::Object(o) => o
+            .get("entries")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
         _ => Vec::new(),
     };
     let mut out = Vec::with_capacity(arr.len());
     for raw in arr {
-        let e: EntryRef = serde_json::from_value(raw).map_err(|e| RemoteError::Protocol(format!("分段 {name} 条目非法: {e}")))?;
-        notera_core::EntityId::parse(&e.i)
-            .map_err(|_| RemoteError::Protocol(format!("分段 {name} 含非 UUID 条目 id: {:?}", e.i)))?;
+        let e: EntryRef = serde_json::from_value(raw)
+            .map_err(|e| RemoteError::Protocol(format!("分段 {name} 条目非法: {e}")))?;
+        notera_core::EntityId::parse(&e.i).map_err(|_| {
+            RemoteError::Protocol(format!("分段 {name} 含非 UUID 条目 id: {:?}", e.i))
+        })?;
         out.push(e);
     }
     Ok(out)
@@ -807,19 +921,26 @@ impl WebDavRemote {
     /// 由调用方去读并**接受**那一份，绝不覆盖。
     pub async fn provision_protocol(&self, doc: &serde_json::Value) -> Result<bool, RemoteError> {
         let url = self.paths.protocol_json();
-        let bytes = serde_json::to_vec_pretty(doc).map_err(|e| RemoteError::Protocol(e.to_string()))?;
+        let bytes =
+            serde_json::to_vec_pretty(doc).map_err(|e| RemoteError::Protocol(e.to_string()))?;
         match self.put_cond(&url, &bytes, Cond::CreateOnly).await {
             Ok(r) if r.is_success() => Ok(true),
             // 412 = 有别的客户端先建好了：这不是失败，是"去接受它的那一份"
             Ok(r) if r.status == 412 => Ok(false),
             // 服务器不认 If 头：退回"暂存 + MOVE Overwrite:F"的创建语义
-            Ok(r) if matches!(r.status, 405 | 501) => self.provision_protocol_by_move(&url, &bytes).await,
+            Ok(r) if matches!(r.status, 405 | 501) => {
+                self.provision_protocol_by_move(&url, &bytes).await
+            }
             Ok(r) => Err(crate::error::map_status(r.status)),
             Err(e) => Err(e),
         }
     }
 
-    async fn provision_protocol_by_move(&self, dest: &str, bytes: &[u8]) -> Result<bool, RemoteError> {
+    async fn provision_protocol_by_move(
+        &self,
+        dest: &str,
+        bytes: &[u8],
+    ) -> Result<bool, RemoteError> {
         let tmp = self.paths.tmp(&self.device, self.next_nonce())?;
         self.put_plain(&tmp, bytes).await?;
         let moved = self.move_raw(&tmp, dest, false, None).await;
@@ -878,7 +999,10 @@ impl WebDavRemote {
     /// 目标已存在视为成功（同一 sha = 同一内容，去重是内容寻址的本意）。
     pub async fn put_attachment(&self, sha256: &str, bytes: &[u8]) -> Result<(), RemoteError> {
         if bytes.len() > MAX_RECORD_BYTES * 8 {
-            return Err(RemoteError::Protocol(format!("附件过大（{} 字节），拒绝上传", bytes.len())));
+            return Err(RemoteError::Protocol(format!(
+                "附件过大（{} 字节），拒绝上传",
+                bytes.len()
+            )));
         }
         let dest = self.paths.attachment(sha256)?;
         if self.has_attachment(sha256).await? {
@@ -910,7 +1034,9 @@ impl WebDavRemote {
         }
         let got = notera_crypto::sha256_hex(&back.body);
         if got != sha256 {
-            return Err(RemoteError::Protocol(format!("附件复验不符：期望 {sha256} 实际 {got}")));
+            return Err(RemoteError::Protocol(format!(
+                "附件复验不符：期望 {sha256} 实际 {got}"
+            )));
         }
         Ok(())
     }
@@ -927,7 +1053,12 @@ impl WebDavRemote {
     ///
     /// `from == 0` 也照样按窗口要：否则第一块就把整份读进内存，"有界内存"和
     /// "断点续传"两头都落空（实测过：只在 `from > 0` 时带 Range，结果一轮就下完了）。
-    pub async fn fetch_attachment_window(&self, sha256: &str, from: u64, len: u64) -> Result<Option<AttachmentWindow>, RemoteError> {
+    pub async fn fetch_attachment_window(
+        &self,
+        sha256: &str,
+        from: u64,
+        len: u64,
+    ) -> Result<Option<AttachmentWindow>, RemoteError> {
         let url = self.paths.attachment(sha256)?;
         let want_range = self.caps.has(Caps::RANGE);
         let mut s = self.spec(HttpMethod::Get, &url)?;
@@ -943,7 +1074,12 @@ impl WebDavRemote {
         }
         // 先把头抄成自己的 String：`resp.header(..)` 借的是 `resp`，直接传进去就搬不走 `resp.body`。
         let cr = resp.header("content-range").map(str::to_owned);
-        Ok(Some(resolve_window(resp.status, cr.as_deref(), resp.body, from)))
+        Ok(Some(resolve_window(
+            resp.status,
+            cr.as_deref(),
+            resp.body,
+            from,
+        )))
     }
 
     pub(crate) async fn get_with(&self, s: RequestSpec) -> Result<Response, RemoteError> {
@@ -969,14 +1105,23 @@ pub struct AttachmentWindow {
 ///   老实、正式请求时被负载均衡换了一台，真实会发生在兼容矩阵里），它给的都是**全文**。
 ///   这时偏移必须报 0 —— 照 `from` 报，调用方就会把全文追加到已有半截的后面，凑出
 ///   一份哈希永远对不上的文件，这一轮白跑还得删 `.part` 重来。
-fn resolve_window(status: u16, content_range: Option<&str>, body: Vec<u8>, from: u64) -> AttachmentWindow {
+fn resolve_window(
+    status: u16,
+    content_range: Option<&str>,
+    body: Vec<u8>,
+    from: u64,
+) -> AttachmentWindow {
     let from = if status == 206 { from } else { 0 };
     // `bytes 5-9/10` 的第三段才是对象总长；读不到（没有该头，或是 `bytes 0-3/*`）就按已收到的长度算。
     let total = content_range
         .and_then(|v| v.rsplit('/').next())
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(from + body.len() as u64);
-    AttachmentWindow { bytes: body, from, total }
+    AttachmentWindow {
+        bytes: body,
+        from,
+        total,
+    }
 }
 
 #[cfg(test)]

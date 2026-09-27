@@ -18,7 +18,11 @@ impl Fix {
     pub fn new() -> Self {
         let keep = tempfile::tempdir().expect("临时目录");
         let dir = keep.path().to_path_buf();
-        Self { dir, device: DeviceId::new(), keep }
+        Self {
+            dir,
+            device: DeviceId::new(),
+            keep,
+        }
     }
 
     pub fn open(&self) -> Store {
@@ -66,7 +70,9 @@ pub fn missing_id() -> EntityId {
 /// 当前 doc 的权威哈希（= Store 内部算法：richtext canonical → sha256）。
 pub fn hash_of(doc: &Value) -> String {
     let parsed = notera_richtext::parse_from_value(doc).expect("测试文档必须合法");
-    ContentHash::of(notera_richtext::canonical(&parsed).as_bytes()).as_str().to_string()
+    ContentHash::of(notera_richtext::canonical(&parsed).as_bytes())
+        .as_str()
+        .to_string()
 }
 
 /// 造一条 `enc.alg=none` 的记录信封（DATA-MODEL §11 / SYNC-PROTOCOL §3）。
@@ -107,7 +113,9 @@ pub fn purged_envelope(id: &EntityId, rev: u64) -> Value {
 
 /// 便捷写：在默认本里建一条笔记。
 pub fn create(store: &Store, folder: &EntityId, text: &str) -> Note {
-    store.create_note(folder, doc_text(text)).expect("create_note")
+    store
+        .create_note(folder, doc_text(text))
+        .expect("create_note")
 }
 
 /// 默认本 id：`list_folders` 里 `system_kind = Some("default")` 的那一个。

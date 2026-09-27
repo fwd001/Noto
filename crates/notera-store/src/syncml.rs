@@ -16,7 +16,8 @@ const NIL_ID: &str = "00000000-0000-0000-0000-000000000000";
 /// nil UUID：表示"该行的键不是 UUID，请用 [`SyncOperation::entity_key`] /
 /// [`RemoteIndexEntry::sha256`]"。绝不用随机 ID 冒充。
 fn nil_id() -> EntityId {
-    EntityId::parse(NIL_ID).unwrap_or_else(|_| EntityId::parse(NIL_ID).expect("nil UUID 必须可解析"))
+    EntityId::parse(NIL_ID)
+        .unwrap_or_else(|_| EntityId::parse(NIL_ID).expect("nil UUID 必须可解析"))
 }
 
 /// 只在 `entity_key` 确实是 UUID 时填充 `id_`。
@@ -47,7 +48,12 @@ impl Store {
     // -------------------------------------------------------------- 账户 ---
 
     /// 登记/更新一个远端账户（outbox 的 `account_id` 是 NOT NULL FK，必须先有账户行）。
-    pub fn register_account(&self, id: &str, label: &str, base_url: &str) -> Result<(), StoreError> {
+    pub fn register_account(
+        &self,
+        id: &str,
+        label: &str,
+        base_url: &str,
+    ) -> Result<(), StoreError> {
         let device = self.device_id().to_string();
         self.write_tx(|tx, now| {
             tx.execute(
@@ -66,7 +72,10 @@ impl Store {
 
     pub fn set_account_enabled(&self, id: &str, enabled: bool) -> Result<(), StoreError> {
         self.write_tx(|tx, now| {
-            let n = tx.execute("UPDATE sync_accounts SET enabled = ?2 WHERE id = ?1", params![id, enabled as i64])?;
+            let n = tx.execute(
+                "UPDATE sync_accounts SET enabled = ?2 WHERE id = ?1",
+                params![id, enabled as i64],
+            )?;
             if n == 0 {
                 return Err(StoreError::Constraint(format!("账户不存在: {id}")));
             }
@@ -80,7 +89,10 @@ impl Store {
     pub fn set_account_caps(&self, id: &str, mask: u32) -> Result<(), StoreError> {
         let at = self.now();
         self.write_tx(|tx, _| {
-            let n = tx.execute("UPDATE sync_accounts SET cap_mask = ?2, caps_probed_at = ?3 WHERE id = ?1", params![id, mask as i64, at])?;
+            let n = tx.execute(
+                "UPDATE sync_accounts SET cap_mask = ?2, caps_probed_at = ?3 WHERE id = ?1",
+                params![id, mask as i64, at],
+            )?;
             if n == 0 {
                 return Err(StoreError::Constraint(format!("账户不存在: {id}")));
             }
@@ -91,11 +103,17 @@ impl Store {
     /// `None` = 从未探测过（调用方应使用保守默认，而不是当成"全不支持"）。
     pub fn account_caps(&self, id: &str) -> Result<Option<u32>, StoreError> {
         let conn = self.read()?;
-        let v = conn.query_row("SELECT cap_mask FROM sync_accounts WHERE id = ?1", [id], |r| r.get::<_, Option<i64>>(0));
+        let v = conn.query_row(
+            "SELECT cap_mask FROM sync_accounts WHERE id = ?1",
+            [id],
+            |r| r.get::<_, Option<i64>>(0),
+        );
         match v {
             Ok(Some(m)) => Ok(Some(m.max(0) as u32)),
             Ok(None) => Ok(None),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Err(StoreError::Constraint(format!("账户不存在: {id}"))),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                Err(StoreError::Constraint(format!("账户不存在: {id}")))
+            }
             Err(e) => Err(StoreError::from(e)),
         }
     }
@@ -104,10 +122,16 @@ impl Store {
     /// 是同步侧的策略，不放进存储层。
     pub fn account_caps_probed_at(&self, id: &str) -> Result<Option<String>, StoreError> {
         let conn = self.read()?;
-        let v = conn.query_row("SELECT caps_probed_at FROM sync_accounts WHERE id = ?1", [id], |r| r.get::<_, Option<String>>(0));
+        let v = conn.query_row(
+            "SELECT caps_probed_at FROM sync_accounts WHERE id = ?1",
+            [id],
+            |r| r.get::<_, Option<String>>(0),
+        );
         match v {
             Ok(t) => Ok(t),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Err(StoreError::Constraint(format!("账户不存在: {id}"))),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                Err(StoreError::Constraint(format!("账户不存在: {id}")))
+            }
             Err(e) => Err(StoreError::from(e)),
         }
     }
@@ -119,9 +143,11 @@ impl Store {
 
     pub fn account_exists(&self, id: &str) -> Result<bool, StoreError> {
         let conn = self.read()?;
-        Ok(conn
-            .query_row("SELECT EXISTS(SELECT 1 FROM sync_accounts WHERE id = ?1)", [id], |r| r.get::<_, i64>(0))?
-            != 0)
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sync_accounts WHERE id = ?1)",
+            [id],
+            |r| r.get::<_, i64>(0),
+        )? != 0)
     }
 
     pub fn sync_state(&self, account: &str) -> Result<Option<SyncStateRow>, StoreError> {
@@ -215,9 +241,11 @@ impl Store {
     pub fn dirty_entities(&self, account: &str) -> Result<Vec<DirtyEntity>, StoreError> {
         let conn = self.read()?;
         let mut out: Vec<DirtyEntity> = Vec::new();
-        let account_known: bool = conn
-            .query_row("SELECT EXISTS(SELECT 1 FROM sync_accounts WHERE id = ?1)", [account], |r| r.get::<_, i64>(0))?
-            != 0;
+        let account_known: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sync_accounts WHERE id = ?1)",
+            [account],
+            |r| r.get::<_, i64>(0),
+        )? != 0;
 
         collect_dirty(
             &conn,
@@ -250,7 +278,12 @@ impl Store {
                   ORDER BY t.entity_type, t.entity_id",
             )?;
             let rows = stmt.query_map([account], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, Option<String>>(3)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
             })?;
             for row in rows {
                 let (id, tag, rev, hash) = row?;
@@ -274,7 +307,11 @@ impl Store {
     // ----------------------------------------------------------- outbox ---
 
     /// 取一批待办并置 `inflight`（`attempts+1`）。单事务，崩溃后可重取。
-    pub fn outbox_take(&self, account: &str, limit: usize) -> Result<Vec<SyncOperation>, StoreError> {
+    pub fn outbox_take(
+        &self,
+        account: &str,
+        limit: usize,
+    ) -> Result<Vec<SyncOperation>, StoreError> {
         let account = account.to_string();
         self.write_tx(|tx, now| {
             let mut stmt = tx.prepare(
@@ -357,7 +394,14 @@ impl Store {
     /// `kind` 刻意是 `EntityKind` 而不是字符串：`entity_type` 列写的是长标记
     /// （note/folder/attachment），而同步线上飘的是短标记（n/f/a）。这里收字符串的话，
     /// 传错词汇编译能过、UPDATE 匹配 0 行、待办静静停在 inflight —— 实测就这么坏过。
-    pub fn outbox_settle(&self, account: &str, kind: EntityKind, id: &str, rev: i64, st: OpState) -> Result<bool, StoreError> {
+    pub fn outbox_settle(
+        &self,
+        account: &str,
+        kind: EntityKind,
+        id: &str,
+        rev: i64,
+        st: OpState,
+    ) -> Result<bool, StoreError> {
         let account = account.to_string();
         let id = id.to_string();
         let st = st.as_str().to_string();
@@ -379,15 +423,19 @@ impl Store {
         } else {
             states.iter().map(|s| s.as_str().to_string()).collect()
         };
-        let placeholders = list.iter().enumerate().map(|(i, _)| format!("?{}", i + 2)).collect::<Vec<_>>().join(",");
+        let placeholders = list
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 2))
+            .collect::<Vec<_>>()
+            .join(",");
         let sql = format!(
             "SELECT COUNT(*) FROM sync_operations WHERE account_id = ?1 AND state IN ({placeholders})"
         );
         let mut stmt = conn.prepare(&sql)?;
-        let binds: Vec<&dyn rusqlite::ToSql> =
-            std::iter::once(&account as &dyn rusqlite::ToSql)
-                .chain(list.iter().map(|s| s as &dyn rusqlite::ToSql))
-                .collect();
+        let binds: Vec<&dyn rusqlite::ToSql> = std::iter::once(&account as &dyn rusqlite::ToSql)
+            .chain(list.iter().map(|s| s as &dyn rusqlite::ToSql))
+            .collect();
         Ok(stmt.query_row(binds.as_slice(), |r| r.get::<_, i64>(0))? as u32)
     }
 
@@ -397,7 +445,13 @@ impl Store {
     ///
     /// 实体行已不存在但存在 `purged=1` 墓碑时，把确认写进 `sync_remote_index`
     /// （否则永久删除的传播没有可记录的确认点，墓碑会永远算作脏）。
-    pub fn mark_synced(&self, kind: EntityKind, id: &EntityId, rev: Rev, hash: &str) -> Result<(), StoreError> {
+    pub fn mark_synced(
+        &self,
+        kind: EntityKind,
+        id: &EntityId,
+        rev: Rev,
+        hash: &str,
+    ) -> Result<(), StoreError> {
         let id = id.clone();
         let hash = hash.to_string();
         self.write_tx(|tx, now| {
@@ -450,7 +504,13 @@ impl Store {
     }
 
     /// 清单里记录的服务器头部：`remote_rev`（Lamport 的"观测"来源，I2 用它取 max）。
-    pub fn set_remote_rev(&self, kind: EntityKind, id: &EntityId, remote_rev: Rev, hash12: &str) -> Result<(), StoreError> {
+    pub fn set_remote_rev(
+        &self,
+        kind: EntityKind,
+        id: &EntityId,
+        remote_rev: Rev,
+        hash12: &str,
+    ) -> Result<(), StoreError> {
         let id = id.clone();
         let hash12 = hash12.to_string();
         self.write_tx(|tx, now| {
@@ -521,7 +581,11 @@ impl Store {
     }
 
     /// 清单缓存整表替换（每账户一次）。单事务：中途失败不会留下半份清单。
-    pub fn remote_index_replace(&self, account: &str, entries: &[RemoteIndexEntry]) -> Result<(), StoreError> {
+    pub fn remote_index_replace(
+        &self,
+        account: &str,
+        entries: &[RemoteIndexEntry],
+    ) -> Result<(), StoreError> {
         let account = account.to_string();
         let entries = entries.to_vec();
         self.write_tx(|tx, now| {
@@ -563,7 +627,12 @@ impl Store {
         })
     }
 
-    pub fn remote_index_lookup(&self, account: &str, kind: EntityKind, key: &str) -> Result<Option<RemoteIndexEntry>, StoreError> {
+    pub fn remote_index_lookup(
+        &self,
+        account: &str,
+        kind: EntityKind,
+        key: &str,
+    ) -> Result<Option<RemoteIndexEntry>, StoreError> {
         let account = account.to_string();
         let key = key.to_string();
         let conn = self.read()?;
@@ -572,15 +641,28 @@ impl Store {
               WHERE account_id = ?1 AND kind = ?2 AND entity_id = ?3",
         )?;
         let out = stmt
-            .query_map(params![account.as_str(), rows::kind_tag(kind), key.as_str()], |r| {
-                let tag = r.get::<_, String>(0)?;
-                let id = r.get::<_, String>(1)?;
-                Ok((tag, id, r.get::<_, i64>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, Option<i64>>(4)?,
-                    r.get::<_, i64>(5)?, r.get::<_, i64>(6)?, r.get::<_, Option<String>>(7)?))
-            })?
+            .query_map(
+                params![account.as_str(), rows::kind_tag(kind), key.as_str()],
+                |r| {
+                    let tag = r.get::<_, String>(0)?;
+                    let id = r.get::<_, String>(1)?;
+                    Ok((
+                        tag,
+                        id,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                        r.get::<_, Option<i64>>(4)?,
+                        r.get::<_, i64>(5)?,
+                        r.get::<_, i64>(6)?,
+                        r.get::<_, Option<String>>(7)?,
+                    ))
+                },
+            )?
             .next()
             .transpose()?;
-        let Some((tag, id, rev, hash12, size, deleted, purged, seg)) = out else { return Ok(None) };
+        let Some((tag, id, rev, hash12, size, deleted, purged, seg)) = out else {
+            return Ok(None);
+        };
         let kind = rows::kind_from_tag(&tag)?;
         Ok(Some(RemoteIndexEntry {
             kind,
@@ -670,7 +752,12 @@ impl Store {
         self.attachment_jobs(limit, "missing", &["present", "unknown"])
     }
 
-    fn attachment_jobs(&self, limit: usize, local: &str, remote_in: &[&str]) -> Result<Vec<AttachmentJob>, StoreError> {
+    fn attachment_jobs(
+        &self,
+        limit: usize,
+        local: &str,
+        remote_in: &[&str],
+    ) -> Result<Vec<AttachmentJob>, StoreError> {
         let placeholders = remote_in.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
             "SELECT sha256, size, media_type FROM attachments
@@ -678,26 +765,45 @@ impl Store {
                 AND remote_state IN ({ph})
                 AND deleted_at IS NULL
               ORDER BY size ASC LIMIT ?",
-            local = if local == "available" { "available" } else { "missing" },
+            local = if local == "available" {
+                "available"
+            } else {
+                "missing"
+            },
             ph = placeholders
         );
         let conn = self.read()?;
         let mut stmt = conn.prepare(&sql)?;
-        let mut args: Vec<Box<dyn rusqlite::ToSql>> = remote_in.iter().map(|s| Box::new(s.to_string()) as _).collect();
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = remote_in
+            .iter()
+            .map(|s| Box::new(s.to_string()) as _)
+            .collect();
         args.push(Box::new(limit as i64));
         let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|a| a.as_ref()).collect();
         let rows = stmt.query_map(rusqlite::params_from_iter(refs), |r| {
-            Ok(AttachmentJob { sha256: r.get(0)?, size: r.get::<_, i64>(1)?, media_type: r.get(2)? })
+            Ok(AttachmentJob {
+                sha256: r.get(0)?,
+                size: r.get::<_, i64>(1)?,
+                media_type: r.get(2)?,
+            })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
-
     /// 记下"远端有、本地还没有"的附件（清单/记录里读到引用时调用）。
     /// 只登记元数据与 `local_state='missing'`，**绝不**创建空 blob 占位。
-    pub fn register_remote_attachment(&self, sha256: &str, size: i64, media_type: &str) -> Result<(), StoreError> {
+    pub fn register_remote_attachment(
+        &self,
+        sha256: &str,
+        size: i64,
+        media_type: &str,
+    ) -> Result<(), StoreError> {
         let sha = sha256.to_string();
-        let media = if media_type.trim().is_empty() { "application/octet-stream".to_string() } else { media_type.to_string() };
+        let media = if media_type.trim().is_empty() {
+            "application/octet-stream".to_string()
+        } else {
+            media_type.to_string()
+        };
         self.write_tx(|tx, now| {
             tx.execute(
                 "INSERT INTO attachments (sha256, size, media_type, local_state, remote_state, created_at)
@@ -778,13 +884,20 @@ impl Store {
         let sha = sha256.to_string();
         let conn = self.read()?;
         Ok(conn
-            .query_row("SELECT media_type FROM attachments WHERE sha256 = ?1", [sha.as_str()], |r| r.get::<_, String>(0))
+            .query_row(
+                "SELECT media_type FROM attachments WHERE sha256 = ?1",
+                [sha.as_str()],
+                |r| r.get::<_, String>(0),
+            )
             .optional()?)
     }
 
     /// 落在这些文件夹里的笔记所引用的附件 sha（按文件夹导出时只带上这些字节）。
     /// 一次集合查询，不是"每篇笔记问一遍"。
-    pub fn attachment_shas_in_folders(&self, folder_ids: &[String]) -> Result<Vec<String>, StoreError> {
+    pub fn attachment_shas_in_folders(
+        &self,
+        folder_ids: &[String],
+    ) -> Result<Vec<String>, StoreError> {
         if folder_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -793,7 +906,10 @@ impl Store {
         let sql = format!(
             "SELECT DISTINCT na.sha256 FROM note_attachments na JOIN notes n ON n.id = na.note_id WHERE n.folder_id IN ({marks}) ORDER BY na.sha256"
         );
-        let binds: Vec<&dyn rusqlite::ToSql> = folder_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let binds: Vec<&dyn rusqlite::ToSql> = folder_ids
+            .iter()
+            .map(|s| s as &dyn rusqlite::ToSql)
+            .collect();
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(binds.as_slice(), |r| r.get::<_, String>(0))?;
         rows.collect::<Result<_, _>>().map_err(Into::into)
@@ -840,7 +956,13 @@ impl Store {
     /// （保留哪一边要用户决定），所以只要用户没处理，每一轮都会再判出同一件事 ——
     /// 每轮多一张卡片是骚扰，每轮多造一篇"本地副本"更是往用户库里塞垃圾（实测真发生过）。
     /// 只对"完全同一对哈希"去重：任意一侧又改了，那就是新事实，该再进一张。
-    pub fn open_conflict_exists(&self, kind: EntityKind, id: &EntityId, local_hash: &str, remote_hash: &str) -> Result<bool, StoreError> {
+    pub fn open_conflict_exists(
+        &self,
+        kind: EntityKind,
+        id: &EntityId,
+        local_hash: &str,
+        remote_hash: &str,
+    ) -> Result<bool, StoreError> {
         let conn = self.read()?;
         Ok(conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM sync_conflicts
@@ -893,7 +1015,8 @@ impl Store {
             let conn = self.read()?;
             let mut stmt = conn.prepare("SELECT id FROM notes ORDER BY id")?;
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-            rows.map(|row| rows::parse_id(&row?)).collect::<Result<_, _>>()?
+            rows.map(|row| rows::parse_id(&row?))
+                .collect::<Result<_, _>>()?
         };
         for id in ids {
             if let Some(note) = self.get_note(&id)? {
@@ -924,8 +1047,13 @@ impl Store {
     /// 用户/引擎裁决后关闭一条冲突（`resolution` ∈ kept_both|local|remote|merged|manual）。
     pub fn resolve_conflict(&self, conflict_id: i64, resolution: &str) -> Result<(), StoreError> {
         let resolution = resolution.to_string();
-        if !matches!(resolution.as_str(), "kept_both" | "local" | "remote" | "merged" | "manual") {
-            return Err(StoreError::Constraint(format!("未知 resolution: {resolution}")));
+        if !matches!(
+            resolution.as_str(),
+            "kept_both" | "local" | "remote" | "merged" | "manual"
+        ) {
+            return Err(StoreError::Constraint(format!(
+                "未知 resolution: {resolution}"
+            )));
         }
         self.write_tx(|tx, now| {
             let n = tx.execute(
@@ -941,7 +1069,10 @@ impl Store {
 
     pub fn dismiss_conflict(&self, conflict_id: i64) -> Result<(), StoreError> {
         self.write_tx(|tx, _now| {
-            let n = tx.execute("UPDATE sync_conflicts SET state='dismissed' WHERE id=?1", [conflict_id])?;
+            let n = tx.execute(
+                "UPDATE sync_conflicts SET state='dismissed' WHERE id=?1",
+                [conflict_id],
+            )?;
             if n == 0 {
                 return Err(StoreError::Constraint(format!("冲突不存在: {conflict_id}")));
             }
@@ -968,7 +1099,8 @@ fn wire_bytes(v: &serde_json::Value) -> Result<Vec<u8>, StoreError> {
 /// `sync_rev` 是设备态、按 §6 不参与同步判定；带着它只为与规范示例一致，
 /// `apply_remote` 不读该字段。墓碑公告没有行，故省略。
 #[allow(clippy::too_many_arguments)]
-fn envelope(    kind: EntityKind,
+fn envelope(
+    kind: EntityKind,
     id: &EntityId,
     rev: Rev,
     sync_rev: Option<Rev>,
@@ -992,7 +1124,10 @@ fn envelope(    kind: EntityKind,
     m.insert("device".into(), serde_json::json!(device));
     m.insert("deleted_at".into(), serde_json::json!(deleted_at));
     m.insert("purged".into(), serde_json::json!(purged));
-    m.insert("enc".into(), serde_json::json!({ "alg": "none", "hash_alg": "sha256" }));
+    m.insert(
+        "enc".into(),
+        serde_json::json!({ "alg": "none", "hash_alg": "sha256" }),
+    );
     m.insert("payload".into(), payload);
     m.insert("ct".into(), serde_json::Value::Null);
     serde_json::Value::Object(m)
@@ -1005,7 +1140,10 @@ fn envelope(    kind: EntityKind,
 fn note_wire(n: &Note, device: &str) -> Result<serde_json::Value, StoreError> {
     let mut payload = n.doc.clone();
     let Some(map) = payload.as_object_mut() else {
-        return Err(StoreError::Constraint(format!("笔记 {} 的 doc 不是 JSON 对象：拒绝构造残缺记录", n.id)));
+        return Err(StoreError::Constraint(format!(
+            "笔记 {} 的 doc 不是 JSON 对象：拒绝构造残缺记录",
+            n.id
+        )));
     };
     map.insert("folder_id".into(), serde_json::json!(n.folder_id.as_str()));
     map.insert("pinned".into(), serde_json::json!(n.pinned));
@@ -1101,7 +1239,8 @@ fn conflicts_where(conn: &Connection, cond: &str) -> Result<Vec<ConflictRow>, St
                     .get::<_, Option<String>>(10)?
                     .map(|s| rows::parse_id(&s).map_err(rows::into_sql))
                     .transpose()?,
-                state: ConflictState::parse(&r.get::<_, String>(11)?).unwrap_or(ConflictState::Open),
+                state: ConflictState::parse(&r.get::<_, String>(11)?)
+                    .unwrap_or(ConflictState::Open),
                 resolution: r.get(12)?,
                 created_at: r.get(13)?,
                 resolved_at: r.get(14)?,

@@ -16,8 +16,8 @@ use crate::rows;
 use crate::search;
 use crate::types::*;
 use notera_core::{
-    hash_json, next_rev, Clock, ContentHash, DeviceId, EntityId, EntityKind, InvariantViolation, Rev,
-    SystemClock, Timestamp,
+    hash_json, next_rev, Clock, ContentHash, DeviceId, EntityId, EntityKind, InvariantViolation,
+    Rev, SystemClock, Timestamp,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
@@ -116,7 +116,10 @@ impl Store {
         let device = bootstrap(&mut conn, &device_id)?;
 
         let mut store = Store {
-            paths: StorePaths { db: db.clone(), attachments },
+            paths: StorePaths {
+                db: db.clone(),
+                attachments,
+            },
             device,
             write: Mutex::new(conn),
             readers: Readers::new(db),
@@ -196,7 +199,11 @@ impl Store {
 
     /// 新建笔记：`doc` 先过 richtext 校验（I6），再在单事务里写
     /// `notes` + 派生列 + `notes_fts` + `note_revisions` + outbox（I5）。
-    pub fn create_note(&self, folder_id: &EntityId, doc: serde_json::Value) -> Result<Note, StoreError> {
+    pub fn create_note(
+        &self,
+        folder_id: &EntityId,
+        doc: serde_json::Value,
+    ) -> Result<Note, StoreError> {
         let prepared = derive::prepare(&doc)?;
         let id = EntityId::new();
         let device = self.device.to_string();
@@ -258,7 +265,12 @@ impl Store {
     }
 
     /// 编辑笔记。`expected_rev` 与当前 `rev` 不符 → [`StoreError::StaleEdit`]，且不写任何数据。
-    pub fn edit_note(&self, id: &EntityId, doc: serde_json::Value, expected_rev: Rev) -> Result<Note, StoreError> {
+    pub fn edit_note(
+        &self,
+        id: &EntityId,
+        doc: serde_json::Value,
+        expected_rev: Rev,
+    ) -> Result<Note, StoreError> {
         let prepared = derive::prepare(&doc)?;
         self.write_tx(|tx, now| {
             let cur = Self::load_cur(tx, id)?;
@@ -267,7 +279,11 @@ impl Store {
                 // 内容未变 → 不推进 rev（I2 只约束"产生内容变化的提交"）。
                 return Ok(cur.note);
             }
-            let edit = Edit { doc: Some(prepared), expected_rev: Some(expected_rev), ..Default::default() };
+            let edit = Edit {
+                doc: Some(prepared),
+                expected_rev: Some(expected_rev),
+                ..Default::default()
+            };
             self.commit_edit(tx, &cur, &edit, now)
         })
     }
@@ -280,12 +296,18 @@ impl Store {
             let f = rows::read_folder(tx, &target)?
                 .ok_or_else(|| StoreError::not_found(EntityKind::Folder, target.clone()))?;
             if f.deleted_at.is_some() {
-                return Err(StoreError::Constraint(format!("文件夹 {} 已在回收站", f.id)));
+                return Err(StoreError::Constraint(format!(
+                    "文件夹 {} 已在回收站",
+                    f.id
+                )));
             }
             if cur.note.folder_id == target {
                 return Ok(cur.note);
             }
-            let edit = Edit { folder_id: Some(target), ..Default::default() };
+            let edit = Edit {
+                folder_id: Some(target),
+                ..Default::default()
+            };
             self.commit_edit(tx, &cur, &edit, now)
         })
     }
@@ -297,7 +319,10 @@ impl Store {
             if cur.note.pinned == pinned {
                 return Ok(cur.note);
             }
-            let edit = Edit { pinned: Some(pinned), ..Default::default() };
+            let edit = Edit {
+                pinned: Some(pinned),
+                ..Default::default()
+            };
             self.commit_edit(tx, &cur, &edit, now)
         })
     }
@@ -309,7 +334,10 @@ impl Store {
             if cur.note.deleted_at.is_some() {
                 return Ok(()); // 幂等
             }
-            let edit = Edit { deleted_at: Some(Some(now.to_string())), ..Default::default() };
+            let edit = Edit {
+                deleted_at: Some(Some(now.to_string())),
+                ..Default::default()
+            };
             self.commit_edit(tx, &cur, &edit, now)?;
             Ok(())
         })
@@ -321,7 +349,11 @@ impl Store {
             if cur.note.deleted_at.is_none() {
                 return Ok(()); // 幂等
             }
-            let edit = Edit { deleted_at: Some(None), origin: RevOrigin::Restored, ..Default::default() };
+            let edit = Edit {
+                deleted_at: Some(None),
+                origin: RevOrigin::Restored,
+                ..Default::default()
+            };
             self.commit_edit(tx, &cur, &edit, now)?;
             Ok(())
         })
@@ -353,7 +385,15 @@ impl Store {
                 Some(cur.note.title.clone()),
                 now,
             )?;
-            rows::enqueue(tx, now, EntityKind::Note, id, OpKind::Purge, Some(rev), Some(&cur.note.content_hash))?;
+            rows::enqueue(
+                tx,
+                now,
+                EntityKind::Note,
+                id,
+                OpKind::Purge,
+                Some(rev),
+                Some(&cur.note.content_hash),
+            )?;
             // CASCADE 带走 note_revisions / note_attachments 链接；blob 由后台按引用计数回收。
             tx.execute("DELETE FROM notes WHERE id = ?1", [id.as_str()])?;
             Ok(())
@@ -362,7 +402,11 @@ impl Store {
 
     // ------------------------------------------------------ 文件夹（写） ---
 
-    pub fn create_folder(&self, parent: Option<&EntityId>, name: &str) -> Result<Folder, StoreError> {
+    pub fn create_folder(
+        &self,
+        parent: Option<&EntityId>,
+        name: &str,
+    ) -> Result<Folder, StoreError> {
         let name = validate_name(name)?;
         let parent = parent.cloned();
         let id = EntityId::new();
@@ -403,7 +447,11 @@ impl Store {
     }
 
     /// 移动文件夹。**必须检测成环**：新父不得是自己，也不得是自己的后代。
-    pub fn move_folder(&self, id: &EntityId, new_parent: Option<&EntityId>) -> Result<Folder, StoreError> {
+    pub fn move_folder(
+        &self,
+        id: &EntityId,
+        new_parent: Option<&EntityId>,
+    ) -> Result<Folder, StoreError> {
         let new_parent = new_parent.cloned();
         self.write_tx(|tx, now| {
             let cur = rows::read_folder(tx, id)?
@@ -414,15 +462,23 @@ impl Store {
             }
             if let Some(p) = &new_parent {
                 if p == id {
-                    return Err(StoreError::Constraint("拒绝成环：文件夹不能成为自己的子文件夹".into()));
+                    return Err(StoreError::Constraint(
+                        "拒绝成环：文件夹不能成为自己的子文件夹".into(),
+                    ));
                 }
                 let target = rows::read_folder(tx, p)?
                     .ok_or_else(|| StoreError::not_found(EntityKind::Folder, p.clone()))?;
                 if target.deleted_at.is_some() {
-                    return Err(StoreError::Constraint(format!("目标文件夹 {} 已在回收站", target.id)));
+                    return Err(StoreError::Constraint(format!(
+                        "目标文件夹 {} 已在回收站",
+                        target.id
+                    )));
                 }
                 if Self::descendant_ids(tx, id)?.contains(p) {
-                    return Err(StoreError::Constraint(format!("拒绝成环：{} 是 {} 的后代", p, id)));
+                    return Err(StoreError::Constraint(format!(
+                        "拒绝成环：{} 是 {} 的后代",
+                        p, id
+                    )));
                 }
             }
             self.commit_folder_edit(tx, &cur, None, Some(new_parent), now)
@@ -485,14 +541,20 @@ impl Store {
             return Err(StoreError::Constraint("空 blob 不允许挂载".into()));
         }
         if block_id.trim().is_empty() {
-            return Err(StoreError::Constraint("block_id 不能为空（附件必须指向 doc 中的块）".into()));
+            return Err(StoreError::Constraint(
+                "block_id 不能为空（附件必须指向 doc 中的块）".into(),
+            ));
         }
         if media_type.trim().is_empty() {
             return Err(StoreError::Constraint("media_type 不能为空".into()));
         }
         let sha = notera_crypto::sha256_hex(bytes);
         ContentHash::from_hex(&sha).map_err(|e| StoreError::Constraint(e.to_string()))?;
-        let role = if media_type.starts_with("image/") { "inline" } else { "file" };
+        let role = if media_type.starts_with("image/") {
+            "inline"
+        } else {
+            "file"
+        };
         let target = blob_path(&self.paths.attachments, &sha);
         if !target.exists() {
             write_atomic(&target, bytes)?;
@@ -541,7 +603,9 @@ impl Store {
         let got = notera_crypto::sha256_hex(bytes);
         if got != sha {
             self.set_attachment_states(&sha, Some("error"), None).ok();
-            return Err(StoreError::Constraint(format!("blob 哈希不符：期望 {sha} 实际 {got}")));
+            return Err(StoreError::Constraint(format!(
+                "blob 哈希不符：期望 {sha} 实际 {got}"
+            )));
         }
         let target = crate::store::blob_path(&self.paths.attachments, &sha);
         if !target.exists() {
@@ -564,7 +628,9 @@ impl Store {
         }
         let got = notera_crypto::sha256_hex(bytes);
         if got != sha256 {
-            return Err(StoreError::Constraint(format!("blob 哈希不符：期望 {sha256} 实际 {got}")));
+            return Err(StoreError::Constraint(format!(
+                "blob 哈希不符：期望 {sha256} 实际 {got}"
+            )));
         }
         let target = blob_path(&self.paths.attachments, sha256);
         if !target.exists() {
@@ -572,7 +638,9 @@ impl Store {
         }
         let sha = sha256.to_string();
         let size = bytes.len() as i64;
-        self.write_tx(move |tx, now| Self::upsert_attachment_row(tx, now, &sha, size, None, None, "available"))
+        self.write_tx(move |tx, now| {
+            Self::upsert_attachment_row(tx, now, &sha, size, None, None, "available")
+        })
     }
 
     /// 登记 / 更新一行 `attachments` 元数据，**由调用方的事务驱动**（还原与"从记录派生引用"共用）。
@@ -624,12 +692,30 @@ impl Store {
     ) -> Result<(), StoreError> {
         for (idx, r) in refs.iter().enumerate() {
             let media = r.media_type.as_deref().filter(|m| !m.trim().is_empty());
-            let local = if self.blob_path(&r.sha256).exists() { "available" } else { "missing" };
-            Self::upsert_attachment_row(tx, now, &r.sha256, r.size.unwrap_or(0), media, r.filename.as_deref(), local)?;
+            let local = if self.blob_path(&r.sha256).exists() {
+                "available"
+            } else {
+                "missing"
+            };
+            Self::upsert_attachment_row(
+                tx,
+                now,
+                &r.sha256,
+                r.size.unwrap_or(0),
+                media,
+                r.filename.as_deref(),
+                local,
+            )?;
             let role = match r.role.as_deref() {
                 Some(x @ ("inline" | "file")) => x,
                 // 块上没写角色就按媒体类型推（与 `attach_blob` 同一条判据）
-                _ => if media.is_some_and(|m| m.starts_with("image/")) { "inline" } else { "file" },
+                _ => {
+                    if media.is_some_and(|m| m.starts_with("image/")) {
+                        "inline"
+                    } else {
+                        "file"
+                    }
+                }
             };
             tx.execute(
                 "INSERT INTO note_attachments (note_id, sha256, block_id, role, position)
@@ -641,7 +727,10 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) fn with_read<T>(&self, f: impl FnOnce(&Connection) -> Result<T, StoreError>) -> Result<T, StoreError> {
+    pub(crate) fn with_read<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
         let conn = self.read()?;
         f(&conn)
     }
@@ -679,16 +768,24 @@ impl Store {
     // ---------------------------------------------------------- 内部：编辑 ---
 
     pub(crate) fn load_cur(tx: &Connection, id: &EntityId) -> Result<CurNote, StoreError> {
-        Self::load_cur_opt(tx, id)?.ok_or_else(|| StoreError::not_found(EntityKind::Note, id.clone()))
+        Self::load_cur_opt(tx, id)?
+            .ok_or_else(|| StoreError::not_found(EntityKind::Note, id.clone()))
     }
 
-    pub(crate) fn load_cur_opt(tx: &Connection, id: &EntityId) -> Result<Option<CurNote>, StoreError> {
+    pub(crate) fn load_cur_opt(
+        tx: &Connection,
+        id: &EntityId,
+    ) -> Result<Option<CurNote>, StoreError> {
         let sql = format!("SELECT {}, rowid FROM notes WHERE id = ?1", rows::NOTE_COLS);
         let row = tx.query_row(&sql, [id.as_str()], |r| {
             let doc_json: String = r.get(2)?;
             let note = rows::note_from_row(r)?;
             let rowid: i64 = r.get(21)?;
-            Ok(CurNote { note, doc_json, rowid })
+            Ok(CurNote {
+                note,
+                doc_json,
+                rowid,
+            })
         });
         match row {
             Ok(v) => Ok(Some(v)),
@@ -700,17 +797,26 @@ impl Store {
     fn assert_editable(note: &Note) -> Result<(), StoreError> {
         if note.deleted_at.is_some() {
             // "打开中的笔记不得带 deleted_at"（DATA-MODEL §5.1 notes 表注释）
-            return Err(StoreError::Constraint(format!("笔记 {} 在回收站中，请先恢复再编辑", note.id)));
+            return Err(StoreError::Constraint(format!(
+                "笔记 {} 在回收站中，请先恢复再编辑",
+                note.id
+            )));
         }
         Ok(())
     }
 
     fn assert_folder_writable(f: &Folder) -> Result<(), StoreError> {
         if f.system_kind.is_some() {
-            return Err(StoreError::Constraint(format!("内置文件夹 {} 不可改名/移动/删除", f.id)));
+            return Err(StoreError::Constraint(format!(
+                "内置文件夹 {} 不可改名/移动/删除",
+                f.id
+            )));
         }
         if f.deleted_at.is_some() {
-            return Err(StoreError::Constraint(format!("文件夹 {} 已在回收站", f.id)));
+            return Err(StoreError::Constraint(format!(
+                "文件夹 {} 已在回收站",
+                f.id
+            )));
         }
         Ok(())
     }
@@ -726,7 +832,12 @@ impl Store {
     ) -> Result<Note, StoreError> {
         if let Some(exp) = edit.expected_rev {
             if exp != cur.note.rev {
-                return Err(StoreError::stale_edit(cur.note.id.clone(), exp, cur.note.rev, &self.device));
+                return Err(StoreError::stale_edit(
+                    cur.note.id.clone(),
+                    exp,
+                    cur.note.rev,
+                    &self.device,
+                ));
             }
         }
         let new_rev = match edit.force_rev {
@@ -741,13 +852,27 @@ impl Store {
             }
             None => {
                 let r = next_rev(cur.note.rev, cur.note.remote_rev);
-                notera_core::assert_rev_advances(cur.note.rev, r).map_err(|v| StoreError::Constraint(v.detail))?;
+                notera_core::assert_rev_advances(cur.note.rev, r)
+                    .map_err(|v| StoreError::Constraint(v.detail))?;
                 r
             }
         };
 
-        let folder_id = edit.folder_id.clone().unwrap_or_else(|| cur.note.folder_id.clone());
-        let (doc_json, doc_format, title, plain_text, summary, char_count, block_count, content_hash, doc_has) = match &edit.doc {
+        let folder_id = edit
+            .folder_id
+            .clone()
+            .unwrap_or_else(|| cur.note.folder_id.clone());
+        let (
+            doc_json,
+            doc_format,
+            title,
+            plain_text,
+            summary,
+            char_count,
+            block_count,
+            content_hash,
+            doc_has,
+        ) = match &edit.doc {
             Some(p) => (
                 p.doc_json.clone(),
                 p.doc_version as i64,
@@ -773,7 +898,10 @@ impl Store {
         };
         let pinned = edit.pinned.unwrap_or(cur.note.pinned);
         let color = edit.color.clone().unwrap_or_else(|| cur.note.color.clone());
-        let deleted_at = edit.deleted_at.clone().unwrap_or_else(|| cur.note.deleted_at.clone());
+        let deleted_at = edit
+            .deleted_at
+            .clone()
+            .unwrap_or_else(|| cur.note.deleted_at.clone());
         let has_attachment = doc_has || rows::has_linked_attachment(tx, &cur.note.id)?;
         let (sync_rev, sync_hash) = if edit.confirm_sync {
             (new_rev, Some(content_hash.clone()))
@@ -796,10 +924,26 @@ impl Store {
                 remote_rev = ?20
              WHERE id = ?1",
             params![
-                cur.note.id.as_str(), folder_id.as_str(), doc_json, doc_format, pinned as i64, color,
-                title, plain_text, summary, char_count, block_count, has_attachment as i64,
-                new_rev.get() as i64, sync_rev.get() as i64, sync_hash, content_hash, now,
-                self.device.to_string(), deleted_at, remote_rev.get() as i64
+                cur.note.id.as_str(),
+                folder_id.as_str(),
+                doc_json,
+                doc_format,
+                pinned as i64,
+                color,
+                title,
+                plain_text,
+                summary,
+                char_count,
+                block_count,
+                has_attachment as i64,
+                new_rev.get() as i64,
+                sync_rev.get() as i64,
+                sync_hash,
+                content_hash,
+                now,
+                self.device.to_string(),
+                deleted_at,
+                remote_rev.get() as i64
             ],
         )?;
         if text_changed {
@@ -816,7 +960,15 @@ impl Store {
             now,
         )?;
         if edit.enqueue {
-            rows::enqueue(tx, now, EntityKind::Note, &cur.note.id, OpKind::Upsert, Some(new_rev), Some(&content_hash))?;
+            rows::enqueue(
+                tx,
+                now,
+                EntityKind::Note,
+                &cur.note.id,
+                OpKind::Upsert,
+                Some(new_rev),
+                Some(&content_hash),
+            )?;
         }
         rows::read_note(tx, &cur.note.id)?
             .ok_or_else(|| StoreError::not_found(EntityKind::Note, cur.note.id.clone()))
@@ -834,7 +986,13 @@ impl Store {
         let new_name = name.unwrap_or_else(|| cur.name.clone());
         let new_parent = parent.unwrap_or_else(|| cur.parent_id.clone());
         let rev = next_rev(cur.rev, cur.remote_rev);
-        let hash = folder_hash(&new_name, &new_parent, &cur.color, cur.sort_order, &cur.system_kind);
+        let hash = folder_hash(
+            &new_name,
+            &new_parent,
+            &cur.color,
+            cur.sort_order,
+            &cur.system_kind,
+        );
         tx.execute(
             "UPDATE folders SET name = ?2, parent_id = ?3, rev = ?4, content_hash = ?5, updated_at = ?6, updated_device = ?7
               WHERE id = ?1",
@@ -843,8 +1001,17 @@ impl Store {
                 rev.get() as i64, hash, now, self.device.to_string()
             ],
         )?;
-        rows::enqueue(tx, now, EntityKind::Folder, &cur.id, OpKind::Upsert, Some(rev), Some(&hash))?;
-        rows::read_folder(tx, &cur.id)?.ok_or_else(|| StoreError::not_found(EntityKind::Folder, cur.id.clone()))
+        rows::enqueue(
+            tx,
+            now,
+            EntityKind::Folder,
+            &cur.id,
+            OpKind::Upsert,
+            Some(rev),
+            Some(&hash),
+        )?;
+        rows::read_folder(tx, &cur.id)?
+            .ok_or_else(|| StoreError::not_found(EntityKind::Folder, cur.id.clone()))
     }
 
     // 形参就是 `tombstones` 的列：包一层结构体不会少一个字段，只会多一处搬运。
@@ -876,7 +1043,11 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) fn tombstone_of(conn: &Connection, kind: EntityKind, id: &EntityId) -> Result<Option<TombstoneRow>, StoreError> {
+    pub(crate) fn tombstone_of(
+        conn: &Connection,
+        kind: EntityKind,
+        id: &EntityId,
+    ) -> Result<Option<TombstoneRow>, StoreError> {
         let mut stmt = conn.prepare(
             "SELECT entity_type, entity_id, rev, deleted_at, purged, content_hash, device_id, title_snap, created_at
                FROM tombstones WHERE entity_type = ?1 AND entity_id = ?2",
@@ -905,13 +1076,22 @@ impl Store {
     /// 与 `folder_closure` 的分工：祖先只是外键骨架（文件夹行要跟着走），但祖先自己
     /// 的笔记不属于这一棵子树。两者若共用一个集合，勾一个子层就会把上层（乃至默认本）
     /// 的笔记与附件字节一起带走 —— 用户以为导的是"这一棵"，拿到的却掺了别处的东西。
-    pub fn folder_subtree(&self, ids: &[EntityId]) -> Result<std::collections::BTreeSet<String>, StoreError> {
+    pub fn folder_subtree(
+        &self,
+        ids: &[EntityId],
+    ) -> Result<std::collections::BTreeSet<String>, StoreError> {
         let conn = self.read()?;
         let mut out = std::collections::BTreeSet::new();
         for id in ids {
-            let exists: i64 = conn.query_row("SELECT EXISTS(SELECT 1 FROM folders WHERE id = ?1)", [id.as_str()], |r| r.get(0))?;
+            let exists: i64 = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM folders WHERE id = ?1)",
+                [id.as_str()],
+                |r| r.get(0),
+            )?;
             if exists == 0 {
-                return Err(StoreError::Rejected(format!("文件夹不存在，无法按其范围导出：{id}")));
+                return Err(StoreError::Rejected(format!(
+                    "文件夹不存在，无法按其范围导出：{id}"
+                )));
             }
             out.insert(id.to_string());
             for d in Self::descendant_ids(&conn, id)? {
@@ -927,13 +1107,22 @@ impl Store {
     /// 是外键失败 —— "导出一个文件夹，导不回去"比不导出更糟。
     /// 为什么不存在的 id 要直接拒：静默跳过一个文件夹，用户看到的却是一份"成功了"的
     /// 导出报告，那是把缺内容当成完整备份。
-    pub fn folder_closure(&self, ids: &[EntityId]) -> Result<std::collections::BTreeSet<String>, StoreError> {
+    pub fn folder_closure(
+        &self,
+        ids: &[EntityId],
+    ) -> Result<std::collections::BTreeSet<String>, StoreError> {
         let conn = self.read()?;
         let mut out = std::collections::BTreeSet::new();
         for id in ids {
-            let exists: i64 = conn.query_row("SELECT EXISTS(SELECT 1 FROM folders WHERE id = ?1)", [id.as_str()], |r| r.get(0))?;
+            let exists: i64 = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM folders WHERE id = ?1)",
+                [id.as_str()],
+                |r| r.get(0),
+            )?;
             if exists == 0 {
-                return Err(StoreError::Rejected(format!("文件夹不存在，无法按其范围导出：{id}")));
+                return Err(StoreError::Rejected(format!(
+                    "文件夹不存在，无法按其范围导出：{id}"
+                )));
             }
             out.insert(id.to_string());
             for d in Self::descendant_ids(&conn, id)? {
@@ -945,7 +1134,11 @@ impl Store {
             let mut hops = 0u32;
             while hops < 64 {
                 let parent: Option<Option<String>> = conn
-                    .query_row("SELECT parent_id FROM folders WHERE id = ?1", [cursor.as_str()], |r| r.get::<_, Option<String>>(0))
+                    .query_row(
+                        "SELECT parent_id FROM folders WHERE id = ?1",
+                        [cursor.as_str()],
+                        |r| r.get::<_, Option<String>>(0),
+                    )
                     .optional()?;
                 let Some(Some(p)) = parent else { break };
                 let Ok(pid) = rows::parse_id(&p) else { break };
@@ -960,7 +1153,8 @@ impl Store {
     }
 
     /// 某文件夹的全部后代（递归 CTE）。成环检测的唯一依据。
-    fn descendant_ids(conn: &Connection, id: &EntityId) -> Result<Vec<EntityId>, StoreError> {        let mut stmt = conn.prepare(
+    fn descendant_ids(conn: &Connection, id: &EntityId) -> Result<Vec<EntityId>, StoreError> {
+        let mut stmt = conn.prepare(
             "WITH RECURSIVE sub(id) AS (
                SELECT id FROM folders WHERE parent_id = ?1
                UNION ALL
@@ -996,11 +1190,13 @@ impl Store {
                 |r| r.get(0),
             )
             .optional()?;
-        id.map(|s| EntityId::parse(&s)).transpose()?.ok_or_else(|| StoreError::Migration {
-            from: 0,
-            to: 0,
-            detail: "库内缺少 system_kind='default' 的默认本".into(),
-        })
+        id.map(|s| EntityId::parse(&s))
+            .transpose()?
+            .ok_or_else(|| StoreError::Migration {
+                from: 0,
+                to: 0,
+                detail: "库内缺少 system_kind='default' 的默认本".into(),
+            })
     }
 
     // --------------------------------------------------------- 读（投影） ---
@@ -1015,7 +1211,11 @@ impl Store {
         self.with_read(|c| rows::read_folder(c, &id))
     }
 
-    pub fn get_tombstone(&self, kind: EntityKind, id: &EntityId) -> Result<Option<TombstoneRow>, StoreError> {
+    pub fn get_tombstone(
+        &self,
+        kind: EntityKind,
+        id: &EntityId,
+    ) -> Result<Option<TombstoneRow>, StoreError> {
         let id = id.clone();
         self.with_read(|c| Self::tombstone_of(c, kind, &id))
     }
@@ -1038,14 +1238,20 @@ impl Store {
         let folder_bind = q.folder.as_ref().map(|f| f.as_str().to_string());
         let folder_param: Option<&str> = folder_bind.as_deref();
         let mut stmt = conn.prepare(&sql)?;
-        let mut rows = stmt.query_map(params![trash, limit, offset, folder_param], rows::list_from_row)?;
+        let mut rows = stmt.query_map(
+            params![trash, limit, offset, folder_param],
+            rows::list_from_row,
+        )?;
         let out = rows.by_ref().collect::<Result<Vec<_>, _>>()?;
         Ok(out)
     }
 
     pub fn list_folders(&self) -> Result<Vec<Folder>, StoreError> {
         let conn = self.read()?;
-        let sql = format!("SELECT {} FROM folders ORDER BY created_at, id", rows::FOLDER_COLS);
+        let sql = format!(
+            "SELECT {} FROM folders ORDER BY created_at, id",
+            rows::FOLDER_COLS
+        );
         let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query_map([], rows::folder_from_row)?;
         let out = rows.by_ref().collect::<Result<Vec<_>, _>>()?;
@@ -1058,7 +1264,11 @@ impl Store {
     }
 
     /// 三方合并取 base：`note_revisions(note_id, rev = sync_rev)`（DATA-MODEL §4.3）。
-    pub fn revision_doc(&self, note: &EntityId, rev: Rev) -> Result<Option<serde_json::Value>, StoreError> {
+    pub fn revision_doc(
+        &self,
+        note: &EntityId,
+        rev: Rev,
+    ) -> Result<Option<serde_json::Value>, StoreError> {
         let note = note.clone();
         self.with_read(|c| rows::revision_doc(c, &note, rev))
     }
@@ -1074,8 +1284,12 @@ impl Store {
 
     pub fn stats(&self) -> Result<StoreStats, StoreError> {
         let conn = self.read()?;
-        let one = |sql: &str| -> Result<i64, StoreError> { Ok(conn.query_row(sql, [], |r| r.get::<_, i64>(0))?) };
-        let db_bytes = std::fs::metadata(&self.paths.db).map(|m| m.len()).unwrap_or(0);
+        let one = |sql: &str| -> Result<i64, StoreError> {
+            Ok(conn.query_row(sql, [], |r| r.get::<_, i64>(0))?)
+        };
+        let db_bytes = std::fs::metadata(&self.paths.db)
+            .map(|m| m.len())
+            .unwrap_or(0);
         Ok(StoreStats {
             notes: one("SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL")? as u32,
             notes_trash: one("SELECT COUNT(*) FROM notes WHERE deleted_at IS NOT NULL")? as u32,
@@ -1146,7 +1360,9 @@ impl Store {
         let mut map = serde_json::Map::new();
         for (k, raw) in rows {
             let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
-                StoreError::Constraint(format!("settings[{k}] 存的不是合法 JSON（库被外部改写？）: {e}"))
+                StoreError::Constraint(format!(
+                    "settings[{k}] 存的不是合法 JSON（库被外部改写？）: {e}"
+                ))
             })?;
             map.insert(k, v);
         }
@@ -1196,9 +1412,13 @@ impl Store {
             match (like, fts) {
                 (Ok(l), Ok(f)) if l != f => out.push(violation(
                     "I5",
-                    format!("FTS 与派生列脱钩：样本 {tri:?} LIKE={l} MATCH={f}，需 rebuild_search()"),
+                    format!(
+                        "FTS 与派生列脱钩：样本 {tri:?} LIKE={l} MATCH={f}，需 rebuild_search()"
+                    ),
                 )),
-                (Err(e), _) | (_, Err(e)) => out.push(violation("I5", format!("抽样查询失败: {e}"))),
+                (Err(e), _) | (_, Err(e)) => {
+                    out.push(violation("I5", format!("抽样查询失败: {e}")))
+                }
                 _ => {}
             }
         }
@@ -1218,8 +1438,10 @@ impl Store {
                 return v;
             }
         };
-        let bad = |v: &mut Vec<InvariantViolation>, id: &'static str, label: &str, sql: &str| {
-            match conn.prepare(sql) {
+        let bad =
+            |v: &mut Vec<InvariantViolation>, id: &'static str, label: &str, sql: &str| match conn
+                .prepare(sql)
+            {
                 Ok(mut stmt) => match stmt.query_map([], |r| r.get::<_, String>(0)) {
                     Ok(rows) => {
                         for row in rows.flatten().take(5) {
@@ -1229,8 +1451,7 @@ impl Store {
                     Err(e) => v.push(violation(id, format!("{label}: SQL 失败 {e}"))),
                 },
                 Err(e) => v.push(violation(id, format!("{label}: SQL 准备失败 {e}"))),
-            }
-        };
+            };
 
         // §12：PRAGMA 必须真的生效（foreign_keys 是连接级，每个连接都要设）
         match crate::pool::foreign_keys_on(&conn) {
@@ -1245,21 +1466,44 @@ impl Store {
         }
         match crate::pool::synchronous_value(&conn) {
             Ok(2) | Ok(3) => {} // FULL=2 / EXTRA=3
-            Ok(x) => v.push(violation("§12", format!("synchronous 必须是 FULL，实际 {x}"))),
+            Ok(x) => v.push(violation(
+                "§12",
+                format!("synchronous 必须是 FULL，实际 {x}"),
+            )),
             Err(e) => v.push(violation("§12", format!("synchronous 不可读: {e}"))),
         }
 
         // I1：ID 形态；已 purge 的实体不得复活（删除后永不复用）
-        bad(&mut v, "I1", "notes.id 形态非法", "SELECT id FROM notes WHERE length(id) <> 36");
-        bad(&mut v, "I1", "folders.id 形态非法", "SELECT id FROM folders WHERE length(id) <> 36");
+        bad(
+            &mut v,
+            "I1",
+            "notes.id 形态非法",
+            "SELECT id FROM notes WHERE length(id) <> 36",
+        );
+        bad(
+            &mut v,
+            "I1",
+            "folders.id 形态非法",
+            "SELECT id FROM folders WHERE length(id) <> 36",
+        );
         bad(&mut v, "I1", "purged 墓碑对应的笔记仍存在（复活）",
             "SELECT n.id FROM notes n JOIN tombstones t ON t.entity_type='note' AND t.entity_id=n.id WHERE t.purged=1");
         bad(&mut v, "I1", "purged 墓碑对应的文件夹仍存在（复活）",
             "SELECT f.id FROM folders f JOIN tombstones t ON t.entity_type='folder' AND t.entity_id=f.id WHERE t.purged=1");
 
         // I2：sync_rev 是双端确认过的一致点，不可能高于头部
-        bad(&mut v, "I2", "notes.sync_rev > rev", "SELECT id FROM notes WHERE sync_rev > rev AND purged_at IS NULL");
-        bad(&mut v, "I2", "folders.sync_rev > rev", "SELECT id FROM folders WHERE sync_rev > rev");
+        bad(
+            &mut v,
+            "I2",
+            "notes.sync_rev > rev",
+            "SELECT id FROM notes WHERE sync_rev > rev AND purged_at IS NULL",
+        );
+        bad(
+            &mut v,
+            "I2",
+            "folders.sync_rev > rev",
+            "SELECT id FROM folders WHERE sync_rev > rev",
+        );
 
         // I5 + §4.4：当前 rev 与 base(sync_rev) 的 revision 必须在，否则三方合并找不回 base
         bad(&mut v, "I5", "缺当前 rev 的 revision",
@@ -1277,13 +1521,20 @@ impl Store {
                   AND o.state IN ('pending','inflight','failed') AND o.op IN ('upsert','upload'))");
 
         // I6：哈希形态
-        bad(&mut v, "I6", "content_hash 形态非法", "SELECT id FROM notes WHERE content_hash NOT GLOB 'sha256:[0-9a-f]*'");
+        bad(
+            &mut v,
+            "I6",
+            "content_hash 形态非法",
+            "SELECT id FROM notes WHERE content_hash NOT GLOB 'sha256:[0-9a-f]*'",
+        );
 
         // §8：local_state='available' 的 blob 必须真的在盘上
         let available: Vec<String> = match conn
             .prepare("SELECT sha256 FROM attachments WHERE local_state='available'")
-            .and_then(|mut s| s.query_map([], |r| r.get::<_, String>(0)).and_then(|rows| rows.collect::<Result<Vec<_>, _>>()))
-        {
+            .and_then(|mut s| {
+                s.query_map([], |r| r.get::<_, String>(0))
+                    .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+            }) {
             Ok(list) => list,
             Err(e) => {
                 v.push(violation("§8", format!("附件枚举失败: {e}")));
@@ -1292,7 +1543,10 @@ impl Store {
         };
         for sha in available {
             if !blob_path(&self.paths.attachments, &sha).exists() {
-                v.push(violation("§8", format!("blob 缺失但 local_state='available': {sha}")));
+                v.push(violation(
+                    "§8",
+                    format!("blob 缺失但 local_state='available': {sha}"),
+                ));
             }
         }
 
@@ -1307,24 +1561,39 @@ impl Store {
 // ------------------------------------------------------------------ 辅助 ---
 
 fn violation(id: &'static str, detail: impl Into<String>) -> InvariantViolation {
-    InvariantViolation { id, detail: detail.into() }
+    InvariantViolation {
+        id,
+        detail: detail.into(),
+    }
 }
 
-fn collect_ids<P: rusqlite::Params>(stmt: &mut rusqlite::Statement<'_>, binds: P) -> Result<Vec<EntityId>, StoreError> {
+fn collect_ids<P: rusqlite::Params>(
+    stmt: &mut rusqlite::Statement<'_>,
+    binds: P,
+) -> Result<Vec<EntityId>, StoreError> {
     let rows = stmt.query_map(binds, |r| r.get::<_, String>(0))?;
-    rows.map(|r| r.map_err(StoreError::Sql).and_then(|s| rows::parse_id(&s))).collect()
+    rows.map(|r| r.map_err(StoreError::Sql).and_then(|s| rows::parse_id(&s)))
+        .collect()
 }
 
-fn attachment_for(conn: &Connection, note_id: &EntityId, sha: &str) -> Result<Attachment, StoreError> {
+fn attachment_for(
+    conn: &Connection,
+    note_id: &EntityId,
+    sha: &str,
+) -> Result<Attachment, StoreError> {
     let sql = format!(
         "SELECT {}, na.note_id, na.block_id, na.role, na.position
            FROM attachments a JOIN note_attachments na ON na.sha256 = a.sha256
           WHERE a.sha256 = ?1 AND na.note_id = ?2",
         rows::attachment_cols("a")
     );
-    conn.query_row(&sql, params![sha, note_id.as_str()], rows::attachment_from_row)
-        .optional()?
-        .ok_or_else(|| StoreError::not_found(EntityKind::Attachment, note_id.clone()))
+    conn.query_row(
+        &sql,
+        params![sha, note_id.as_str()],
+        rows::attachment_from_row,
+    )
+    .optional()?
+    .ok_or_else(|| StoreError::not_found(EntityKind::Attachment, note_id.clone()))
 }
 
 /// 逐条复核派生列与 `content_hash`（I5/I6）。规模保护：最多 2000 条。
@@ -1378,7 +1647,10 @@ fn verify_derived(conn: &Connection) -> Vec<InvariantViolation> {
                     out.push(violation("I5", format!("has_attachment 脱钩: {id}")));
                 }
                 if p.content_hash.as_str() != hash {
-                    out.push(violation("I6", format!("content_hash 与 canonical(doc) 不符: {id}")));
+                    out.push(violation(
+                        "I6",
+                        format!("content_hash 与 canonical(doc) 不符: {id}"),
+                    ));
                 }
             }
             Err(e) => out.push(violation("I6", format!("{id} 的 doc 无法复核: {e}"))),
@@ -1466,7 +1738,13 @@ fn bootstrap(conn: &mut Connection, device_id: &DeviceId) -> Result<DeviceId, St
         //（实测第二台入伙后本地变 2 个文件夹、清单 1002 条），详见 types.rs 上的注释。
         let id = EntityId::parse(DEFAULT_FOLDER_ID).expect("默认本 id 是写死的合法 uuid");
         let rev = next_rev(Rev::ZERO, Rev::ZERO);
-        let hash = folder_hash(DEFAULT_FOLDER_NAME, &None, &None, 0, &Some("default".to_string()));
+        let hash = folder_hash(
+            DEFAULT_FOLDER_NAME,
+            &None,
+            &None,
+            0,
+            &Some("default".to_string()),
+        );
         tx.execute(
             "INSERT INTO folders
                (id, parent_id, name, color, system_kind, sort_order, rev, sync_rev, sync_hash,
@@ -1475,7 +1753,15 @@ fn bootstrap(conn: &mut Connection, device_id: &DeviceId) -> Result<DeviceId, St
             params![id.as_str(), DEFAULT_FOLDER_NAME, rev.get() as i64, hash, now.as_str(), device],
         )?;
         rows::meta_set(&tx, META_CACHED_ROOT, &id.to_string())?;
-        rows::enqueue(&tx, now.as_str(), EntityKind::Folder, &id, OpKind::Upsert, Some(rev), Some(&hash))?;
+        rows::enqueue(
+            &tx,
+            now.as_str(),
+            EntityKind::Folder,
+            &id,
+            OpKind::Upsert,
+            Some(rev),
+            Some(&hash),
+        )?;
     }
     tx.commit()?;
     Ok(device_id.clone())
@@ -1490,7 +1776,9 @@ fn existing_default_folder(conn: &Connection) -> Result<Option<EntityId>, StoreE
             |r| r.get(0),
         )
         .optional()?;
-    id.map(|s| EntityId::parse(&s)).transpose().map_err(Into::into)
+    id.map(|s| EntityId::parse(&s))
+        .transpose()
+        .map_err(Into::into)
 }
 
 /// 文件夹的同步载荷哈希：只取参与同步的字段（DATA-MODEL §6）。
@@ -1533,7 +1821,10 @@ pub(crate) fn write_atomic(target: &Path, bytes: &[u8]) -> Result<(), StoreError
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let name = target.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "blob".into());
+    let name = target
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "blob".into());
     let tmp = target.with_file_name(format!("{name}.{}.part", EntityId::new()));
     {
         let mut f = std::fs::File::create(&tmp)?;

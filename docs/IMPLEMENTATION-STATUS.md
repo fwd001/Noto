@@ -13,12 +13,13 @@
 |---|---|---|
 | `cargo test --workspace` | 487 通过 / 0 失败 / 0 ignored（58 个测试二进制） | 本机 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 / 0 | 本机（CI-CD 原样命令） |
+| `cargo fmt --all --check` | 退出码 0（`rustfmt` 组件已装；全仓已格式化） | 本机 |
 | `node scripts/arch-check.mjs` | 26/26（第 26 条 = 版本单源，两处变异验过） | 本机 |
 | 版本单源 | 权威 = 根 Cargo.toml，基线 0.0.0；`check-versions` 一致 | 本机 |
 | `node scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 | 本机 |
 | `node scripts/verify-app.mjs` | 35/35（真 Rust 核心，非 mock） | 本机 |
 | `node scripts/verify-tauri-window.mjs` | 8/8（真 `invoke`，控制台 0 error） | 本机 |
-| `cargo fmt --check` | **BLOCKED** | 本机工具链没装 `rustfmt` 组件；解除 = `rustup component add --toolchain stable-x86_64-pc-windows-gnu rustfmt`（联网 + 改本机工具链，未擅自执行） |
+| `cargo fmt --check` | **已解除**（组件已装）：第一次跑就发现 92 个文件漂移，已纯格式化提交并复验 487/0 + clippy 0/0 | 本机 |
 
 ## 分领域状态
 

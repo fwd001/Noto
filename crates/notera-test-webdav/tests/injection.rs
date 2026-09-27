@@ -70,7 +70,11 @@ async fn status_rules_are_method_scoped_and_first_match_wins() {
     // 第一条命中即生效：PUT 落在 records 上 → 412 而非兜底 500
     let p = put(&s.addr, "/.notes/records/note/a.json", b"v").await;
     assert_eq!(p.status, 412, "规则按序第一条命中生效");
-    assert_eq!(get(&s.addr, "/.notes/records/note/a.json").await.status, 500, "其余请求走兜底规则");
+    assert_eq!(
+        get(&s.addr, "/.notes/records/note/a.json").await.status,
+        500,
+        "其余请求走兜底规则"
+    );
 
     let s2 = mem_with(Injection {
         status_for: vec![("PUT /.notes/records/*".into(), 503)],
@@ -190,9 +194,21 @@ async fn reset_empties_the_store() {
     put(&s.addr, "/.notes/records/folder/b.json", b"2").await;
     assert_ne!(s.fs_dump()["count"], serde_json::json!(0));
     s.reset().await;
-    assert_eq!(s.fs_dump()["count"], serde_json::json!(0), "{}", s.fs_dump());
+    assert_eq!(
+        s.fs_dump()["count"],
+        serde_json::json!(0),
+        "{}",
+        s.fs_dump()
+    );
     assert!(s.fs_dump()["entries"].as_array().unwrap().is_empty());
-    let pf = send(s.addr, "PROPFIND", "/.notes", &[h("depth", "infinity")], ALLPROP).await;
+    let pf = send(
+        s.addr,
+        "PROPFIND",
+        "/.notes",
+        &[h("depth", "infinity")],
+        ALLPROP,
+    )
+    .await;
     assert_eq!(pf.status, 404, "RESET 后根前缀必须不存在");
 }
 
@@ -206,7 +222,11 @@ async fn reset_after_n_requests_wipes_state() {
     .await;
     put(&s.addr, "/a.json", b"1").await;
     put(&s.addr, "/b.json", b"2").await;
-    assert_eq!(s.fs_dump()["count"], serde_json::json!(0), "两次之后应被清空");
+    assert_eq!(
+        s.fs_dump()["count"],
+        serde_json::json!(0),
+        "两次之后应被清空"
+    );
     assert_eq!(get(&s.addr, "/a.json").await.status, 404);
 }
 
@@ -270,7 +290,10 @@ async fn drop_after_n_cuts_connections() {
         log.iter().map(|r| r.status).collect::<Vec<_>>(),
         vec![201, 201, 0]
     );
-    assert_eq!(s.inspect()["counters"]["connections_dropped"], serde_json::json!(1));
+    assert_eq!(
+        s.inspect()["counters"]["connections_dropped"],
+        serde_json::json!(1)
+    );
 }
 
 /// `FAIL(latency)`：延迟真实作用于响应时间（可控且可测）。
@@ -289,7 +312,10 @@ async fn latency_injection_delays_responses() {
     let t1 = std::time::Instant::now();
     let d = send(s.addr, "GET", "/_fs/dump", &[], &[]).await;
     assert_eq!(d.status, 200);
-    assert!(t1.elapsed() < std::time::Duration::from_millis(100), "控制面必须即时");
+    assert!(
+        t1.elapsed() < std::time::Duration::from_millis(100),
+        "控制面必须即时"
+    );
 }
 
 /// 代理独占（PROXY.md §9 证据链②）：直连 403，经代理才放行。
@@ -308,25 +334,22 @@ async fn require_proxy_forbids_direct_and_admits_proxied_traffic() {
 
     // ② 绝对形式请求目标（= HTTP 代理转发 http:// 目标的样子）→ 放行
     let target = format!("http://{}/.notes/records/note/a.json", s.addr);
-    let via_proxy = support::send_raw_bytes(
-        s.addr,
-        &build_request("PUT", &target, &[], b"via-proxy"),
-    )
-    .await;
+    let via_proxy =
+        support::send_raw_bytes(s.addr, &build_request("PUT", &target, &[], b"via-proxy")).await;
     assert_eq!(via_proxy.status, 201, "经代理转发的请求应放行");
-    assert_eq!(s.fs_dump()["count"], serde_json::json!(1), "{}", s.fs_dump());
+    assert_eq!(
+        s.fs_dump()["count"],
+        serde_json::json!(1),
+        "{}",
+        s.fs_dump()
+    );
 
     // ③ CONNECT 隧道：握手 200 之后，同一连接上的请求算"经代理到达"→ 放行
     let tunnel = support::send_pipeline(
         s.addr,
         &[
             build_request("CONNECT", &s.addr.to_string(), &[], &[]),
-            build_request(
-                "PUT",
-                "/.notes/records/note/b.json",
-                &[],
-                b"via-connect",
-            ),
+            build_request("PUT", "/.notes/records/note/b.json", &[], b"via-connect"),
             build_request("GET", "/.notes/records/note/a.json", &[], &[]),
         ],
     )
@@ -335,8 +358,11 @@ async fn require_proxy_forbids_direct_and_admits_proxied_traffic() {
     assert_eq!(tunnel[1].status, 201, "隧道内的 PUT 必须被放行");
     assert_eq!(tunnel[2].status, 200, "隧道内的 GET 必须被放行");
     assert_eq!(tunnel[2].body, b"via-proxy");
-    assert_eq!(get(&s.addr, "/.notes/records/note/b.json").await.status, 403,
-        "换了直连连接就必须再次被拒 —— 放行判定是按连接的");
+    assert_eq!(
+        get(&s.addr, "/.notes/records/note/b.json").await.status,
+        403,
+        "换了直连连接就必须再次被拒 —— 放行判定是按连接的"
+    );
 }
 
 /// **确定性**：同一注入两次运行，request_log（去掉时间戳）逐条一致。
@@ -394,7 +420,10 @@ async fn control_plane_works_over_http() {
         .iter()
         .find(|e| e["path"] == serde_json::json!("/.notes/records/note/a.json"))
         .unwrap();
-    assert_eq!(sha["sha256"], serde_json::json!(format!("sha256:{}", sha_hex(b"hello"))));
+    assert_eq!(
+        sha["sha256"],
+        serde_json::json!(format!("sha256:{}", sha_hex(b"hello")))
+    );
     assert_eq!(sha["bytes"], serde_json::json!(5));
 
     // prefix 过滤
@@ -418,7 +447,10 @@ async fn control_plane_works_over_http() {
     assert_eq!(reqs[0]["status"], serde_json::json!(201));
     assert_eq!(reqs[1]["status"], serde_json::json!(401));
     assert_eq!(sv["injection"]["status_for"][0][1], serde_json::json!(401));
-    assert_eq!(sv["injection"]["status_for"][0][0], serde_json::json!("PUT /*"));
+    assert_eq!(
+        sv["injection"]["status_for"][0][0],
+        serde_json::json!("PUT /*")
+    );
 
     // RESET 走 HTTP，随后 DUMP 为空
     let rr = send(s.addr, "POST", "/_control/reset", &[], &[]).await;

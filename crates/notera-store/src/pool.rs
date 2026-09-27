@@ -81,24 +81,28 @@ pub(crate) struct ReaderPool {
 
 impl ReaderPool {
     pub(crate) fn new(db: PathBuf) -> Self {
-        Self { idle: Mutex::new(Vec::new()), db }
+        Self {
+            idle: Mutex::new(Vec::new()),
+            db,
+        }
     }
 
     fn take(&self) -> Result<Connection, StoreError> {
         loop {
             let popped = self.idle.lock().unwrap_or_else(|p| p.into_inner()).pop();
-            let Some(c) = popped else { return open_readonly_conn(&self.db) };
+            let Some(c) = popped else {
+                return open_readonly_conn(&self.db);
+            };
             // 借出前必须确认连接处于 autocommit。
             //
             // 未耗尽的 query_map / 提前 return 会让连接停在一个**只读事务**里，
             // 而 WAL 下只读事务会把它开始时刻的快照钉住：这条连接下次被借出时，
             // 读到的是过期数据而不是已提交的新状态。实测表现为"同一个 COUNT(*)
             // 先返回 1、紧接着返回 0"——取决于这次借到哪个连接。
-            if !c.is_autocommit()
-                && c.execute_batch("ROLLBACK;").is_err() {
-                    // 回滚不掉就丢弃它，宁可新开一条，也不能把脏快照交出去
-                    continue;
-                }
+            if !c.is_autocommit() && c.execute_batch("ROLLBACK;").is_err() {
+                // 回滚不掉就丢弃它，宁可新开一条，也不能把脏快照交出去
+                continue;
+            }
             return Ok(c);
         }
     }
@@ -120,7 +124,10 @@ pub(crate) struct ReadGuard {
 
 impl ReadGuard {
     fn new(conn: Connection, pool: Arc<ReaderPool>) -> Self {
-        Self { conn: Some(conn), pool }
+        Self {
+            conn: Some(conn),
+            pool,
+        }
     }
 }
 
@@ -146,7 +153,9 @@ pub(crate) struct Readers {
 
 impl Readers {
     pub(crate) fn new(db: PathBuf) -> Self {
-        Self { pool: Arc::new(ReaderPool::new(db)) }
+        Self {
+            pool: Arc::new(ReaderPool::new(db)),
+        }
     }
     pub(crate) fn get(&self) -> Result<ReadGuard, StoreError> {
         Ok(ReadGuard::new(self.pool.take()?, self.pool.clone()))

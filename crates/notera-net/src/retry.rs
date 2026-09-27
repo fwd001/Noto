@@ -74,16 +74,16 @@ impl RetryPolicy {
     }
 
     /// 解析 `Retry-After`（秒数或 HTTP-日期），失败返回 `None`。
-///
-/// 秒数形式优先服从（SYNC-PROTOCOL §12："`Retry-After` 存在则优先"）。
-pub fn retry_after(value: &str, now_ms: u64) -> Option<Duration> {
-    let v = value.trim();
-    if let Ok(secs) = v.parse::<u64>() {
-        return Some(Duration::from_secs(secs));
-    }
-    let dt = http_date_secs(v)?;
-    let now = (now_ms / 1000) as i64;
-    Some(Duration::from_secs((dt - now).max(0) as u64))
+    ///
+    /// 秒数形式优先服从（SYNC-PROTOCOL §12："`Retry-After` 存在则优先"）。
+    pub fn retry_after(value: &str, now_ms: u64) -> Option<Duration> {
+        let v = value.trim();
+        if let Ok(secs) = v.parse::<u64>() {
+            return Some(Duration::from_secs(secs));
+        }
+        let dt = http_date_secs(v)?;
+        let now = (now_ms / 1000) as i64;
+        Some(Duration::from_secs((dt - now).max(0) as u64))
     }
 }
 

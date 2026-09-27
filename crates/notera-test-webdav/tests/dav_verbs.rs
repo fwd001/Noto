@@ -36,7 +36,15 @@ async fn options_advertises_every_required_verb() {
     let allow = r.header("allow").unwrap_or_default().to_string();
     let dav = r.header("dav").unwrap_or_default().to_string();
     for v in [
-        "OPTIONS", "GET", "HEAD", "PUT", "DELETE", "MOVE", "COPY", "PROPFIND", "PROPPATCH",
+        "OPTIONS",
+        "GET",
+        "HEAD",
+        "PUT",
+        "DELETE",
+        "MOVE",
+        "COPY",
+        "PROPFIND",
+        "PROPPATCH",
         "MKCOL",
     ] {
         assert!(allow.contains(v), "Allow 缺 {v}: {allow}");
@@ -47,8 +55,7 @@ async fn options_advertises_every_required_verb() {
 #[tokio::test]
 async fn propfind_returns_207_multistatus_for_depth_zero_one_infinity() {
     let s = mem().await;
-    put(s.addr, "/.notes/manifest/index.json", b"{\"seq\":1}")
-        .await;
+    put(s.addr, "/.notes/manifest/index.json", b"{\"seq\":1}").await;
     put(s.addr, "/.notes/records/note/a.json", b"aa").await;
     put(s.addr, "/.notes/records/folder/b.json", b"bb").await;
 
@@ -64,7 +71,11 @@ async fn propfind_returns_207_multistatus_for_depth_zero_one_infinity() {
     let t0 = String::from_utf8_lossy(&d0.body).into_owned();
     assert!(t0.starts_with("<?xml"), "{t0}");
     assert!(t0.contains("<D:multistatus xmlns:D=\"DAV:\">"), "{t0}");
-    assert_eq!(count_occurrences(&t0, "<D:response>"), 1, "Depth:0 只回自己");
+    assert_eq!(
+        count_occurrences(&t0, "<D:response>"),
+        1,
+        "Depth:0 只回自己"
+    );
     assert!(t0.contains("<D:href>/.notes/</D:href>"));
     assert!(t0.contains("<D:propstat>"));
     assert!(t0.contains("<D:prop>"));
@@ -162,10 +173,7 @@ async fn if_match_mismatch_is_412_and_match_proceeds() {
     .await;
     assert_eq!(bad.status, 412, "If-Match 不匹配必须 412");
     // 412 之后内容未变
-    assert_eq!(
-        get(s.addr, "/.notes/records/note/a.json").await.body,
-        b"v1"
-    );
+    assert_eq!(get(s.addr, "/.notes/records/note/a.json").await.body, b"v1");
 
     let good = send(
         s.addr,
@@ -279,7 +287,10 @@ async fn range_requests_return_206_and_bad_range_416() {
     .await;
     assert_eq!(r.status, 206);
     assert_eq!(r.body, b"234");
-    assert_eq!(r.header("content-range").unwrap_or_default(), "bytes 2-4/10");
+    assert_eq!(
+        r.header("content-range").unwrap_or_default(),
+        "bytes 2-4/10"
+    );
 
     let tail = send(
         s.addr,
@@ -316,10 +327,7 @@ async fn move_honours_overwrite_f_and_if_match() {
         "MOVE",
         "/.notes/tmp/dev1-nonce.json",
         &[
-            h(
-                "destination",
-                format!("{dest}/.notes/records/note/r.json"),
-            ),
+            h("destination", format!("{dest}/.notes/records/note/r.json")),
             h("overwrite", "F"),
         ],
         &[],
@@ -347,7 +355,10 @@ async fn move_honours_overwrite_f_and_if_match() {
     .await;
     assert_eq!(forced.status, 204);
     assert_eq!(get(s.addr, "/.notes/tmp/dev1-nonce.json").await.status, 404);
-    assert_eq!(get(s.addr, "/.notes/records/note/r.json").await.body, b"new");
+    assert_eq!(
+        get(s.addr, "/.notes/records/note/r.json").await.body,
+        b"new"
+    );
 
     // 新目标 → 201
     let fresh = send(
@@ -442,14 +453,7 @@ async fn mkcol_is_strict_about_parents_and_existing() {
 #[tokio::test]
 async fn delete_reports_404_and_cascades_collections() {
     let s = mem().await;
-    let miss = send(
-        s.addr,
-        "DELETE",
-        "/.notes/records/note/none.json",
-        &[],
-        &[],
-    )
-    .await;
+    let miss = send(s.addr, "DELETE", "/.notes/records/note/none.json", &[], &[]).await;
     assert_eq!(miss.status, 404, "远端确实缺失必须与'配额满'区分（§10）");
     put(s.addr, "/.notes/records/note/a.json", b"1").await;
     put(s.addr, "/.notes/records/note/b.json", b"2").await;

@@ -7,9 +7,9 @@
 //! * 穷尽 match → 枚举变体集合与顺序无关地完整。
 
 use notera_richtext::{
-    canonical, extract, merge, normalize, parse, supports, to_json, validate, Block, BlockType,
-    Document, Extracted, Inline, Mark, MarkKind, MergeOutcome, ReadOnlyReason, RichError,
-    block_ids, DOC_FORMAT,
+    block_ids, canonical, extract, merge, normalize, parse, supports, to_json, validate, Block,
+    BlockType, Document, Extracted, Inline, Mark, MarkKind, MergeOutcome, ReadOnlyReason,
+    RichError, DOC_FORMAT,
 };
 use std::collections::BTreeMap;
 
@@ -40,8 +40,14 @@ fn struct_field_sets_are_frozen() {
         attrs: BTreeMap::new(),
         content: Vec::new(),
     };
-    let inl: Inline = Inline { text: "字".into(), marks: Vec::new() };
-    let mk: Mark = Mark { kind: MarkKind::Bold, attrs: BTreeMap::new() };
+    let inl: Inline = Inline {
+        text: "字".into(),
+        marks: Vec::new(),
+    };
+    let mk: Mark = Mark {
+        kind: MarkKind::Bold,
+        attrs: BTreeMap::new(),
+    };
     let x: Extracted = Extracted {
         title: String::new(),
         plain_text: String::new(),
@@ -116,9 +122,18 @@ fn enum_variant_sets_are_frozen() {
     }
 
     // 未知类型的**原始名**在 Unknown 里，不是 `unknown:` 之后的残片被改写。
-    assert_eq!(BlockType::from_wire_name("mermaid"), BlockType::Unknown("mermaid".into()));
-    assert_eq!(BlockType::from_wire_name("unknown:mermaid"), BlockType::Unknown("mermaid".into()));
-    assert_eq!(MarkKind::from_wire_name("sparkle"), MarkKind::Unknown("sparkle".into()));
+    assert_eq!(
+        BlockType::from_wire_name("mermaid"),
+        BlockType::Unknown("mermaid".into())
+    );
+    assert_eq!(
+        BlockType::from_wire_name("unknown:mermaid"),
+        BlockType::Unknown("mermaid".into())
+    );
+    assert_eq!(
+        MarkKind::from_wire_name("sparkle"),
+        MarkKind::Unknown("sparkle".into())
+    );
 }
 
 #[test]
@@ -140,17 +155,27 @@ fn error_and_outcome_variants_are_matchable_exhaustively() {
                 "UnsupportedVersion"
             }
         };
-        assert!(!e.to_string().is_empty(), "{s} 必须有可读文案（UI 只用这个字符串）");
+        assert!(
+            !e.to_string().is_empty(),
+            "{s} 必须有可读文案（UI 只用这个字符串）"
+        );
         // 错误必须可克隆可比对（测试与 outbox 重放都依赖它）。
         assert_eq!(e.clone(), e);
     }
 
     let outcomes = [
         MergeOutcome::Converged,
-        MergeOutcome::ReadOnly { because: ReadOnlyReason::DocVersionTooNew(9) },
-        MergeOutcome::Conflict { conflicting_block_ids: vec!["a".into()] },
+        MergeOutcome::ReadOnly {
+            because: ReadOnlyReason::DocVersionTooNew(9),
+        },
+        MergeOutcome::Conflict {
+            conflicting_block_ids: vec!["a".into()],
+        },
         MergeOutcome::AutoMerged {
-            doc: Document { v: DOC_FORMAT, content: Vec::new() },
+            doc: Document {
+                v: DOC_FORMAT,
+                content: Vec::new(),
+            },
             taken_local: 1,
             taken_remote: 2,
         },
@@ -158,12 +183,18 @@ fn error_and_outcome_variants_are_matchable_exhaustively() {
     for o in outcomes {
         match o {
             MergeOutcome::Converged => {}
-            MergeOutcome::AutoMerged { doc, taken_local, taken_remote } => {
+            MergeOutcome::AutoMerged {
+                doc,
+                taken_local,
+                taken_remote,
+            } => {
                 let _: u32 = taken_local;
                 let _: u32 = taken_remote;
                 let _: &Vec<Block> = &doc.content;
             }
-            MergeOutcome::Conflict { conflicting_block_ids } => {
+            MergeOutcome::Conflict {
+                conflicting_block_ids,
+            } => {
                 let _: &Vec<String> = &conflicting_block_ids;
             }
             MergeOutcome::ReadOnly { because } => match because {

@@ -4,11 +4,11 @@
 //! 函数指针类型标注钉签名，结构体字面量钉**公共字段集合**（少字段编译不过，**多加字段
 //! 同样编译不过** —— 别人用字面量构造它），穷尽 match 钉枚举变体。
 
+use notera_core::{EntityId, EntityKind, Rev};
 use notera_crypto::{
     derive_key, open, seal_plaintext, sha256_hex, verify_bytes, CryptoError, EncAlg, EncMeta,
     Envelope, HashAlg, PROTOCOL,
 };
-use notera_core::{EntityId, EntityKind, Rev};
 
 // 这里的"复杂类型"就是要断言的东西本身：把它抽成 `type` 别名，等于让被检查的
 // 形状和检查它的表达式写成同一份，漂了就再也看不出来。
@@ -92,7 +92,11 @@ fn for_folder_mirrors_for_note_argument_order() {
     assert_eq!(f.kind, EntityKind::Folder);
     let wire = f.to_wire().unwrap();
     let v: serde_json::Value = serde_json::from_str(&wire).unwrap();
-    assert_eq!(v["kind"], serde_json::json!("folder"), "wire 上 kind 用目录名");
+    assert_eq!(
+        v["kind"],
+        serde_json::json!("folder"),
+        "wire 上 kind 用目录名"
+    );
     assert_eq!(v["rev"], serde_json::json!(3));
     assert_eq!(v["sync_rev"], serde_json::json!(2));
 }
@@ -115,7 +119,10 @@ fn crypto_error_variants_are_matchable_exhaustively() {
         let tag = match &e {
             CryptoError::PayloadAndCtMutuallyExclusive => "互斥",
             CryptoError::HashMismatch { expected, actual } => {
-                assert!(!expected.is_empty() && !actual.is_empty(), "两个哈希都要带上");
+                assert!(
+                    !expected.is_empty() && !actual.is_empty(),
+                    "两个哈希都要带上"
+                );
                 "哈希不符"
             }
             CryptoError::KindMismatch => "kind",
@@ -133,7 +140,12 @@ fn enc_and_hash_alg_wire_spelling_is_frozen() {
     // 这两个字符串是 wire 契约的一部分：写错就等于换了协议（SYNC-PROTOCOL §3）。
     let j = |m: &EncMeta| serde_json::to_value(m).unwrap();
     assert_eq!(
-        j(&EncMeta { alg: EncAlg::None, kid: None, nonce: None, hash_alg: HashAlg::Sha256 }),
+        j(&EncMeta {
+            alg: EncAlg::None,
+            kid: None,
+            nonce: None,
+            hash_alg: HashAlg::Sha256
+        }),
         serde_json::json!({ "alg": "none", "hash_alg": "sha256" })
     );
     assert_eq!(

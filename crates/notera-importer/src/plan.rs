@@ -13,7 +13,7 @@ use crate::frontmatter::{self, FrontMatter};
 use crate::markdown;
 use crate::source::{ImportSource, SourceKind};
 use notera_core::{ContentHash, EntityId};
-use notera_richtext::{parse_from_value, Document, BlockType};
+use notera_richtext::{parse_from_value, BlockType, Document};
 use notera_store::{NoteQuery, Store};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -145,30 +145,40 @@ pub fn plan(sources: &[ImportSource]) -> ImportPlan {
 /// `build` 与 `from_paths` 都必须走这里，否则"空文件"在两条入口下行为不一致。
 fn push_source(plan: &mut ImportPlan, src: &ImportSource) {
     if src.text.trim().is_empty() {
-        plan.skipped.push(SkippedSource { label: src.label.clone(), reason: SkipReason::Blank });
+        plan.skipped.push(SkippedSource {
+            label: src.label.clone(),
+            reason: SkipReason::Blank,
+        });
         return;
     }
     match plan_one(src) {
         Ok(item) => plan.items.push(item),
-        Err(error) => plan.failures.push(FailedSource { label: src.label.clone(), error }),
+        Err(error) => plan.failures.push(FailedSource {
+            label: src.label.clone(),
+            error,
+        }),
     }
 }
 
 fn plan_one(src: &ImportSource) -> Result<ImportItem, ImportError> {
     let (fm, body) = frontmatter::split(&src.text);
-    let fm_title = fm.title.clone().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    let fm_title = fm
+        .title
+        .clone()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
     let prefix = markdown::id_prefix(&src.source_hash.short());
     let draft = markdown::to_document(&body, src.kind, &prefix, None);
     // front-matter 的 title 只有变成 doc 里"第一个标题"才落得进 `notes.title`（派生列，I5）。
     // 已有同名标题块时不补第二个，否则用户看到的是标题重复两遍。
-    let inject =
-        fm_title.is_some() && first_heading_text(&draft).as_deref() != fm_title.as_deref();
+    let inject = fm_title.is_some() && first_heading_text(&draft).as_deref() != fm_title.as_deref();
     let draft = if inject {
         markdown::to_document(&body, src.kind, &prefix, fm_title.as_deref())
     } else {
         draft
     };
-    let draft_value = serde_json::to_value(&draft).map_err(|e| ImportError::InvalidDoc(e.to_string()))?;
+    let draft_value =
+        serde_json::to_value(&draft).map_err(|e| ImportError::InvalidDoc(e.to_string()))?;
     // 验收闸门就是 richtext 自己的闸门：过不了 parse() 的文档绝不进计划。
     let doc = parse_from_value(&draft_value)
         .map_err(|e| ImportError::InvalidDoc(format!("{}: {e}", src.label)))?;
@@ -206,13 +216,19 @@ pub enum FolderTarget {
     /// 导入器不会顺手把它"救活"。
     Existing(EntityId),
     /// 按名字定位（同父同名且未删）；找不到就创建它，并在报告里说明。
-    Named { name: String, parent: Option<EntityId> },
+    Named {
+        name: String,
+        parent: Option<EntityId>,
+    },
 }
 
 impl FolderTarget {
     /// 按名字给一个目标文件夹。
     pub fn named(name: impl Into<String>, parent: Option<EntityId>) -> Self {
-        FolderTarget::Named { name: name.into(), parent }
+        FolderTarget::Named {
+            name: name.into(),
+            parent,
+        }
     }
 }
 
@@ -319,7 +335,10 @@ pub fn apply(
         let value = match item.doc_value() {
             Ok(v) => v,
             Err(error) => {
-                report.failed.push(FailedWrite { label: item.label.clone(), error });
+                report.failed.push(FailedWrite {
+                    label: item.label.clone(),
+                    error,
+                });
                 continue;
             }
         };
@@ -333,9 +352,10 @@ pub fn apply(
                     content_hash: note.content_hash,
                 });
             }
-            Err(error) => report
-                .failed
-                .push(FailedWrite { label: item.label.clone(), error: ImportError::Store(error) }),
+            Err(error) => report.failed.push(FailedWrite {
+                label: item.label.clone(),
+                error: ImportError::Store(error),
+            }),
         }
     }
     Ok(report)
@@ -346,7 +366,10 @@ pub fn hashes_in_folder(store: &Store, folder: &EntityId) -> Result<HashSet<Stri
     existing_content_hashes(store, folder)
 }
 
-fn resolve_folder(store: &Store, target: &FolderTarget) -> Result<(EntityId, String, bool), ImportError> {
+fn resolve_folder(
+    store: &Store,
+    target: &FolderTarget,
+) -> Result<(EntityId, String, bool), ImportError> {
     match target {
         FolderTarget::Existing(id) => {
             let f = store
@@ -374,11 +397,19 @@ fn resolve_folder(store: &Store, target: &FolderTarget) -> Result<(EntityId, Str
 /// `notes` 表没有"来源文件"这一列（DATA-MODEL §5.1），所以能用的只有内容哈希：
 /// 于是**去重的粒度是"这篇内容"而不是"这个路径"** —— 同一文件改名再导会再生成一条，
 /// 同一文件导进两个文件夹也各有一条。这是 schema 限制，不是本 crate 的选择。
-fn existing_content_hashes(store: &Store, folder: &EntityId) -> Result<HashSet<String>, ImportError> {
+fn existing_content_hashes(
+    store: &Store,
+    folder: &EntityId,
+) -> Result<HashSet<String>, ImportError> {
     let mut out = HashSet::new();
     let mut offset = 0u32;
     loop {
-        let q = NoteQuery { folder: Some(folder.clone()), trash: false, limit: NOTE_PAGE, offset };
+        let q = NoteQuery {
+            folder: Some(folder.clone()),
+            trash: false,
+            limit: NOTE_PAGE,
+            offset,
+        };
         let rows = store.list_notes(&q)?;
         let n = rows.len();
         for r in rows {
@@ -393,7 +424,11 @@ fn existing_content_hashes(store: &Store, folder: &EntityId) -> Result<HashSet<S
 }
 
 /// 单文件一步到位（预览请用 [`plan`] + [`apply`]）。
-pub fn import_paths(store: &Store, folder: &FolderTarget, paths: &[&Path]) -> Result<(ImportPlan, ApplyReport), ImportError> {
+pub fn import_paths(
+    store: &Store,
+    folder: &FolderTarget,
+    paths: &[&Path],
+) -> Result<(ImportPlan, ApplyReport), ImportError> {
     let plan = ImportPlan::from_paths(paths);
     let report = apply(store, folder, &plan)?;
     Ok((plan, report))
@@ -413,13 +448,18 @@ mod tests {
     use std::path::Path;
 
     fn source(name: &str, text: &str) -> ImportSource {
-        ImportSource::from_bytes(Some(Path::new(name)), text.as_bytes()).expect("fixture 必须能解码")
+        ImportSource::from_bytes(Some(Path::new(name)), text.as_bytes())
+            .expect("fixture 必须能解码")
     }
 
     #[test]
     fn title_precedence_front_matter_beats_first_heading_beats_filename() {
         // 1) front-matter `title:` 最高，并且会补一个一级标题块，让派生列拿得到它
-        let a = plan_one(&source("post.md", "---\ntitle: 头部标题\n---\n# 正文标题\n\n内容\n")).expect("a");
+        let a = plan_one(&source(
+            "post.md",
+            "---\ntitle: 头部标题\n---\n# 正文标题\n\n内容\n",
+        ))
+        .expect("a");
         assert_eq!(a.title, "头部标题");
         assert_eq!(a.title_source, TitleSource::FrontMatter);
         assert_eq!(a.doc.content[0].type_, BlockType::Heading);
@@ -444,10 +484,18 @@ mod tests {
 
     #[test]
     fn front_matter_title_matching_the_h1_does_not_duplicate_it() {
-        let p = plan_one(&source("post.md", "---\ntitle: 同一个标题\n---\n# 同一个标题\n\n内容\n")).expect("p");
+        let p = plan_one(&source(
+            "post.md",
+            "---\ntitle: 同一个标题\n---\n# 同一个标题\n\n内容\n",
+        ))
+        .expect("p");
         assert_eq!(p.title_source, TitleSource::FrontMatter);
         assert_eq!(
-            p.doc.content.iter().filter(|b| b.type_ == BlockType::Heading).count(),
+            p.doc
+                .content
+                .iter()
+                .filter(|b| b.type_ == BlockType::Heading)
+                .count(),
             1,
             "正文已有同名标题时不能再补一个"
         );
@@ -476,10 +524,19 @@ mod tests {
 
     #[test]
     fn planning_is_deterministic_across_runs() {
-        let mk = || plan_one(&source("d.md", "# 标题\n\n- 一\n- 二\n\n```rs\nfn f() {}\n```\n")).expect("mk");
+        let mk = || {
+            plan_one(&source(
+                "d.md",
+                "# 标题\n\n- 一\n- 二\n\n```rs\nfn f() {}\n```\n",
+            ))
+            .expect("mk")
+        };
         let (a, b) = (mk(), mk());
         assert_eq!(a.doc, b.doc);
         assert_eq!(a.content_hash, b.content_hash);
-        assert_eq!(notera_richtext::canonical(&a.doc), notera_richtext::canonical(&b.doc));
+        assert_eq!(
+            notera_richtext::canonical(&a.doc),
+            notera_richtext::canonical(&b.doc)
+        );
     }
 }

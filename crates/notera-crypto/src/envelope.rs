@@ -94,7 +94,16 @@ impl Envelope {
         device: &str,
         updated_at: &str,
     ) -> Self {
-        Self::for_entity(EntityKind::Note, id, rev, sync_rev, doc, deleted_at, device, updated_at)
+        Self::for_entity(
+            EntityKind::Note,
+            id,
+            rev,
+            sync_rev,
+            doc,
+            deleted_at,
+            device,
+            updated_at,
+        )
     }
 
     /// 明文文件夹信封。`folder` 是文件夹元数据（`name` / `parent_id` / `order` …）。
@@ -138,7 +147,10 @@ impl Envelope {
             id: id.clone(),
             rev,
             sync_rev,
-            hash: format!("{SHA256_PREFIX}{}", sha256_hex(canonical_json(doc).as_bytes())),
+            hash: format!(
+                "{SHA256_PREFIX}{}",
+                sha256_hex(canonical_json(doc).as_bytes())
+            ),
             updated_at: updated_at.to_string(),
             device: device.to_string(),
             deleted_at: deleted_at.map(str::to_string),
@@ -267,8 +279,7 @@ impl Envelope {
             EncAlg::Aes256GcmSiv => {
                 if self.enc.hash_alg != HashAlg::HmacSha256 {
                     return Err(CryptoError::Malformed(
-                        "开启 E2EE 后 hash_alg 必须转 hmac-sha256，否则泄露明文等价指纹"
-                            .into(),
+                        "开启 E2EE 后 hash_alg 必须转 hmac-sha256，否则泄露明文等价指纹".into(),
                     ));
                 }
                 if self.ct.is_none() {
@@ -284,14 +295,19 @@ impl Envelope {
                     .ok_or_else(|| CryptoError::Malformed("缺少 nonce".into()))?;
                 let _ = b64::decode_nonce(nonce)?;
                 if self.enc.kid.is_none() {
-                    return Err(CryptoError::Malformed("缺少 kid（不知道用哪把钥匙）".into()));
+                    return Err(CryptoError::Malformed(
+                        "缺少 kid（不知道用哪把钥匙）".into(),
+                    ));
                 }
             }
         }
 
         // ③ hash 形态 + 明文时的内容一致性。
         let (prefix, hex) = split_hash(&self.hash).ok_or_else(|| {
-            CryptoError::Malformed(format!("hash 必须是 sha256:/hmac-sha256: 加 64 hex: {:?}", self.hash))
+            CryptoError::Malformed(format!(
+                "hash 必须是 sha256:/hmac-sha256: 加 64 hex: {:?}",
+                self.hash
+            ))
         })?;
         let want_prefix = match self.enc.hash_alg {
             HashAlg::Sha256 => SHA256_PREFIX,
@@ -303,7 +319,10 @@ impl Envelope {
                 self.enc.hash_alg
             )));
         }
-        if !hex.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()) {
+        if !hex
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        {
             return Err(CryptoError::Malformed(
                 "hash 必须是小写十六进制（大写会让同一条记录有两个哈希值）".into(),
             ));
@@ -402,7 +421,10 @@ impl Envelope {
             .ok_or_else(|| CryptoError::Malformed("缺少 nonce".into()))?;
         let bytes = b64::decode(ct)?;
         let pt = crate::open(&bytes, &b64::decode_nonce(nonce)?, key)?;
-        let want = format!("{HMAC_SHA256_PREFIX}{}", notera_core::hex_lower(&hmac_sha256(key, &pt)));
+        let want = format!(
+            "{HMAC_SHA256_PREFIX}{}",
+            notera_core::hex_lower(&hmac_sha256(key, &pt))
+        );
         if want != self.hash {
             return Err(CryptoError::HashMismatch {
                 expected: self.hash.clone(),
@@ -444,10 +466,7 @@ mod kind_wire {
 
     use notera_core::EntityKind;
 
-    pub(super) fn serialize<S: Serializer>(
-        kind: &EntityKind,
-        s: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub(super) fn serialize<S: Serializer>(kind: &EntityKind, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(kind.dir())
     }
 
@@ -478,9 +497,7 @@ fn check_timestamp(s: &str, field: &str) -> Result<(), CryptoError> {
     if b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
         return Err(bad("分隔符不对"));
     }
-    let num = |a: usize, c: usize| -> u32 {
-        s[a..c].parse::<u32>().unwrap_or(u32::MAX)
-    };
+    let num = |a: usize, c: usize| -> u32 { s[a..c].parse::<u32>().unwrap_or(u32::MAX) };
     if !(1..=12).contains(&num(5, 7)) {
         return Err(bad("月份越界"));
     }
@@ -575,11 +592,26 @@ mod tests {
         assert_eq!(
             keys,
             vec![
-                "ct", "deleted_at", "device", "enc", "hash", "id", "kind", "payload",
-                "protocol", "purged", "rev", "sync_rev", "updated_at"
+                "ct",
+                "deleted_at",
+                "device",
+                "enc",
+                "hash",
+                "id",
+                "kind",
+                "payload",
+                "protocol",
+                "purged",
+                "rev",
+                "sync_rev",
+                "updated_at"
             ]
         );
-        assert_eq!(v["kind"], json!("note"), "kind 用远端目录名，不是 Rust 变体名");
+        assert_eq!(
+            v["kind"],
+            json!("note"),
+            "kind 用远端目录名，不是 Rust 变体名"
+        );
         assert_eq!(v["protocol"], json!(PROTOCOL));
         assert_eq!(v["deleted_at"], Value::Null);
         assert_eq!(v["purged"], json!(false));
@@ -605,10 +637,17 @@ mod tests {
         });
         let a = Envelope::for_note(&note_id(), Rev(7), Rev(6), &doc(), None, DEV, T);
         let b = Envelope::for_note(&note_id(), Rev(7), Rev(6), &reordered, None, DEV, T);
-        assert_eq!(a.hash, b.hash, "键序影响了内容哈希：{} vs {}", a.hash, b.hash);
+        assert_eq!(
+            a.hash, b.hash,
+            "键序影响了内容哈希：{} vs {}",
+            a.hash, b.hash
+        );
         assert_eq!(
             a.hash,
-            format!("sha256:{}", crate::sha256_hex(canonical_json(&doc()).as_bytes()))
+            format!(
+                "sha256:{}",
+                crate::sha256_hex(canonical_json(&doc()).as_bytes())
+            )
         );
         // 一个字的差别必须是完全不同的哈希。
         let mut changed = doc();
@@ -625,7 +664,10 @@ mod tests {
         assert_eq!(back, e);
         assert_eq!(back.kind, EntityKind::Folder);
         assert_eq!(back.payload_doc(), Some(&meta));
-        assert_eq!(back.check_matches(EntityKind::Note, &note_id()), Err(CryptoError::KindMismatch));
+        assert_eq!(
+            back.check_matches(EntityKind::Note, &note_id()),
+            Err(CryptoError::KindMismatch)
+        );
     }
 
     #[test]
@@ -699,23 +741,37 @@ mod tests {
         let mut v: Value = serde_json::from_str(&note_env().to_wire().unwrap()).unwrap();
         v["kind"] = json!("widget");
         let err = Envelope::from_wire(&v.to_string()).unwrap_err();
-        assert!(matches!(&err, CryptoError::Malformed(m) if m.contains("widget")), "{err:?}");
+        assert!(
+            matches!(&err, CryptoError::Malformed(m) if m.contains("widget")),
+            "{err:?}"
+        );
         // 缺失 kind 同样拒。
         v.as_object_mut().unwrap().remove("kind");
-        assert!(matches!(Envelope::from_wire(&v.to_string()), Err(CryptoError::Malformed(_))));
+        assert!(matches!(
+            Envelope::from_wire(&v.to_string()),
+            Err(CryptoError::Malformed(_))
+        ));
     }
 
     #[test]
     fn unsafe_id_is_rejected_because_it_becomes_a_path() {
         // notera-webdav 会把这个 id 拼进 records/note/<id>.json —— 目录穿越是安全事故。
-        for bad in ["../../etc/passwd", "", "a-b", "0192e6c1-0000-7000-8000-00000000abcd/../../x"] {
+        for bad in [
+            "../../etc/passwd",
+            "",
+            "a-b",
+            "0192e6c1-0000-7000-8000-00000000abcd/../../x",
+        ] {
             let wire = {
                 let mut v: Value = serde_json::from_str(&note_env().to_wire().unwrap()).unwrap();
                 v["id"] = json!(bad);
                 v.to_string()
             };
             let err = Envelope::from_wire(&wire).unwrap_err();
-            assert!(matches!(&err, CryptoError::Malformed(m) if m.contains("id")), "{bad} → {err:?}");
+            assert!(
+                matches!(&err, CryptoError::Malformed(m) if m.contains("id")),
+                "{bad} → {err:?}"
+            );
         }
     }
 
@@ -741,7 +797,12 @@ mod tests {
         }
         // 截断 / 非 JSON / 顶层不是对象：都不许"尽力解析"出一个能用的信封。
         let good = note_env().to_wire().unwrap();
-        for bad in [String::new(), "{".to_string(), "[]".to_string(), good[..20].to_string()] {
+        for bad in [
+            String::new(),
+            "{".to_string(),
+            "[]".to_string(),
+            good[..20].to_string(),
+        ] {
             assert!(
                 matches!(Envelope::from_wire(&bad), Err(CryptoError::Malformed(_))),
                 "{bad}"
@@ -753,8 +814,14 @@ mod tests {
     fn check_matches_catches_wrong_file_or_wrong_directory() {
         let e = note_env();
         assert_eq!(e.check_matches(EntityKind::Note, &note_id()), Ok(()));
-        assert_eq!(e.check_matches(EntityKind::Folder, &note_id()), Err(CryptoError::KindMismatch));
-        assert_eq!(e.check_matches(EntityKind::Note, &other_id()), Err(CryptoError::IdMismatch));
+        assert_eq!(
+            e.check_matches(EntityKind::Folder, &note_id()),
+            Err(CryptoError::KindMismatch)
+        );
+        assert_eq!(
+            e.check_matches(EntityKind::Note, &other_id()),
+            Err(CryptoError::IdMismatch)
+        );
         // 两个都不对时先报 kind（顺序稳定，便于诊断）。
         assert_eq!(
             e.check_matches(EntityKind::Folder, &other_id()),
@@ -769,7 +836,10 @@ mod tests {
         let e = Envelope::for_note(&note_id(), Rev(8), Rev(7), &doc(), Some(T2), DEV, T2);
         let back = Envelope::from_wire(&e.to_wire().unwrap()).unwrap();
         assert_eq!(back.deleted_at.as_deref(), Some(T2));
-        assert!(back.payload_doc().is_some(), "删除记录仍带正文（回收站要能预览）");
+        assert!(
+            back.payload_doc().is_some(),
+            "删除记录仍带正文（回收站要能预览）"
+        );
         assert!(!back.purged);
     }
 
@@ -799,12 +869,18 @@ mod tests {
         let key = crate::derive_key("口令".as_bytes(), &[7u8; 16]);
         let plain = note_env();
         let sealed = plain.seal_with_key(3, &key).unwrap();
-        assert!(sealed.payload_doc().is_none(), "密文信封不得再带明文 payload");
+        assert!(
+            sealed.payload_doc().is_none(),
+            "密文信封不得再带明文 payload"
+        );
         assert!(sealed.ct.is_some());
         assert!(matches!(sealed.enc.alg, EncAlg::Aes256GcmSiv));
         assert_eq!(sealed.enc.kid, Some(3));
         assert_eq!(sealed.enc.hash_alg, HashAlg::HmacSha256);
-        assert!(sealed.hash.starts_with(HMAC_SHA256_PREFIX), "开启 E2EE 后 hash 必须换 keyed 摘要");
+        assert!(
+            sealed.hash.starts_with(HMAC_SHA256_PREFIX),
+            "开启 E2EE 后 hash 必须换 keyed 摘要"
+        );
         // 密文里绝不能残留明文字符串。
         let wire = sealed.to_wire().unwrap();
         assert!(!wire.contains("同步测试内容"), "密文信封泄露了明文：{wire}");
@@ -848,18 +924,33 @@ mod tests {
         let sealed = note_env().seal_with_key(1, &key).unwrap();
         let cases: Vec<(EncMeta, Option<Value>, Option<String>)> = vec![
             (
-                EncMeta { alg: EncAlg::Aes256GcmSiv, kid: Some(1), nonce: sealed.enc.nonce.clone(), hash_alg: HashAlg::Sha256 },
+                EncMeta {
+                    alg: EncAlg::Aes256GcmSiv,
+                    kid: Some(1),
+                    nonce: sealed.enc.nonce.clone(),
+                    hash_alg: HashAlg::Sha256,
+                },
                 None,
                 sealed.ct.clone(),
             ),
             (EncMeta::default(), None, None), // 两个都没有
             (
-                EncMeta { alg: EncAlg::None, kid: Some(1), nonce: None, hash_alg: HashAlg::Sha256 },
+                EncMeta {
+                    alg: EncAlg::None,
+                    kid: Some(1),
+                    nonce: None,
+                    hash_alg: HashAlg::Sha256,
+                },
                 sealed.payload_doc().cloned(),
                 None,
             ), // alg=none 却留着 kid
             (
-                EncMeta { alg: EncAlg::Aes256GcmSiv, kid: None, nonce: None, hash_alg: HashAlg::HmacSha256 },
+                EncMeta {
+                    alg: EncAlg::Aes256GcmSiv,
+                    kid: None,
+                    nonce: None,
+                    hash_alg: HashAlg::HmacSha256,
+                },
                 None,
                 sealed.ct.clone(),
             ), // 缺 kid/nonce
@@ -869,11 +960,7 @@ mod tests {
             e.enc = enc;
             e.payload = payload;
             e.ct = ct;
-            assert!(
-                e.validate().is_err(),
-                "自相矛盾的 enc 必须拒：{:?}",
-                e.enc
-            );
+            assert!(e.validate().is_err(), "自相矛盾的 enc 必须拒：{:?}", e.enc);
         }
         // 密封前先校验：hash 已经对不上的明文不许被"洗白"成密文。
         let mut liar = note_env();
@@ -887,7 +974,15 @@ mod tests {
     #[test]
     fn note_payload_must_be_a_valid_document_before_it_leaves_the_machine() {
         // 写出侧多一道富文本校验：坏数据不许被发布出去（I6）。
-        let bad = Envelope::for_note(&note_id(), Rev(1), Rev(0), &json!({ "name": "这不是文档" }), None, DEV, T);
+        let bad = Envelope::for_note(
+            &note_id(),
+            Rev(1),
+            Rev(0),
+            &json!({ "name": "这不是文档" }),
+            None,
+            DEV,
+            T,
+        );
         assert!(matches!(bad.to_wire(), Err(CryptoError::Malformed(_))));
         // 但读入侧不因 payload 内部语义而整条拒收（只读降级由同步层处理）。
         let mut v: Value = serde_json::from_str(&note_env().to_wire().unwrap()).unwrap();
@@ -897,7 +992,15 @@ mod tests {
         let read = Envelope::from_wire(&v.to_string()).expect("超前版本要能读，不能丢记录");
         assert_eq!(read.payload_doc().unwrap()["v"], json!(99));
         // 文件夹 payload 不是富文本，不该被误校验。
-        let f = Envelope::for_folder(&note_id(), Rev(1), Rev(0), &json!({ "name": "夹子" }), None, DEV, T);
+        let f = Envelope::for_folder(
+            &note_id(),
+            Rev(1),
+            Rev(0),
+            &json!({ "name": "夹子" }),
+            None,
+            DEV,
+            T,
+        );
         assert!(f.to_wire().is_ok());
     }
 
@@ -905,7 +1008,13 @@ mod tests {
 
     #[test]
     fn timestamp_forms_are_checked_exactly_enough() {
-        for good in [T, T2, "2026-09-25T09:12:03Z", "2026-12-31T23:59:59.999999Z", "2026-09-25T09:12:03+08:00"] {
+        for good in [
+            T,
+            T2,
+            "2026-09-25T09:12:03Z",
+            "2026-12-31T23:59:59.999999Z",
+            "2026-09-25T09:12:03+08:00",
+        ] {
             assert_eq!(check_timestamp(good, "t"), Ok(()), "{good}");
         }
         for bad in [

@@ -44,7 +44,11 @@ struct Draft {
 
 impl Draft {
     fn new(type_: BlockType, content: Vec<Inline>) -> Self {
-        Draft { type_, attrs: BTreeMap::new(), content }
+        Draft {
+            type_,
+            attrs: BTreeMap::new(),
+            content,
+        }
     }
     fn attr(mut self, key: &str, val: Value) -> Self {
         self.attrs.insert(key.to_string(), val);
@@ -74,7 +78,10 @@ pub fn to_document(
         SourceKind::Markdown => markdown_blocks(text),
     };
     if let Some(t) = title_heading {
-        drafts.insert(0, Draft::new(BlockType::Heading, inline_nodes(t, kind)).attr("level", Value::from(1u8)));
+        drafts.insert(
+            0,
+            Draft::new(BlockType::Heading, inline_nodes(t, kind)).attr("level", Value::from(1u8)),
+        );
     }
     Document {
         v: DOC_FORMAT,
@@ -173,8 +180,11 @@ fn markdown_blocks(text: &str) -> Vec<Draft> {
                     let (depth, inner) = quote_markers(b);
                     if !inner.is_empty() {
                         out.push(
-                            Draft::new(BlockType::BlockQuote, inline_nodes(inner, SourceKind::Markdown))
-                                .attr("indent", Value::from(depth as u8)),
+                            Draft::new(
+                                BlockType::BlockQuote,
+                                inline_nodes(inner, SourceKind::Markdown),
+                            )
+                            .attr("indent", Value::from(depth as u8)),
                         );
                     }
                     i += 1;
@@ -215,7 +225,9 @@ fn markdown_blocks(text: &str) -> Vec<Draft> {
                 None if ordered => Draft::new(BlockType::OrderedList, inlines)
                     .attr("indent", Value::from(level))
                     .attr("number", Value::from(i64::from(number_of(body)))),
-                None => Draft::new(BlockType::BulletList, inlines).attr("indent", Value::from(level)),
+                None => {
+                    Draft::new(BlockType::BulletList, inlines).attr("indent", Value::from(level))
+                }
             };
             out.push(d);
             continue;
@@ -475,7 +487,10 @@ fn text_inline(text: &str) -> Vec<Inline> {
     if text.is_empty() {
         Vec::new()
     } else {
-        vec![Inline { text: text.to_string(), marks: Vec::new() }]
+        vec![Inline {
+            text: text.to_string(),
+            marks: Vec::new(),
+        }]
     }
 }
 
@@ -495,7 +510,10 @@ pub fn inline_nodes(src: &str, kind: SourceKind) -> Vec<Inline> {
     macro_rules! flush {
         ($buf:expr, $out:expr) => {
             if !$buf.is_empty() {
-                $out.push(Inline { text: std::mem::take($buf), marks: Vec::new() });
+                $out.push(Inline {
+                    text: std::mem::take($buf),
+                    marks: Vec::new(),
+                });
             }
         };
     }
@@ -525,7 +543,10 @@ pub fn inline_nodes(src: &str, kind: SourceKind) -> Vec<Inline> {
                 let inner: String = chars[i + n..close].iter().collect();
                 let inner = inner.strip_prefix(' ').unwrap_or(&inner);
                 let inner = inner.strip_suffix(' ').unwrap_or(inner);
-                out.push(Inline { text: inner.to_string(), marks: vec![mark(MarkKind::Code)] });
+                out.push(Inline {
+                    text: inner.to_string(),
+                    marks: vec![mark(MarkKind::Code)],
+                });
                 i = close + n;
                 continue;
             }
@@ -555,7 +576,10 @@ pub fn inline_nodes(src: &str, kind: SourceKind) -> Vec<Inline> {
                 let inner: String = chars[ts..te].iter().collect();
                 let mut pieces = inline_nodes(&inner, SourceKind::Markdown);
                 if pieces.is_empty() {
-                    pieces.push(Inline { text: String::new(), marks: Vec::new() });
+                    pieces.push(Inline {
+                        text: String::new(),
+                        marks: Vec::new(),
+                    });
                 }
                 for p in pieces.iter_mut() {
                     p.marks.push(link_mark(&dest, &title));
@@ -570,7 +594,10 @@ pub fn inline_nodes(src: &str, kind: SourceKind) -> Vec<Inline> {
         if c == '<' {
             if let Some((url, next)) = autolink(&chars, i) {
                 flush!(&mut buf, &mut out);
-                out.push(Inline { text: url.clone(), marks: vec![link_mark(&url, "")] });
+                out.push(Inline {
+                    text: url.clone(),
+                    marks: vec![link_mark(&url, "")],
+                });
                 i = next;
                 continue;
             }
@@ -580,7 +607,10 @@ pub fn inline_nodes(src: &str, kind: SourceKind) -> Vec<Inline> {
         if c == 'h' || c == 'H' {
             if let Some((url, next)) = bare_url(&chars, i) {
                 flush!(&mut buf, &mut out);
-                out.push(Inline { text: url.clone(), marks: vec![link_mark(&url, "")] });
+                out.push(Inline {
+                    text: url.clone(),
+                    marks: vec![link_mark(&url, "")],
+                });
                 i = next;
                 continue;
             }
@@ -598,7 +628,10 @@ pub fn inline_nodes(src: &str, kind: SourceKind) -> Vec<Inline> {
                         let inner: String = chars[i + 2..close].iter().collect();
                         let mut pieces = inline_nodes(&inner, SourceKind::Markdown);
                         if pieces.is_empty() {
-                            pieces.push(Inline { text: String::new(), marks: Vec::new() });
+                            pieces.push(Inline {
+                                text: String::new(),
+                                marks: Vec::new(),
+                            });
                         }
                         for p in pieces.iter_mut() {
                             p.marks.push(mark(MarkKind::Strike));
@@ -615,7 +648,10 @@ pub fn inline_nodes(src: &str, kind: SourceKind) -> Vec<Inline> {
                     let inner: String = chars[i + consume..close].iter().collect();
                     let mut pieces = inline_nodes(&inner, SourceKind::Markdown);
                     if pieces.is_empty() {
-                        pieces.push(Inline { text: String::new(), marks: Vec::new() });
+                        pieces.push(Inline {
+                            text: String::new(),
+                            marks: Vec::new(),
+                        });
                     }
                     for p in pieces.iter_mut() {
                         p.marks.extend(emph_marks(consume));
@@ -640,7 +676,10 @@ pub fn inline_nodes(src: &str, kind: SourceKind) -> Vec<Inline> {
 }
 
 fn mark(kind: MarkKind) -> Mark {
-    Mark { kind, attrs: BTreeMap::new() }
+    Mark {
+        kind,
+        attrs: BTreeMap::new(),
+    }
 }
 
 fn link_mark(href: &str, title: &str) -> Mark {
@@ -649,7 +688,10 @@ fn link_mark(href: &str, title: &str) -> Mark {
     if !title.is_empty() {
         attrs.insert("title".to_string(), Value::String(title.to_string()));
     }
-    Mark { kind: MarkKind::Link, attrs }
+    Mark {
+        kind: MarkKind::Link,
+        attrs,
+    }
 }
 
 fn emph_consume(open_len: usize, close_len: usize) -> usize {
@@ -861,7 +903,10 @@ fn link_like(chars: &[char], open: usize) -> Option<(usize, usize, String, Strin
 fn split_dest_title(raw: &str) -> (String, String) {
     if let Some(rest) = raw.strip_prefix('<') {
         if let Some(pos) = rest.find('>') {
-            return (rest[..pos].to_string(), strip_quotes(rest[pos + 1..].trim()));
+            return (
+                rest[..pos].to_string(),
+                strip_quotes(rest[pos + 1..].trim()),
+            );
         }
     }
     match raw.split_once([' ', '\t', '\n']) {
@@ -908,7 +953,8 @@ fn autolink(chars: &[char], open: usize) -> Option<(String, usize)> {
 fn bare_url(chars: &[char], i: usize) -> Option<(String, usize)> {
     if i > 0 {
         let p = chars[i - 1];
-        if p.is_alphanumeric() || matches!(p, ':' | '/' | '.' | '-' | '_' | '%' | '?' | '&' | '=' | '#')
+        if p.is_alphanumeric()
+            || matches!(p, ':' | '/' | '.' | '-' | '_' | '%' | '?' | '&' | '=' | '#')
         {
             return None;
         }
@@ -917,7 +963,10 @@ fn bare_url(chars: &[char], i: usize) -> Option<(String, usize)> {
     while j < chars.len() {
         let c = chars[j];
         if c.is_whitespace()
-            || matches!(c, '<' | '>' | '|' | '[' | ']' | '(' | ')' | '"' | '\'' | '`')
+            || matches!(
+                c,
+                '<' | '>' | '|' | '[' | ']' | '(' | ')' | '"' | '\'' | '`'
+            )
         {
             break;
         }
@@ -988,7 +1037,11 @@ mod tests {
     }
 
     fn kinds(d: &Document, i: usize, j: usize) -> Vec<MarkKind> {
-        d.content[i].content[j].marks.iter().map(|m| m.kind.clone()).collect()
+        d.content[i].content[j]
+            .marks
+            .iter()
+            .map(|m| m.kind.clone())
+            .collect()
     }
 
     fn attr(d: &Document, i: usize, key: &str) -> Option<Value> {
@@ -1061,7 +1114,11 @@ mod tests {
         let d = md("> 一层\n> > 两层\n>\n> 引文里的 `代码`\n");
         assert_eq!(
             types(&d),
-            vec![BlockType::BlockQuote, BlockType::BlockQuote, BlockType::BlockQuote]
+            vec![
+                BlockType::BlockQuote,
+                BlockType::BlockQuote,
+                BlockType::BlockQuote
+            ]
         );
         assert_eq!(attr(&d, 0, "indent"), Some(Value::from(1u8)));
         assert_eq!(attr(&d, 1, "indent"), Some(Value::from(2u8)));
@@ -1098,7 +1155,11 @@ mod tests {
         let d = md("- 第一项\n  续写的一行\n- 第二项\n  - 子项\n");
         assert_eq!(
             types(&d),
-            vec![BlockType::BulletList, BlockType::BulletList, BlockType::BulletList]
+            vec![
+                BlockType::BulletList,
+                BlockType::BulletList,
+                BlockType::BulletList
+            ]
         );
         assert_eq!(text_at(&d, 0), "第一项 续写的一行");
         assert_eq!(attr(&d, 2, "indent"), Some(Value::from(1u8)));
@@ -1128,7 +1189,11 @@ mod tests {
         assert_eq!(kinds(&d, 0, 6), vec![MarkKind::Strike]);
         let last = d.content[0].content.len() - 1;
         assert_eq!(
-            d.content[0].content[last].marks.iter().map(|m| m.kind.clone()).collect::<Vec<_>>(),
+            d.content[0].content[last]
+                .marks
+                .iter()
+                .map(|m| m.kind.clone())
+                .collect::<Vec<_>>(),
             vec![MarkKind::Italic, MarkKind::Bold]
         );
         assert_eq!(text_at(&d, 0), "粗 与 斜 与 码 与 删 与 粗斜");
@@ -1148,11 +1213,20 @@ mod tests {
         let link = &d.content[0].content[0];
         assert_eq!(link.text, "文字");
         assert_eq!(link.marks[0].kind, MarkKind::Link);
-        assert_eq!(link.marks[0].attrs["href"], Value::from("https://example.test/a"));
+        assert_eq!(
+            link.marks[0].attrs["href"],
+            Value::from("https://example.test/a")
+        );
         assert_eq!(link.marks[0].attrs["title"], Value::from("标题"));
         let plain = notera_richtext::extract(&d).plain_text;
-        assert!(plain.contains("https://auto.test/x"), "角括号自动链接的文字要留在正文");
-        assert!(plain.contains("https://bare.test/p"), "裸 URL 的文字要留在正文");
+        assert!(
+            plain.contains("https://auto.test/x"),
+            "角括号自动链接的文字要留在正文"
+        );
+        assert!(
+            plain.contains("https://bare.test/p"),
+            "裸 URL 的文字要留在正文"
+        );
     }
 
     #[test]
@@ -1170,15 +1244,34 @@ mod tests {
         let src = "[文字][标]\n\n[标]: https://ref.test \"引用式\" \n<div class=\"x\">原样</div>\nSetext\n======\n脚注[^1]\n";
         let d = md(src);
         let plain = notera_richtext::extract(&d).plain_text;
-        for token in ["文字", "[文字][标]", "[标]:", "https://ref.test", "原样", "Setext", "======", "脚注[^1]"] {
-            assert!(plain.contains(token), "{token} 必须原样留在正文里；实得：{plain}");
+        for token in [
+            "文字",
+            "[文字][标]",
+            "[标]:",
+            "https://ref.test",
+            "原样",
+            "Setext",
+            "======",
+            "脚注[^1]",
+        ] {
+            assert!(
+                plain.contains(token),
+                "{token} 必须原样留在正文里；实得：{plain}"
+            );
         }
     }
 
     #[test]
     fn crlf_tabs_and_bom_are_handled() {
         let d = md("\u{feff}# 标题\r\n\r\n- 甲\r\n\t- 乙\r\n");
-        assert_eq!(types(&d), vec![BlockType::Heading, BlockType::BulletList, BlockType::BulletList]);
+        assert_eq!(
+            types(&d),
+            vec![
+                BlockType::Heading,
+                BlockType::BulletList,
+                BlockType::BulletList
+            ]
+        );
         assert_eq!(text_at(&d, 0), "标题");
         assert_eq!(attr(&d, 2, "indent"), Some(Value::from(1u8)));
     }
@@ -1188,7 +1281,10 @@ mod tests {
         let d = txt("# 这不是标题\n**也不是粗体** `也不是代码`\n");
         assert_eq!(types(&d), vec![BlockType::Paragraph, BlockType::Paragraph]);
         assert_eq!(text_at(&d, 0), "# 这不是标题");
-        assert!(d.content.iter().all(|b| b.content.iter().all(|i| i.marks.is_empty())));
+        assert!(d
+            .content
+            .iter()
+            .all(|b| b.content.iter().all(|i| i.marks.is_empty())));
     }
 
     #[test]
@@ -1200,7 +1296,10 @@ mod tests {
         let uniq: HashSet<&str> = ids.iter().copied().collect();
         assert_eq!(ids.len(), uniq.len(), "块 id 文档内必须唯一");
         for id in &ids {
-            assert!((8..=32).contains(&id.len()), "§10.2 要求 id 长度 8..32，实得 {id}");
+            assert!(
+                (8..=32).contains(&id.len()),
+                "§10.2 要求 id 长度 8..32，实得 {id}"
+            );
         }
     }
 
@@ -1236,6 +1335,9 @@ mod tests {
         );
         assert_eq!(text_at(&d, 0), "无空格");
         assert_eq!(attr(&d, 0, "checked"), Some(Value::Bool(true)));
-        assert!(d.content[1].content.is_empty(), "空列表项保留成空块，不消失");
+        assert!(
+            d.content[1].content.is_empty(),
+            "空列表项保留成空块，不消失"
+        );
     }
 }

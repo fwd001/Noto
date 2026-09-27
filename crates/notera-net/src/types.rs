@@ -313,7 +313,10 @@ mod tests {
 
     #[test]
     fn custom_verbs_map_to_http_methods() {
-        assert_eq!(HttpMethod::Propfind.to_reqwest().unwrap().as_str(), "PROPFIND");
+        assert_eq!(
+            HttpMethod::Propfind.to_reqwest().unwrap().as_str(),
+            "PROPFIND"
+        );
         assert_eq!(HttpMethod::Move.to_reqwest().unwrap().as_str(), "MOVE");
         assert!(HttpMethod::Propfind.is_inherently_idempotent());
         assert!(!HttpMethod::Post.is_inherently_idempotent());

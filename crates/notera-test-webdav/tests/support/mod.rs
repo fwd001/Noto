@@ -104,10 +104,7 @@ pub async fn send_raw_bytes(addr: std::net::SocketAddr, bytes: &[u8]) -> RawResp
 }
 
 /// keep-alive：同一连接上依次发多个请求，逐个收响应。
-pub async fn send_pipeline(
-    addr: std::net::SocketAddr,
-    requests: &[Vec<u8>],
-) -> Vec<RawResp> {
+pub async fn send_pipeline(addr: std::net::SocketAddr, requests: &[Vec<u8>]) -> Vec<RawResp> {
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let mut out = Vec::new();
     for req in requests {
@@ -191,13 +188,17 @@ pub async fn read_response_head(stream: &mut TcpStream, no_body: bool) -> RawRes
     }
 }
 
-async fn read_chunked_body(stream: &mut TcpStream, mut have: Vec<u8>, consumed_head: usize) -> Vec<u8> {
+async fn read_chunked_body(
+    stream: &mut TcpStream,
+    mut have: Vec<u8>,
+    consumed_head: usize,
+) -> Vec<u8> {
     let _ = consumed_head;
     let mut out = Vec::new();
     loop {
         let line = read_until_blank_line(stream, &mut have).await;
-        let size = usize::from_str_radix(line.split(';').next().unwrap_or("").trim(), 16)
-            .unwrap_or(0);
+        let size =
+            usize::from_str_radix(line.split(';').next().unwrap_or("").trim(), 16).unwrap_or(0);
         if size == 0 {
             break;
         }

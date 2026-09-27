@@ -153,10 +153,12 @@ fn is_binary_exempt(bytes: &[u8]) -> bool {
 /// 严格解码：UTF-8（可带 BOM）→ 带 BOM 的 UTF-16 → 失败。
 fn decode(path: &str, bytes: &[u8]) -> Result<(String, bool), ImportError> {
     if let Some(utf16) = decode_utf16_bom(bytes) {
-        return utf16.map(|s| (s, true)).map_err(|detail| ImportError::InvalidEncoding {
-            path: path.to_string(),
-            detail,
-        });
+        return utf16
+            .map(|s| (s, true))
+            .map_err(|detail| ImportError::InvalidEncoding {
+                path: path.to_string(),
+                detail,
+            });
     }
     let (body, bom) = match bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]) {
         Some(rest) => (rest, true),
@@ -166,7 +168,10 @@ fn decode(path: &str, bytes: &[u8]) -> Result<(String, bool), ImportError> {
         Ok(s) => Ok((s.to_string(), bom)),
         Err(e) => Err(ImportError::InvalidEncoding {
             path: path.to_string(),
-            detail: format!("UTF-8 在第 {} 字节处断裂；也不是带 BOM 的 UTF-16: {e}", e.valid_up_to()),
+            detail: format!(
+                "UTF-8 在第 {} 字节处断裂；也不是带 BOM 的 UTF-16: {e}",
+                e.valid_up_to()
+            ),
         }),
     }
 }
@@ -179,7 +184,10 @@ fn decode_utf16_bom(bytes: &[u8]) -> Option<Result<String, String>> {
         _ => return None,
     };
     if body.len() % 2 != 0 {
-        return Some(Err(format!("UTF-16 负载长度不是偶数（{} 字节）", body.len())));
+        return Some(Err(format!(
+            "UTF-16 负载长度不是偶数（{} 字节）",
+            body.len()
+        )));
     }
     let units: Vec<u16> = body
         .chunks(2)
@@ -278,9 +286,15 @@ mod tests {
     fn invalid_utf8_is_not_guessed_away() {
         // GB18030 的"中文"：既不猜编码也不当二进制，报 InvalidEncoding 让用户转 UTF-8。
         let gbk = [0xD6u8, 0xD0, 0xCE, 0xC4];
-        assert!(matches!(src("note.md", gbk), Err(ImportError::InvalidEncoding { .. })));
+        assert!(matches!(
+            src("note.md", gbk),
+            Err(ImportError::InvalidEncoding { .. })
+        ));
         let broken = [0xFFu8, 0xBB, 0xBF, b'a'];
-        assert!(matches!(src("note.md", broken), Err(ImportError::InvalidEncoding { .. })));
+        assert!(matches!(
+            src("note.md", broken),
+            Err(ImportError::InvalidEncoding { .. })
+        ));
     }
 
     #[test]
@@ -307,14 +321,20 @@ mod tests {
         // 没有 BOM 的 UTF-16 与真二进制不可区分 → 按二进制拒（宁可让用户转，也不猜）。
         // 用 ASCII：UTF-16LE 的每个 ASCII 字符都带一个 NUL 字节，正是被嗅探拦下的形状。
         let nobom: Vec<u8> = "AB".encode_utf16().flat_map(u16::to_le_bytes).collect();
-        assert!(matches!(src("noea.txt", &nobom), Err(ImportError::Binary { .. })));
+        assert!(matches!(
+            src("noea.txt", &nobom),
+            Err(ImportError::Binary { .. })
+        ));
         // 纯 CJK 的无 BOM UTF-16 可能一个 NUL 都没有，而字节又恰好是合法 UTF-8 ——
         // 那就只能按 UTF-8 收下（内容是乱码）。刻意不做"也许是 UTF-16?"的猜测：
         // 猜错会摧毁真文本文件。要稳，请带 BOM 或另存为 UTF-8。
         let cjk: Vec<u8> = "甲乙".encode_utf16().flat_map(u16::to_le_bytes).collect();
         let s = src("noea2.txt", &cjk).expect("不猜编码：字节合法就按 UTF-8 收");
         assert_eq!(s.text.chars().count(), 4);
-        assert!(!s.text.contains('甲'), "无 BOM 的 UTF-16 不会被解成中文（设计内）");
+        assert!(
+            !s.text.contains('甲'),
+            "无 BOM 的 UTF-16 不会被解成中文（设计内）"
+        );
     }
 
     #[test]
@@ -357,6 +377,9 @@ mod tests {
     #[test]
     fn read_rejects_missing_files_with_typed_io_error() {
         let e = ImportSource::read(Path::new("D:/definitely-not-here/notera-importer-test.md"));
-        assert!(matches!(e, Err(ImportError::Io { .. })), "缺文件必须是 Io，实得 {e:?}");
+        assert!(
+            matches!(e, Err(ImportError::Io { .. })),
+            "缺文件必须是 Io，实得 {e:?}"
+        );
     }
 }

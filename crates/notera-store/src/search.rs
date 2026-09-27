@@ -111,7 +111,11 @@ pub(crate) fn snippet_html(hay: &str, needle: &str) -> String {
             // 未命中（例如只在另一列命中）：退化为开头片段，仍不加 mark。
             let take: String = hay_chars.iter().take(SNIPPET_LEAD + SNIPPET_TAIL).collect();
             let truncated = hay_chars.len() > SNIPPET_LEAD + SNIPPET_TAIL;
-            return format!("{}{}", html_escape(take.trim()), if truncated { "…" } else { "" });
+            return format!(
+                "{}{}",
+                html_escape(take.trim()),
+                if truncated { "…" } else { "" }
+            );
         }
     };
     let start = ms.saturating_sub(SNIPPET_LEAD);
@@ -141,7 +145,10 @@ pub(crate) struct Hit {
     pub path_used: SearchPath,
 }
 
-pub(crate) fn run(conn: &Connection, q: &crate::types::SearchQuery) -> Result<Vec<SearchHit>, StoreError> {
+pub(crate) fn run(
+    conn: &Connection,
+    q: &crate::types::SearchQuery,
+) -> Result<Vec<SearchHit>, StoreError> {
     let text = q.text.trim();
     if text.is_empty() {
         return Ok(Vec::new());
@@ -155,12 +162,17 @@ pub(crate) fn run(conn: &Connection, q: &crate::types::SearchQuery) -> Result<Ve
         merged = Some(match merged {
             None => part,
             Some(prev) => {
-                let keys: std::collections::HashSet<EntityId> = part.iter().map(|h| h.note_id.clone()).collect();
-                prev.into_iter().filter(|h| keys.contains(&h.note_id)).collect()
+                let keys: std::collections::HashSet<EntityId> =
+                    part.iter().map(|h| h.note_id.clone()).collect();
+                prev.into_iter()
+                    .filter(|h| keys.contains(&h.note_id))
+                    .collect()
             }
         });
     }
-    let Some(mut hits) = merged else { return Ok(Vec::new()) };
+    let Some(mut hits) = merged else {
+        return Ok(Vec::new());
+    };
     hits.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
@@ -170,7 +182,12 @@ pub(crate) fn run(conn: &Connection, q: &crate::types::SearchQuery) -> Result<Ve
     hits.truncate(limit as usize);
     Ok(hits
         .into_iter()
-        .map(|h| SearchHit { note_id: h.note_id, score: h.score, snippet_html: h.snippet_html, path_used: h.path_used })
+        .map(|h| SearchHit {
+            note_id: h.note_id,
+            score: h.score,
+            snippet_html: h.snippet_html,
+            path_used: h.path_used,
+        })
         .collect())
 }
 
@@ -198,7 +215,11 @@ fn run_one(conn: &Connection, seg: &str, fetch_limit: u32) -> Result<Vec<Hit>, S
             })?;
             for row in rows {
                 let (id, score, title, plain) = row?;
-                let hay = if find_ci(&title, seg).is_some() { &title } else { &plain };
+                let hay = if find_ci(&title, seg).is_some() {
+                    &title
+                } else {
+                    &plain
+                };
                 out.push(Hit {
                     note_id: parse_id(&id)?,
                     score,
@@ -218,11 +239,19 @@ fn run_one(conn: &Connection, seg: &str, fetch_limit: u32) -> Result<Vec<Hit>, S
                   LIMIT ?2",
             )?;
             let rows = stmt.query_map(rusqlite::params![pattern, fetch_limit as i64], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
             })?;
             for row in rows {
                 let (id, title, plain) = row?;
-                let hay = if find_ci(&title, seg).is_some() { &title } else { &plain };
+                let hay = if find_ci(&title, seg).is_some() {
+                    &title
+                } else {
+                    &plain
+                };
                 out.push(Hit {
                     note_id: parse_id(&id)?,
                     score: occurrences(hay, seg) as f64,
@@ -248,7 +277,11 @@ fn occurrences(hay: &str, needle: &str) -> usize {
     let mut n = 0usize;
     let mut i = 0usize;
     while i + nc.len() <= hc.len() {
-        if hc[i..i + nc.len()].iter().zip(nc.iter()).all(|(a, b)| a.eq_ignore_ascii_case(b)) {
+        if hc[i..i + nc.len()]
+            .iter()
+            .zip(nc.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+        {
             n += 1;
             i += nc.len();
         } else {
@@ -285,7 +318,10 @@ mod tests {
         let hay = "前文 <script>alert(1)</script> 同步协议 后文";
         let s = snippet_html(hay, "同步协");
         assert!(s.contains("<mark>同步协</mark>"), "{s}");
-        assert!(!s.contains("<script>"), "裸标签绝不允许出现在 snippet 里: {s}");
+        assert!(
+            !s.contains("<script>"),
+            "裸标签绝不允许出现在 snippet 里: {s}"
+        );
         assert!(s.contains("&lt;script&gt;"), "{s}");
     }
 

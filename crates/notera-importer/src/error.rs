@@ -15,7 +15,11 @@ pub enum ImportError {
 
     /// 第二道闸门：二进制嗅探（前 `window` 字节里出现 NUL）。
     #[error("文件 {path} 看起来不是文本（前 {window} 字节的第 {offset} 字节处出现 NUL）")]
-    Binary { path: String, offset: usize, window: usize },
+    Binary {
+        path: String,
+        offset: usize,
+        window: usize,
+    },
 
     /// 第三道闸门：编码。UTF-8（可带 BOM）与带 BOM 的 UTF-16 之外一律拒绝。
     ///

@@ -50,13 +50,24 @@ pub trait LocalPort: Send + Sync {
     /// 应用远端结果：单事务
     fn apply(&self, ops: Vec<ApplyOp>) -> Result<ApplyReport, LocalError>;
     /// 记录冲突（保留双方）
-    fn record_conflict(&self, d: &Decision, local: &LocalView, remote: &RemoteView) -> Result<(), LocalError>;
+    fn record_conflict(
+        &self,
+        d: &Decision,
+        local: &LocalView,
+        remote: &RemoteView,
+    ) -> Result<(), LocalError>;
     fn outbox_take(&self, limit: usize) -> Result<Vec<OutboxItem>, LocalError>;
     /// 结清某个实体某 rev 的待办。参数刻意是 `kind/id/rev` 而不是某个"键"：
     /// 引擎手里只有这三样（`Decision.key` 就是 `(kind, id)`），以前把它当
     /// `dedupe_key` 传下去，实现方要么接不上、要么猜错行 —— 猜错就是把别人的
     /// 待办标成已完成。
-    fn outbox_settle(&self, kind: &str, id: &str, rev: u64, st: OutboxState) -> Result<(), LocalError>;
+    fn outbox_settle(
+        &self,
+        kind: &str,
+        id: &str,
+        rev: u64,
+        st: OutboxState,
+    ) -> Result<(), LocalError>;
     /// §11.4：把本轮贴上的租约记进本地状态（诊断用：出问题时能看出"当时我以为谁在写"）。
     /// 允许空实现 —— 它不丢数据，只少一条线索。
     fn record_lease(&self, _token: &str, _expires_at: &str) -> Result<(), LocalError> {
@@ -73,19 +84,37 @@ pub trait LocalPort: Send + Sync {
 #[async_trait::async_trait]
 pub trait RemotePort: Send + Sync {
     /// GET manifest/index.json，带 If-None-Match。None = 304 未变。
-    async fn fetch_manifest(&self, etag: Option<&str>) -> Result<Option<(Vec<u8>, Option<String>)>, RemoteError>;
+    async fn fetch_manifest(
+        &self,
+        etag: Option<&str>,
+    ) -> Result<Option<(Vec<u8>, Option<String>)>, RemoteError>;
     async fn fetch_segment(&self, name: &str) -> Result<Vec<EntryRef>, RemoteError>;
     async fn fetch_record(&self, kind: &str, id: &str) -> Result<Option<Vec<u8>>, RemoteError>;
     /// 写实体记录（内部按 cap_mask 选 S1/S2/S3 并回读校验）
-    async fn put_record(&self, kind: &str, id: &str, wire: &[u8], if_match: Option<&str>) -> Result<Commit, RemoteError>;
+    async fn put_record(
+        &self,
+        kind: &str,
+        id: &str,
+        wire: &[u8],
+        if_match: Option<&str>,
+    ) -> Result<Commit, RemoteError>;
     /// CAS 提交清单（先写 prev，再提交 index）
-    async fn commit_manifest(&self, wire: &[u8], cas_etag: Option<&str>) -> Result<Option<String>, RemoteError>;
+    async fn commit_manifest(
+        &self,
+        wire: &[u8],
+        cas_etag: Option<&str>,
+    ) -> Result<Option<String>, RemoteError>;
     async fn put_segment(&self, name: &str, wire: &[u8]) -> Result<(), RemoteError>;
     async fn probe_record_etag(&self, kind: &str, id: &str) -> Result<Option<String>, RemoteError>;
     /// §11.4：贴上/续上本机租约（尽力而为，失败只影响"别人看不看得见我"）。
     /// 过期时刻由引擎算：它才掌握"这一轮是什么时候"，也便于把同一个值记进本地状态。
     /// 刻意**不给默认实现**：默认 = 这一层静默空转，而"空转的并发保护"比没有更糟。
-    async fn lease_publish(&self, token: &str, expires_at: &str, seq: u64) -> Result<(), RemoteError>;
+    async fn lease_publish(
+        &self,
+        token: &str,
+        expires_at: &str,
+        seq: u64,
+    ) -> Result<(), RemoteError>;
     /// §11.4：读别人的租约。`known` 是清单 `generated_by` 学到的对手设备 id ——
     /// 服务器列目录能力坏掉时至少还能给它让路。读不出一律按"没人持有"处理。
     async fn lease_holders(&self, known: &[String]) -> Result<Vec<PeerLease>, RemoteError>;
@@ -117,17 +146,51 @@ pub struct Commit {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ApplyOp {
-    Upsert { kind: String, id: String, wire: Vec<u8> },
+    Upsert {
+        kind: String,
+        id: String,
+        wire: Vec<u8>,
+    },
     /// 冲突采纳：把远端那一版换成本机正文（本地那份已由 `record_conflict` 存成副本）。
     /// 只有引擎在判出 `UpdateUpdate` 并真的取回记录时才发这条（CONFLICT-RESOLUTION §6.1）。
-    AdoptConflict { kind: String, id: String, wire: Vec<u8> },
-    SetRemote { kind: String, id: String, rev: u64, hash12: String },
-    MarkSynced { kind: String, id: String, rev: u64 },
-    Delete { kind: String, id: String, rev: u64 },
-    Purge { kind: String, id: String },
-    Tombstone { kind: String, id: String, rev: u64, deleted_at: Option<String>, purged: bool },
+    AdoptConflict {
+        kind: String,
+        id: String,
+        wire: Vec<u8>,
+    },
+    SetRemote {
+        kind: String,
+        id: String,
+        rev: u64,
+        hash12: String,
+    },
+    MarkSynced {
+        kind: String,
+        id: String,
+        rev: u64,
+    },
+    Delete {
+        kind: String,
+        id: String,
+        rev: u64,
+    },
+    Purge {
+        kind: String,
+        id: String,
+    },
+    Tombstone {
+        kind: String,
+        id: String,
+        rev: u64,
+        deleted_at: Option<String>,
+        purged: bool,
+    },
     /// 提交成功后把清单正文与 etag 缓存下来，供下一轮 304 路径使用
-    StoreManifest { wire: Vec<u8>, etag: Option<String>, seq: u64 },
+    StoreManifest {
+        wire: Vec<u8>,
+        etag: Option<String>,
+        seq: u64,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -188,11 +251,23 @@ pub enum RemoteError {
 impl RemoteError {
     /// 该错误是否值得本轮之后尽快重试（SYNC-PROTOCOL §12）。
     pub fn retryable(&self) -> bool {
-        matches!(self, RemoteError::Offline | RemoteError::Server | RemoteError::Quota | RemoteError::Precondition)
+        matches!(
+            self,
+            RemoteError::Offline
+                | RemoteError::Server
+                | RemoteError::Quota
+                | RemoteError::Precondition
+        )
     }
     /// 是否应停止继续本轮（避免对着坏链路刷请求）。
     pub fn halts_round(&self) -> bool {
-        matches!(self, RemoteError::Auth | RemoteError::Forbidden | RemoteError::Cancelled | RemoteError::Protocol(_))
+        matches!(
+            self,
+            RemoteError::Auth
+                | RemoteError::Forbidden
+                | RemoteError::Cancelled
+                | RemoteError::Protocol(_)
+        )
     }
 }
 
@@ -234,14 +309,22 @@ pub enum RoundOutcome {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SyncEvent {
     Phase(Phase),
-    Progress { done: u32, total: u32 },
+    Progress {
+        done: u32,
+        total: u32,
+    },
     NeedsConflictAttention,
     /// §11.4：本轮让路给另一台设备（改动仍是 dirty，下一轮会再试）。
     /// 单独一个事件而不是"失败"：让路是正常协作，报成失败会吓到人，
     /// 静默不说又等于"看着同步其实没公告"。
-    Deferred { device: String },
+    Deferred {
+        device: String,
+    },
     Completed(RoundOutcome),
-    Failed { retryable: bool, message_key: &'static str },
+    Failed {
+        retryable: bool,
+        message_key: &'static str,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -261,13 +344,20 @@ pub struct EngineConfig {
 pub enum LeasePolicy {
     #[default]
     Off,
-    On { ttl_ms: i64 },
+    On {
+        ttl_ms: i64,
+    },
 }
-
 
 impl Default for EngineConfig {
     fn default() -> Self {
-        Self { max_cas_retries: 3, round_request_cap: 200, pull_concurrency: 8, bootstrap_batch: 500, lease: LeasePolicy::Off }
+        Self {
+            max_cas_retries: 3,
+            round_request_cap: 200,
+            pull_concurrency: 8,
+            bootstrap_batch: 500,
+            lease: LeasePolicy::Off,
+        }
     }
 }
 
@@ -308,7 +398,12 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             let now_ms = self.now_ms();
             let expires_at = notera_core::Timestamp::from_millis(now_ms + ttl_ms).to_string();
             let token = self.lease_token();
-            if self.remote.lease_publish(&token, &expires_at, self.local.seq_applied()).await.is_ok() {
+            if self
+                .remote
+                .lease_publish(&token, &expires_at, self.local.seq_applied())
+                .await
+                .is_ok()
+            {
                 let _ = self.local.record_lease(&token, &expires_at);
             }
         }
@@ -325,9 +420,18 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 // 304：远端未变。但**"远端未变"不等于"本机已追平"** —— 上一轮可能被
                 // 请求预算截断在下载的中途，此时账上（脏）是干净的，界还会说"已同步",
                 // 而库里其实少着一批实体。所以这里要用上一轮存下来的清单正文接着算。
-                let cached = self.local.cached_manifest().and_then(|b| Manifest::parse(&b).ok());
-                let backlog = cached.as_ref().is_some_and(|m| self.local.seq_applied() < m.seq);
-                let dirty = self.local.local_views().map(|v| v.iter().any(|l| l.dirty())).unwrap_or(false);
+                let cached = self
+                    .local
+                    .cached_manifest()
+                    .and_then(|b| Manifest::parse(&b).ok());
+                let backlog = cached
+                    .as_ref()
+                    .is_some_and(|m| self.local.seq_applied() < m.seq);
+                let dirty = self
+                    .local
+                    .local_views()
+                    .map(|v| v.iter().any(|l| l.dirty()))
+                    .unwrap_or(false);
                 if !dirty && !backlog {
                     st.requests += 1;
                     return (st, vec![SyncEvent::Completed(RoundOutcome::NoOp)]);
@@ -345,38 +449,70 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                     // 本机提交清单时才写，于是纯拉侧每轮都拿不到 304、每轮整份重下
                     // index.json（5000 条约 186 KiB / 轮 / 设备，而后台 25 秒一轮）。
                     Ok(m) => {
-                        let _ = self.local.apply(vec![ApplyOp::StoreManifest { wire: bytes, etag: e.clone(), seq: m.seq }]);
+                        let _ = self.local.apply(vec![ApplyOp::StoreManifest {
+                            wire: bytes,
+                            etag: e.clone(),
+                            seq: m.seq,
+                        }]);
                         (Some(m), e)
                     }
                     // D1/D2：清单不可信 → 绝不"以空清单继续"（那等于清空用户库）
                     Err(ManifestError::Protocol { .. }) => {
                         return (
-                            RoundStats { outcome: RoundOutcome::Failed, ..st },
-                            vec![SyncEvent::Failed { retryable: false, message_key: "sync.protocol_mismatch" }],
+                            RoundStats {
+                                outcome: RoundOutcome::Failed,
+                                ..st
+                            },
+                            vec![SyncEvent::Failed {
+                                retryable: false,
+                                message_key: "sync.protocol_mismatch",
+                            }],
                         );
                     }
                     Err(_) => {
                         return (
-                            RoundStats { outcome: RoundOutcome::Failed, ..st },
-                            vec![SyncEvent::Failed { retryable: true, message_key: "sync.corrupt_record" }],
+                            RoundStats {
+                                outcome: RoundOutcome::Failed,
+                                ..st
+                            },
+                            vec![SyncEvent::Failed {
+                                retryable: true,
+                                message_key: "sync.corrupt_record",
+                            }],
                         );
                     }
                 }
             }
-            Err(e) => return (RoundStats { outcome: RoundOutcome::Failed, ..st }, vec![self.fail_event(&e)]),
+            Err(e) => {
+                return (
+                    RoundStats {
+                        outcome: RoundOutcome::Failed,
+                        ..st
+                    },
+                    vec![self.fail_event(&e)],
+                )
+            }
         };
 
         // ② 生成计划
         let locals = match self.local.local_views() {
             Ok(v) => v,
-            Err(_) => return (RoundStats { outcome: RoundOutcome::Failed, ..st }, vec![]),
+            Err(_) => {
+                return (
+                    RoundStats {
+                        outcome: RoundOutcome::Failed,
+                        ..st
+                    },
+                    vec![],
+                )
+            }
         };
         let remotes: Vec<RemoteView> = match &manifest {
             Some(m) => {
                 let mut out = self.local.cached_remote().unwrap_or_default();
                 // 落后超过窗口 → 拉变化分段（SYNC-PROTOCOL §6.2 第三档）
-                let window_covers = m.window.complete
-                    && self.local.seq_applied() >= m.window.since_seq;
+                let window_covers =
+                    m.window.complete && self.local.seq_applied() >= m.window.since_seq;
                 if !window_covers {
                     for name in m.segments_needed_for(&self.local.cached_segment_hashes()) {
                         if st.requests >= self.cfg.round_request_cap {
@@ -386,7 +522,11 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                         match self.remote.fetch_segment(&name).await {
                             Ok(entries) => {
                                 st.requests += 1;
-                                out.retain(|r| !entries.iter().any(|e| e.key() == (r.kind.clone(), r.id.clone())));
+                                out.retain(|r| {
+                                    !entries
+                                        .iter()
+                                        .any(|e| e.key() == (r.kind.clone(), r.id.clone()))
+                                });
                                 for e in entries {
                                     out.push(RemoteView {
                                         kind: e.t,
@@ -429,11 +569,17 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             if !l.dirty() || l.deleted_at.is_some() || l.purged_at.is_some() {
                 continue;
             }
-            let Some(r) = remotes.iter().find(|r| r.kind == l.kind && r.id == l.id) else { continue };
+            let Some(r) = remotes.iter().find(|r| r.kind == l.kind && r.id == l.id) else {
+                continue;
+            };
             if r.purged || r.deleted_at.is_some() || r.rev != l.rev {
                 continue;
             }
-            if !r.hash.as_deref().is_some_and(|h| notera_core::same_content_hash(h, &l.content_hash)) {
+            if !r
+                .hash
+                .as_deref()
+                .is_some_and(|h| notera_core::same_content_hash(h, &l.content_hash))
+            {
                 continue;
             }
             let _ = self.local.apply(vec![ApplyOp::MarkSynced {
@@ -441,7 +587,9 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 id: l.id.clone(),
                 rev: l.rev,
             }]);
-            let _ = self.local.outbox_settle(&l.kind, &l.id, l.rev, OutboxState::Done);
+            let _ = self
+                .local
+                .outbox_settle(&l.kind, &l.id, l.rev, OutboxState::Done);
         }
 
         // ③ push 本地变更（先实体，后清单 —— R2）
@@ -465,9 +613,18 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 Ok(None) => continue,
                 Err(_) => continue,
             };
-            let known_etag = self.remote.probe_record_etag(&l.kind, &l.id).await.ok().flatten();
+            let known_etag = self
+                .remote
+                .probe_record_etag(&l.kind, &l.id)
+                .await
+                .ok()
+                .flatten();
             st.requests += 1;
-            match self.remote.put_record(&l.kind, &l.id, &wire, known_etag.as_deref()).await {
+            match self
+                .remote
+                .put_record(&l.kind, &l.id, &wire, known_etag.as_deref())
+                .await
+            {
                 Ok(c) if c.verified => {
                     st.requests += 1;
                     st.bytes_up += wire.len() as u64;
@@ -477,28 +634,44 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 }
                 Ok(_) => {
                     // 写未通过复验：不得记为已提交（webdav 层契约）
-                    let _ = self.local.outbox_settle(&l.kind, &l.id, l.rev, OutboxState::Failed);
+                    let _ = self
+                        .local
+                        .outbox_settle(&l.kind, &l.id, l.rev, OutboxState::Failed);
                 }
                 Err(RemoteError::Precondition) => {
                     // 有人先写了：本轮该实体让路，重算在下轮
-                    let _ = self.local.outbox_settle(&l.kind, &l.id, l.rev, OutboxState::Pending);
+                    let _ = self
+                        .local
+                        .outbox_settle(&l.kind, &l.id, l.rev, OutboxState::Pending);
                     st.outcome = RoundOutcome::Partial;
                 }
                 Err(e) => {
-                    let _ = self.local.outbox_settle(&l.kind, &l.id, l.rev, OutboxState::Failed);
+                    let _ = self
+                        .local
+                        .outbox_settle(&l.kind, &l.id, l.rev, OutboxState::Failed);
                     if e.halts_round() {
-                        return (RoundStats { outcome: RoundOutcome::Failed, ..st }, vec![self.fail_event(&e)]);
+                        return (
+                            RoundStats {
+                                outcome: RoundOutcome::Failed,
+                                ..st
+                            },
+                            vec![self.fail_event(&e)],
+                        );
                     }
                 }
             }
-            events.push(SyncEvent::Progress { done: st.pushed as u32, total: plan.pushes().len() as u32 });
+            events.push(SyncEvent::Progress {
+                done: st.pushed as u32,
+                total: plan.pushes().len() as u32,
+            });
         }
 
         // ④ pull 远端变更
         notera_core::crash_point("after_records_push");
         // 已经有了的那一版，就别再花请求去要了（见 `LocalPort::synced_heads`）。
         let held = self.local.synced_heads();
-        let rmap: BTreeMap<(String, String), &RemoteView> = remotes.iter().map(|r| (r.key(), r)).collect();
+        let rmap: BTreeMap<(String, String), &RemoteView> =
+            remotes.iter().map(|r| (r.key(), r)).collect();
         notera_core::crash_point("before_apply");
         for d in plan.pulls() {
             if st.requests >= self.cfg.round_request_cap {
@@ -509,7 +682,10 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             let (kind, id) = d.key.clone();
             if let (Some((rev, hash)), Some(r)) = (held.get(&d.key), rmap.get(&d.key)) {
                 let same_rev = *rev == r.rev;
-                let same_hash = r.hash.as_deref().is_some_and(|h| notera_core::same_content_hash(h, hash));
+                let same_hash = r
+                    .hash
+                    .as_deref()
+                    .is_some_and(|h| notera_core::same_content_hash(h, hash));
                 if same_rev && same_hash {
                     continue;
                 }
@@ -518,7 +694,10 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 Ok(Some(wire)) => {
                     st.requests += 1;
                     st.bytes_down += wire.len() as u64;
-                    let rep = self.local.apply(vec![ApplyOp::Upsert { kind, id, wire }]).unwrap_or_default();
+                    let rep = self
+                        .local
+                        .apply(vec![ApplyOp::Upsert { kind, id, wire }])
+                        .unwrap_or_default();
                     if rep.applied == 1 {
                         st.pulled += 1;
                     } else {
@@ -530,7 +709,13 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                     st.outcome = RoundOutcome::Partial;
                 }
                 Err(e) if e.halts_round() => {
-                    return (RoundStats { outcome: RoundOutcome::Failed, ..st }, vec![self.fail_event(&e)])
+                    return (
+                        RoundStats {
+                            outcome: RoundOutcome::Failed,
+                            ..st
+                        },
+                        vec![self.fail_event(&e)],
+                    )
                 }
                 Err(_) => st.outcome = RoundOutcome::Partial,
             }
@@ -542,8 +727,15 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             match &d.action {
                 Action::ApplyRemoteDelete | Action::ApplyRemotePurge => {
                     let purged = matches!(d.action, Action::ApplyRemotePurge);
-                    let rev = remotes.iter().find(|r| r.key() == d.key).map(|r| r.rev).unwrap_or(0);
-                    let deleted_at = remotes.iter().find(|r| r.key() == d.key).and_then(|r| r.deleted_at.clone());
+                    let rev = remotes
+                        .iter()
+                        .find(|r| r.key() == d.key)
+                        .map(|r| r.rev)
+                        .unwrap_or(0);
+                    let deleted_at = remotes
+                        .iter()
+                        .find(|r| r.key() == d.key)
+                        .and_then(|r| r.deleted_at.clone());
                     tombstone_ops.push(ApplyOp::Tombstone {
                         kind: d.key.0.clone(),
                         id: d.key.1.clone(),
@@ -553,7 +745,9 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                     });
                 }
                 Action::Conflict(ck) => {
-                    if let (Some(l), Some(r)) = (lmap.get(&d.key), remotes.iter().find(|x| x.key() == d.key)) {
+                    if let (Some(l), Some(r)) =
+                        (lmap.get(&d.key), remotes.iter().find(|x| x.key() == d.key))
+                    {
                         let _ = self.local.record_conflict(d, l, r);
                         st.conflicts += 1;
                         // §6.1：正文必须是**已被别的设备确认的那一份**，本机那份刚才已经进了副本。
@@ -564,13 +758,20 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                         //      把别人已确认的那一份**静默盖掉**。
                         // 只有 UpdateUpdate 走这条路：删除 vs 修改（P11）该保留哪一边由用户决定，
                         // 引擎不许替他选。取不到就照旧留卡片，下一轮再试。
-                        if matches!(ck, ConflictKind::UpdateUpdate) && l.kind == "n" && st.requests < self.cfg.round_request_cap {
+                        if matches!(ck, ConflictKind::UpdateUpdate)
+                            && l.kind == "n"
+                            && st.requests < self.cfg.round_request_cap
+                        {
                             if let Ok(Some(wire)) = self.remote.fetch_record(&l.kind, &l.id).await {
                                 st.requests += 1;
                                 st.bytes_down += wire.len() as u64;
                                 let rep = self
                                     .local
-                                    .apply(vec![ApplyOp::AdoptConflict { kind: l.kind.clone(), id: l.id.clone(), wire }])
+                                    .apply(vec![ApplyOp::AdoptConflict {
+                                        kind: l.kind.clone(),
+                                        id: l.id.clone(),
+                                        wire,
+                                    }])
                                     .unwrap_or_default();
                                 if rep.applied == 1 {
                                     st.pulled += 1;
@@ -591,11 +792,19 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
         // 304 轮次手里没有清单正文：回落到上一轮缓存，否则本地变更将永远无法公告。
         let mut manifest = manifest;
         if manifest.is_none() && !written.is_empty() {
-            manifest = self.local.cached_manifest().and_then(|b| Manifest::parse(&b).ok());
+            manifest = self
+                .local
+                .cached_manifest()
+                .and_then(|b| Manifest::parse(&b).ok());
             if manifest.is_none() {
                 // 缓存也没有（首次或缓存丢失）：以本轮变更新建一份，宁可多一次全量公告，
                 // 也不能丢掉变更。seq 从 1 起由服务器 CAS 仲裁。
-                manifest = Some(Manifest::initial("", &self.local.device_id(), &self.local.now(), "notera"));
+                manifest = Some(Manifest::initial(
+                    "",
+                    &self.local.device_id(),
+                    &self.local.now(),
+                    "notera",
+                ));
             }
         }
         // 本轮是否要让路（让路只跳过"提交清单"这一步，其余收尾照常）
@@ -604,13 +813,19 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             // §11.2 第三层：**写清单前**问一次有没有人正占着。让路只是延后一轮 ——
             // 记录已经推上去了但清单没公告 = 别人暂时看不见，也无害（清单是唯一入口）。
             if let LeasePolicy::On { .. } = self.cfg.lease {
-                let known: Vec<String> = manifest.as_ref().map(|m| vec![m.generated_by.clone()]).unwrap_or_default();
+                let known: Vec<String> = manifest
+                    .as_ref()
+                    .map(|m| vec![m.generated_by.clone()])
+                    .unwrap_or_default();
                 let now_ms = self.now_ms();
                 let me = self.local.device_id();
                 match self.remote.lease_holders(&known).await {
                     Ok(peers) => {
                         st.requests += 1;
-                        yielded = peers.into_iter().find(|p| p.device != me && p.is_fresh(now_ms)).map(|p| p.device);
+                        yielded = peers
+                            .into_iter()
+                            .find(|p| p.device != me && p.is_fresh(now_ms))
+                            .map(|p| p.device);
                     }
                     // 读不到别人的租约 = 当作没人持有（§11.4：这一层坏了不能变成永不同步）
                     Err(_) => {
@@ -623,16 +838,25 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             st.outcome = RoundOutcome::Partial;
             events.push(SyncEvent::Deferred { device });
         }
-        if !written.is_empty() && events.iter().all(|e| !matches!(e, SyncEvent::Deferred { .. })) {
+        if !written.is_empty()
+            && events
+                .iter()
+                .all(|e| !matches!(e, SyncEvent::Deferred { .. }))
+        {
             if let Some(m) = manifest.as_ref() {
-                let mut next = m.with_commit(&self.local.device_id(), &self.local.now(), &written, &[]);
+                let mut next =
+                    m.with_commit(&self.local.device_id(), &self.local.now(), &written, &[]);
                 next = self.compact_if_needed(next).await;
                 let mut tries = 0u8;
                 loop {
                     st.requests += 1;
                     st.bytes_up += next.to_wire().len() as u64;
                     notera_core::crash_point("before_manifest_commit");
-                    match self.remote.commit_manifest(&next.to_wire(), new_etag.as_deref()).await {
+                    match self
+                        .remote
+                        .commit_manifest(&next.to_wire(), new_etag.as_deref())
+                        .await
+                    {
                         Ok(e) => {
                             // 公告已在服务器上、本地却还没结清 —— 这是最要命的一刀：
                             // 崩在这里之后下一轮必须既不再重复公告、也不把改动弄丢。
@@ -647,7 +871,11 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                                 let _ = self.local.outbox_settle(kind, id, *rev, OutboxState::Done);
                             }
                             let _ = self.local.apply(vec![
-                                ApplyOp::StoreManifest { wire: next.to_wire(), etag: e.clone(), seq: next.seq },
+                                ApplyOp::StoreManifest {
+                                    wire: next.to_wire(),
+                                    etag: e.clone(),
+                                    seq: next.seq,
+                                },
                                 ApplyOp::SetRemote {
                                     kind: "manifest".into(),
                                     id: "index".into(),
@@ -666,7 +894,14 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                             match self.remote.fetch_manifest(None).await {
                                 Ok(Some((bytes, e2))) => match Manifest::parse(&bytes) {
                                     Ok(fresh) => {
-                                        next = self.compact_if_needed(fresh.with_commit(&self.local.device_id(), &self.local.now(), &written, &[])).await;
+                                        next = self
+                                            .compact_if_needed(fresh.with_commit(
+                                                &self.local.device_id(),
+                                                &self.local.now(),
+                                                &written,
+                                                &[],
+                                            ))
+                                            .await;
                                         new_etag = e2;
                                     }
                                     Err(_) => break,
@@ -703,7 +938,11 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
         }
 
         if st.outcome == RoundOutcome::NoOp {
-            st.outcome = if st.pushed + st.pulled > 0 { RoundOutcome::Converged } else { RoundOutcome::NoOp };
+            st.outcome = if st.pushed + st.pulled > 0 {
+                RoundOutcome::Converged
+            } else {
+                RoundOutcome::NoOp
+            };
         }
         if st.conflicts > 0 {
             events.push(SyncEvent::NeedsConflictAttention);
@@ -730,10 +969,18 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 Err(_) => return next,
             }
         }
-        let (compacted, touched, contents) = next.compact(&segs, &self.local.device_id(), &self.local.now());
+        let (compacted, touched, contents) =
+            next.compact(&segs, &self.local.device_id(), &self.local.now());
         for name in touched {
-            let Some(entries) = contents.get(&name) else { continue };
-            if self.remote.put_segment(&name, &crate::manifest::segment_wire(entries)).await.is_err() {
+            let Some(entries) = contents.get(&name) else {
+                continue;
+            };
+            if self
+                .remote
+                .put_segment(&name, &crate::manifest::segment_wire(entries))
+                .await
+                .is_err()
+            {
                 return next;
             }
         }
@@ -746,7 +993,9 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
     /// 本地时钟的毫秒刻度。读不出来就按 0 —— 方向是"别人的租约都算过期"，
     /// 也就是不让路，而不是永久挡住自己。
     fn now_ms(&self) -> i64 {
-        notera_core::Timestamp::parse(&self.local.now()).and_then(|t| t.as_millis()).unwrap_or_default()
+        notera_core::Timestamp::parse(&self.local.now())
+            .and_then(|t| t.as_millis())
+            .unwrap_or_default()
     }
 
     /// 一轮一份。只用来区分同一台设备的两次运行，不参与任何判定。
@@ -786,7 +1035,12 @@ pub struct Backoff {
 
 impl Default for Backoff {
     fn default() -> Self {
-        Self { base: Duration::from_secs(2), factor: 1.85, max: Duration::from_secs(900), jitter: 0.2 }
+        Self {
+            base: Duration::from_secs(2),
+            factor: 1.85,
+            max: Duration::from_secs(900),
+            jitter: 0.2,
+        }
     }
 }
 
@@ -800,7 +1054,12 @@ impl Backoff {
     }
 
     /// 尊重服务器 `Retry-After`（取较大者，避免比服务器要求更激进）。
-    pub fn with_retry_after(&self, attempt: u32, rand01: f64, retry_after: Option<Duration>) -> Duration {
+    pub fn with_retry_after(
+        &self,
+        attempt: u32,
+        rand01: f64,
+        retry_after: Option<Duration>,
+    ) -> Duration {
         let d = self.delay_for(attempt, rand01);
         match retry_after {
             Some(ra) => d.max(ra),
@@ -830,7 +1089,10 @@ mod tests {
         let hi = b.delay_for(3, 1.0);
         let mid = b.delay_for(3, 0.5);
         assert!(lo < mid && mid < hi);
-        assert!((hi.as_secs_f64() / lo.as_secs_f64()) < 1.6, "±20% jitter 区间不应过宽");
+        assert!(
+            (hi.as_secs_f64() / lo.as_secs_f64()) < 1.6,
+            "±20% jitter 区间不应过宽"
+        );
     }
 
     #[test]
@@ -839,7 +1101,10 @@ mod tests {
         let d = b.with_retry_after(0, 0.5, Some(Duration::from_secs(30)));
         assert_eq!(d, Duration::from_secs(30));
         let d2 = b.with_retry_after(6, 0.5, Some(Duration::from_secs(1)));
-        assert!(d2 > Duration::from_secs(1), "退避已大于 Retry-After 时不得缩短");
+        assert!(
+            d2 > Duration::from_secs(1),
+            "退避已大于 Retry-After 时不得缩短"
+        );
     }
 
     #[test]
@@ -847,9 +1112,15 @@ mod tests {
         assert!(RemoteError::Server.retryable());
         assert!(RemoteError::Quota.retryable());
         assert!(!RemoteError::Auth.retryable());
-        assert!(RemoteError::Auth.halts_round(), "认证失败必须停轮，不能刷请求");
+        assert!(
+            RemoteError::Auth.halts_round(),
+            "认证失败必须停轮，不能刷请求"
+        );
         assert!(RemoteError::Protocol("x".into()).halts_round());
-        assert!(!RemoteError::Offline.halts_round(), "离线可继续下一轮，不是终止态");
+        assert!(
+            !RemoteError::Offline.halts_round(),
+            "离线可继续下一轮，不是终止态"
+        );
     }
 
     #[test]

@@ -340,7 +340,11 @@ async fn serve_conn(shared: Arc<Shared>, stream: tokio::net::TcpStream) {
                 push_log(
                     &mut c,
                     &info.method,
-                    if info.path.is_empty() { "?" } else { &info.path },
+                    if info.path.is_empty() {
+                        "?"
+                    } else {
+                        &info.path
+                    },
                     0,
                     info.bytes as u64,
                 );
@@ -434,7 +438,12 @@ fn decide(shared: &Arc<Shared>, req: &Request, proxied: bool) -> Decision {
     let stripped;
     let req = if inj.ignore_range && req.headers.iter().any(|(k, _)| k == "range") {
         stripped = Request {
-            headers: req.headers.iter().filter(|(k, _)| k != "range").cloned().collect(),
+            headers: req
+                .headers
+                .iter()
+                .filter(|(k, _)| k != "range")
+                .cloned()
+                .collect(),
             ..req.clone()
         };
         &stripped

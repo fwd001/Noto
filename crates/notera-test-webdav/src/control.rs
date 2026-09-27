@@ -44,7 +44,10 @@ pub fn handle(shared: &Shared, req: &Request) -> (Reply, Action) {
             let c = shared.cell.lock().expect("cell");
             let mut c = c;
             if let Err(e) = c.store.clear() {
-                return (Reply::json(500, &json!({ "error": e.to_string() }).to_string()), Action::None);
+                return (
+                    Reply::json(500, &json!({ "error": e.to_string() }).to_string()),
+                    Action::None,
+                );
             }
             c.served_data = 0;
             c.counters = Default::default();

@@ -104,13 +104,29 @@ pub fn decide(local: Option<&LocalView>, remote: Option<&RemoteView>) -> Decisio
     }
     match (local, remote) {
         // P1 不可能：调用方不会为"双方都不存在"生成计划
-        (None, None) => Decision { key: (String::new(), String::new()), action: Action::NoOp, rule: "P1" },
+        (None, None) => Decision {
+            key: (String::new(), String::new()),
+            action: Action::NoOp,
+            rule: "P1",
+        },
         // P13 远端是永久删除墓碑，本地什么都没有 → 只需落墓碑
-        (None, Some(r)) if r.purged => Decision { key: r.key(), action: Action::ApplyRemotePurge, rule: "P13" },
+        (None, Some(r)) if r.purged => Decision {
+            key: r.key(),
+            action: Action::ApplyRemotePurge,
+            rule: "P13",
+        },
         // P2 远端新增
-        (None, Some(r)) if r.deleted_at.is_none() => Decision { key: r.key(), action: Action::Pull, rule: "P2" },
+        (None, Some(r)) if r.deleted_at.is_none() => Decision {
+            key: r.key(),
+            action: Action::Pull,
+            rule: "P2",
+        },
         // 远端已删而本地没有该实体：无事可做（墓碑不必拉成笔记）
-        (None, Some(r)) => Decision { key: r.key(), action: Action::NoOp, rule: "P2b" },
+        (None, Some(r)) => Decision {
+            key: r.key(),
+            action: Action::NoOp,
+            rule: "P2b",
+        },
         // P3 / C2：本地有、清单没有 —— 补传，**绝不删本地**
         (Some(l), None) => Decision {
             key: l.key(),
@@ -135,40 +151,76 @@ fn both_present(l: &LocalView, r: &RemoteView) -> Decision {
     // P16 版本超前（远端 rev 比本程序语义能力新，由引擎用 protocol 判定后传入）
     // P12/P13 永久删除传播优先于一切编辑
     if r.purged && !local_changed {
-        return Decision { key: l.key(), action: Action::ApplyRemotePurge, rule: "P13" };
+        return Decision {
+            key: l.key(),
+            action: Action::ApplyRemotePurge,
+            rule: "P13",
+        };
     }
     if l.purged_at.is_some() && local_changed {
-        return Decision { key: l.key(), action: Action::PushPurge, rule: "P12" };
+        return Decision {
+            key: l.key(),
+            action: Action::PushPurge,
+            rule: "P12",
+        };
     }
 
     // P11 删除 vs 修改（双向都算冲突，且本地内容必须先保留）
     if local_changed && r.deleted_at.is_some() && !r.purged {
-        return Decision { key: l.key(), action: Action::Conflict(ConflictKind::UpdateDelete), rule: "P11" };
+        return Decision {
+            key: l.key(),
+            action: Action::Conflict(ConflictKind::UpdateDelete),
+            rule: "P11",
+        };
     }
     if l.deleted_at.is_some() && local_changed && remote_changed && r.deleted_at.is_none() {
-        return Decision { key: l.key(), action: Action::Conflict(ConflictKind::DeleteUpdate), rule: "P11b" };
+        return Decision {
+            key: l.key(),
+            action: Action::Conflict(ConflictKind::DeleteUpdate),
+            rule: "P11b",
+        };
     }
 
     // P9 本地删除待传播
     if l.deleted_at.is_some() && local_changed && !remote_changed {
-        return Decision { key: l.key(), action: Action::PushDelete, rule: "P9" };
+        return Decision {
+            key: l.key(),
+            action: Action::PushDelete,
+            rule: "P9",
+        };
     }
     // P10 远端删除、本地未改
     if r.deleted_at.is_some() && remote_changed && !local_changed {
-        return Decision { key: l.key(), action: Action::ApplyRemoteDelete, rule: "P10" };
+        return Decision {
+            key: l.key(),
+            action: Action::ApplyRemoteDelete,
+            rule: "P10",
+        };
     }
 
     // P4 双方都停在一致点
     if !local_changed && !remote_changed {
-        return Decision { key: l.key(), action: Action::NoOp, rule: "P4" };
+        return Decision {
+            key: l.key(),
+            action: Action::NoOp,
+            rule: "P4",
+        };
     }
     // P5 仅本地改
     if local_changed && !remote_changed {
-        return Decision { key: l.key(), action: Action::Push, rule: "P5" };
+        return Decision {
+            key: l.key(),
+            action: Action::Push,
+            rule: "P5",
+        };
     }
     // P6 仅远端改
     if !local_changed && remote_changed {
-        return Decision { key: l.key(), action: Action::Pull, rule: "P6" };
+        return Decision {
+            key: l.key(),
+            action: Action::Pull,
+            rule: "P6",
+        };
     }
     // P7/P8 两侧都改：内容相同即收敛，不同才是真冲突。
     // 比较走 `same_content_hash`：远端索引带的是 12 位短哈希，本地行上是全哈希，
@@ -178,9 +230,17 @@ fn both_present(l: &LocalView, r: &RemoteView) -> Decision {
         _ => false,
     };
     if same {
-        return Decision { key: l.key(), action: Action::NoOp, rule: "P7" };
+        return Decision {
+            key: l.key(),
+            action: Action::NoOp,
+            rule: "P7",
+        };
     }
-    Decision { key: l.key(), action: Action::Conflict(ConflictKind::UpdateUpdate), rule: "P8" }
+    Decision {
+        key: l.key(),
+        action: Action::Conflict(ConflictKind::UpdateUpdate),
+        rule: "P8",
+    }
 }
 
 /// 从两侧视图生成整轮计划。
@@ -214,7 +274,12 @@ impl Plan {
     pub fn pushes(&self) -> Vec<&Decision> {
         self.decisions
             .iter()
-            .filter(|d| matches!(d.action, Action::Push | Action::PushDelete | Action::PushPurge | Action::MissingRemote))
+            .filter(|d| {
+                matches!(
+                    d.action,
+                    Action::Push | Action::PushDelete | Action::PushPurge | Action::MissingRemote
+                )
+            })
             .collect()
     }
     pub fn pulls(&self) -> Vec<&Decision> {
@@ -271,7 +336,14 @@ mod tests {
         }
     }
     fn r(rev: u64, hash: &str) -> RemoteView {
-        RemoteView { kind: "n".into(), id: "x".into(), rev, hash: Some(format!("sha256:{hash}")), deleted_at: None, purged: false }
+        RemoteView {
+            kind: "n".into(),
+            id: "x".into(),
+            rev,
+            hash: Some(format!("sha256:{hash}")),
+            deleted_at: None,
+            purged: false,
+        }
     }
 
     #[test]
@@ -285,7 +357,10 @@ mod tests {
         let d = decide(Some(&l(1, 0, "aaa")), None);
         assert_eq!((d.action.clone(), d.rule), (Action::MissingRemote, "P3"));
         // 关键：绝不是"删除本地"
-        assert!(!matches!(d.action, Action::ApplyRemoteDelete | Action::ApplyRemotePurge));
+        assert!(!matches!(
+            d.action,
+            Action::ApplyRemoteDelete | Action::ApplyRemotePurge
+        ));
     }
 
     #[test]
@@ -298,8 +373,14 @@ mod tests {
 
     #[test]
     fn p5_and_p6_one_sided() {
-        assert_eq!(decide(Some(&l(6, 5, "abc")), Some(&r(5, "abc"))).action, Action::Push);
-        assert_eq!(decide(Some(&l(5, 5, "abc")), Some(&r(6, "xyz"))).action, Action::Pull);
+        assert_eq!(
+            decide(Some(&l(6, 5, "abc")), Some(&r(5, "abc"))).action,
+            Action::Push
+        );
+        assert_eq!(
+            decide(Some(&l(5, 5, "abc")), Some(&r(6, "xyz"))).action,
+            Action::Pull
+        );
     }
 
     #[test]
@@ -327,13 +408,23 @@ mod tests {
             purged: false,
         };
         let d = decide(Some(&local), Some(&remote));
-        assert_eq!((d.action, d.rule), (Action::NoOp, "P7"), "短哈希与全哈希同值必须算收敛");
+        assert_eq!(
+            (d.action, d.rule),
+            (Action::NoOp, "P7"),
+            "短哈希与全哈希同值必须算收敛"
+        );
 
         // 而真的不一样时不许因为"前 12 位相同"就收敛掉：短哈希只用于同一版判定，
         // 这里给的是两个不同的完整值，必须仍然判成冲突。
-        let other = RemoteView { hash: Some("ff00ee001122".to_string()), ..remote };
+        let other = RemoteView {
+            hash: Some("ff00ee001122".to_string()),
+            ..remote
+        };
         let e = decide(Some(&local), Some(&other));
-        assert_eq!((e.action, e.rule), (Action::Conflict(ConflictKind::UpdateUpdate), "P8"));
+        assert_eq!(
+            (e.action, e.rule),
+            (Action::Conflict(ConflictKind::UpdateUpdate), "P8")
+        );
     }
 
     #[test]
@@ -347,11 +438,17 @@ mod tests {
     fn p9_p10_deletions() {
         let mut a = l(6, 5, "abc");
         a.deleted_at = Some("2026-09-25T00:00:00.000Z".into());
-        assert_eq!(decide(Some(&a), Some(&r(5, "abc"))).action, Action::PushDelete);
+        assert_eq!(
+            decide(Some(&a), Some(&r(5, "abc"))).action,
+            Action::PushDelete
+        );
 
         let mut b = r(6, "abc");
         b.deleted_at = Some("2026-09-25T00:00:00.000Z".into());
-        assert_eq!(decide(Some(&l(5, 5, "abc")), Some(&b)).action, Action::ApplyRemoteDelete);
+        assert_eq!(
+            decide(Some(&l(5, 5, "abc")), Some(&b)).action,
+            Action::ApplyRemoteDelete
+        );
     }
 
     #[test]
@@ -360,38 +457,78 @@ mod tests {
         let mut b = r(6, "abc");
         b.deleted_at = Some("2026-09-25T00:00:00.000Z".into());
         let d = decide(Some(&l(7, 5, "edited")), Some(&b));
-        assert!(matches!(d.action, Action::Conflict(ConflictKind::UpdateDelete)), "{d:?}");
+        assert!(
+            matches!(d.action, Action::Conflict(ConflictKind::UpdateDelete)),
+            "{d:?}"
+        );
         // 反向：本地删、远端改
         let mut a = l(6, 5, "abc");
         a.deleted_at = Some("2026-09-25T00:00:00.000Z".into());
         let d2 = decide(Some(&a), Some(&r(7, "other")));
-        assert!(matches!(d2.action, Action::Conflict(ConflictKind::DeleteUpdate)), "{d2:?}");
+        assert!(
+            matches!(d2.action, Action::Conflict(ConflictKind::DeleteUpdate)),
+            "{d2:?}"
+        );
     }
 
     #[test]
     fn p12_p13_purge_propagates() {
         let mut a = l(6, 5, "abc");
         a.purged_at = Some("2026-09-25T00:00:00.000Z".into());
-        assert_eq!(decide(Some(&a), Some(&r(5, "abc"))).action, Action::PushPurge);
+        assert_eq!(
+            decide(Some(&a), Some(&r(5, "abc"))).action,
+            Action::PushPurge
+        );
         let mut b = r(6, "abc");
         b.purged = true;
         b.deleted_at = Some("2026-09-25T00:00:00.000Z".into());
-        assert_eq!(decide(Some(&l(5, 5, "abc")), Some(&b)).action, Action::ApplyRemotePurge);
+        assert_eq!(
+            decide(Some(&l(5, 5, "abc")), Some(&b)).action,
+            Action::ApplyRemotePurge
+        );
         assert_eq!(decide(None, Some(&b)).action, Action::ApplyRemotePurge);
     }
 
     #[test]
     fn plan_partitions_actions() {
         let locals = vec![
-            { let mut x = l(6, 5, "a"); x.id = "push".into(); x },
-            { let mut x = l(5, 5, "b"); x.id = "pull".into(); x },
-            { let mut x = l(7, 5, "c"); x.id = "conf".into(); x },
+            {
+                let mut x = l(6, 5, "a");
+                x.id = "push".into();
+                x
+            },
+            {
+                let mut x = l(5, 5, "b");
+                x.id = "pull".into();
+                x
+            },
+            {
+                let mut x = l(7, 5, "c");
+                x.id = "conf".into();
+                x
+            },
         ];
         let remotes = vec![
-            { let mut x = r(5, "a"); x.id = "push".into(); x },
-            { let mut x = r(6, "zzz"); x.id = "pull".into(); x },
-            { let mut x = r(8, "yyy"); x.id = "conf".into(); x },
-            { let mut x = r(2, "new"); x.id = "remote-only".into(); x },
+            {
+                let mut x = r(5, "a");
+                x.id = "push".into();
+                x
+            },
+            {
+                let mut x = r(6, "zzz");
+                x.id = "pull".into();
+                x
+            },
+            {
+                let mut x = r(8, "yyy");
+                x.id = "conf".into();
+                x
+            },
+            {
+                let mut x = r(2, "new");
+                x.id = "remote-only".into();
+                x
+            },
         ];
         let p = Plan::build(&locals, &remotes);
         assert_eq!(p.decisions.len(), 4, "并集去重后应 4 条");
@@ -399,7 +536,10 @@ mod tests {
         assert_eq!(p.pulls().len(), 2, "本地落后与远端新增都要拉");
         assert_eq!(p.conflicts().len(), 1);
         assert!(!p.is_read_only());
-        assert!(Plan::build(&[l(5, 5, "a")], &[r(5, "a")]).is_read_only(), "全收敛轮不得产生写入");
+        assert!(
+            Plan::build(&[l(5, 5, "a")], &[r(5, "a")]).is_read_only(),
+            "全收敛轮不得产生写入"
+        );
     }
 
     #[test]

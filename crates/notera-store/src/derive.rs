@@ -32,7 +32,10 @@ pub(crate) fn prepare(value: &serde_json::Value) -> Result<Prepared, StoreError>
     if let Some(v) = value.get("v").and_then(|x| x.as_u64()) {
         let v = v as u16;
         if !notera_richtext::supports(v) {
-            return Err(StoreError::DocTooNew { doc: v, supported: notera_richtext::DOC_FORMAT });
+            return Err(StoreError::DocTooNew {
+                doc: v,
+                supported: notera_richtext::DOC_FORMAT,
+            });
         }
     }
     let doc = notera_richtext::parse_from_value(value).map_err(map_rich)?;
@@ -46,9 +49,10 @@ pub(crate) fn prepare_text(raw: &str) -> Result<Prepared, StoreError> {
 
 fn map_rich(e: notera_richtext::RichError) -> StoreError {
     match e {
-        notera_richtext::RichError::UnsupportedVersion(v) => {
-            StoreError::DocTooNew { doc: v, supported: notera_richtext::DOC_FORMAT }
-        }
+        notera_richtext::RichError::UnsupportedVersion(v) => StoreError::DocTooNew {
+            doc: v,
+            supported: notera_richtext::DOC_FORMAT,
+        },
         other => StoreError::InvalidDoc(other.to_string()),
     }
 }
@@ -74,7 +78,10 @@ fn finish(doc: notera_richtext::Document) -> Result<Prepared, StoreError> {
 
 /// 复核外部声明的哈希是否等于 canonical 哈希（容忍大小写与 `sha256:` 前缀缺失）。
 pub(crate) fn hash_matches(declared: &str, actual: &ContentHash) -> bool {
-    let d = declared.trim().strip_prefix("sha256:").unwrap_or(declared.trim());
+    let d = declared
+        .trim()
+        .strip_prefix("sha256:")
+        .unwrap_or(declared.trim());
     let a = actual
         .as_str()
         .strip_prefix("sha256:")
@@ -103,13 +110,19 @@ mod tests {
         assert!(p.char_count > 0);
         assert_eq!(p.block_count, 2);
         assert!(p.content_hash.as_str().starts_with("sha256:"));
-        assert_eq!(p.content_hash.as_str(), prepare(&v).unwrap().content_hash.as_str());
+        assert_eq!(
+            p.content_hash.as_str(),
+            prepare(&v).unwrap().content_hash.as_str()
+        );
         assert!(hash_matches(p.content_hash.as_str(), &p.content_hash));
     }
 
     #[test]
     fn garbage_is_rejected_not_silently_accepted() {
-        assert!(matches!(prepare_text("not json at all"), Err(StoreError::InvalidDoc(_))));
+        assert!(matches!(
+            prepare_text("not json at all"),
+            Err(StoreError::InvalidDoc(_))
+        ));
         assert!(matches!(
             prepare(&serde_json::json!({ "v": 9999, "content": [] })),
             Err(StoreError::DocTooNew { .. })

@@ -6,14 +6,18 @@ use notera_store::{SearchQuery, Store, StoreError, SUPPORTED_SCHEMA_VERSION};
 
 fn user_version(file: &std::path::Path) -> u32 {
     let conn = rusqlite::Connection::open(file).unwrap();
-    conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap() as u32
+    conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+        .unwrap() as u32
 }
 
 /// 期望的迁移序列：`from..=支持版本` 连续递增。
 /// 不写死 `[1,2,3,4,5]` —— 那样每加一个迁移就得改测试，很容易顺手改成"少一个也过"。
 /// 下限断言保证真有人删迁移号时这里仍然会红。
 /// 写成 `const`：编译期就红，不用等测试被跑到。
-const _: () = assert!(SUPPORTED_SCHEMA_VERSION >= 5, "支持版本不该低于 5，迁移序列被截断了？");
+const _: () = assert!(
+    SUPPORTED_SCHEMA_VERSION >= 5,
+    "支持版本不该低于 5，迁移序列被截断了？"
+);
 fn contiguous_from(from: u32) -> Vec<u32> {
     (from..=SUPPORTED_SCHEMA_VERSION).collect()
 }
@@ -65,7 +69,9 @@ fn empty_db_migrates_to_latest_and_tables_exist() {
         assert!(flat.contains(&want), "缺少表/视图 {want}：{flat:?}");
     }
     // 视图可读（§13 的递归 CTE / 回收站视图）
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM v_note_list", [], |r| r.get(0)).unwrap();
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM v_note_list", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(n, 0);
     let tree: Vec<(String, i64, String)> = conn
         .prepare("SELECT id, depth, path FROM v_folder_tree ORDER BY path")
@@ -91,15 +97,27 @@ fn reopening_does_not_reapply_migrations_or_duplicate_bootstrap() {
     }
     for _ in 0..3 {
         let store = fx.reopen();
-        assert!(store.migration_report().applied.is_empty(), "重复 open 不得再跑迁移");
+        assert!(
+            store.migration_report().applied.is_empty(),
+            "重复 open 不得再跑迁移"
+        );
         assert_eq!(user_version(&fx.db_file()), SUPPORTED_SCHEMA_VERSION);
         assert_eq!(default_folder(&store), first_root, "默认本不得被重复创建");
         assert_eq!(store.stats().unwrap().notes, 1);
-        assert_eq!(store.list_notes(&notera_store::NoteQuery::all()).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .list_notes(&notera_store::NoteQuery::all())
+                .unwrap()
+                .len(),
+            1
+        );
     }
     let folders = fx.reopen().list_folders().unwrap();
     assert_eq!(folders.len(), 1, "引导幂等：{folders:?}");
-    assert_eq!(folders.iter().filter(|f| f.system_kind.is_some()).count(), 1);
+    assert_eq!(
+        folders.iter().filter(|f| f.system_kind.is_some()).count(),
+        1
+    );
 }
 
 #[test]
@@ -114,21 +132,48 @@ fn upgrade_from_a_real_v2_database_backs_up_and_keeps_data() {
     let store = fx.reopen();
     let rep = store.migration_report();
     assert_eq!(rep.from, 2);
-    assert_eq!(rep.applied, contiguous_from(3), "只补缺失的后续迁移（forward-only）");
-    assert_eq!(rep.backup, Some(fx.dir.join("notera.sqlite.pre-migration.2")));
-    assert!(rep.backup.as_ref().unwrap().exists(), "迁移前必须有物理备份（ADR-0012）");
+    assert_eq!(
+        rep.applied,
+        contiguous_from(3),
+        "只补缺失的后续迁移（forward-only）"
+    );
+    assert_eq!(
+        rep.backup,
+        Some(fx.dir.join("notera.sqlite.pre-migration.2"))
+    );
+    assert!(
+        rep.backup.as_ref().unwrap().exists(),
+        "迁移前必须有物理备份（ADR-0012）"
+    );
     assert_eq!(user_version(&db), SUPPORTED_SCHEMA_VERSION);
 
     // M3：行数与内容不变，且新增的 FTS 由启动自愈补齐 → 老数据立刻可搜
     assert_eq!(store.stats().unwrap().notes, 1, "升级后笔记数不变");
     assert_eq!(store.get_note(&legacy).unwrap().unwrap().title, "老笔记");
-    assert_eq!(store.stats().unwrap().fts_rows, 1, "0003 建的空索引必须由启动自检补齐");
-    assert_eq!(store.search(&SearchQuery::new("老笔记")).unwrap().len(), 1, "升级后老数据可搜");
-    assert_eq!(store.dirty_entities(notera_store::LOCAL_ACCOUNT_ID).unwrap().len(), 2, "老笔记 + 默认本待上行");
+    assert_eq!(
+        store.stats().unwrap().fts_rows,
+        1,
+        "0003 建的空索引必须由启动自检补齐"
+    );
+    assert_eq!(
+        store.search(&SearchQuery::new("老笔记")).unwrap().len(),
+        1,
+        "升级后老数据可搜"
+    );
+    assert_eq!(
+        store
+            .dirty_entities(notera_store::LOCAL_ACCOUNT_ID)
+            .unwrap()
+            .len(),
+        2,
+        "老笔记 + 默认本待上行"
+    );
     assert!(store.verify().is_empty(), "{:?}", store.verify());
 
     // 升级后的库立即可写（新笔记 + 索引同步）
-    let n = store.create_note(&default_folder(&store), doc_text("升级后新建")).unwrap();
+    let n = store
+        .create_note(&default_folder(&store), doc_text("升级后新建"))
+        .unwrap();
     assert_eq!(store.search(&SearchQuery::new("升级后")).unwrap().len(), 1);
     assert!(n.rev.get() >= 1);
     assert!(store.verify().is_empty(), "{:?}", store.verify());
@@ -154,10 +199,22 @@ fn future_db_version_opens_read_only_and_is_never_downgraded() {
         other => panic!("必须是 StoreError::ReadOnly，实际 {other:?}"),
     }
     assert_eq!(user_version(&fx.db_file()), ahead, "绝不降级写回（M4）");
-    assert_eq!(std::fs::metadata(fx.db_file()).unwrap().len(), size_before, "拒绝打开不得改动文件");
+    assert_eq!(
+        std::fs::metadata(fx.db_file()).unwrap().len(),
+        size_before,
+        "拒绝打开不得改动文件"
+    );
     let backups: Vec<_> = listing(&fx.dir);
-    assert_eq!(backups, before_files, "只读闸门下不得产生备份或任何文件变化");
-    assert!(!backups.iter().any(|n| n.ends_with(&format!("pre-migration.{ahead}"))), "被拒绝的迁移不得生成备份：{backups:?}");
+    assert_eq!(
+        backups, before_files,
+        "只读闸门下不得产生备份或任何文件变化"
+    );
+    assert!(
+        !backups
+            .iter()
+            .any(|n| n.ends_with(&format!("pre-migration.{ahead}"))),
+        "被拒绝的迁移不得生成备份：{backups:?}"
+    );
     // 回到支持范围内后仍可打开（只读闸门不是"库坏了"）
     downgrade(&fx.db_file(), SUPPORTED_SCHEMA_VERSION);
     let store = fx.reopen();
@@ -171,11 +228,17 @@ fn pragmas_match_data_model_section_12() {
     create(&store, &default_folder(&store), "pragma 检查");
     // WAL 是库级持久设置
     let conn = rusqlite::Connection::open(fx.db_file()).unwrap();
-    let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
+    let mode: String = conn
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(mode.to_ascii_lowercase(), "wal", "journal_mode 必须是 WAL");
     drop(conn);
     // synchronous/busy_timeout/foreign_keys 是连接级：verify() 检的正是 Store 自己的连接
-    assert!(store.verify().is_empty(), "verify() 检查的正是 Store 自己连接上的 §12 PRAGMA：{:?}", store.verify());
+    assert!(
+        store.verify().is_empty(),
+        "verify() 检查的正是 Store 自己连接上的 §12 PRAGMA：{:?}",
+        store.verify()
+    );
     // 写连接是单写者：并发编辑不得产生丢文件或 rev 跳号
     let store = std::sync::Arc::new(store);
     let folder = default_folder(&store);
@@ -216,7 +279,8 @@ fn build_partial_db(file: &std::path::Path, through: u32) {
         }
         conn.execute_batch(sql).unwrap();
     }
-    conn.pragma_update(None, "user_version", through as i64).unwrap();
+    conn.pragma_update(None, "user_version", through as i64)
+        .unwrap();
     drop(conn);
 }
 
@@ -252,8 +316,16 @@ fn seed_legacy_note(file: &std::path::Path) -> notera_core::EntityId {
                             content_hash, created_at, updated_at, created_device, updated_device)
          VALUES (?1,?2,?3,1,0,?4,?5,?6,?7,?8,0,1,0,0,?9,?10,?10,'dev-old','dev-old')",
         rusqlite::params![
-            note.as_str(), folder.as_str(), canonical, ex.title, ex.plain_text, ex.summary,
-            ex.char_count as i64, ex.block_count as i64, hash.as_str(), now
+            note.as_str(),
+            folder.as_str(),
+            canonical,
+            ex.title,
+            ex.plain_text,
+            ex.summary,
+            ex.char_count as i64,
+            ex.block_count as i64,
+            hash.as_str(),
+            now
         ],
     )
     .unwrap();

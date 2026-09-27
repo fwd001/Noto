@@ -128,9 +128,9 @@ impl UserFacingError {
                 ErrorCode::QuotaFull => UserAction::FreeSpace,
                 ErrorCode::DbTooNew | ErrorCode::ProtocolMismatch => UserAction::UpgradeApp,
                 ErrorCode::ConflictNeedsAttention => UserAction::ResolveConflict,
-                ErrorCode::CertUntrusted | ErrorCode::Unsupported | ErrorCode::RemoteDivergenceSuspected => {
-                    UserAction::ContactAdmin
-                }
+                ErrorCode::CertUntrusted
+                | ErrorCode::Unsupported
+                | ErrorCode::RemoteDivergenceSuspected => UserAction::ContactAdmin,
                 c if c.retryable() => UserAction::RetryLater,
                 _ => UserAction::None,
             },
@@ -154,7 +154,11 @@ pub struct StaleEdit {
 
 impl std::fmt::Display for StaleEdit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} 已被改动（期望 rev {}，实际 {}）", self.entity, self.expected, self.actual)
+        write!(
+            f,
+            "{} 已被改动（期望 rev {}，实际 {}）",
+            self.entity, self.expected, self.actual
+        )
     }
 }
 

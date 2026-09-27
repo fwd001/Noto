@@ -5,7 +5,13 @@ use common::*;
 use notera_store::{apply_pending_restore, inspect_backup, NoteQuery, Store, StoreError};
 
 fn default_folder(store: &Store) -> notera_core::EntityId {
-    store.list_folders().unwrap().into_iter().next().expect("默认本").id
+    store
+        .list_folders()
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("默认本")
+        .id
 }
 
 #[test]
@@ -20,7 +26,8 @@ fn backup_is_a_self_describing_consistent_snapshot() {
     assert_eq!(info.sha256.len(), 64, "sha256 是裸 64 hex");
     assert!(info.bytes > 0);
     assert_eq!(
-        info.user_version, store.migration_report().to,
+        info.user_version,
+        store.migration_report().to,
         "备份要带上 schema 版本，恢复闸门靠它（写死数字会让每次迁移都误报）"
     );
     assert!(info.user_version > 0, "user_version 必须已推进，不能是 0");
@@ -42,7 +49,10 @@ fn backup_is_a_self_describing_consistent_snapshot() {
     let restore_dir = tempfile::tempdir().unwrap();
     std::fs::copy(&info.path, restore_dir.path().join("notera.sqlite")).unwrap();
     let reopened = Store::open(restore_dir.path(), fx.device.clone()).unwrap();
-    let got = reopened.get_note(&note.id).unwrap().expect("备份里应有这条笔记");
+    let got = reopened
+        .get_note(&note.id)
+        .unwrap()
+        .expect("备份里应有这条笔记");
     assert_eq!(got.title, "备份前写的正文");
 }
 
@@ -59,7 +69,10 @@ fn backup_captures_wal_frames_not_yet_flushed() {
     std::fs::copy(&info.path, restore_dir.path().join("notera.sqlite")).unwrap();
     let reopened = Store::open(restore_dir.path(), fx.device.clone()).unwrap();
     let rows = reopened.list_notes(&NoteQuery::all()).unwrap();
-    assert!(rows.iter().any(|r| r.id == note.id), "备份必须包含刚写入、尚未 checkpoint 的改动");
+    assert!(
+        rows.iter().any(|r| r.id == note.id),
+        "备份必须包含刚写入、尚未 checkpoint 的改动"
+    );
 }
 
 #[test]
@@ -73,10 +86,21 @@ fn corrupt_backup_is_refused_rather_than_restored() {
     std::fs::write(&info.path, &bytes[..bytes.len() / 3]).unwrap();
 
     let err = inspect_backup(&info.path).expect_err("截断的备份不能算备份");
-    assert!(matches!(err, StoreError::Rejected(_) | StoreError::Sql(_)), "实际 {err:?}");
-    let stage = store.stage_restore(&info.path).expect_err("校验不过就不该立恢复标记");
-    assert!(matches!(stage, StoreError::Rejected(_) | StoreError::Sql(_)), "实际 {stage:?}");
-    assert!(!fx.dir.join(notera_store::PENDING_FILE_NAME).exists(), "失败的恢复不得留下标记");
+    assert!(
+        matches!(err, StoreError::Rejected(_) | StoreError::Sql(_)),
+        "实际 {err:?}"
+    );
+    let stage = store
+        .stage_restore(&info.path)
+        .expect_err("校验不过就不该立恢复标记");
+    assert!(
+        matches!(stage, StoreError::Rejected(_) | StoreError::Sql(_)),
+        "实际 {stage:?}"
+    );
+    assert!(
+        !fx.dir.join(notera_store::PENDING_FILE_NAME).exists(),
+        "失败的恢复不得留下标记"
+    );
 }
 
 #[test]
@@ -96,8 +120,14 @@ fn staged_restore_applies_on_next_boot_and_keeps_the_replaced_db() {
     fx.open().stage_restore(&info.path).unwrap();
     let after = fx.open();
     let titles = list_titles(&after);
-    assert!(titles.iter().any(|t| t.contains("备份里的笔记")), "恢复后应回到备份内容：{titles:?}");
-    assert!(!titles.iter().any(|t| t.contains("备份之后")), "恢复必须回到备份时点：{titles:?}");
+    assert!(
+        titles.iter().any(|t| t.contains("备份里的笔记")),
+        "恢复后应回到备份内容：{titles:?}"
+    );
+    assert!(
+        !titles.iter().any(|t| t.contains("备份之后")),
+        "恢复必须回到备份时点：{titles:?}"
+    );
     assert!(after.get_note(&kept.id).unwrap().is_some());
 
     let pre = std::fs::read_dir(&fx.dir)
@@ -107,7 +137,10 @@ fn staged_restore_applies_on_next_boot_and_keeps_the_replaced_db() {
         .filter(|n| n.starts_with("notera.sqlite.pre-restore."))
         .collect::<Vec<_>>();
     assert_eq!(pre.len(), 1, "替换前必须留一份当前库，实际 {pre:?}");
-    assert!(!fx.dir.join(notera_store::PENDING_FILE_NAME).exists(), "落地后标记必须删掉");
+    assert!(
+        !fx.dir.join(notera_store::PENDING_FILE_NAME).exists(),
+        "落地后标记必须删掉"
+    );
 }
 
 #[test]
@@ -115,7 +148,10 @@ fn apply_without_marker_is_a_noop() {
     let fx = Fix::new();
     fx.open();
     let before = std::fs::read(fx.db_file()).unwrap();
-    assert!(apply_pending_restore(&fx.dir).unwrap().is_none(), "没有标记就不该动任何文件");
+    assert!(
+        apply_pending_restore(&fx.dir).unwrap().is_none(),
+        "没有标记就不该动任何文件"
+    );
     assert_eq!(std::fs::read(fx.db_file()).unwrap(), before);
 }
 
@@ -130,13 +166,24 @@ fn marker_that_does_not_match_the_file_stops_the_restore() {
     drop(store);
 
     // 手写一个 sha256 对不上的标记：模拟备份文件在恢复前被换掉/被改坏
-    let body = serde_json::json!({ "path": info.path, "sha256": format!("{:064}", 0u8) }).to_string();
+    let body =
+        serde_json::json!({ "path": info.path, "sha256": format!("{:064}", 0u8) }).to_string();
     std::fs::write(fx.dir.join(notera_store::PENDING_FILE_NAME), body).unwrap();
 
     let err = apply_pending_restore(&fx.dir).expect_err("内容不符必须报错");
-    assert!(format!("{err:?}").contains("与标记不符"), "错误要能说清为什么：{err:?}");
-    assert_eq!(std::fs::read(fx.db_file()).unwrap(), current, "报错时一个字节都不该动");
-    assert!(fx.dir.join(notera_store::PENDING_FILE_NAME).exists(), "标记保留，让用户自己决定");
+    assert!(
+        format!("{err:?}").contains("与标记不符"),
+        "错误要能说清为什么：{err:?}"
+    );
+    assert_eq!(
+        std::fs::read(fx.db_file()).unwrap(),
+        current,
+        "报错时一个字节都不该动"
+    );
+    assert!(
+        fx.dir.join(notera_store::PENDING_FILE_NAME).exists(),
+        "标记保留，让用户自己决定"
+    );
 }
 
 #[test]
@@ -151,8 +198,16 @@ fn repeated_backups_never_overwrite_an_earlier_one() {
     create(&store, &folder, "第二份备份之前写的");
     let second = store.create_backup(None).unwrap();
     assert_ne!(first.path, second.path, "两份备份不能指向同一个文件");
-    assert_eq!(std::fs::read(&first.path).unwrap(), first_bytes, "后一次备份改写了前一份的内容");
-    assert_eq!(inspect_backup(&first.path).unwrap().sha256, first.sha256, "前一份的自证哈希必须仍然成立");
+    assert_eq!(
+        std::fs::read(&first.path).unwrap(),
+        first_bytes,
+        "后一次备份改写了前一份的内容"
+    );
+    assert_eq!(
+        inspect_backup(&first.path).unwrap().sha256,
+        first.sha256,
+        "前一份的自证哈希必须仍然成立"
+    );
 
     let all = store.list_backups().unwrap();
     assert_eq!(all.len(), 2, "两份都该在列表里：{all:?}");
@@ -167,15 +222,27 @@ fn list_backups_sorts_newest_first_and_skips_unreadable() {
     let second = a.path.with_file_name("notera-20200101T000000Z.sqlite");
     std::fs::copy(&a.path, &second).unwrap();
     let b = inspect_backup(&second).unwrap();
-    std::fs::write(fx.dir.join("backups").join("notera-垃圾.sqlite"), b"not a database").unwrap();
+    std::fs::write(
+        fx.dir.join("backups").join("notera-垃圾.sqlite"),
+        b"not a database",
+    )
+    .unwrap();
 
     let all = store.list_backups().unwrap();
     assert_eq!(all.len(), 2, "坏文件应被跳过而不是让整张列表失败：{all:?}");
     assert!(all.iter().any(|i| i.path == a.path));
     assert!(all.iter().any(|i| i.path == b.path));
-    assert!(all.windows(2).all(|w| w[0].created_at >= w[1].created_at), "必须新的在前");
+    assert!(
+        all.windows(2).all(|w| w[0].created_at >= w[1].created_at),
+        "必须新的在前"
+    );
 }
 
 fn list_titles(store: &Store) -> Vec<String> {
-    store.list_notes(&NoteQuery::all()).unwrap().into_iter().map(|r| r.title).collect()
+    store
+        .list_notes(&NoteQuery::all())
+        .unwrap()
+        .into_iter()
+        .map(|r| r.title)
+        .collect()
 }

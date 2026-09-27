@@ -19,14 +19,19 @@ pub struct Credentials {
 impl Credentials {
     /// 构造凭据。RFC 7617 规定 userid 不得含 `:`，含了就没法编码进 `user:pass` ——
     /// 这里直接拒绝，而不是偷偷抹掉一个字符（那会让用户永远登录不上且查不出原因）。
-    pub fn new(user: impl Into<String>, secret: impl Into<String>) -> Result<Credentials, WebDavError> {
+    pub fn new(
+        user: impl Into<String>,
+        secret: impl Into<String>,
+    ) -> Result<Credentials, WebDavError> {
         let user = user.into();
         let secret = secret.into();
         if user.is_empty() {
             return Err(WebDavError::Config("WebDAV 用户名不能为空".into()));
         }
         if user.contains(':') {
-            return Err(WebDavError::Config("WebDAV 用户名不得含冒号（RFC 7617）".into()));
+            return Err(WebDavError::Config(
+                "WebDAV 用户名不得含冒号（RFC 7617）".into(),
+            ));
         }
         if user.chars().any(|c| c.is_control()) || secret.chars().any(|c| c.is_control()) {
             return Err(WebDavError::Config("凭据含控制字符".into()));
@@ -41,13 +46,19 @@ impl Credentials {
     /// `Authorization: Basic <base64(user:secret)>` 的头值（不含头名）。
     pub fn basic_header(&self) -> String {
         let pair = format!("{}:{}", self.user, self.secret);
-        format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(pair.as_bytes()))
+        format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(pair.as_bytes())
+        )
     }
 }
 
 impl std::fmt::Debug for Credentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Credentials").field("user", &self.user).field("secret", &notera_net::REDACTED).finish()
+        f.debug_struct("Credentials")
+            .field("user", &self.user)
+            .field("secret", &notera_net::REDACTED)
+            .finish()
     }
 }
 
@@ -64,10 +75,19 @@ mod tests {
     #[test]
     fn header_value_and_redaction() {
         let c = Credentials::new("u1", "p@ss").expect("合法凭据");
-        assert_eq!(c.basic_header(), format!("Basic {}", base64::engine::general_purpose::STANDARD.encode("u1:p@ss")));
+        assert_eq!(
+            c.basic_header(),
+            format!(
+                "Basic {}",
+                base64::engine::general_purpose::STANDARD.encode("u1:p@ss")
+            )
+        );
         let d = format!("{c:?}");
         assert!(!d.contains("p@ss"), "{d}");
-        assert!(!d.contains(&base64::engine::general_purpose::STANDARD.encode("u1:p@ss")), "Debug 不得泄露 base64 形态");
+        assert!(
+            !d.contains(&base64::engine::general_purpose::STANDARD.encode("u1:p@ss")),
+            "Debug 不得泄露 base64 形态"
+        );
         assert!(!format!("{c}").contains("p@ss"));
         let spec = notera_net::RequestSpec::new(notera_net::HttpMethod::Get, "http://127.0.0.1/x")
             .with_header("authorization", c.basic_header());

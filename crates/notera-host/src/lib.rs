@@ -9,16 +9,24 @@
 
 pub mod commands;
 
+pub mod devserver;
 /// 平台原生物的计划表（菜单项 / 通知判定）—— 纯逻辑，壳只负责摆上去。
 pub mod platform;
-pub mod devserver;
 
-use commands::{AccountDraftCmd, AccountDto, CmdError, ConflictDto, ExportCmd, FolderDto, ImportCmd, ListNotesCmd, NoteDto, NoteListDto, SearchCmd, SearchHitDto, StatsDto, SyncStatusDto};
-use notera_config::{AccountConfig, AppConfig, ConfigRepository, ProxyMode, ProxyProfile, TlsPolicyKind};
+use commands::{
+    AccountDraftCmd, AccountDto, CmdError, ConflictDto, ExportCmd, FolderDto, ImportCmd,
+    ListNotesCmd, NoteDto, NoteListDto, SearchCmd, SearchHitDto, StatsDto, SyncStatusDto,
+};
+use notera_config::{
+    AccountConfig, AppConfig, ConfigRepository, ProxyMode, ProxyProfile, TlsPolicyKind,
+};
 use notera_core::{Clock, DeviceId, EntityId, EntityKind, Rev, SystemClock, Timestamp};
-use notera_store::{ApplyOp as StoreApplyOp, ConflictRow, Folder, Note, NoteListRow, NoteQuery, SearchPath, Store, StoreError};
-use notera_sync::{ApplyOp, EngineConfig, LocalError, LocalPort, Phase, RoundStats, SyncEvent};
+use notera_store::{
+    ApplyOp as StoreApplyOp, ConflictRow, Folder, Note, NoteListRow, NoteQuery, SearchPath, Store,
+    StoreError,
+};
 use notera_sync::plan::{Decision, LocalView, RemoteView};
+use notera_sync::{ApplyOp, EngineConfig, LocalError, LocalPort, Phase, RoundStats, SyncEvent};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -58,7 +66,10 @@ pub enum BusEvent {
     #[serde(rename_all = "camelCase")]
     NotesChanged { ids: Vec<String> },
     #[serde(rename_all = "camelCase")]
-    Conflict { conflict_id: i64, note_title: String },
+    Conflict {
+        conflict_id: i64,
+        note_title: String,
+    },
     #[serde(rename_all = "camelCase")]
     Toast { message_key: String, level: String },
 }
@@ -233,7 +244,8 @@ impl App {
         };
         if config.device_id.is_empty() {
             config.device_id = device_id.to_string();
-            repo.save(&config).map_err(|e| BootError::Config(e.to_string()))?;
+            repo.save(&config)
+                .map_err(|e| BootError::Config(e.to_string()))?;
         }
         let store = Store::open(data_dir, device_id).map_err(BootError::Store)?;
         let violations = store.startup_violations().to_vec();
@@ -257,7 +269,10 @@ impl App {
         };
         // 启动自检结论必须可见：不静默修，也不静默忽略
         for v in &violations {
-            app.emit(BusEvent::Toast { message_key: format!("verify.{}", v.id), level: "warn".into() });
+            app.emit(BusEvent::Toast {
+                message_key: format!("verify.{}", v.id),
+                level: "warn".into(),
+            });
         }
         Ok(app)
     }
@@ -308,12 +323,20 @@ impl App {
             let v = self.inner.sync_view.lock().unwrap();
             (v.badge, v.message_key.clone())
         };
-        self.emit(BusEvent::Sync { badge, progress: None, error_code: key });
+        self.emit(BusEvent::Sync {
+            badge,
+            progress: None,
+            error_code: key,
+        });
     }
 
     // -------------------------------------------------------------- 用例 ---
 
-    pub fn create_note(&self, folder_id: &EntityId, doc: serde_json::Value) -> Result<NoteDto, CmdError> {
+    pub fn create_note(
+        &self,
+        folder_id: &EntityId,
+        doc: serde_json::Value,
+    ) -> Result<NoteDto, CmdError> {
         let n = self.inner.store.create_note(folder_id, doc)?;
         self.note_saved(&n);
         self.to_dto(n)
@@ -330,7 +353,12 @@ impl App {
             .ok_or_else(|| CmdError::of("no_default_folder", false))
     }
 
-    pub fn edit_note(&self, id: &EntityId, doc: serde_json::Value, expected: Rev) -> Result<NoteDto, CmdError> {
+    pub fn edit_note(
+        &self,
+        id: &EntityId,
+        doc: serde_json::Value,
+        expected: Rev,
+    ) -> Result<NoteDto, CmdError> {
         let n = self.inner.store.edit_note(id, doc, expected)?;
         self.note_saved(&n);
         self.to_dto(n)
@@ -339,7 +367,9 @@ impl App {
     /// 本地写入成功 = 同步被"需要跑一轮"标记。**这里绝不碰网络**（I8/P1）。
     fn note_saved(&self, n: &Note) {
         self.inner.dirty_ticks.fetch_add(1, Ordering::SeqCst);
-        self.emit(BusEvent::NotesChanged { ids: vec![n.id.to_string()] });
+        self.emit(BusEvent::NotesChanged {
+            ids: vec![n.id.to_string()],
+        });
         self.set_sync(|v| {
             if v.badge == Badge::Synced {
                 v.in_flight = false;
@@ -348,12 +378,21 @@ impl App {
     }
 
     pub fn get_note(&self, id: &EntityId) -> Result<Option<NoteDto>, CmdError> {
-        self.inner.store.get_note(id)?.map(|n| self.to_dto(n)).transpose()
+        self.inner
+            .store
+            .get_note(id)?
+            .map(|n| self.to_dto(n))
+            .transpose()
     }
 
     pub fn list_notes(&self, c: ListNotesCmd) -> Result<Vec<serde_json::Value>, CmdError> {
         let q = NoteQuery {
-            folder: c.folder_id.as_deref().map(EntityId::parse).transpose().map_err(|_| CmdError::of("bad_id", false))?,
+            folder: c
+                .folder_id
+                .as_deref()
+                .map(EntityId::parse)
+                .transpose()
+                .map_err(|_| CmdError::of("bad_id", false))?,
             trash: c.trash,
             limit: c.limit,
             offset: c.offset,
@@ -369,7 +408,12 @@ impl App {
             let n = self
                 .inner
                 .store
-                .list_notes(&NoteQuery { folder: Some(f.id.clone()), trash: false, limit: 0, offset: 0 })?
+                .list_notes(&NoteQuery {
+                    folder: Some(f.id.clone()),
+                    trash: false,
+                    limit: 0,
+                    offset: 0,
+                })?
                 .len();
             *counts.entry(f.id.to_string()).or_insert(0) = n as u64;
         }
@@ -403,7 +447,12 @@ impl App {
         let count = self
             .inner
             .store
-            .list_notes(&NoteQuery { folder: Some(f.id.clone()), trash: false, limit: 0, offset: 0 })?
+            .list_notes(&NoteQuery {
+                folder: Some(f.id.clone()),
+                trash: false,
+                limit: 0,
+                offset: 0,
+            })?
             .len();
         Ok(FolderDto {
             id: f.id.to_string(),
@@ -460,7 +509,10 @@ impl App {
     }
 
     pub fn search(&self, c: SearchCmd) -> Result<Vec<SearchHitDto>, CmdError> {
-        let hits = self.inner.store.search(&notera_store::SearchQuery { text: c.text, limit: c.limit })?;
+        let hits = self.inner.store.search(&notera_store::SearchQuery {
+            text: c.text,
+            limit: c.limit,
+        })?;
         let mut out = Vec::with_capacity(hits.len());
         for h in hits {
             // 短查询走 LIKE 兜底是**实现细节**，但它是排障关键，因此记进日志而不进 UI。
@@ -473,7 +525,12 @@ impl App {
                 .get_note(&h.note_id)?
                 .map(|n| n.title)
                 .unwrap_or_default();
-            out.push(SearchHitDto { note_id: h.note_id.to_string(), score: h.score, snippet_html: h.snippet_html, title });
+            out.push(SearchHitDto {
+                note_id: h.note_id.to_string(),
+                score: h.score,
+                snippet_html: h.snippet_html,
+                title,
+            });
         }
         Ok(out)
     }
@@ -488,8 +545,12 @@ impl App {
                     "detail": "localPath 与 bytesBase64 必须恰好给一个",
                 })));
             }
-            (Some(p), None) => std::fs::read(p).map_err(|e| CmdError::of("read_failed", false).with(serde_json::json!({ "why": e.to_string() })))?,
-            (None, Some(b)) => notera_crypto::b64::decode(b).map_err(|e| CmdError::of("bad_args", false).with(serde_json::json!({ "detail": e.to_string() })))?,
+            (Some(p), None) => std::fs::read(p).map_err(|e| {
+                CmdError::of("read_failed", false).with(serde_json::json!({ "why": e.to_string() }))
+            })?,
+            (None, Some(b)) => notera_crypto::b64::decode(b).map_err(|e| {
+                CmdError::of("bad_args", false).with(serde_json::json!({ "detail": e.to_string() }))
+            })?,
         };
         if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
             // 单个附件超过同步一轮的预算上限时，先在这里挡住并给出能看懂的话；
@@ -500,7 +561,11 @@ impl App {
             })));
         }
         let note = EntityId::parse(&c.note_id).map_err(|_| CmdError::of("bad_id", false))?;
-        let media = if c.media_type.trim().is_empty() { "application/octet-stream".to_string() } else { c.media_type.clone() };
+        let media = if c.media_type.trim().is_empty() {
+            "application/octet-stream".to_string()
+        } else {
+            c.media_type.clone()
+        };
         let a = self
             .inner
             .store
@@ -517,7 +582,9 @@ impl App {
             .map_err(CmdError::from)?
             .map(|n| n.rev.get())
             .unwrap_or(0);
-        Ok(serde_json::json!({ "sha256": a.sha256, "size": a.size, "mediaType": a.media_type, "rev": rev }))
+        Ok(
+            serde_json::json!({ "sha256": a.sha256, "size": a.size, "mediaType": a.media_type, "rev": rev }),
+        )
     }
 
     /// 读回一个附件的字节（编辑器显示图片用）。
@@ -528,13 +595,21 @@ impl App {
         // 只认**小写** 64hex：`sha256_hex` 出来的就是这个形态，收大写等于允许同一个
         // blob 有两种拼法、两条路径（Windows 上还不报错）。更关键的是它挡住 `../` 那类
         // 字符串走进 `blob_path` —— 这个参数会被拼进文件路径，不能靠"调用方总不会乱传"。
-        if sha256.len() != 64 || !sha256.chars().all(|ch| ch.is_ascii_digit() || ('a'..='f').contains(&ch)) {
-            return Err(CmdError::of("bad_args", false).with(serde_json::json!({ "detail": "sha256 必须是 64 位 hex" })));
+        if sha256.len() != 64
+            || !sha256
+                .chars()
+                .all(|ch| ch.is_ascii_digit() || ('a'..='f').contains(&ch))
+        {
+            return Err(CmdError::of("bad_args", false)
+                .with(serde_json::json!({ "detail": "sha256 必须是 64 位 hex" })));
         }
         let path = self.inner.store.blob_path(sha256);
-        let bytes = std::fs::read(&path).map_err(|_| CmdError::of("attachment_missing", false).with(serde_json::json!({ "sha256": sha256 })))?;
+        let bytes = std::fs::read(&path).map_err(|_| {
+            CmdError::of("attachment_missing", false).with(serde_json::json!({ "sha256": sha256 }))
+        })?;
         if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
-            return Err(CmdError::of("too_large", false).with(serde_json::json!({ "bytes": bytes.len(), "limit": MAX_ATTACHMENT_BYTES })));
+            return Err(CmdError::of("too_large", false)
+                .with(serde_json::json!({ "bytes": bytes.len(), "limit": MAX_ATTACHMENT_BYTES })));
         }
         let media_type = self
             .inner
@@ -616,19 +691,35 @@ impl App {
         // UI 侧的动词（apps/desktop/src/api/types.ts 的 ConflictAction）与存储侧的
         // resolution 词表不是一套；翻译只能发生在这里 —— 存储与引擎都不该认识 UI 词汇。
         let resolution = match c.action.as_str() {
-            "dismiss" => return self.inner.store.dismiss_conflict(c.id).map_err(CmdError::from),
+            "dismiss" => {
+                return self
+                    .inner
+                    .store
+                    .dismiss_conflict(c.id)
+                    .map_err(CmdError::from)
+            }
             "keepBoth" | "keep_both" | "kept_both" => "kept_both",
             "replaceWithLocal" | "use_local" | "local" => "local",
             "replaceWithRemote" | "use_remote" | "remote" => "remote",
             "manualMerge" | "manual" => "manual",
             "merged" => "merged",
-            other => return Err(CmdError::of("bad_action", false).with(serde_json::json!({ "action": other }))),
+            other => {
+                return Err(
+                    CmdError::of("bad_action", false).with(serde_json::json!({ "action": other }))
+                )
+            }
         };
         // "用我这一版"不是记账就完事：§6.1 采纳之后正文是对面那一版，用户点这颗按钮
         // 要的就是把两版互换（互换后两版各有一处存放，谁都没被吃掉）。
         // 前提不成立时（正文本来就是我要的那一版）`swap_conflict_sides` 返回 false，
         // 那就只关卡片 —— 用户要的结果已经在了，不去动任何内容。
-        if resolution == "local" && self.inner.store.swap_conflict_sides(c.id).map_err(CmdError::from)? {
+        if resolution == "local"
+            && self
+                .inner
+                .store
+                .swap_conflict_sides(c.id)
+                .map_err(CmdError::from)?
+        {
             self.emit(BusEvent::NotesChanged { ids: vec![] });
             return Ok(());
         }
@@ -638,7 +729,10 @@ impl App {
     }
 
     pub fn set_pref(&self, key: &str, value: serde_json::Value) -> Result<(), CmdError> {
-        self.inner.store.set_pref(key, &value).map_err(CmdError::from)
+        self.inner
+            .store
+            .set_pref(key, &value)
+            .map_err(CmdError::from)
     }
     pub fn get_prefs(&self) -> Result<serde_json::Value, CmdError> {
         self.inner.store.get_prefs().map_err(CmdError::from)
@@ -656,16 +750,42 @@ impl App {
             .collect::<Result<_, _>>()?;
         // 两个范围、两种用途：文件夹行要按外键闭包带上祖先骨架，
         // 笔记与附件只认这一棵子树 —— 否则祖先（默认本）里的东西会被顺手带走。
-        let skeleton: Option<std::collections::BTreeSet<String>> =
-            if ids.is_empty() { None } else { Some(self.inner.store.folder_closure(&ids).map_err(CmdError::from)?) };
-        let content: Option<std::collections::BTreeSet<String>> =
-            if ids.is_empty() { None } else { Some(self.inner.store.folder_subtree(&ids).map_err(CmdError::from)?) };
+        let skeleton: Option<std::collections::BTreeSet<String>> = if ids.is_empty() {
+            None
+        } else {
+            Some(
+                self.inner
+                    .store
+                    .folder_closure(&ids)
+                    .map_err(CmdError::from)?,
+            )
+        };
+        let content: Option<std::collections::BTreeSet<String>> = if ids.is_empty() {
+            None
+        } else {
+            Some(
+                self.inner
+                    .store
+                    .folder_subtree(&ids)
+                    .map_err(CmdError::from)?,
+            )
+        };
         let in_skeleton = |id: &str| skeleton.as_ref().is_none_or(|s| s.contains(id));
         let in_content = |id: &str| content.as_ref().is_none_or(|s| s.contains(id));
 
         let records = self.inner.store.all_records().map_err(CmdError::from)?;
-        let kind_of = |r: &serde_json::Value| r.get("kind").and_then(|k| k.as_str()).unwrap_or_default().to_string();
-        let id_of = |r: &serde_json::Value| r.get("id").and_then(|i| i.as_str()).unwrap_or_default().to_string();
+        let kind_of = |r: &serde_json::Value| {
+            r.get("kind")
+                .and_then(|k| k.as_str())
+                .unwrap_or_default()
+                .to_string()
+        };
+        let id_of = |r: &serde_json::Value| {
+            r.get("id")
+                .and_then(|i| i.as_str())
+                .unwrap_or_default()
+                .to_string()
+        };
         let folder_of = |r: &serde_json::Value| {
             r.get("payload")
                 .and_then(|p| p.get("folder_id"))
@@ -673,7 +793,8 @@ impl App {
                 .unwrap_or_default()
                 .to_string()
         };
-        let purged = |r: &serde_json::Value| r.get("purged").and_then(|p| p.as_bool()).unwrap_or(false);
+        let purged =
+            |r: &serde_json::Value| r.get("purged").and_then(|p| p.as_bool()).unwrap_or(false);
         // 按文件夹导时：
         //   文件夹 → 子树 + 祖先链（`folder_closure` 的键集就是它：祖先只是外键骨架）
         //   笔记   → 父本在**子树**里的（`folder_subtree`，祖先自己的笔记不算这一棵的内容）
@@ -691,20 +812,39 @@ impl App {
                 counts: std::collections::BTreeMap::new(),
                 partial: skeleton.is_some(),
             }),
-            folders: records.iter().filter(|r| kind_of(r) == "folder" && !purged(r) && in_skeleton(&id_of(r))).cloned().collect(),
-            notes: records.iter().filter(|r| kind_of(r) == "note" && !purged(r) && in_content(&folder_of(r))).cloned().collect(),
+            folders: records
+                .iter()
+                .filter(|r| kind_of(r) == "folder" && !purged(r) && in_skeleton(&id_of(r)))
+                .cloned()
+                .collect(),
+            notes: records
+                .iter()
+                .filter(|r| kind_of(r) == "note" && !purged(r) && in_content(&folder_of(r)))
+                .cloned()
+                .collect(),
             tombstones: records
                 .iter()
-                .filter(|r| purged(r) && (skeleton.is_none() || (kind_of(r) == "folder" && in_skeleton(&id_of(r)))))
+                .filter(|r| {
+                    purged(r)
+                        && (skeleton.is_none()
+                            || (kind_of(r) == "folder" && in_skeleton(&id_of(r))))
+                })
                 .cloned()
                 .collect(),
             attachments: Vec::new(),
         };
         let shas: Vec<String> = match &content {
-            None => self.inner.store.local_attachment_shas().map_err(CmdError::from)?,
+            None => self
+                .inner
+                .store
+                .local_attachment_shas()
+                .map_err(CmdError::from)?,
             Some(set) => {
                 let folders: Vec<String> = set.iter().cloned().collect();
-                self.inner.store.attachment_shas_in_folders(&folders).map_err(CmdError::from)?
+                self.inner
+                    .store
+                    .attachment_shas_in_folders(&folders)
+                    .map_err(CmdError::from)?
             }
         };
         let mut attachments = Vec::new();
@@ -717,15 +857,27 @@ impl App {
                 }
             }
         }
-        let bundle = notera_importer::Bundle { attachments, ..bundle };
+        let bundle = notera_importer::Bundle {
+            attachments,
+            ..bundle
+        };
         let scope_size = skeleton.map(|s| s.len()).unwrap_or(0);
         let path = match c.path.as_deref() {
             Some(p) => std::path::PathBuf::from(p),
             None => {
                 let dir = self.inner.data_dir.join("exports");
-                std::fs::create_dir_all(&dir).map_err(|e| CmdError::of("storage", false).with(serde_json::json!({ "detail": e.to_string() })))?;
+                std::fs::create_dir_all(&dir).map_err(|e| {
+                    CmdError::of("storage", false)
+                        .with(serde_json::json!({ "detail": e.to_string() }))
+                })?;
                 // 时间戳里的 `:`/`-` 在 Windows 文件名里不安全，只留字母数字
-                dir.join(format!("notera-{}.zip", self.inner.store.now().replace(|c: char| !c.is_ascii_alphanumeric(), "")))
+                dir.join(format!(
+                    "notera-{}.zip",
+                    self.inner
+                        .store
+                        .now()
+                        .replace(|c: char| !c.is_ascii_alphanumeric(), "")
+                ))
             }
         };
         if path.exists() {
@@ -734,7 +886,9 @@ impl App {
                 "detail": format!("导出目标已存在，未覆盖：{}", path.display()),
             })));
         }
-        notera_importer::write_bundle(&path, &bundle).map_err(|e| CmdError::of("save_failed", false).with(serde_json::json!({ "detail": e.to_string() })))?;
+        notera_importer::write_bundle(&path, &bundle).map_err(|e| {
+            CmdError::of("save_failed", false).with(serde_json::json!({ "detail": e.to_string() }))
+        })?;
         let counts = serde_json::json!({
             "notes": bundle.notes.len(),
             "folders": bundle.folders.len(),
@@ -755,14 +909,17 @@ impl App {
     /// 三方判定，绝不静默覆盖（§15 / I3）。
     pub fn import_data(&self, c: ImportCmd) -> Result<serde_json::Value, CmdError> {
         let path = std::path::PathBuf::from(c.path.ok_or_else(|| CmdError::of("bad_args", false))?);
-        let bundle = notera_importer::read_bundle(&path)
-            .map_err(|e| CmdError::of("save_failed", false).with(serde_json::json!({ "detail": e.to_string() })))?;
+        let bundle = notera_importer::read_bundle(&path).map_err(|e| {
+            CmdError::of("save_failed", false).with(serde_json::json!({ "detail": e.to_string() }))
+        })?;
         let stats = self.inner.store.stats().map_err(CmdError::from)?;
         // 子树包缺两样东西：不在范围内的其它内容，以及（无法归属的）**笔记永久删除公告**。
         // 把它当"整库还原"导进一个空库，之后一旦与服务器同步，那些本该保持删除的笔记
         // 就会被别的设备的副本带回来 —— 这正是 §8 硬性要求 6 禁的事。所以 intoEmpty 响亮拒绝；
         // 合并模式不受影响：那只是往里加内容，少带几篇不会删掉任何人的东西。
-        if bundle.manifest.as_ref().is_some_and(|m| m.partial) && c.mode.as_deref() == Some("intoEmpty") {
+        if bundle.manifest.as_ref().is_some_and(|m| m.partial)
+            && c.mode.as_deref() == Some("intoEmpty")
+        {
             return Err(CmdError::of("save_failed", false).with(serde_json::json!({
                 "detail": "这是一个按文件夹导出的部分包，不能用于「仅在空库时导入」的整库还原：它缺库内其它内容，也缺笔记的永久删除公告。请导整库，或改用合并模式。",
             })));
@@ -775,26 +932,47 @@ impl App {
         for (sha, bytes) in &bundle.attachments {
             // 还原走 `restore_blob` 而不是同步的 `ingest_blob`：包里的字节没经过服务器，
             // 远端态必须是 unknown（否则永远不补传），而且目标库很可能没有这一行。
-            self.inner.store.restore_blob(sha, bytes).map_err(CmdError::from)?;
+            self.inner
+                .store
+                .restore_blob(sha, bytes)
+                .map_err(CmdError::from)?;
         }
         let mut ops = Vec::new();
         for env in bundle.records_in_apply_order() {
             let kind = env.get("kind").and_then(|k| k.as_str()).unwrap_or_default();
-            let id = env.get("id").and_then(|i| i.as_str()).ok_or_else(|| CmdError::of("bad_args", false))?;
+            let id = env
+                .get("id")
+                .and_then(|i| i.as_str())
+                .ok_or_else(|| CmdError::of("bad_args", false))?;
             let entity = EntityId::parse(id).map_err(|_| CmdError::of("bad_id", false))?;
-            ops.push(if env.get("purged").and_then(|p| p.as_bool()).unwrap_or(false) {
-                notera_store::ApplyOp::Purge {
-                    kind: if kind == "folder" { notera_core::EntityKind::Folder } else { notera_core::EntityKind::Note },
-                    id: entity,
-                }
-            } else if kind == "folder" {
-                notera_store::ApplyOp::UpsertFolder { env }
-            } else {
-                notera_store::ApplyOp::UpsertNote { env }
-            });
+            ops.push(
+                if env.get("purged").and_then(|p| p.as_bool()).unwrap_or(false) {
+                    notera_store::ApplyOp::Purge {
+                        kind: if kind == "folder" {
+                            notera_core::EntityKind::Folder
+                        } else {
+                            notera_core::EntityKind::Note
+                        },
+                        id: entity,
+                    }
+                } else if kind == "folder" {
+                    notera_store::ApplyOp::UpsertFolder { env }
+                } else {
+                    notera_store::ApplyOp::UpsertNote { env }
+                },
+            );
         }
-        let report = self.inner.store.apply_remote(&ops).map_err(CmdError::from)?;
-        let conflicts = self.inner.store.open_conflicts().map(|v| v.len()).unwrap_or(0);
+        let report = self
+            .inner
+            .store
+            .apply_remote(&ops)
+            .map_err(CmdError::from)?;
+        let conflicts = self
+            .inner
+            .store
+            .open_conflicts()
+            .map(|v| v.len())
+            .unwrap_or(0);
         Ok(serde_json::json!({
             "path": path.to_string_lossy(),
             "merged": report.applied,
@@ -810,17 +988,29 @@ impl App {
     /// 预览因此不会和列表/正文用的是"另一种算法"—— 两套算法迟早会给出不同的文本。
     pub fn preview_text(&self, id: &str, rev: u64) -> Result<String, CmdError> {
         let id = EntityId::parse(id).map_err(|_| CmdError::of("bad_id", false))?;
-        let doc = self.inner.store.revision_doc(&id, Rev(rev))?.ok_or_else(|| {
-            CmdError::of("not_found", false).with(serde_json::json!({ "kind": "note", "id": id.to_string(), "rev": rev }))
+        let doc = self
+            .inner
+            .store
+            .revision_doc(&id, Rev(rev))?
+            .ok_or_else(|| {
+                CmdError::of("not_found", false)
+                    .with(serde_json::json!({ "kind": "note", "id": id.to_string(), "rev": rev }))
+            })?;
+        let parsed = notera_richtext::parse_from_value(&doc).map_err(|e| {
+            CmdError::of("corrupt_record", false).with(serde_json::json!({ "why": e.to_string() }))
         })?;
-        let parsed = notera_richtext::parse_from_value(&doc)
-            .map_err(|e| CmdError::of("corrupt_record", false).with(serde_json::json!({ "why": e.to_string() })))?;
         Ok(notera_richtext::extract(&parsed).plain_text)
     }
 
     /// 一致性快照（DATA-MODEL §15）。产物自带 sha256 与 user_version，恢复闸门靠它们。
-    pub fn backup_db(&self, dest_dir: Option<&std::path::Path>) -> Result<notera_store::BackupInfo, CmdError> {
-        self.inner.store.create_backup(dest_dir).map_err(CmdError::from)
+    pub fn backup_db(
+        &self,
+        dest_dir: Option<&std::path::Path>,
+    ) -> Result<notera_store::BackupInfo, CmdError> {
+        self.inner
+            .store
+            .create_backup(dest_dir)
+            .map_err(CmdError::from)
     }
 
     pub fn list_backups(&self) -> Result<Vec<notera_store::BackupInfo>, CmdError> {
@@ -830,7 +1020,11 @@ impl App {
     /// 恢复只"排期"，不在进程内换库：真正落地发生在下次启动 `Store::open` 之前。
     /// 返回 `restart_required=true` 是这条命令的正常结果，不是失败。
     pub fn stage_restore(&self, path: &std::path::Path) -> Result<serde_json::Value, CmdError> {
-        let info = self.inner.store.stage_restore(path).map_err(CmdError::from)?;
+        let info = self
+            .inner
+            .store
+            .stage_restore(path)
+            .map_err(CmdError::from)?;
         Ok(serde_json::json!({
             "restartRequired": true,
             "sha256": info.sha256,
@@ -842,7 +1036,9 @@ impl App {
     // ------------------------------------------------------------ 配置面 ---
 
     pub fn current_account(&self) -> Result<Option<AccountDto>, CmdError> {
-        Ok(ConfigRepository::active(&self.config()).map(account_dto).map(|d| self.attach_caps(d)))
+        Ok(ConfigRepository::active(&self.config())
+            .map(account_dto)
+            .map(|d| self.attach_caps(d)))
     }
 
     pub fn configure_account(&self, draft: AccountDraftCmd) -> Result<AccountDto, CmdError> {
@@ -861,7 +1057,11 @@ impl App {
         // 但那是**它那一份**：host 若继续拿空串去 `register_account`，配置里的账户在
         // `sync_accounts` 里就没有对应行 —— 本地写入永远不会排队给这台服务器，
         // 用户看到的却是"已配置、已同步"。（端到端测试 sync_once 抓到的静默不同步）
-        let id = if draft.id.is_empty() { EntityId::new().to_string() } else { draft.id.clone() };
+        let id = if draft.id.is_empty() {
+            EntityId::new().to_string()
+        } else {
+            draft.id.clone()
+        };
         let acct = AccountConfig {
             id: id.clone(),
             label: draft.label,
@@ -895,20 +1095,28 @@ impl App {
                 },
                 host: draft.proxy_host,
                 port: draft.proxy_port,
-                username_ref: draft.proxy_username.map(|_| format!("keychain:proxy-user:{id}")),
-                password_ref: draft.proxy_password.map(|_| format!("keychain:proxy-pass:{id}")),
+                username_ref: draft
+                    .proxy_username
+                    .map(|_| format!("keychain:proxy-user:{id}")),
+                password_ref: draft
+                    .proxy_password
+                    .map(|_| format!("keychain:proxy-pass:{id}")),
                 bypass: draft.bypass.unwrap_or_default(),
                 resolve_remote_dns: true,
             },
             enabled: true,
         };
         // 校验/落盘的规则全在 notera-config 里；host 只折叠错误码（原子写、拒绝覆盖损坏配置）
-        notera_config::validate_account(&acct)
-            .map_err(|e| CmdError::of("invalid_account", false).with(serde_json::json!({ "why": e.to_string() })))?;
+        notera_config::validate_account(&acct).map_err(|e| {
+            CmdError::of("invalid_account", false).with(serde_json::json!({ "why": e.to_string() }))
+        })?;
         self.inner
             .config_repo
             .upsert_account(&mut cfg, acct.clone())
-            .map_err(|e| CmdError::of("invalid_account", false).with(serde_json::json!({ "why": e.to_string() })))?;
+            .map_err(|e| {
+                CmdError::of("invalid_account", false)
+                    .with(serde_json::json!({ "why": e.to_string() }))
+            })?;
         self.inner.config_repo.save(&cfg).map_err(|e| {
             CmdError::of("save_failed", false).with(serde_json::json!({ "why": e.to_string() }))
         })?;
@@ -918,7 +1126,10 @@ impl App {
         self.inner
             .store
             .register_account(&acct.id, &acct.label, &acct.base_url)
-            .map_err(|e| CmdError::of("invalid_account", false).with(serde_json::json!({ "why": e.to_string() })))?;
+            .map_err(|e| {
+                CmdError::of("invalid_account", false)
+                    .with(serde_json::json!({ "why": e.to_string() }))
+            })?;
         self.set_sync(|v| v.phase = Phase::Provisioning);
         // 带上新账户的探测状态（刚配上 = 还没探过），界面才不会把"没探过"说成"不支持"
         ConfigRepository::active(&cfg)
@@ -940,13 +1151,16 @@ impl App {
             self.set_sync(|v| v.phase = Phase::Unconfigured);
             return Ok(None);
         };
-        let device = DeviceId::parse(&cfg.device_id)
-            .map_err(|e| CmdError::of("bad_device", false).with(serde_json::json!({ "why": e.to_string() })))?;
+        let device = DeviceId::parse(&cfg.device_id).map_err(|e| {
+            CmdError::of("bad_device", false).with(serde_json::json!({ "why": e.to_string() }))
+        })?;
         let creds = self
             .secret_for(acct)
             .map(|(user, secret)| {
-                notera_webdav::Credentials::new(user, secret)
-                    .map_err(|e| CmdError::of("invalid_account", false).with(serde_json::json!({ "why": e.to_string() })))
+                notera_webdav::Credentials::new(user, secret).map_err(|e| {
+                    CmdError::of("invalid_account", false)
+                        .with(serde_json::json!({ "why": e.to_string() }))
+                })
             })
             .transpose()?;
         let Some(credentials) = creds else {
@@ -982,7 +1196,11 @@ impl App {
         };
         dto.cap_mask = Some(mask);
         dto.write_strategy = Some(format!("{:?}", self.stored_caps(&dto.id).write_strategy()));
-        dto.caps_probed_at = self.inner.store.account_caps_probed_at(&dto.id).unwrap_or(None);
+        dto.caps_probed_at = self
+            .inner
+            .store
+            .account_caps_probed_at(&dto.id)
+            .unwrap_or(None);
         dto
     }
 
@@ -996,9 +1214,13 @@ impl App {
             CmdError::of("net_config", true).with(serde_json::json!({ "why": e.to_string() }))
         })?;
         let cfg = self.config();
-        let acct = ConfigRepository::active(&cfg).ok_or_else(|| CmdError::of("no_account", false))?;
+        let acct =
+            ConfigRepository::active(&cfg).ok_or_else(|| CmdError::of("no_account", false))?;
         let mask = report.to_caps().mask();
-        self.inner.store.set_account_caps(&acct.id, mask).map_err(CmdError::from)?;
+        self.inner
+            .store
+            .set_account_caps(&acct.id, mask)
+            .map_err(CmdError::from)?;
         Ok(serde_json::json!({
             "capMask": mask,
             "writeStrategy": format!("{:?}", report.to_caps().write_strategy()),
@@ -1018,7 +1240,11 @@ impl App {
         let Some(acct) = ConfigRepository::active(&cfg) else {
             return Ok(false);
         };
-        let prev = self.inner.store.account_caps_probed_at(&acct.id).map_err(CmdError::from)?;
+        let prev = self
+            .inner
+            .store
+            .account_caps_probed_at(&acct.id)
+            .map_err(CmdError::from)?;
         let Some(prev) = prev else {
             return Ok(true);
         };
@@ -1036,7 +1262,9 @@ impl App {
     /// 顺序不能反 —— 先装后用，探测到的"这台服务器支持条件写"要等下次启动才生效，
     /// 本次会话仍然走保守盲写（§5 的优化白做）。
     /// 探测失败**不是**错误：记一条提示并以保守默认继续（拿不到结论 ≠ 连不上）。
-    pub async fn remote_for_sync(&self) -> Result<Option<Arc<notera_webdav::WebDavRemote>>, CmdError> {
+    pub async fn remote_for_sync(
+        &self,
+    ) -> Result<Option<Arc<notera_webdav::WebDavRemote>>, CmdError> {
         if self.caps_probe_due()? {
             if let Err(e) = self.probe_and_store_caps().await {
                 tracing::warn!(code = %e.code, "§5 能力探测未完成，本轮按保守默认走");
@@ -1062,7 +1290,11 @@ impl App {
         self.set_sync_public(Badge::Syncing);
         // §6.3：带上轮的 etag 才可能拿到 304（空轮 1 请求 0 字节正文）
         let etag = self.manifest_etag();
-        let engine = notera_sync::SyncEngine::new(self.local_port(), RemoteBorrow(remote.as_ref()), self.engine_config());
+        let engine = notera_sync::SyncEngine::new(
+            self.local_port(),
+            RemoteBorrow(remote.as_ref()),
+            self.engine_config(),
+        );
         let (st, evs) = engine.run_round(etag.as_deref()).await;
         let yielded = evs.iter().any(|e| matches!(e, SyncEvent::Deferred { .. }));
         for e in evs {
@@ -1078,7 +1310,10 @@ impl App {
     /// * 探不到强 ETag → 清单 CAS 形同虚设，公告可能互相覆盖，同样要让路。
     ///   两者都不成立时（S1/S2 + 强 ETag）服务器自己就拦并发写，开租约只是白多两个请求。
     fn engine_config(&self) -> EngineConfig {
-        EngineConfig { lease: self.lease_policy(), ..EngineConfig::default() }
+        EngineConfig {
+            lease: self.lease_policy(),
+            ..EngineConfig::default()
+        }
     }
 
     /// 从 §5 的探测结果推出租约策略。没探过 → 用保守默认（含强 ETag 且有条件写）→ 关。
@@ -1090,7 +1325,9 @@ impl App {
         let weak_announcement_cas = !caps.has(notera_webdav::Caps::STRONG_ETAG);
         let blind_writes = caps.write_strategy() == notera_webdav::WriteStrategy::S3;
         if weak_announcement_cas || blind_writes {
-            notera_sync::LeasePolicy::On { ttl_ms: LEASE_TTL_MS }
+            notera_sync::LeasePolicy::On {
+                ttl_ms: LEASE_TTL_MS,
+            }
         } else {
             notera_sync::LeasePolicy::Off
         }
@@ -1103,9 +1340,13 @@ impl App {
             return Err(CmdError::of("no_account", false));
         };
         if let Err(key) = self.negotiate(&remote).await {
-            return Err(CmdError::of("sync_refused", false).with(serde_json::json!({ "reason": key })));
+            return Err(
+                CmdError::of("sync_refused", false).with(serde_json::json!({ "reason": key }))
+            );
         }
-        self.run_round(&remote).await.ok_or_else(|| CmdError::of("sync_busy", true))
+        self.run_round(&remote)
+            .await
+            .ok_or_else(|| CmdError::of("sync_busy", true))
     }
 
     /// §5 的"每日一次"。
@@ -1117,7 +1358,11 @@ impl App {
     pub fn route_for(&self, url: &str) -> Result<serde_json::Value, CmdError> {
         let cfg = self.config();
         let (proxy, tls, from) = match ConfigRepository::active(&cfg) {
-            Some(acct) => (net_proxy(&acct.proxy)?, net_tls(acct), format!("account:{}", acct.id)),
+            Some(acct) => (
+                net_proxy(&acct.proxy)?,
+                net_tls(acct),
+                format!("account:{}", acct.id),
+            ),
             None => (
                 notera_net::ProxyProfile::direct(),
                 notera_net::TlsPolicy::Strict,
@@ -1125,10 +1370,12 @@ impl App {
             ),
         };
         let http = notera_net::HttpClient::build(&proxy, &tls, notera_net::Timeouts::default())
-            .map_err(|e| CmdError::of("net_config", true).with(serde_json::json!({ "why": e.to_string() })))?;
-        let proof = http
-            .probe(url)
-            .map_err(|e| CmdError::of("net_config", false).with(serde_json::json!({ "why": e.to_string() })))?;
+            .map_err(|e| {
+                CmdError::of("net_config", true).with(serde_json::json!({ "why": e.to_string() }))
+            })?;
+        let proof = http.probe(url).map_err(|e| {
+            CmdError::of("net_config", false).with(serde_json::json!({ "why": e.to_string() }))
+        })?;
         Ok(serde_json::json!({
             "url": url,
             "configFrom": from,
@@ -1149,7 +1396,10 @@ impl App {
         let proxy = net_proxy(&acct.proxy)?;
         let http = Arc::new(
             notera_net::HttpClient::build(&proxy, &net_tls(acct), notera_net::Timeouts::default())
-                .map_err(|e| CmdError::of("net_config", true).with(serde_json::json!({ "why": e.to_string() })))?,
+                .map_err(|e| {
+                    CmdError::of("net_config", true)
+                        .with(serde_json::json!({ "why": e.to_string() }))
+                })?,
         );
         let remote = notera_webdav::WebDavRemote::new(
             notera_webdav::WebDavConfig::new(acct.base_url.clone())
@@ -1159,7 +1409,9 @@ impl App {
                 .with_caps(caps),
             http,
         )
-        .map_err(|e| CmdError::of("invalid_account", false).with(serde_json::json!({ "why": e.to_string() })))?;
+        .map_err(|e| {
+            CmdError::of("invalid_account", false).with(serde_json::json!({ "why": e.to_string() }))
+        })?;
         Ok(Arc::new(remote))
     }
 
@@ -1181,7 +1433,10 @@ impl App {
     /// 判据顺序按规范：读 `protocol.json` → 版本区间 → `root_id` 是否同一个库。
     /// 缺 `protocol.json` 时先看根是不是已被用过（有清单）：用过就拒，
     /// 绝不当成"空库就地初始化"（那等于清空别人现有的库）。
-    pub async fn negotiate(&self, remote: &notera_webdav::WebDavRemote) -> Result<(), &'static str> {
+    pub async fn negotiate(
+        &self,
+        remote: &notera_webdav::WebDavRemote,
+    ) -> Result<(), &'static str> {
         let cfg = self.config();
         let acct = ConfigRepository::active(&cfg).ok_or("sync.no_account")?;
         let mut state = self
@@ -1190,13 +1445,21 @@ impl App {
             .sync_state(&acct.id)
             .map_err(|_| "sync.storage_unavailable")?
             .ok_or("sync.state_missing")?;
-        let observed = remote.fetch_protocol().await.map_err(|_| "sync.protocol_unreadable")?;
-        let mine = self.default_folder_id().map_err(|_| "sync.no_default_folder")?;
+        let observed = remote
+            .fetch_protocol()
+            .await
+            .map_err(|_| "sync.protocol_unreadable")?;
+        let mine = self
+            .default_folder_id()
+            .map_err(|_| "sync.no_default_folder")?;
         let ours = notera_sync::SYNC_PROTOCOL_VERSION as u64;
         match observed {
             Some(doc) => {
                 let server = doc.get("protocol").and_then(|v| v.as_u64()).unwrap_or(0);
-                let server_min = doc.get("min_protocol").and_then(|v| v.as_u64()).unwrap_or(server);
+                let server_min = doc
+                    .get("min_protocol")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(server);
                 if server_min > ours || server < ours {
                     self.set_sync(|v| {
                         v.phase = Phase::ReadOnly;
@@ -1205,7 +1468,11 @@ impl App {
                     });
                     return Err("sync.protocol_mismatch");
                 }
-                let remote_root = doc.get("root_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let remote_root = doc
+                    .get("root_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 if remote_root.is_empty() {
                     return Err("sync.protocol_mismatch");
                 }
@@ -1234,7 +1501,11 @@ impl App {
                 }
             }
             None => {
-                if remote.root_looks_used().await.map_err(|_| "sync.protocol_unreadable")? {
+                if remote
+                    .root_looks_used()
+                    .await
+                    .map_err(|_| "sync.protocol_unreadable")?
+                {
                     self.set_sync(|v| {
                         v.phase = Phase::Error;
                         v.badge = Badge::Failed;
@@ -1254,18 +1525,32 @@ impl App {
                     "window_max_entries": 200,
                     "capabilities_hint": { "conditional_put": null },
                 });
-                let created = remote.provision_protocol(&doc).await.map_err(|_| "sync.protocol_unreadable")?;
+                let created = remote
+                    .provision_protocol(&doc)
+                    .await
+                    .map_err(|_| "sync.protocol_unreadable")?;
                 state.root_id = Some(if created {
                     mine.as_str().to_string()
                 } else {
                     // 抢输的一方必须接受对方那一份，而不是继续按自己的 root_id 写
-                    let other = remote.fetch_protocol().await.map_err(|_| "sync.protocol_unreadable")?.ok_or("sync.protocol_mismatch")?;
-                    other.get("root_id").and_then(|v| v.as_str()).ok_or("sync.protocol_mismatch")?.to_string()
+                    let other = remote
+                        .fetch_protocol()
+                        .await
+                        .map_err(|_| "sync.protocol_unreadable")?
+                        .ok_or("sync.protocol_mismatch")?;
+                    other
+                        .get("root_id")
+                        .and_then(|v| v.as_str())
+                        .ok_or("sync.protocol_mismatch")?
+                        .to_string()
                 });
             }
         }
         state.phase = "online".into();
-        self.inner.store.set_sync_state(&state).map_err(|_| "sync.storage_unavailable")?;
+        self.inner
+            .store
+            .set_sync_state(&state)
+            .map_err(|_| "sync.storage_unavailable")?;
         // 协商通过才把可见状态推进同步态；否则徽标会停在"未配置"，用户不知道为什么没动。
         self.set_sync(|v| {
             v.phase = Phase::Online;
@@ -1288,7 +1573,10 @@ impl App {
     ///
     /// 返回 `(上传, 下载, 失败)`。任何失败都不向上抛：附件全失败时，
     /// 文本同步必须照常完成（TEST-PLAN 的"只拔附件端点"用例）。
-    pub async fn run_attachment_round(&self, remote: &notera_webdav::WebDavRemote) -> (usize, usize, usize) {
+    pub async fn run_attachment_round(
+        &self,
+        remote: &notera_webdav::WebDavRemote,
+    ) -> (usize, usize, usize) {
         const FILES: usize = 4;
         const BYTES: i64 = 64 * 1024 * 1024;
         // §8 的下载窗口：一轮一个窗口，进度落在 `.part` 上。4 MiB 是"内存上界 vs
@@ -1298,7 +1586,14 @@ impl App {
         let (mut up, mut down, mut failed) = (0usize, 0usize, 0usize);
         let mut budget = BYTES;
 
-        for (i, job) in self.inner.store.attachment_uploads(FILES).unwrap_or_default().into_iter().enumerate() {
+        for (i, job) in self
+            .inner
+            .store
+            .attachment_uploads(FILES)
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+        {
             // 第一个文件不设预算，否则一个 100 MiB 的附件永远轮不到
             if i > 0 && job.size > budget {
                 break;
@@ -1309,7 +1604,10 @@ impl App {
                 // 账上"本地有"而盘上没有：标 error，绝不把它当成已上传
                 Err(e) => {
                     tracing::warn!(?e, sha = %job.sha256, "本地 blob 缺失");
-                    let _ = self.inner.store.set_attachment_states(&job.sha256, Some("error"), None);
+                    let _ =
+                        self.inner
+                            .store
+                            .set_attachment_states(&job.sha256, Some("error"), None);
                     let _ = self.inner.store.finish_attachment_ops(&job.sha256, false);
                     failed += 1;
                     continue;
@@ -1321,7 +1619,10 @@ impl App {
                     // 字节已经在服务器上、账上还没标 present：崩在这里必须既不重复传、
                     // 也不留下"以为没传"的悬账（内容寻址 + 复验就是为这一刻准备的）。
                     notera_core::crash_point("after_attachment_upload");
-                    let _ = self.inner.store.set_attachment_states(&job.sha256, None, Some("present"));
+                    let _ =
+                        self.inner
+                            .store
+                            .set_attachment_states(&job.sha256, None, Some("present"));
                     let _ = self.inner.store.finish_attachment_ops(&job.sha256, true);
                     up += 1;
                 }
@@ -1334,7 +1635,14 @@ impl App {
         }
 
         budget = BYTES;
-        for (i, job) in self.inner.store.attachment_downloads(FILES).unwrap_or_default().into_iter().enumerate() {
+        for (i, job) in self
+            .inner
+            .store
+            .attachment_downloads(FILES)
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+        {
             if i > 0 && job.size > budget {
                 break;
             }
@@ -1350,7 +1658,10 @@ impl App {
                 let _ = std::fs::remove_file(&part);
                 have = 0;
             }
-            match remote.fetch_attachment_window(sha, have, ATTACH_WINDOW).await {
+            match remote
+                .fetch_attachment_window(sha, have, ATTACH_WINDOW)
+                .await
+            {
                 Ok(Some(w)) => {
                     budget -= (w.bytes.len() as i64).min(budget);
                     // blob 目录是 `<attachments>/<2hex>/<sha>` 两层：`create(true)` 不会把父
@@ -1414,7 +1725,10 @@ impl App {
                 // 远端 404：只改远端态。§10 —— 任何情况下都不因远端缺失删本地
                 Ok(None) => {
                     let _ = std::fs::remove_file(&part);
-                    let _ = self.inner.store.set_attachment_states(&job.sha256, None, Some("absent"));
+                    let _ =
+                        self.inner
+                            .store
+                            .set_attachment_states(&job.sha256, None, Some("absent"));
                 }
                 Err(e) => {
                     tracing::warn!(%e, sha = %job.sha256, "附件下载失败");
@@ -1438,7 +1752,11 @@ impl App {
     }
 
     /// 常驻附件循环（壳 spawn 一次）。与文本调度器互不等待、互不阻塞。
-    pub async fn run_attachments(self, remote: Arc<notera_webdav::WebDavRemote>, stop: Arc<AtomicBool>) {
+    pub async fn run_attachments(
+        self,
+        remote: Arc<notera_webdav::WebDavRemote>,
+        stop: Arc<AtomicBool>,
+    ) {
         let mut ticker = tokio::time::interval(Duration::from_secs(20));
         loop {
             ticker.tick().await;
@@ -1454,8 +1772,13 @@ impl App {
         self.inner
             .config_repo
             .remove_account(&mut cfg, id)
-            .map_err(|e| CmdError::of("unknown_account", false).with(serde_json::json!({ "why": e.to_string() })))?;
-        self.inner.config_repo.save(&cfg).map_err(|e| CmdError::of("save_failed", false).with(serde_json::json!({ "why": e.to_string() })))?;
+            .map_err(|e| {
+                CmdError::of("unknown_account", false)
+                    .with(serde_json::json!({ "why": e.to_string() }))
+            })?;
+        self.inner.config_repo.save(&cfg).map_err(|e| {
+            CmdError::of("save_failed", false).with(serde_json::json!({ "why": e.to_string() }))
+        })?;
         *self.inner.config.lock().unwrap() = cfg;
         Ok(())
     }
@@ -1472,9 +1795,26 @@ impl App {
         let pending = cfg
             .active_account
             .as_deref()
-            .and_then(|a| self.inner.store.outbox_len(a, &[notera_store::OpState::Pending, notera_store::OpState::Inflight, notera_store::OpState::Failed]).ok())
+            .and_then(|a| {
+                self.inner
+                    .store
+                    .outbox_len(
+                        a,
+                        &[
+                            notera_store::OpState::Pending,
+                            notera_store::OpState::Inflight,
+                            notera_store::OpState::Failed,
+                        ],
+                    )
+                    .ok()
+            })
             .unwrap_or(0);
-        let conflicts = self.inner.store.open_conflicts().map(|v| v.len() as u32).unwrap_or(0);
+        let conflicts = self
+            .inner
+            .store
+            .open_conflicts()
+            .map(|v| v.len() as u32)
+            .unwrap_or(0);
         Ok(SyncStatusDto {
             phase: format!("{:?}", v.phase).to_lowercase(),
             badge: match v.badge {
@@ -1494,7 +1834,11 @@ impl App {
 
     /// 步骤 6：**首帧之后**才调用。返回一个可后台运行的调度句柄。
     pub fn start_sync<R: notera_sync::RemotePort + 'static>(self, remote: Arc<R>) -> Scheduler<R> {
-        Scheduler { app: self, remote, stop: Arc::new(AtomicBool::new(false)) }
+        Scheduler {
+            app: self,
+            remote,
+            stop: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     pub(crate) fn local_port(&self) -> HostLocalPort {
@@ -1552,13 +1896,18 @@ impl App {
                 self.set_sync(|v| v.badge = Badge::Syncing);
                 self.emit(BusEvent::Sync {
                     badge: Badge::Syncing,
-                    progress: Some(Progress { done, total, bytes: 0 }),
+                    progress: Some(Progress {
+                        done,
+                        total,
+                        bytes: 0,
+                    }),
                     error_code: None,
                 });
             }
-            SyncEvent::NeedsConflictAttention => {
-                self.emit(BusEvent::Toast { message_key: "sync.conflict_attention".into(), level: "warn".into() })
-            }
+            SyncEvent::NeedsConflictAttention => self.emit(BusEvent::Toast {
+                message_key: "sync.conflict_attention".into(),
+                level: "warn".into(),
+            }),
             // §11.4：让路不是失败，但必须看得见 —— "安静地不下公告"就是静默不同步。
             SyncEvent::Deferred { device } => {
                 self.set_sync(|v| {
@@ -1569,10 +1918,17 @@ impl App {
                 tracing::info!(%device, "本轮让路给另一台正在写的设备（§11.4）");
             }
             SyncEvent::Completed(_) => {}
-            SyncEvent::Failed { retryable, message_key } => {
+            SyncEvent::Failed {
+                retryable,
+                message_key,
+            } => {
                 let key = message_key.to_string();
                 self.set_sync(move |v| {
-                    v.badge = if key.ends_with("offline") { Badge::Offline } else { Badge::Failed };
+                    v.badge = if key.ends_with("offline") {
+                        Badge::Offline
+                    } else {
+                        Badge::Failed
+                    };
                     v.message_key = Some(key);
                     v.retryable = retryable;
                 });
@@ -1586,7 +1942,9 @@ impl App {
         let Some(acct) = ConfigRepository::active(&self.config()).cloned() else {
             return Ok(());
         };
-        let Ok(Some(mut st)) = self.inner.store.sync_state(&acct.id) else { return Ok(()) };
+        let Ok(Some(mut st)) = self.inner.store.sync_state(&acct.id) else {
+            return Ok(());
+        };
         st.lease_token = Some(token.to_string());
         st.lease_expires_at = Some(expires_at.to_string());
         self.inner
@@ -1617,18 +1975,25 @@ impl App {
         let store = self.store();
         let row = match kind {
             EntityKind::Note => store.get_note(id).map_err(store_err)?.map(|n| n.deleted_at),
-            EntityKind::Folder => store.get_folder(id).map_err(store_err)?.map(|f| f.deleted_at),
+            EntityKind::Folder => store
+                .get_folder(id)
+                .map_err(store_err)?
+                .map(|f| f.deleted_at),
             EntityKind::Attachment => None,
         };
         match row {
             // 行还在：以行的 deleted_at 为准（None = 已恢复，绝不能回落到旧墓碑）
             Some(deleted) => Ok(deleted),
-            None => store.get_tombstone(kind, id).map_err(store_err).map(|t| t.map(|t| t.deleted_at)),
+            None => store
+                .get_tombstone(kind, id)
+                .map_err(store_err)
+                .map(|t| t.map(|t| t.deleted_at)),
         }
     }
 }
 
-fn store_err(e: StoreError) -> LocalError {    match e {
+fn store_err(e: StoreError) -> LocalError {
+    match e {
         StoreError::ReadOnly { .. } => LocalError::ReadOnly,
         other => LocalError::Storage(other.to_string()),
     }
@@ -1713,7 +2078,9 @@ fn net_tls(acct: &AccountConfig) -> notera_net::TlsPolicy {
             .filter(|s| !s.trim().is_empty())
             .map(notera_net::TlsPolicy::CaBundle)
             .unwrap_or(notera_net::TlsPolicy::Strict),
-        TlsPolicyKind::Pin => notera_net::TlsPolicy::Pin(acct.pinned_sha256.clone().unwrap_or_default()),
+        TlsPolicyKind::Pin => {
+            notera_net::TlsPolicy::Pin(acct.pinned_sha256.clone().unwrap_or_default())
+        }
         TlsPolicyKind::InsecureLocal => notera_net::TlsPolicy::InsecureLocal,
     }
 }
@@ -1748,7 +2115,11 @@ impl LocalPort for HostLocalPort {
     }
     fn local_views(&self) -> Result<Vec<LocalView>, LocalError> {
         let acct = self.account_id();
-        let rows = self.0.store().dirty_entities(&acct).map_err(|e| LocalError::Storage(e.to_string()))?;
+        let rows = self
+            .0
+            .store()
+            .dirty_entities(&acct)
+            .map_err(|e| LocalError::Storage(e.to_string()))?;
         rows.into_iter()
             .map(|d| {
                 // `DirtyEntity` 只带"为什么脏"，不带时间戳；删除/永久删除必须让引擎看得见
@@ -1789,7 +2160,9 @@ impl LocalPort for HostLocalPort {
             .synced_heads()
             .unwrap_or_default()
             .into_iter()
-            .map(|(kind, id, rev, hash)| ((kind_tag(kind).into(), id.to_string()), (rev.get(), hash)))
+            .map(|(kind, id, rev, hash)| {
+                ((kind_tag(kind).into(), id.to_string()), (rev.get(), hash))
+            })
             .collect()
     }
     fn seq_applied(&self) -> u64 {
@@ -1797,10 +2170,14 @@ impl LocalPort for HostLocalPort {
     }
     fn revision_json(&self, id: &str, rev: u64) -> Result<Option<serde_json::Value>, LocalError> {
         let eid = EntityId::parse(id).map_err(|_| LocalError::Storage("bad id".into()))?;
-        self.0.store().revision_doc(&eid, Rev(rev)).map_err(|e| LocalError::Storage(e.to_string()))
+        self.0
+            .store()
+            .revision_doc(&eid, Rev(rev))
+            .map_err(|e| LocalError::Storage(e.to_string()))
     }
     fn envelope_wire(&self, kind: &str, id: &str) -> Result<Option<Vec<u8>>, LocalError> {
-        let eid = EntityId::parse(id).map_err(|_| LocalError::Storage(format!("outbox 里的 id 不是 UUID: {id}")))?;
+        let eid = EntityId::parse(id)
+            .map_err(|_| LocalError::Storage(format!("outbox 里的 id 不是 UUID: {id}")))?;
         let wire = match EntityKind::from_tag(kind) {
             // 附件按 sha256 寻址、走独立队列（SYNC-PROTOCOL §13），不是这里的 UUID 实体
             Some(EntityKind::Note) => self.0.store().note_envelope_wire(&eid),
@@ -1834,7 +2211,12 @@ impl LocalPort for HostLocalPort {
                         mapped.push(StoreApplyOp::AdoptConflict { env });
                     }
                 }
-                ApplyOp::SetRemote { kind, id, rev, hash12 } => {
+                ApplyOp::SetRemote {
+                    kind,
+                    id,
+                    rev,
+                    hash12,
+                } => {
                     // 引擎的"这一版清单我已经 reconcile 到这儿了"标记。它是进程内的账，
                     // 304 快路径靠它把"远端没变"和"本机已追平"分开 —— 搞混过一次就会
                     // 出现"账上干净、库里少 63 条、徽标说已同步"那种谎报。
@@ -1843,7 +2225,12 @@ impl LocalPort for HostLocalPort {
                         self.0.set_seq_applied(rev);
                     }
                     if let (Some(k), Ok(i)) = (EntityKind::from_tag(&kind), EntityId::parse(&id)) {
-                        mapped.push(StoreApplyOp::SetRemote { kind: k, id: i, rev: Rev(rev), hash12 });
+                        mapped.push(StoreApplyOp::SetRemote {
+                            kind: k,
+                            id: i,
+                            rev: Rev(rev),
+                            hash12,
+                        });
                     }
                 }
                 ApplyOp::MarkSynced { kind, id, rev } => {
@@ -1853,7 +2240,11 @@ impl LocalPort for HostLocalPort {
                 }
                 ApplyOp::Delete { kind, id, rev } | ApplyOp::Tombstone { kind, id, rev, .. } => {
                     if let (Some(k), Ok(i)) = (EntityKind::from_tag(&kind), EntityId::parse(&id)) {
-                        mapped.push(StoreApplyOp::Tombstone { kind: k, id: i, rev: Rev(rev) });
+                        mapped.push(StoreApplyOp::Tombstone {
+                            kind: k,
+                            id: i,
+                            rev: Rev(rev),
+                        });
                     }
                 }
                 ApplyOp::Purge { kind, id } => {
@@ -1872,21 +2263,39 @@ impl LocalPort for HostLocalPort {
                 }
             }
         }
-        let rep = self.0.store().apply_remote(&mapped).map_err(|e| LocalError::Storage(e.to_string()))?;
-        Ok(notera_sync::ApplyReport { applied: rep.applied, rejected: rep.skipped })
+        let rep = self
+            .0
+            .store()
+            .apply_remote(&mapped)
+            .map_err(|e| LocalError::Storage(e.to_string()))?;
+        Ok(notera_sync::ApplyReport {
+            applied: rep.applied,
+            rejected: rep.skipped,
+        })
     }
     /// 引擎已经判完"这是冲突"，这里只做**记账字段**的翻译（不含任何判定）。
     ///
     /// `base_rev` 取 `sync_rev`：DATA-MODEL §4.3 定义共同祖先就是"最后确认一致的那一版"。
-    fn record_conflict(&self, d: &Decision, l: &LocalView, r: &RemoteView) -> Result<(), LocalError> {
-        let kind = EntityKind::from_tag(&l.kind).ok_or_else(|| LocalError::Storage(format!("未知 kind: {}", l.kind)))?;
+    fn record_conflict(
+        &self,
+        d: &Decision,
+        l: &LocalView,
+        r: &RemoteView,
+    ) -> Result<(), LocalError> {
+        let kind = EntityKind::from_tag(&l.kind)
+            .ok_or_else(|| LocalError::Storage(format!("未知 kind: {}", l.kind)))?;
         let id = EntityId::parse(&l.id).map_err(|e| LocalError::Storage(e.to_string()))?;
         // 同一对哈希已经有张未处理的卡片 → 这一轮什么都不做。不这么做就会每轮多一张卡片、
         // 每轮多造一篇"本地副本"（P11 这类引擎故意不收敛的判定实测真出现过两篇同名副本）。
         if self
             .0
             .store()
-            .open_conflict_exists(kind, &id, &l.content_hash, r.hash.as_deref().unwrap_or_default())
+            .open_conflict_exists(
+                kind,
+                &id,
+                &l.content_hash,
+                r.hash.as_deref().unwrap_or_default(),
+            )
             .map_err(store_err)?
         {
             tracing::debug!(rule = d.rule, id = %l.id, "这条冲突已有未处理卡片，跳过重复登记");
@@ -1934,14 +2343,21 @@ impl LocalPort for HostLocalPort {
             .map_err(store_err)?
             .map(|n| n.title)
             .unwrap_or_else(|| "（无标题）".into());
-        self.0.emit(crate::BusEvent::Conflict { conflict_id, note_title: title });
+        self.0.emit(crate::BusEvent::Conflict {
+            conflict_id,
+            note_title: title,
+        });
         // 判定行号（P8/P10/P15…）只进日志：它是排障线索，不是 UI 词汇
         tracing::debug!(rule = d.rule, action = ?d.action, id = %l.id, conflict_id, "冲突已记账");
         Ok(())
     }
     fn outbox_take(&self, limit: usize) -> Result<Vec<notera_sync::OutboxItem>, LocalError> {
         let acct = self.account_id();
-        let rows = self.0.store().outbox_take(&acct, limit).map_err(store_err)?;
+        let rows = self
+            .0
+            .store()
+            .outbox_take(&acct, limit)
+            .map_err(store_err)?;
         Ok(rows
             .into_iter()
             .map(|o| notera_sync::OutboxItem {
@@ -1964,7 +2380,13 @@ impl LocalPort for HostLocalPort {
     /// 引擎给的 `kind` 是**线上短标记**（n/f/a，用于远端路径），而 `sync_operations.entity_type`
     /// 存的是长标记。这里就是这两种词汇唯一的翻译点（`local_views`/`outbox_take` 是反向那一条边）；
     /// 认不出的标记直接放弃并留痕，不去猜数据库里叫什么。
-    fn outbox_settle(&self, kind: &str, id: &str, rev: u64, st: notera_sync::OutboxState) -> Result<(), LocalError> {
+    fn outbox_settle(
+        &self,
+        kind: &str,
+        id: &str,
+        rev: u64,
+        st: notera_sync::OutboxState,
+    ) -> Result<(), LocalError> {
         let Some(entity_kind) = EntityKind::from_tag(kind) else {
             tracing::warn!(kind, id, rev, state = ?st, "待办结清收到未知的 kind 标记，已放弃（不猜词汇）");
             return Ok(());
@@ -2016,13 +2438,23 @@ struct RemoteBorrow<'a, R>(&'a R);
 
 #[async_trait::async_trait]
 impl<R: notera_sync::RemotePort> notera_sync::RemotePort for RemoteBorrow<'_, R> {
-    async fn fetch_manifest(&self, etag: Option<&str>) -> Result<Option<(Vec<u8>, Option<String>)>, notera_sync::RemoteError> {
+    async fn fetch_manifest(
+        &self,
+        etag: Option<&str>,
+    ) -> Result<Option<(Vec<u8>, Option<String>)>, notera_sync::RemoteError> {
         self.0.fetch_manifest(etag).await
     }
-    async fn fetch_segment(&self, name: &str) -> Result<Vec<notera_sync::manifest::EntryRef>, notera_sync::RemoteError> {
+    async fn fetch_segment(
+        &self,
+        name: &str,
+    ) -> Result<Vec<notera_sync::manifest::EntryRef>, notera_sync::RemoteError> {
         self.0.fetch_segment(name).await
     }
-    async fn fetch_record(&self, kind: &str, id: &str) -> Result<Option<Vec<u8>>, notera_sync::RemoteError> {
+    async fn fetch_record(
+        &self,
+        kind: &str,
+        id: &str,
+    ) -> Result<Option<Vec<u8>>, notera_sync::RemoteError> {
         self.0.fetch_record(kind, id).await
     }
     async fn put_record(
@@ -2034,21 +2466,37 @@ impl<R: notera_sync::RemotePort> notera_sync::RemotePort for RemoteBorrow<'_, R>
     ) -> Result<notera_sync::Commit, notera_sync::RemoteError> {
         self.0.put_record(kind, id, wire, if_match).await
     }
-    async fn commit_manifest(&self, wire: &[u8], cas_etag: Option<&str>) -> Result<Option<String>, notera_sync::RemoteError> {
+    async fn commit_manifest(
+        &self,
+        wire: &[u8],
+        cas_etag: Option<&str>,
+    ) -> Result<Option<String>, notera_sync::RemoteError> {
         self.0.commit_manifest(wire, cas_etag).await
     }
     async fn put_segment(&self, name: &str, wire: &[u8]) -> Result<(), notera_sync::RemoteError> {
         self.0.put_segment(name, wire).await
     }
-    async fn probe_record_etag(&self, kind: &str, id: &str) -> Result<Option<String>, notera_sync::RemoteError> {
+    async fn probe_record_etag(
+        &self,
+        kind: &str,
+        id: &str,
+    ) -> Result<Option<String>, notera_sync::RemoteError> {
         self.0.probe_record_etag(kind, id).await
     }
     // 这两条必须**显式转发**。漏一条 = 租约静默空转，而"空转的并发保护"比没有更糟：
     // 界面会以为自己有让路能力。
-    async fn lease_publish(&self, token: &str, expires_at: &str, seq: u64) -> Result<(), notera_sync::RemoteError> {
+    async fn lease_publish(
+        &self,
+        token: &str,
+        expires_at: &str,
+        seq: u64,
+    ) -> Result<(), notera_sync::RemoteError> {
         self.0.lease_publish(token, expires_at, seq).await
     }
-    async fn lease_holders(&self, known: &[String]) -> Result<Vec<notera_sync::PeerLease>, notera_sync::RemoteError> {
+    async fn lease_holders(
+        &self,
+        known: &[String],
+    ) -> Result<Vec<notera_sync::PeerLease>, notera_sync::RemoteError> {
         self.0.lease_holders(known).await
     }
 }
@@ -2153,13 +2601,28 @@ mod tests {
         };
         use notera_sync::RoundOutcome as O;
         // 被截断但确有推进：立刻续跑（5000 条库的追平靠的就是这个）
-        assert!(should_drain(Some(&st(O::Partial, 0, 197))), "追平中的截断轮次被当成了不用续跑");
-        assert!(should_drain(Some(&st(O::Partial, 100, 0))), "推送中的截断轮次被当成了不用续跑");
+        assert!(
+            should_drain(Some(&st(O::Partial, 0, 197))),
+            "追平中的截断轮次被当成了不用续跑"
+        );
+        assert!(
+            should_drain(Some(&st(O::Partial, 100, 0))),
+            "推送中的截断轮次被当成了不用续跑"
+        );
         // 没推进的 Partial（404、请求出错）：退回常规节拍，不许 1 秒一轮热转圈
-        assert!(!should_drain(Some(&st(O::Partial, 0, 0))), "没有进展的 Partial 会引发无界续跑");
-        assert!(!should_drain(Some(&st(O::Converged, 3, 3))), "干完的一轮不该再续");
+        assert!(
+            !should_drain(Some(&st(O::Partial, 0, 0))),
+            "没有进展的 Partial 会引发无界续跑"
+        );
+        assert!(
+            !should_drain(Some(&st(O::Converged, 3, 3))),
+            "干完的一轮不该再续"
+        );
         assert!(!should_drain(Some(&st(O::NoOp, 0, 0))), "空轮不该再续");
-        assert!(!should_drain(Some(&st(O::Failed, 0, 0))), "失败的一轮交给退避，不该立刻续");
+        assert!(
+            !should_drain(Some(&st(O::Failed, 0, 0))),
+            "失败的一轮交给退避，不该立刻续"
+        );
         // 并发里另一条轮次占着时 run_round 返回 None：同样不许续
         assert!(!should_drain(None), "本轮没跑成不该续跑");
     }
@@ -2198,10 +2661,16 @@ mod tests {
     fn boot_starts_unconfigured_and_offline() {
         let app = boot("boot");
         let s = app.sync_status().unwrap();
-        assert_eq!((s.phase.as_str(), s.badge.as_str()), ("unconfigured", "offline"));
+        assert_eq!(
+            (s.phase.as_str(), s.badge.as_str()),
+            ("unconfigured", "offline")
+        );
         assert!(!s.retryable);
         assert_eq!(s.open_conflicts, 0);
-        assert!(app.current_account().unwrap().is_none(), "没配过账户就没有活动账户");
+        assert!(
+            app.current_account().unwrap().is_none(),
+            "没配过账户就没有活动账户"
+        );
     }
 
     /// DTO 的字段名就是前端契约（`apps/desktop/src/api/types.ts`），漂一个字母 UI 就静默显示 undefined。
@@ -2209,29 +2678,67 @@ mod tests {
     fn note_and_list_dto_field_names_match_the_frontend_contract() {
         let app = boot("dto");
         let folder = app.list_folders().unwrap().remove(0);
-        let created = app.create_note(&EntityId::parse(&folder.id).unwrap(), doc("契约检查")).unwrap();
+        let created = app
+            .create_note(&EntityId::parse(&folder.id).unwrap(), doc("契约检查"))
+            .unwrap();
         let detail = commands::j(&created).unwrap();
         assert_eq!(
             sorted(keys(&detail)),
             sorted(
                 [
-                    "id", "folderId", "doc", "docFormat", "title", "summary", "charCount", "blockCount",
-                    "hasAttachment", "pinned", "color", "rev", "contentHash", "createdAt", "updatedAt", "deletedAt"
+                    "id",
+                    "folderId",
+                    "doc",
+                    "docFormat",
+                    "title",
+                    "summary",
+                    "charCount",
+                    "blockCount",
+                    "hasAttachment",
+                    "pinned",
+                    "color",
+                    "rev",
+                    "contentHash",
+                    "createdAt",
+                    "updatedAt",
+                    "deletedAt"
                 ]
                 .map(str::to_string)
                 .to_vec()
             )
         );
-        assert_eq!(detail["title"], "契约检查", "title 由 doc 派生（DATA-MODEL §7.1）");
+        assert_eq!(
+            detail["title"], "契约检查",
+            "title 由 doc 派生（DATA-MODEL §7.1）"
+        );
 
-        let rows = app.list_notes(ListNotesCmd { folder_id: None, trash: false, limit: 10, offset: 0 }).unwrap();
+        let rows = app
+            .list_notes(ListNotesCmd {
+                folder_id: None,
+                trash: false,
+                limit: 10,
+                offset: 0,
+            })
+            .unwrap();
         let row = rows.first().expect("列表必须有一行");
         assert_eq!(
             sorted(keys(row)),
             sorted(
-                ["id", "folderId", "folderName", "title", "summary", "charCount", "hasAttachment", "pinned", "updatedAt", "deletedAt", "dirty"]
-                    .map(str::to_string)
-                    .to_vec()
+                [
+                    "id",
+                    "folderId",
+                    "folderName",
+                    "title",
+                    "summary",
+                    "charCount",
+                    "hasAttachment",
+                    "pinned",
+                    "updatedAt",
+                    "deletedAt",
+                    "dirty"
+                ]
+                .map(str::to_string)
+                .to_vec()
             )
         );
         assert_eq!(row["folderName"], folder.name);
@@ -2243,20 +2750,53 @@ mod tests {
     #[test]
     fn every_store_error_keeps_its_own_code() {
         let cases: Vec<(StoreError, &str)> = vec![
-            (StoreError::NotFound { kind: EntityKind::Note, id: EntityId::new() }, "not_found"),
             (
-                notera_core::error::StaleEdit { entity: EntityId::new(), expected: Rev(3), actual: Rev(5) }.into(),
+                StoreError::NotFound {
+                    kind: EntityKind::Note,
+                    id: EntityId::new(),
+                },
+                "not_found",
+            ),
+            (
+                notera_core::error::StaleEdit {
+                    entity: EntityId::new(),
+                    expected: Rev(3),
+                    actual: Rev(5),
+                }
+                .into(),
                 "stale_edit",
             ),
-            (StoreError::ReadOnly { db: 9, supported: 3 }, "db_too_new"),
-            (StoreError::Migration { from: 2, to: 3, detail: "x".into() }, "db_migration"),
-            (StoreError::DocTooNew { doc: 9, supported: 1 }, "doc_too_new"),
+            (
+                StoreError::ReadOnly {
+                    db: 9,
+                    supported: 3,
+                },
+                "db_too_new",
+            ),
+            (
+                StoreError::Migration {
+                    from: 2,
+                    to: 3,
+                    detail: "x".into(),
+                },
+                "db_migration",
+            ),
+            (
+                StoreError::DocTooNew {
+                    doc: 9,
+                    supported: 1,
+                },
+                "doc_too_new",
+            ),
             (StoreError::Constraint("名字为空".into()), "constraint"),
             (StoreError::InvalidDoc("坏文档".into()), "invalid_doc"),
             (StoreError::Rejected("远端拒绝".into()), "rejected"),
             (StoreError::Rich("富文本层拒绝".into()), "richtext"),
             (StoreError::Io(std::io::Error::other("磁盘满了")), "io"),
-            (StoreError::Identity(notera_core::IdentityError::Malformed("x".into())), "bad_id"),
+            (
+                StoreError::Identity(notera_core::IdentityError::Malformed("x".into())),
+                "bad_id",
+            ),
         ];
         let mut seen = std::collections::BTreeSet::new();
         for (e, want) in cases {
@@ -2298,32 +2838,75 @@ mod tests {
         let blob: Vec<u8> = b"PNG-ish bytes".to_vec();
         let sha = app
             .store()
-            .attach_blob(&EntityId::parse(&note.id).unwrap(), &blob, "image/png", Some("pic.png"), "b1")
+            .attach_blob(
+                &EntityId::parse(&note.id).unwrap(),
+                &blob,
+                "image/png",
+                Some("pic.png"),
+                "b1",
+            )
             .unwrap()
             .sha256;
         // 附件按 `<attachments>/<2hex>/<sha>` 两层分片落盘，所以这里既是在证明
         // "真有一条 blob"，也是在证明导出没有靠"扫一层目录名"去猜它在哪。
-        assert!(app.store().blob_path(&sha).exists(), "blob 就该在分片目录里");
+        assert!(
+            app.store().blob_path(&sha).exists(),
+            "blob 就该在分片目录里"
+        );
 
         for (label, name, body) in [
-            ("平铺", "平铺.zip", json!({ "path": dir.join("平铺.zip").to_string_lossy(), "includeAttachments": true })),
-            ("req 包一层", "包一层.zip", json!({ "req": { "path": dir.join("包一层.zip").to_string_lossy(), "includeAttachments": true } })),
+            (
+                "平铺",
+                "平铺.zip",
+                json!({ "path": dir.join("平铺.zip").to_string_lossy(), "includeAttachments": true }),
+            ),
+            (
+                "req 包一层",
+                "包一层.zip",
+                json!({ "req": { "path": dir.join("包一层.zip").to_string_lossy(), "includeAttachments": true } }),
+            ),
         ] {
-            let got = commands::dispatch(&app, "export_data", body).unwrap_or_else(|e| panic!("{label} 形态导出失败：{e:?}"));
+            let got = commands::dispatch(&app, "export_data", body)
+                .unwrap_or_else(|e| panic!("{label} 形态导出失败：{e:?}"));
             let want = dir.join(name).to_string_lossy().replace('\\', "/");
-            assert_eq!(got["path"].as_str().unwrap_or_default().replace('\\', "/"), want, "{label}：输出路径必须按用户指的写");
+            assert_eq!(
+                got["path"].as_str().unwrap_or_default().replace('\\', "/"),
+                want,
+                "{label}：输出路径必须按用户指的写"
+            );
             let out = Path::new(got["path"].as_str().unwrap());
             assert!(out.exists(), "{label}：报告说有文件，盘上就得有");
-            assert_eq!(got["counts"]["attachments"].as_u64(), Some(1), "{label}：勾了包含附件就必须真带上");
+            assert_eq!(
+                got["counts"]["attachments"].as_u64(),
+                Some(1),
+                "{label}：勾了包含附件就必须真带上"
+            );
             // 报告里的数还得和包里的字节对得上
-            let back = notera_importer::read_bundle(out).unwrap_or_else(|e| panic!("{label}：包读回来就失败：{e:?}"));
-            assert_eq!(back.attachments.len(), 1, "{label}：ZIP 里必须真有那一个附件");
+            let back = notera_importer::read_bundle(out)
+                .unwrap_or_else(|e| panic!("{label}：包读回来就失败：{e:?}"));
+            assert_eq!(
+                back.attachments.len(),
+                1,
+                "{label}：ZIP 里必须真有那一个附件"
+            );
             assert_eq!(back.attachments[0].0, sha, "{label}：附件键就是 sha256");
-            assert_eq!(back.attachments[0].1, blob, "{label}：附件字节必须逐字节相同");
+            assert_eq!(
+                back.attachments[0].1, blob,
+                "{label}：附件字节必须逐字节相同"
+            );
         }
         // 没勾就不该带上（体积与"完整备份"的语义要能区分）
-        let bare = commands::dispatch(&app, "export_data", json!({ "path": dir.join("不含附件.zip").to_string_lossy() })).unwrap();
-        assert_eq!(bare["counts"]["attachments"].as_u64(), Some(0), "默认不含附件");
+        let bare = commands::dispatch(
+            &app,
+            "export_data",
+            json!({ "path": dir.join("不含附件.zip").to_string_lossy() }),
+        )
+        .unwrap();
+        assert_eq!(
+            bare["counts"]["attachments"].as_u64(),
+            Some(0),
+            "默认不含附件"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2333,7 +2916,10 @@ mod tests {
         // 判定，静默换成默认值等于替用户做了决定。这里用一个不存在的包让两种形态
         // 都在"读文件"这一步失败 —— 失败信息里必须带着用户要的那个 mode。
         let app = boot("import-scope");
-        for body in [json!({ "path": "不存在.zip", "mode": "merge" }), json!({ "req": { "path": "不存在.zip", "mode": "merge" } })] {
+        for body in [
+            json!({ "path": "不存在.zip", "mode": "merge" }),
+            json!({ "req": { "path": "不存在.zip", "mode": "merge" } }),
+        ] {
             let r = commands::dispatch(&app, "import_data", body);
             let e = r.expect_err("包不存在必须失败，不能静默当成空导入");
             assert_eq!(e.code, "save_failed", "读不到包是 IO 类失败：{e:?}");
@@ -2349,14 +2935,36 @@ mod tests {
         let app = boot("self-import");
         let folder = app.default_folder_id().unwrap();
         let note = app.create_note(&folder, doc("自导入不该制造冲突")).unwrap();
-        let before = app.store().get_note(&EntityId::parse(&note.id).unwrap()).unwrap().unwrap();
+        let before = app
+            .store()
+            .get_note(&EntityId::parse(&note.id).unwrap())
+            .unwrap()
+            .unwrap();
         let out = tmpdir("self-import").join("库.zip");
-        commands::dispatch(&app, "export_data", json!({ "path": out.to_string_lossy(), "includeAttachments": true })).unwrap();
-        let report = commands::dispatch(&app, "import_data", json!({ "path": out.to_string_lossy(), "mode": "merge" })).unwrap();
-        let after = app.store().get_note(&EntityId::parse(&note.id).unwrap()).unwrap().unwrap();
+        commands::dispatch(
+            &app,
+            "export_data",
+            json!({ "path": out.to_string_lossy(), "includeAttachments": true }),
+        )
+        .unwrap();
+        let report = commands::dispatch(
+            &app,
+            "import_data",
+            json!({ "path": out.to_string_lossy(), "mode": "merge" }),
+        )
+        .unwrap();
+        let after = app
+            .store()
+            .get_note(&EntityId::parse(&note.id).unwrap())
+            .unwrap()
+            .unwrap();
         assert_eq!(after.rev, before.rev, "把同一个包导回同一个库不许推进任何本地 rev（rev 一动，编辑器的 expectedRev 就过期 → 假冲突）");
         assert_eq!(after.content_hash, before.content_hash, "内容也不许变");
-        assert_eq!(app.store().open_conflicts().unwrap().len(), 0, "自导入不许造出冲突：{report:?}");
+        assert_eq!(
+            app.store().open_conflicts().unwrap().len(),
+            0,
+            "自导入不许造出冲突：{report:?}"
+        );
         let _ = std::fs::remove_dir_all(out.parent().unwrap());
     }
 
@@ -2382,14 +2990,37 @@ mod tests {
         // 附件写入推进了笔记的 rev（改了派生列与引用表），因此**必须把新 rev 回给编辑器**：
         // 编辑器手里若还是旧 rev，它随后那次自动保存就会被判成 stale_edit —— 用户插一张图，
         // 得到的却是"这条笔记在别处被改动了"。端到端实测过：expected 7 / actual 8。
-        let now = app.store().get_note(&EntityId::parse(&note.id).unwrap()).unwrap().unwrap();
-        assert_eq!(now.rev.get(), note.rev + 1, "attach 会把笔记 rev 推进一格（这是回 rev 的前提）");
+        let now = app
+            .store()
+            .get_note(&EntityId::parse(&note.id).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            now.rev.get(),
+            note.rev + 1,
+            "attach 会把笔记 rev 推进一格（这是回 rev 的前提）"
+        );
         assert_eq!(got["rev"], now.rev.get(), "响应里必须带推进后的新 rev");
-        assert_eq!(std::fs::read(app.store().blob_path(&want_sha)).unwrap(), blob, "落盘的字节必须与输入相同");
-        assert_eq!(app.store().attachment_media_type(&want_sha).unwrap().as_deref(), Some("image/png"));
+        assert_eq!(
+            std::fs::read(app.store().blob_path(&want_sha)).unwrap(),
+            blob,
+            "落盘的字节必须与输入相同"
+        );
+        assert_eq!(
+            app.store()
+                .attachment_media_type(&want_sha)
+                .unwrap()
+                .as_deref(),
+            Some("image/png")
+        );
 
-        let back = commands::dispatch(&app, "attachment_data", json!({ "sha256": want_sha })).unwrap();
-        assert_eq!(notera_crypto::b64::decode(back["bytesBase64"].as_str().unwrap()).unwrap(), blob, "读回来必须逐字节相同");
+        let back =
+            commands::dispatch(&app, "attachment_data", json!({ "sha256": want_sha })).unwrap();
+        assert_eq!(
+            notera_crypto::b64::decode(back["bytesBase64"].as_str().unwrap()).unwrap(),
+            blob,
+            "读回来必须逐字节相同"
+        );
         assert_eq!(back["mediaType"], "image/png");
     }
 
@@ -2402,16 +3033,31 @@ mod tests {
         let mut both = base.clone();
         both["bytesBase64"] = json!(notera_crypto::b64::encode(b"x"));
         both["localPath"] = json!("某处.png");
-        let e = commands::dispatch(&app, "attach_file", both).expect_err("两个来源都给 = 不知道听谁的，必须拒");
+        let e = commands::dispatch(&app, "attach_file", both)
+            .expect_err("两个来源都给 = 不知道听谁的，必须拒");
         assert_eq!(e.code, "bad_args");
         let e = commands::dispatch(&app, "attach_file", base).expect_err("两个来源都不给同样要拒");
         assert_eq!(e.code, "bad_args");
         // 坏 base64 不许被"尽量解一下"，那是把用户的文件改成另一份内容
-        let e = commands::dispatch(&app, "attach_file", json!({ "noteId": note.id, "blockId": "b1", "role": "inline", "bytesBase64": "###" })).expect_err("坏 base64 必须报错");
+        let e = commands::dispatch(
+            &app,
+            "attach_file",
+            json!({ "noteId": note.id, "blockId": "b1", "role": "inline", "bytesBase64": "###" }),
+        )
+        .expect_err("坏 base64 必须报错");
         assert_eq!(e.code, "bad_args");
         // 空字节不允许挂载（store 的既有约束，别在这里绕过）
-        let e = commands::dispatch(&app, "attach_file", json!({ "noteId": note.id, "blockId": "b1", "role": "inline", "bytesBase64": "" })).expect_err("空 blob 必须报错");
-        assert!(matches!(e.code.as_str(), "bad_args" | "storage" | "constraint"), "实际 {}", e.code);
+        let e = commands::dispatch(
+            &app,
+            "attach_file",
+            json!({ "noteId": note.id, "blockId": "b1", "role": "inline", "bytesBase64": "" }),
+        )
+        .expect_err("空 blob 必须报错");
+        assert!(
+            matches!(e.code.as_str(), "bad_args" | "storage" | "constraint"),
+            "实际 {}",
+            e.code
+        );
     }
 
     #[test]
@@ -2427,12 +3073,14 @@ mod tests {
             "zz".to_string() + &"0".repeat(62),
         ];
         for bad in bad_keys {
-            let e = commands::dispatch(&app, "attachment_data", json!({ "sha256": bad })).expect_err(&format!("非法 sha 必须被拒：{bad}"));
+            let e = commands::dispatch(&app, "attachment_data", json!({ "sha256": bad }))
+                .expect_err(&format!("非法 sha 必须被拒：{bad}"));
             assert_eq!(e.code, "bad_args", "实际 {e:?}");
         }
         // 形态合法但盘上没有：是"缺附件"，不是"参数错"，UI 要显示占位而不是报错堆栈
         let missing = "ab".to_string() + &"0".repeat(62);
-        let e = commands::dispatch(&app, "attachment_data", json!({ "sha256": missing })).expect_err("没有的附件不能返回空成功");
+        let e = commands::dispatch(&app, "attachment_data", json!({ "sha256": missing }))
+            .expect_err("没有的附件不能返回空成功");
         assert_eq!(e.code, "attachment_missing");
     }
 
@@ -2444,11 +3092,14 @@ mod tests {
         let parent = app.store().create_folder(Some(&root), "项目").unwrap();
         let kid = app.store().create_folder(Some(&parent.id), "子夹").unwrap();
         let other = app.store().create_folder(Some(&root), "别的").unwrap();
-        let in_kid = EntityId::parse(&app.create_note(&kid.id, doc("范围内的笔记")).unwrap().id).unwrap();
+        let in_kid =
+            EntityId::parse(&app.create_note(&kid.id, doc("范围内的笔记")).unwrap().id).unwrap();
         app.create_note(&other.id, doc("范围外的笔记")).unwrap();
         let ancestor_note = app.create_note(&root, doc("祖先自己的笔记")).unwrap();
         let blob: Vec<u8> = b"in-scope attachment bytes".to_vec();
-        app.store().attach_blob(&in_kid, &blob, "image/png", Some("a.png"), "b1").unwrap();
+        app.store()
+            .attach_blob(&in_kid, &blob, "image/png", Some("a.png"), "b1")
+            .unwrap();
         app.store()
             .attach_blob(
                 &EntityId::parse(&ancestor_note.id).unwrap(),
@@ -2476,31 +3127,77 @@ mod tests {
         let b = notera_importer::read_bundle(&out).unwrap();
         assert!(b.manifest.as_ref().unwrap().partial, "包自己也得标 partial");
         assert!(b.notes.iter().any(|n| n["id"] == json!(in_kid.to_string())));
-        assert!(!b.notes.iter().any(|n| n["payload"]["folder_id"] == json!(other.to_string())), "平级文件夹的内容不许混进来");
-        assert!(!b.notes.iter().any(|n| n["payload"]["folder_id"] == json!(root.to_string())), "祖先文件夹自己的笔记不许混进来");
-        assert!(b.folders.iter().any(|f| f["id"] == json!(root.to_string())), "祖先链的文件夹行得在，否则外键接不上");
+        assert!(
+            !b.notes
+                .iter()
+                .any(|n| n["payload"]["folder_id"] == json!(other.to_string())),
+            "平级文件夹的内容不许混进来"
+        );
+        assert!(
+            !b.notes
+                .iter()
+                .any(|n| n["payload"]["folder_id"] == json!(root.to_string())),
+            "祖先文件夹自己的笔记不许混进来"
+        );
+        assert!(
+            b.folders.iter().any(|f| f["id"] == json!(root.to_string())),
+            "祖先链的文件夹行得在，否则外键接不上"
+        );
 
         // 真正的验收：干净库能把它导回来，且层级完整。
         let fresh = boot("scoped-b");
-        let rep = commands::dispatch(&fresh, "import_data", json!({ "path": out.to_string_lossy(), "mode": "merge" })).expect("子树包必须能导进干净库（外键闭包不完整就会在这里失败）");
+        let rep = commands::dispatch(
+            &fresh,
+            "import_data",
+            json!({ "path": out.to_string_lossy(), "mode": "merge" }),
+        )
+        .expect("子树包必须能导进干净库（外键闭包不完整就会在这里失败）");
         assert_eq!(rep["merged"], 4, "1 篇笔记 + 3 个文件夹：{rep:?}");
-        assert_eq!(rep["restoredAttachments"], 1, "包里的附件字节要真的落进新库");
-        let back = fresh.store().get_note(&in_kid).unwrap().expect("笔记要能按原 id 读回");
+        assert_eq!(
+            rep["restoredAttachments"], 1,
+            "包里的附件字节要真的落进新库"
+        );
+        let back = fresh
+            .store()
+            .get_note(&in_kid)
+            .unwrap()
+            .expect("笔记要能按原 id 读回");
         assert_eq!(back.folder_id, kid, "父本必须还是那个子夹");
-        let chain: Vec<String> = fresh.store().list_folders().unwrap().iter().map(|f| f.name.clone()).collect();
-        assert!(chain.contains(&"项目".to_string()) && chain.iter().any(|n| n == "子夹"), "祖先链要一起落地：{chain:?}");
+        let chain: Vec<String> = fresh
+            .store()
+            .list_folders()
+            .unwrap()
+            .iter()
+            .map(|f| f.name.clone())
+            .collect();
+        assert!(
+            chain.contains(&"项目".to_string()) && chain.iter().any(|n| n == "子夹"),
+            "祖先链要一起落地：{chain:?}"
+        );
         // 附件不是"字节躺在盘上"就算还原好了：库里得有行、本地态是 available，
         // 而远端态必须是 unknown —— 这个包没经过服务器，谎报 present 就永远不会补传。
         let shas = fresh.store().local_attachment_shas().unwrap();
         assert_eq!(shas.len(), 1, "还原后账上必须认得这一个附件：{shas:?}");
-        let data = commands::dispatch(&fresh, "attachment_data", json!({ "sha256": shas[0] })).expect("还原出来的附件必须读得出来");
+        let data = commands::dispatch(&fresh, "attachment_data", json!({ "sha256": shas[0] }))
+            .expect("还原出来的附件必须读得出来");
         // 源库里现在有两个附件，"随手取第一个 sha"就会比错对象（实测踩过）——
         // 直接和已知字节比，并且钉住祖先那份不许跟着子树包走。
-        assert_eq!(notera_crypto::b64::decode(data["bytesBase64"].as_str().unwrap()).unwrap(), b"in-scope attachment bytes".to_vec(), "字节要一字不差");
+        assert_eq!(
+            notera_crypto::b64::decode(data["bytesBase64"].as_str().unwrap()).unwrap(),
+            b"in-scope attachment bytes".to_vec(),
+            "字节要一字不差"
+        );
         let ancestor_sha = notera_crypto::sha256_hex(b"ancestor attachment bytes");
-        assert!(!shas.contains(&ancestor_sha), "祖先文件夹的附件不该跟着子树包走：{shas:?}");
+        assert!(
+            !shas.contains(&ancestor_sha),
+            "祖先文件夹的附件不该跟着子树包走：{shas:?}"
+        );
         let (local, remote) = fresh.store().attachment_for_state(&shas[0]);
-        assert_eq!((local.as_str(), remote.as_str()), ("available", "unknown"), "还原的附件不得谎报服务器已有");
+        assert_eq!(
+            (local.as_str(), remote.as_str()),
+            ("available", "unknown"),
+            "还原的附件不得谎报服务器已有"
+        );
         let _ = std::fs::remove_file(&out);
     }
 
@@ -2511,15 +3208,42 @@ mod tests {
         let app = boot("scoped-partial");
         let (_root, kid, _other, _in_kid) = scoped_tree(&app);
         let out = tmpdir("scoped-partial").join("子树.zip");
-        commands::dispatch(&app, "export_data", json!({ "path": out.to_string_lossy(), "folderIds": [kid.to_string()] })).unwrap();
+        commands::dispatch(
+            &app,
+            "export_data",
+            json!({ "path": out.to_string_lossy(), "folderIds": [kid.to_string()] }),
+        )
+        .unwrap();
         let fresh = boot("scoped-c");
-        let e = commands::dispatch(&fresh, "import_data", json!({ "path": out.to_string_lossy(), "mode": "intoEmpty" })).expect_err("部分包不许走整库还原");
+        let e = commands::dispatch(
+            &fresh,
+            "import_data",
+            json!({ "path": out.to_string_lossy(), "mode": "intoEmpty" }),
+        )
+        .expect_err("部分包不许走整库还原");
         assert_eq!(e.code, "save_failed");
-        assert!(fresh.store().list_notes(&notera_store::NoteQuery::all()).unwrap().is_empty(), "被拒的导入不得留下半包状态");
+        assert!(
+            fresh
+                .store()
+                .list_notes(&notera_store::NoteQuery::all())
+                .unwrap()
+                .is_empty(),
+            "被拒的导入不得留下半包状态"
+        );
         // 整库包走同一条路则必须成功
         let full = tmpdir("scoped-partial").join("整库.zip");
-        commands::dispatch(&app, "export_data", json!({ "path": full.to_string_lossy() })).unwrap();
-        commands::dispatch(&fresh, "import_data", json!({ "path": full.to_string_lossy(), "mode": "intoEmpty" })).expect("整库包在空库上应当放行");
+        commands::dispatch(
+            &app,
+            "export_data",
+            json!({ "path": full.to_string_lossy() }),
+        )
+        .unwrap();
+        commands::dispatch(
+            &fresh,
+            "import_data",
+            json!({ "path": full.to_string_lossy(), "mode": "intoEmpty" }),
+        )
+        .expect("整库包在空库上应当放行");
         let _ = std::fs::remove_dir_all(out.parent().unwrap());
     }
 
@@ -2527,10 +3251,15 @@ mod tests {
     fn an_unknown_folder_in_the_export_scope_is_refused_not_ignored() {
         let app = boot("scoped-bad");
         let e = commands::dispatch(&app, "export_data", json!({ "folderIds": ["not-a-uuid"] }));
-        assert!(e.is_err(), "不存在的文件夹不能当成\"没勾\"" );
+        assert!(e.is_err(), "不存在的文件夹不能当成\"没勾\"");
         let ghost = EntityId::new().to_string();
-        let e = commands::dispatch(&app, "export_data", json!({ "folderIds": [ghost] })).expect_err("格式对但不存在的 id 也要拒");
-        assert!(matches!(e.code.as_str(), "constraint" | "rejected" | "storage"), "实际 {}", e.code);
+        let e = commands::dispatch(&app, "export_data", json!({ "folderIds": [ghost] }))
+            .expect_err("格式对但不存在的 id 也要拒");
+        assert!(
+            matches!(e.code.as_str(), "constraint" | "rejected" | "storage"),
+            "实际 {}",
+            e.code
+        );
     }
 
     #[test]
@@ -2542,7 +3271,8 @@ mod tests {
         let folder = app.default_folder_id().unwrap();
         let note = app.create_note(&folder, doc("第一版的内容")).unwrap();
         let eid = EntityId::parse(&note.id).unwrap();
-        app.edit_note(&eid, doc("第二版的内容"), Rev(note.rev)).unwrap();
+        app.edit_note(&eid, doc("第二版的内容"), Rev(note.rev))
+            .unwrap();
         let at = |rev: u64| {
             commands::dispatch(&app, "preview_text", json!({ "id": note.id, "rev": rev }))
                 .unwrap()
@@ -2550,10 +3280,19 @@ mod tests {
                 .unwrap_or_default()
                 .to_string()
         };
-        assert!(at(1).contains("第一版"), "rev 1 的预览必须是第一版：{}", at(1));
-        assert!(at(2).contains("第二版"), "rev 2 的预览必须是第二版：{}", at(2));
+        assert!(
+            at(1).contains("第一版"),
+            "rev 1 的预览必须是第一版：{}",
+            at(1)
+        );
+        assert!(
+            at(2).contains("第二版"),
+            "rev 2 的预览必须是第二版：{}",
+            at(2)
+        );
         assert_ne!(at(1), at(2), "两版预览一模一样 = 面板在做样子");
-        let e = commands::dispatch(&app, "preview_text", json!({ "id": note.id, "rev": 99 })).expect_err("没有的 rev 不许给空成功");
+        let e = commands::dispatch(&app, "preview_text", json!({ "id": note.id, "rev": 99 }))
+            .expect_err("没有的 rev 不许给空成功");
         assert_eq!(e.code, "not_found");
     }
 
@@ -2566,11 +3305,25 @@ mod tests {
         // 而单元测试喂的是 camelCase 假数据 —— 正好把洞盖住。键集合就是契约，逐项钉死。
         let app = boot("stats");
         let got = commands::dispatch(&app, "stats", json!({})).unwrap();
-        let mut keys: Vec<&str> = got.as_object().expect("stats 应是对象").keys().map(|k| k.as_str()).collect();
+        let mut keys: Vec<&str> = got
+            .as_object()
+            .expect("stats 应是对象")
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
         keys.sort_unstable();
         assert_eq!(
             keys,
-            ["attachments", "dbBytes", "folders", "ftsEntries", "inflightOps", "notes", "notesInTrash", "searchGeneration"]
+            [
+                "attachments",
+                "dbBytes",
+                "folders",
+                "ftsEntries",
+                "inflightOps",
+                "notes",
+                "notesInTrash",
+                "searchGeneration"
+            ]
         );
         // 值也得接得上：全新库里没有待发操作（本地哨兵账户的留痕行不算队列）
         assert_eq!(got["inflightOps"], 0, "没配置远端时待发队列必须是 0");
@@ -2613,7 +3366,9 @@ mod tests {
         // 先订阅再触发：总线只把"订阅之后"的事件投给这个接收端
         let rx = app.subscribe();
         let folder = app.list_folders().unwrap().remove(0);
-        let note = app.create_note(&EntityId::parse(&folder.id).unwrap(), doc("要吵架的笔记")).unwrap();
+        let note = app
+            .create_note(&EntityId::parse(&folder.id).unwrap(), doc("要吵架的笔记"))
+            .unwrap();
 
         let l = LocalView {
             kind: "n".into(),
@@ -2634,7 +3389,11 @@ mod tests {
             deleted_at: None,
             purged: false,
         };
-        let d = Decision { key: l.key(), action: Action::Conflict(ConflictKind::UpdateUpdate), rule: "P10" };
+        let d = Decision {
+            key: l.key(),
+            action: Action::Conflict(ConflictKind::UpdateUpdate),
+            rule: "P10",
+        };
         app.local_port().record_conflict(&d, &l, &r).unwrap();
 
         let open = app.open_conflicts().unwrap();
@@ -2643,7 +3402,10 @@ mod tests {
         assert_eq!(open[0].note_title, "要吵架的笔记");
         assert_eq!(open[0].local_rev, bump(note.rev));
         assert_eq!(open[0].remote_rev, bump(bump(note.rev)));
-        assert_eq!(open[0].base_rev, note.rev, "base = sync_rev = 共同祖先（DATA-MODEL §4.3）");
+        assert_eq!(
+            open[0].base_rev, note.rev,
+            "base = sync_rev = 共同祖先（DATA-MODEL §4.3）"
+        );
         // 订阅发生在 create_note 之前，所以总线上先出现的是那条 NotesChanged ——
         // 那是正当事件。这里要证的性质是"冲突记录一定会投出一条 Conflict"，
         // 于是跳过在先的其它事件，直到看见 Conflict 或超时。
@@ -2655,7 +3417,10 @@ mod tests {
                 panic!("5s 内没有收到 Conflict 事件，只看到：{skipped:?}");
             }
             match rx.recv_timeout(budget).expect("超时前没有任何事件") {
-                BusEvent::Conflict { conflict_id, note_title } => {
+                BusEvent::Conflict {
+                    conflict_id,
+                    note_title,
+                } => {
                     assert_eq!(conflict_id, open[0].id);
                     assert_eq!(note_title, "要吵架的笔记");
                     break;
@@ -2664,16 +3429,36 @@ mod tests {
             }
         }
         // 裁决走存储层，host 只做动词翻译；UI 的驼峰写法必须能用
-        app.resolve_conflict(commands::ResolveConflictCmd { id: open[0].id, action: "keepBoth".into() }).unwrap();
-        assert!(app.open_conflicts().unwrap().is_empty(), "裁决后不再是 open");
-        let rows = app.list_notes(ListNotesCmd {
-            folder_id: None,
-            trash: false,
-            limit: 50,
-            offset: 0,
-        }).unwrap();
-        let copies: Vec<_> = rows.iter().filter(|r| r["title"].as_str().is_some_and(|t| t.ends_with("（本地副本）"))).collect();
-        assert_eq!(copies.len(), 1, "§6：进收件箱的同一刻必须留下本地副本，用户之后选哪边都不丢字");
+        app.resolve_conflict(commands::ResolveConflictCmd {
+            id: open[0].id,
+            action: "keepBoth".into(),
+        })
+        .unwrap();
+        assert!(
+            app.open_conflicts().unwrap().is_empty(),
+            "裁决后不再是 open"
+        );
+        let rows = app
+            .list_notes(ListNotesCmd {
+                folder_id: None,
+                trash: false,
+                limit: 50,
+                offset: 0,
+            })
+            .unwrap();
+        let copies: Vec<_> = rows
+            .iter()
+            .filter(|r| {
+                r["title"]
+                    .as_str()
+                    .is_some_and(|t| t.ends_with("（本地副本）"))
+            })
+            .collect();
+        assert_eq!(
+            copies.len(),
+            1,
+            "§6：进收件箱的同一刻必须留下本地副本，用户之后选哪边都不丢字"
+        );
         let open2 = app.open_conflicts().unwrap();
         assert_eq!(open2.len(), 0);
     }
@@ -2681,7 +3466,13 @@ mod tests {
     /// UI 的四个动词（types.ts 的 ConflictAction）逐个都要翻得动。
     #[test]
     fn every_ui_conflict_action_maps_to_a_store_resolution() {
-        for action in ["keepBoth", "replaceWithLocal", "replaceWithRemote", "manualMerge", "dismiss"] {
+        for action in [
+            "keepBoth",
+            "replaceWithLocal",
+            "replaceWithRemote",
+            "manualMerge",
+            "dismiss",
+        ] {
             let app = boot(&format!("resolve-{action}"));
             let folder = app.list_folders().unwrap().remove(0);
             let fid = EntityId::parse(&folder.id).unwrap();
@@ -2701,12 +3492,18 @@ mod tests {
                     copy_note_id: None,
                 })
                 .unwrap();
-            app.resolve_conflict(commands::ResolveConflictCmd { id: cid, action: action.into() })
-                .unwrap_or_else(|e| panic!("{action} 必须被接受，实际 {e:?}"));
+            app.resolve_conflict(commands::ResolveConflictCmd {
+                id: cid,
+                action: action.into(),
+            })
+            .unwrap_or_else(|e| panic!("{action} 必须被接受，实际 {e:?}"));
         }
         let app = boot("resolve-bad");
         let e = app
-            .resolve_conflict(commands::ResolveConflictCmd { id: 1, action: "yolo".into() })
+            .resolve_conflict(commands::ResolveConflictCmd {
+                id: 1,
+                action: "yolo".into(),
+            })
             .unwrap_err();
         assert_eq!(e.code, "bad_action");
     }
@@ -2718,7 +3515,9 @@ mod tests {
         let fid = EntityId::parse(&folder.id).unwrap();
         let note = app.create_note(&fid, doc("对端已永久删除")).unwrap();
         let nid = EntityId::parse(&note.id).unwrap();
-        app.store().mark_synced(EntityKind::Note, &nid, Rev(note.rev), &note.content_hash).unwrap();
+        app.store()
+            .mark_synced(EntityKind::Note, &nid, Rev(note.rev), &note.content_hash)
+            .unwrap();
         app.store().purge_note(&nid).unwrap();
         app.store()
             .record_conflict(&notera_store::ConflictRecord {
@@ -2735,7 +3534,10 @@ mod tests {
             })
             .unwrap();
         let open = app.open_conflicts().unwrap();
-        assert_eq!(open[0].note_title, "对端已永久删除", "笔记行已不存在时要用墓碑快照，卡片不许空白");
+        assert_eq!(
+            open[0].note_title, "对端已永久删除",
+            "笔记行已不存在时要用墓碑快照，卡片不许空白"
+        );
     }
 
     /// LocalPort 的 push 侧：wire 由存储层给，host 只搬运；删除态必须引擎看得见。
@@ -2748,35 +3550,63 @@ mod tests {
         let note = app.create_note(&fid, doc("待上传")).unwrap();
         let nid = EntityId::parse(&note.id).unwrap();
 
-        let wire = p.envelope_wire("n", &note.id).unwrap().expect("脏笔记必须有待 PUT 的记录");
+        let wire = p
+            .envelope_wire("n", &note.id)
+            .unwrap()
+            .expect("脏笔记必须有待 PUT 的记录");
         let env: serde_json::Value = serde_json::from_slice(&wire).unwrap();
         assert_eq!(env["kind"], "note");
         assert_eq!(env["hash"], note.content_hash);
         assert_eq!(env["payload"]["folder_id"], folder.id);
-        assert!(p.envelope_wire("zz", &note.id).is_err(), "认不出的类型标记绝不能被当成笔记上传");
+        assert!(
+            p.envelope_wire("zz", &note.id).is_err(),
+            "认不出的类型标记绝不能被当成笔记上传"
+        );
 
         app.store().delete_note(&nid).unwrap();
         let views = p.local_views().unwrap();
-        let v = views.iter().find(|x| x.id == note.id).expect("软删的笔记仍在脏集里");
-        assert!(v.deleted_at.is_some(), "P8/P11 的判据就是 deleted_at，填 None 等于把删除藏起来");
+        let v = views
+            .iter()
+            .find(|x| x.id == note.id)
+            .expect("软删的笔记仍在脏集里");
+        assert!(
+            v.deleted_at.is_some(),
+            "P8/P11 的判据就是 deleted_at，填 None 等于把删除藏起来"
+        );
         assert!(v.purged_at.is_none());
 
         app.store().purge_note(&nid).unwrap();
-        let ann = p.envelope_wire("n", &note.id).unwrap().expect("永久删除必须可传播");
+        let ann = p
+            .envelope_wire("n", &note.id)
+            .unwrap()
+            .expect("永久删除必须可传播");
         let ann: serde_json::Value = serde_json::from_slice(&ann).unwrap();
         assert_eq!(ann["purged"], true);
         assert!(ann["payload"].is_null());
-        assert!(p.envelope_wire("a", "00000000-0000-0000-0000-000000000000").unwrap().is_none(), "附件走独立队列");
+        assert!(
+            p.envelope_wire("a", "00000000-0000-0000-0000-000000000000")
+                .unwrap()
+                .is_none(),
+            "附件走独立队列"
+        );
     }
 
     #[test]
     fn dispatch_reports_unknown_command_and_bad_args() {
         let app = boot("dispatch");
         let e = commands::dispatch(&app, "nope", json!({})).unwrap_err();
-        assert_eq!((e.code.as_str(), e.message_key.as_str()), ("unknown_command", "cmd.unknown_command"));
+        assert_eq!(
+            (e.code.as_str(), e.message_key.as_str()),
+            ("unknown_command", "cmd.unknown_command")
+        );
         let e = commands::dispatch(&app, "get_note", json!({ "id": "不是 uuid" })).unwrap_err();
         assert_eq!(e.code, "bad_id");
-        let e = commands::dispatch(&app, "get_note", json!({ "id": EntityId::new().to_string() })).unwrap();
+        let e = commands::dispatch(
+            &app,
+            "get_note",
+            json!({ "id": EntityId::new().to_string() }),
+        )
+        .unwrap();
         assert_eq!(e, Value::Null, "读不到的笔记返回 null，不是错误");
     }
 
@@ -2785,9 +3615,19 @@ mod tests {
     fn create_note_without_folder_lands_in_the_default_one() {
         let app = boot("new-note");
         let default = app.default_folder_id().unwrap();
-        let r = commands::dispatch(&app, "create_note", json!({ "folderId": Value::Null, "doc": doc("新建按钮") })).unwrap();
+        let r = commands::dispatch(
+            &app,
+            "create_note",
+            json!({ "folderId": Value::Null, "doc": doc("新建按钮") }),
+        )
+        .unwrap();
         assert_eq!(r["folderId"].as_str().unwrap(), default.as_str());
-        let r = commands::dispatch(&app, "create_note", json!({ "doc": doc("连 folderId 都不给") })).unwrap();
+        let r = commands::dispatch(
+            &app,
+            "create_note",
+            json!({ "doc": doc("连 folderId 都不给") }),
+        )
+        .unwrap();
         assert_eq!(r["folderId"].as_str().unwrap(), default.as_str());
     }
 
@@ -2815,29 +3655,49 @@ mod tests {
     #[test]
     fn second_enabled_account_is_refused_and_the_first_stays_untouched() {
         let app = boot("multi");
-        let a = app.configure_account(draft("a", "https://dav.home.example/dav", Some("u"))).unwrap();
-        let e = app.configure_account(draft("b", "https://dav.work.example/dav", Some("u"))).unwrap_err();
+        let a = app
+            .configure_account(draft("a", "https://dav.home.example/dav", Some("u")))
+            .unwrap();
+        let e = app
+            .configure_account(draft("b", "https://dav.work.example/dav", Some("u")))
+            .unwrap_err();
         assert_eq!(e.code, "multi_account_unsupported");
         let now = app.current_account().unwrap().expect("a 仍在");
-        assert_eq!((now.id.as_str(), now.base_url.as_str()), (a.id.as_str(), a.base_url.as_str()));
+        assert_eq!(
+            (now.id.as_str(), now.base_url.as_str()),
+            (a.id.as_str(), a.base_url.as_str())
+        );
         // 停用它之后才允许换另一台
         app.remove_account("a").unwrap();
-        app.configure_account(draft("b", "https://dav.work.example/dav", Some("u"))).unwrap();
+        app.configure_account(draft("b", "https://dav.work.example/dav", Some("u")))
+            .unwrap();
     }
 
     /// 没凭据就绝不装适配器，而且**本地写入照常**（不变式 I8）。
     #[test]
     fn sync_remote_without_credentials_leaves_local_writes_working() {
         let app = boot("nocreds");
-        assert!(app.sync_remote().unwrap().is_none(), "未配置账户时不启动引擎");
-        app.configure_account(draft("a", "https://dav.home.example/dav", None)).unwrap();
-        assert!(app.sync_remote().unwrap().is_none(), "没有用户名的账户拿不到凭据");
+        assert!(
+            app.sync_remote().unwrap().is_none(),
+            "未配置账户时不启动引擎"
+        );
+        app.configure_account(draft("a", "https://dav.home.example/dav", None))
+            .unwrap();
+        assert!(
+            app.sync_remote().unwrap().is_none(),
+            "没有用户名的账户拿不到凭据"
+        );
         let st = app.sync_status().unwrap();
-        assert!(st.phase.contains("credential"), "状态必须可见，不能停在\"已同步\"：{st:?}");
+        assert!(
+            st.phase.contains("credential"),
+            "状态必须可见，不能停在\"已同步\"：{st:?}"
+        );
         assert_eq!(st.badge, "offline");
         assert_eq!(st.message_key.as_deref(), Some("sync.needsCredentials"));
         let folder = app.list_folders().unwrap().remove(0);
-        let n = app.create_note(&EntityId::parse(&folder.id).unwrap(), doc("离线也能写")).unwrap();
+        let n = app
+            .create_note(&EntityId::parse(&folder.id).unwrap(), doc("离线也能写"))
+            .unwrap();
         assert_eq!(n.rev, 1, "拿不到凭据绝不能挡住本地写入（I8）");
     }
 
@@ -2848,12 +3708,29 @@ mod tests {
     #[test]
     fn a_draft_without_id_still_registers_the_account_row() {
         let app = boot("draft-id");
-        let dto = app.configure_account(draft("", "https://dav.home.example/dav", Some("notera"))).unwrap();
-        let active = app.current_account().unwrap().expect("活跃账户").id.to_string();
-        assert_eq!(active, dto.id.as_str(), "返回的 id 与配置里的 id 必须是一个");
+        let dto = app
+            .configure_account(draft("", "https://dav.home.example/dav", Some("notera")))
+            .unwrap();
+        let active = app
+            .current_account()
+            .unwrap()
+            .expect("活跃账户")
+            .id
+            .to_string();
+        assert_eq!(
+            active,
+            dto.id.as_str(),
+            "返回的 id 与配置里的 id 必须是一个"
+        );
         assert!(!active.is_empty(), "id 不能是空串");
-        assert!(app.store().account_exists(&active).unwrap(), "配置里的账户要在 sync_accounts 有对应行（否则不出站）");
-        assert!(!app.store().account_exists("").unwrap(), "不该留下空 id 的幽灵行");
+        assert!(
+            app.store().account_exists(&active).unwrap(),
+            "配置里的账户要在 sync_accounts 有对应行（否则不出站）"
+        );
+        assert!(
+            !app.store().account_exists("").unwrap(),
+            "不该留下空 id 的幽灵行"
+        );
         // 探测结果也要写到这一行上，而不是写到空串那行
         app.store().set_account_caps(&active, 0b000101).unwrap();
         assert_eq!(app.store().account_caps(&active).unwrap(), Some(0b000101));
@@ -2867,13 +3744,26 @@ mod tests {
         let draft = draft("c1", "https://dav.home.example/dav", Some("notera"));
         app.configure_account(draft).unwrap();
         let fresh = app.current_account().unwrap().expect("账户在");
-        assert_eq!((fresh.cap_mask.as_ref(), fresh.write_strategy.as_deref()), (None, None), "刚配上时是『还没探』而不是『不支持』");
+        assert_eq!(
+            (fresh.cap_mask.as_ref(), fresh.write_strategy.as_deref()),
+            (None, None),
+            "刚配上时是『还没探』而不是『不支持』"
+        );
 
         // S1：条件写在位图里
-        app.store().set_account_caps(&fresh.id, notera_webdav::Caps::conventional().mask()).unwrap();
+        app.store()
+            .set_account_caps(&fresh.id, notera_webdav::Caps::conventional().mask())
+            .unwrap();
         let s1 = app.current_account().unwrap().expect("账户在");
         assert_eq!(s1.write_strategy.as_deref(), Some("S1"));
-        assert!(s1.caps_probed_at.as_deref().unwrap_or_default().ends_with('Z'), "要带上什么时候探的：{:?}", s1.caps_probed_at);
+        assert!(
+            s1.caps_probed_at
+                .as_deref()
+                .unwrap_or_default()
+                .ends_with('Z'),
+            "要带上什么时候探的：{:?}",
+            s1.caps_probed_at
+        );
 
         // S3：什么都没探到（位图为 0，与 None 不同）
         app.store().set_account_caps(&fresh.id, 0).unwrap();
@@ -2882,20 +3772,37 @@ mod tests {
         assert_eq!(s3.write_strategy.as_deref(), Some("S3"));
 
         // S2：只有 Overwrite:F MOVE
-        app.store().set_account_caps(&fresh.id, notera_webdav::Caps::OVERWRITE_F_MOVE).unwrap();
-        assert_eq!(app.current_account().unwrap().expect("账户在").write_strategy.as_deref(), Some("S2"));
+        app.store()
+            .set_account_caps(&fresh.id, notera_webdav::Caps::OVERWRITE_F_MOVE)
+            .unwrap();
+        assert_eq!(
+            app.current_account()
+                .unwrap()
+                .expect("账户在")
+                .write_strategy
+                .as_deref(),
+            Some("S2")
+        );
     }
 
     /// 装配路径本身要能被测到（钥匙串还没接入，不能等它才有测试）。
     #[test]
     fn build_remote_makes_a_real_adapter_from_config() {
         let app = boot("remote");
-        let acct = app.configure_account(draft("a", "https://dav.home.example/dav", Some("notera"))).unwrap();
+        let acct = app
+            .configure_account(draft("a", "https://dav.home.example/dav", Some("notera")))
+            .unwrap();
         let cfg = app.config();
-        let acct = cfg.accounts.iter().find(|a| a.id == acct.id).unwrap().clone();
+        let acct = cfg
+            .accounts
+            .iter()
+            .find(|a| a.id == acct.id)
+            .unwrap()
+            .clone();
         let device = DeviceId::parse(&cfg.device_id).unwrap();
         let creds = notera_webdav::Credentials::new("notera", "hunter2").unwrap();
-        let remote = App::build_remote(&acct, device, creds, notera_webdav::Caps::conventional()).unwrap();
+        let remote =
+            App::build_remote(&acct, device, creds, notera_webdav::Caps::conventional()).unwrap();
         // base_url 里的路径会被并进前缀（`https://h/dav` + `/.notes` → `.../dav/.notes`），
         // 所以这里断言的是合并后的 origin+path，不是原始输入字符串。
         assert_eq!(remote.paths().base_url(), "https://dav.home.example/dav");
@@ -2914,13 +3821,22 @@ mod tests {
         let a = boot("att-a");
         let b = boot("att-b");
         for app in [&a, &b] {
-            app.configure_account(draft("srv", &url, Some("u"))).unwrap();
+            app.configure_account(draft("srv", &url, Some("u")))
+                .unwrap();
         }
         let remote_for = |app: &App| {
             let cfg = app.config();
             let acct = ConfigRepository::active(&cfg).unwrap().clone();
             let device = DeviceId::parse(&cfg.device_id).unwrap();
-            std::sync::Arc::new(App::build_remote(&acct, device, Credentials::new("u", "p").unwrap(), notera_webdav::Caps::conventional()).unwrap())
+            std::sync::Arc::new(
+                App::build_remote(
+                    &acct,
+                    device,
+                    Credentials::new("u", "p").unwrap(),
+                    notera_webdav::Caps::conventional(),
+                )
+                .unwrap(),
+            )
         };
         let (ra, rb) = (remote_for(&a), remote_for(&b));
         a.negotiate(&ra).await.unwrap();
@@ -2931,18 +3847,45 @@ mod tests {
         let blob = format!("PNG-ish bytes 图片 {}", note.id.as_str()).into_bytes();
         let sha = a
             .store()
-            .attach_blob(&Eid::parse(&note.id).unwrap(), &blob, "image/png", Some("pic.png"), "blk0000001")
+            .attach_blob(
+                &Eid::parse(&note.id).unwrap(),
+                &blob,
+                "image/png",
+                Some("pic.png"),
+                "blk0000001",
+            )
             .unwrap()
             .sha256;
 
-        assert_eq!(a.run_attachment_round(&ra).await, (1, 0, 0), "A 应当把这一个附件传上去");
-        assert!(ra.has_attachment(&sha).await.unwrap(), "服务器上必须真的存在这个 blob");
-        assert_eq!(a.run_attachment_round(&ra).await.0, 0, "已 present 的不得重传");
+        assert_eq!(
+            a.run_attachment_round(&ra).await,
+            (1, 0, 0),
+            "A 应当把这一个附件传上去"
+        );
+        assert!(
+            ra.has_attachment(&sha).await.unwrap(),
+            "服务器上必须真的存在这个 blob"
+        );
+        assert_eq!(
+            a.run_attachment_round(&ra).await.0,
+            0,
+            "已 present 的不得重传"
+        );
 
         // B 只知道"清单说远端有这个 sha"
-        b.store().register_remote_attachment(&sha, blob.len() as i64, "image/png").unwrap();
-        assert_eq!(b.run_attachment_round(&rb).await, (0, 1, 0), "B 应当把它下载下来");
-        assert_eq!(std::fs::read(b.store().blob_path(&sha)).unwrap(), blob, "字节必须逐字节相同");
+        b.store()
+            .register_remote_attachment(&sha, blob.len() as i64, "image/png")
+            .unwrap();
+        assert_eq!(
+            b.run_attachment_round(&rb).await,
+            (0, 1, 0),
+            "B 应当把它下载下来"
+        );
+        assert_eq!(
+            std::fs::read(b.store().blob_path(&sha)).unwrap(),
+            blob,
+            "字节必须逐字节相同"
+        );
         assert_eq!(
             b.store().attachment_for_state(&sha),
             ("available".into(), "present".into()),
@@ -2950,11 +3893,19 @@ mod tests {
         );
 
         // 远端 404 时：只改远端态，绝不删本地（§10）
-        let ghost = notera_core::ContentHash::of(b"ghost").as_str().replace("sha256:", "");
-        b.store().register_remote_attachment(&ghost, 10, "image/png").unwrap();
+        let ghost = notera_core::ContentHash::of(b"ghost")
+            .as_str()
+            .replace("sha256:", "");
+        b.store()
+            .register_remote_attachment(&ghost, 10, "image/png")
+            .unwrap();
         b.run_attachment_round(&rb).await;
         assert_eq!(b.store().attachment_for_state(&ghost).1, "absent");
-        assert_eq!(b.store().attachment_for_state(&sha).0, "available", "别人的缺失不能牵连已存在的附件");
+        assert_eq!(
+            b.store().attachment_for_state(&sha).0,
+            "available",
+            "别人的缺失不能牵连已存在的附件"
+        );
     }
 
     /// SYNC-PROTOCOL §2：两个库指到同一个目录时必须**停手**，而不是把两库并成一库。
@@ -2966,36 +3917,80 @@ mod tests {
         let b = boot("nego-b");
         let url = srv.base_url.clone();
         for app in [&a, &b] {
-            app.configure_account(draft("srv", &url, Some("u"))).unwrap();
+            app.configure_account(draft("srv", &url, Some("u")))
+                .unwrap();
         }
         let remote_for = |app: &App| {
             let cfg = app.config();
             let acct = ConfigRepository::active(&cfg).unwrap().clone();
             let device = DeviceId::parse(&cfg.device_id).unwrap();
-            App::build_remote(&acct, device, Credentials::new("u", "p").unwrap(), notera_webdav::Caps::conventional()).unwrap()
+            App::build_remote(
+                &acct,
+                device,
+                Credentials::new("u", "p").unwrap(),
+                notera_webdav::Caps::conventional(),
+            )
+            .unwrap()
         };
 
         let ra = remote_for(&a);
-        a.negotiate(&ra).await.expect("第一个库应当建好 protocol.json");
-        let root_a = a.store().sync_state("srv").unwrap().unwrap().root_id.clone();
-        assert_eq!(root_a.as_deref(), Some(a.default_folder_id().unwrap().as_str()));
-        assert_eq!(a.sync_status().unwrap().phase, "online", "协商通过才允许进入同步态");
+        a.negotiate(&ra)
+            .await
+            .expect("第一个库应当建好 protocol.json");
+        let root_a = a
+            .store()
+            .sync_state("srv")
+            .unwrap()
+            .unwrap()
+            .root_id
+            .clone();
+        assert_eq!(
+            root_a.as_deref(),
+            Some(a.default_folder_id().unwrap().as_str())
+        );
+        assert_eq!(
+            a.sync_status().unwrap().phase,
+            "online",
+            "协商通过才允许进入同步态"
+        );
 
         // 情形一：本机已有自己的内容 → 必须停手，而不是接受别人的 root_id
         let bf = b.list_folders().unwrap().remove(0);
-        b.create_note(&EntityId::parse(&bf.id).unwrap(), doc("我这台机器自己的笔记")).unwrap();
+        b.create_note(
+            &EntityId::parse(&bf.id).unwrap(),
+            doc("我这台机器自己的笔记"),
+        )
+        .unwrap();
         let rb = remote_for(&b);
-        assert_eq!(b.negotiate(&rb).await, Err("sync.root_mismatch"), "两个有内容的库不能并成一个");
+        assert_eq!(
+            b.negotiate(&rb).await,
+            Err("sync.root_mismatch"),
+            "两个有内容的库不能并成一个"
+        );
         // 拒绝之后服务器上的 protocol.json 必须仍是 A 的那一份（没有被"顺手改写"）
         let still = rb.fetch_protocol().await.unwrap().unwrap();
         assert_eq!(still["root_id"].as_str(), root_a.as_deref());
-        assert_eq!(b.sync_status().unwrap().phase, "error", "停手必须是可见状态，不是悄悄不干活");
+        assert_eq!(
+            b.sync_status().unwrap().phase,
+            "error",
+            "停手必须是可见状态，不是悄悄不干活"
+        );
 
         // 情形二：空库允许加入既有库（§9 的新设备场景）
         let c = boot("nego-c");
         c.configure_account(draft("srv", &url, Some("u"))).unwrap();
         let rc = remote_for(&c);
-        c.negotiate(&rc).await.expect("空库应当接受服务器上已有的 root_id");
-        assert_eq!(c.store().sync_state("srv").unwrap().unwrap().root_id.as_deref(), root_a.as_deref());
+        c.negotiate(&rc)
+            .await
+            .expect("空库应当接受服务器上已有的 root_id");
+        assert_eq!(
+            c.store()
+                .sync_state("srv")
+                .unwrap()
+                .unwrap()
+                .root_id
+                .as_deref(),
+            root_a.as_deref()
+        );
     }
 }

@@ -387,7 +387,12 @@ impl CmdError {
     /// `pub(crate)`：整个 host（含 cli 走不到的内部路径）共用同一套错误码，
     /// 但**不外泄**给壳层 —— 壳层只看见 `CmdError` 这个值类型。
     pub(crate) fn of(code: &str, retryable: bool) -> Self {
-        Self { code: code.into(), message_key: format!("cmd.{code}"), retryable, detail: None }
+        Self {
+            code: code.into(),
+            message_key: format!("cmd.{code}"),
+            retryable,
+            detail: None,
+        }
     }
     pub(crate) fn with(mut self, d: serde_json::Value) -> Self {
         self.detail = Some(d);
@@ -397,7 +402,9 @@ impl CmdError {
 
 /// 出参序列化：所有命令走同一个出口，序列化失败也折成错误码而不是 panic。
 pub(crate) fn j<T: Serialize>(v: T) -> R<serde_json::Value> {
-    serde_json::to_value(v).map_err(|e| CmdError::of("serialize", false).with(serde_json::json!({ "why": e.to_string() })))
+    serde_json::to_value(v).map_err(|e| {
+        CmdError::of("serialize", false).with(serde_json::json!({ "why": e.to_string() }))
+    })
 }
 
 impl From<notera_store::StoreError> for CmdError {
@@ -414,19 +421,28 @@ impl From<notera_store::StoreError> for CmdError {
                 "actual": s.actual.get(),
             })),
             // ADR-0012：库版本过新 → 只读，绝不降级写回
-            E::ReadOnly { db, supported } => Self::of("db_too_new", false).with(serde_json::json!({ "db": db, "supported": supported })),
+            E::ReadOnly { db, supported } => Self::of("db_too_new", false)
+                .with(serde_json::json!({ "db": db, "supported": supported })),
             // 迁移失败不是"版本过新"，混在一起会让人去查错方向
-            E::Migration { from, to, detail } => Self::of("db_migration", false).with(serde_json::json!({ "from": from, "to": to, "detail": detail })),
+            E::Migration { from, to, detail } => Self::of("db_migration", false)
+                .with(serde_json::json!({ "from": from, "to": to, "detail": detail })),
             // 文档格式超前 → 该笔记只读（I7），与整库只读是两回事
-            E::DocTooNew { doc, supported } => Self::of("doc_too_new", false).with(serde_json::json!({ "doc": doc, "supported": supported })),
+            E::DocTooNew { doc, supported } => Self::of("doc_too_new", false)
+                .with(serde_json::json!({ "doc": doc, "supported": supported })),
             E::Constraint(c) => Self::of("constraint", false).with(serde_json::json!({ "why": c })),
             // I6 闸门拒绝：本地写不进去 = 我们生成的内容不合法，不是存储坏了
-            E::InvalidDoc(m) => Self::of("invalid_doc", false).with(serde_json::json!({ "why": m })),
+            E::InvalidDoc(m) => {
+                Self::of("invalid_doc", false).with(serde_json::json!({ "why": m }))
+            }
             E::Rejected(m) => Self::of("rejected", false).with(serde_json::json!({ "why": m })),
             E::Rich(m) => Self::of("richtext", false).with(serde_json::json!({ "why": m })),
             E::Io(e) => Self::of("io", true).with(serde_json::json!({ "why": e.to_string() })),
-            E::Identity(e) => Self::of("bad_id", false).with(serde_json::json!({ "why": e.to_string() })),
-            E::Sql(e) => Self::of("storage", false).with(serde_json::json!({ "why": e.to_string() })),
+            E::Identity(e) => {
+                Self::of("bad_id", false).with(serde_json::json!({ "why": e.to_string() }))
+            }
+            E::Sql(e) => {
+                Self::of("storage", false).with(serde_json::json!({ "why": e.to_string() }))
+            }
         }
     }
 }
@@ -443,7 +459,8 @@ fn id(s: &str) -> R<EntityId> {
 pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json::Value> {
     match name {
         "create_note" => {
-            let c: CreateNoteCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: CreateNoteCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             let fid = match c.folder_id.as_deref() {
                 Some(s) => id(s)?,
                 None => app.default_folder_id()?,
@@ -451,76 +468,99 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
             j(app.create_note(&fid, c.doc)?)
         }
         "edit_note" => {
-            let c: EditNoteCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: EditNoteCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.edit_note(&id(&c.id)?, c.doc, Rev(c.expected_rev))?)
         }
         "get_note" => {
-            let c: IdCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: IdCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.get_note(&id(&c.id)?)?)
         }
         "list_notes" => {
-            let c: ListNotesCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: ListNotesCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.list_notes(c)?)
         }
         "delete_note" => {
-            let c: IdCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: IdCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             app.store().delete_note(&id(&c.id)?)?;
             j(serde_json::Value::Null)
         }
         "restore_note" => {
-            let c: IdCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: IdCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             app.store().restore_note(&id(&c.id)?)?;
             j(serde_json::Value::Null)
         }
         "purge_note" => {
-            let c: IdCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: IdCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             app.store().purge_note(&id(&c.id)?)?;
             j(serde_json::Value::Null)
         }
         "set_note_folder" => {
-            let c: MoveNoteCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
-            j(app.to_dto(app.store().set_note_folder(&id(&c.id)?, &id(&c.folder_id)?)?))
+            let c: MoveNoteCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            j(app.to_dto(
+                app.store()
+                    .set_note_folder(&id(&c.id)?, &id(&c.folder_id)?)?,
+            ))
         }
         "set_note_pinned" => {
-            let c: PinCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: PinCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.to_dto(app.store().set_note_pinned(&id(&c.id)?, c.pinned)?))
         }
         "create_folder" => {
-            let c: CreateFolderCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
-            j(app.to_folder_dto(app.store().create_folder(c.parent_id.as_deref().map(id).transpose()?.as_ref(), &c.name)?)?)
+            let c: CreateFolderCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            j(app.to_folder_dto(app.store().create_folder(
+                c.parent_id.as_deref().map(id).transpose()?.as_ref(),
+                &c.name,
+            )?)?)
         }
         "rename_folder" => {
-            let c: RenameFolderCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: RenameFolderCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.to_folder_dto(app.store().rename_folder(&id(&c.id)?, &c.name)?)?)
         }
         "move_folder" => {
-            let c: MoveFolderCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
-            j(app.to_folder_dto(
-                app.store().move_folder(&id(&c.id)?, c.parent_id.as_deref().map(id).transpose()?.as_ref())?,
-            ))
+            let c: MoveFolderCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            j(app.to_folder_dto(app.store().move_folder(
+                &id(&c.id)?,
+                c.parent_id.as_deref().map(id).transpose()?.as_ref(),
+            )?))
         }
         "delete_folder" => {
-            let c: IdCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: IdCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             app.store().delete_folder(&id(&c.id)?)?;
             j(serde_json::Value::Null)
         }
         "list_folders" => j(app.list_folders()?),
         "search" => {
-            let c: SearchCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: SearchCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.search(c)?)
         }
         "attach_file" => {
-            let c: AttachCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: AttachCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.attach(c)?)
         }
         "attachment_data" => {
-            let c: AttachmentDataCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: AttachmentDataCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.attachment_data(&c.sha256)?)
         }
         // 冲突面板的并排预览：前端一直在调这条，而核心没有 —— 于是它每次都是
         // unknown_command，面板安静地退回卡片摘要（用户以为看到的就是那一版）。
         "preview_text" => {
-            let c: PreviewTextCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: PreviewTextCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.preview_text(&c.id, c.rev)?)
         }
         "stats" => j(app.stats()?),
@@ -531,22 +571,26 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
         "sync_status" => j(app.sync_status()?),
         "account" => j(app.current_account()?),
         "configure_account" => {
-            let c: AccountDraftCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: AccountDraftCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.configure_account(c)?)
         }
         "remove_account" => {
-            let c: IdCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: IdCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             app.remove_account(&c.id)?;
             j(serde_json::Value::Null)
         }
         "open_conflicts" => j(app.open_conflicts()?),
         "resolve_conflict" => {
-            let c: ResolveConflictCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: ResolveConflictCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             app.resolve_conflict(c)?;
             j(serde_json::Value::Null)
         }
         "set_pref" => {
-            let c: PrefsCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: PrefsCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             app.set_pref(&c.key, c.value)?;
             j(serde_json::Value::Null)
         }
@@ -555,29 +599,47 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
         // 前端把整份请求包在 `req` 里（沿用旧契约），这里剥一层再反序列化。
         "export_data" => {
             let body = args.get("req").cloned().unwrap_or(args);
-            let c: ExportCmd = serde_json::from_value(body).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: ExportCmd =
+                serde_json::from_value(body).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.export_data(c)?)
         }
         "import_data" => {
             let body = args.get("req").cloned().unwrap_or(args);
-            let c: ImportCmd = serde_json::from_value(body).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: ImportCmd =
+                serde_json::from_value(body).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.import_data(c)?)
         }
-        "backup_db" => {            let c: PathCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+        "backup_db" => {
+            let c: PathCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.backup_db(c.path.as_ref().map(std::path::Path::new))?)
         }
         "list_backups" => j(app.list_backups()?),
         "restore_db" => {
-            let c: PathCmd = serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let c: PathCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             let path = c.path.ok_or_else(|| CmdError::of("bad_args", false))?;
             j(app.stage_restore(std::path::Path::new(&path))?)
         }
-        other => Err(CmdError::of("unknown_command", false).with(serde_json::json!({ "name": other }))),
+        other => {
+            Err(CmdError::of("unknown_command", false).with(serde_json::json!({ "name": other })))
+        }
     }
 }
 
 // 让编译器盯住这些类型确实被用到（也作为"契约字段没漂"的哨兵）
 // 元组里的类型再"复杂"也是被测对象本身：抽成别名就等于用被检查的写法去检查它。
 #[allow(clippy::type_complexity)]
-const _: fn() -> (NoteDto, NoteListDto, FolderDto, SearchHitDto, ConflictDto, AccountDto, SyncStatusDto, StoreStats, NoteQuery, SearchQuery, ConflictRow) =
-    || unreachable!();
+const _: fn() -> (
+    NoteDto,
+    NoteListDto,
+    FolderDto,
+    SearchHitDto,
+    ConflictDto,
+    AccountDto,
+    SyncStatusDto,
+    StoreStats,
+    NoteQuery,
+    SearchQuery,
+    ConflictRow,
+) = || unreachable!();

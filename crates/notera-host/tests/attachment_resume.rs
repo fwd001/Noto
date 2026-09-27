@@ -25,7 +25,8 @@ struct Tmp(PathBuf);
 impl Tmp {
     fn new(tag: &str) -> Self {
         let n = SEQ.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("notera-resume-{tag}-{}-{n}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("notera-resume-{tag}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
@@ -105,7 +106,9 @@ async fn a_partial_attachment_keeps_its_progress_and_finishes_after_a_restart() 
     let srv = TestServer::start(Backend::Mem).await;
     let url = srv.base_url();
     // 比一个窗口多 1234 字节：正好逼出"两次请求、中间留在磁盘上"
-    let blob: Vec<u8> = (0..WINDOW as usize + 1234).map(|i| (i % 251) as u8).collect();
+    let blob: Vec<u8> = (0..WINDOW as usize + 1234)
+        .map(|i| (i % 251) as u8)
+        .collect();
 
     let a_dir = Tmp::new("source");
     let sha = seed_source(a_dir.path(), &url, &blob).await;
@@ -123,19 +126,37 @@ async fn a_partial_attachment_keeps_its_progress_and_finishes_after_a_restart() 
     let part = b.store().blob_part_path(&sha);
     let final_path = b.store().blob_path(&sha);
     assert_eq!(first.1, 0, "第一轮只该拿一个窗口，不该算下完：{first:?}");
-    assert_eq!(std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0), WINDOW, "半截文件应恰好推进一个窗口");
-    assert!(!final_path.exists(), "没校验通过之前，正式 blob 不许出现（§8：不把半上传文件当成完整文件）");
+    assert_eq!(
+        std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0),
+        WINDOW,
+        "半截文件应恰好推进一个窗口"
+    );
+    assert!(
+        !final_path.exists(),
+        "没校验通过之前，正式 blob 不许出现（§8：不把半上传文件当成完整文件）"
+    );
     // 到此为止，附件对象上只该出现"源设备上传之后自己核对一次"的那一回
     let after_first = srv.request_log().len();
     drop(b);
 
     // 重启：换一个 App 实例开同一座库，进度必须还在
     let b2 = boot(b_dir.path(), &url);
-    let remote2 = b2.remote_for_sync().await.unwrap().expect("重启后仍有适配器");
+    let remote2 = b2
+        .remote_for_sync()
+        .await
+        .unwrap()
+        .expect("重启后仍有适配器");
     let second = b2.run_attachment_round(&remote2).await;
     assert_eq!(second.1, 1, "第二轮要从断点补齐：{second:?}");
-    assert_eq!(std::fs::read(&final_path).unwrap(), blob, "续传拼出来的字节要一字不差");
-    assert!(!part.exists(), "补齐之后半截文件要清掉，否则它会被当成还在下载的东西");
+    assert_eq!(
+        std::fs::read(&final_path).unwrap(),
+        blob,
+        "续传拼出来的字节要一字不差"
+    );
+    assert!(
+        !part.exists(),
+        "补齐之后半截文件要清掉，否则它会被当成还在下载的东西"
+    );
     let (local, _remote) = b2.store().attachment_for_state(&sha);
     assert_eq!(local.as_str(), "available", "账上要认这份附件已经在本机");
 
@@ -149,8 +170,15 @@ async fn a_partial_attachment_keeps_its_progress_and_finishes_after_a_restart() 
         .into_iter()
         .skip(attachment_requests(&srv, &sha, after_first).len())
         .collect::<Vec<_>>();
-    assert_eq!(in_round2.len(), 1, "重启后那一轮只该再要一个窗口（不是整块重来）：{seen:?}");
-    assert!(in_round2.first().is_some_and(|l| l.ends_with("GET -> 206")), "重启后那次必须是带 Range 的续取：{in_round2:?}");
+    assert_eq!(
+        in_round2.len(),
+        1,
+        "重启后那一轮只该再要一个窗口（不是整块重来）：{seen:?}"
+    );
+    assert!(
+        in_round2.first().is_some_and(|l| l.ends_with("GET -> 206")),
+        "重启后那次必须是带 Range 的续取：{in_round2:?}"
+    );
     let windows = seen.iter().filter(|l| l.contains("206")).count();
     assert_eq!(windows, 2, "两次 206 才对（一轮一个窗口）：{seen:?}");
     srv.stop().await;
@@ -166,7 +194,9 @@ async fn a_partial_attachment_keeps_its_progress_and_finishes_after_a_restart() 
 async fn a_server_that_ignores_range_still_lands_the_right_bytes() {
     let srv = TestServer::start(Backend::Mem).await;
     let url = srv.base_url();
-    let blob: Vec<u8> = (0..WINDOW as usize + 1234).map(|i| (i % 197) as u8).collect();
+    let blob: Vec<u8> = (0..WINDOW as usize + 1234)
+        .map(|i| (i % 197) as u8)
+        .collect();
 
     let a_dir = Tmp::new("lie-source");
     let sha = seed_source(a_dir.path(), &url, &blob).await;
@@ -178,7 +208,10 @@ async fn a_server_that_ignores_range_still_lands_the_right_bytes() {
     let first = b.run_attachment_round(&remote).await;
     let part = b.store().blob_part_path(&sha);
     assert_eq!(first.1, 0, "第一轮按窗口停在半截：{first:?}");
-    assert_eq!(std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0), WINDOW);
+    assert_eq!(
+        std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0),
+        WINDOW
+    );
     drop(b);
 
     // 从这里开始，服务器不再理 Range 头（探测记录还在，客户端仍按"支持 Range"发请求）。
@@ -186,12 +219,19 @@ async fn a_server_that_ignores_range_still_lands_the_right_bytes() {
     srv.inject(Injection::ignore_range()).await;
 
     let b2 = boot(b_dir.path(), &url);
-    let remote2 = b2.remote_for_sync().await.unwrap().expect("重启后仍有适配器");
+    let remote2 = b2
+        .remote_for_sync()
+        .await
+        .unwrap()
+        .expect("重启后仍有适配器");
     let second = b2.run_attachment_round(&remote2).await;
     assert_eq!(second.1, 1, "整份答复也要把这一条结清：{second:?}");
 
     let got = std::fs::read(b2.store().blob_path(&sha)).unwrap_or_default();
-    assert_eq!(got, blob, "服务器给的是全文就必须当全文用：追加会拼出一份内容重复的文件");
+    assert_eq!(
+        got, blob,
+        "服务器给的是全文就必须当全文用：追加会拼出一份内容重复的文件"
+    );
     assert!(!part.exists(), "半截文件不能留在盘上");
     let (local, _remote) = b2.store().attachment_for_state(&sha);
     assert_eq!(local.as_str(), "available");
@@ -202,6 +242,10 @@ async fn a_server_that_ignores_range_still_lands_the_right_bytes() {
         .filter(|r| r.path.contains(&sha))
         .map(|r| format!("{} -> {}", r.method, r.status))
         .collect();
-    assert_eq!(seen.as_slice(), ["GET -> 200".to_string()].as_slice(), "第二轮该被答成整份 200，而且只要一次：{seen:?}");
+    assert_eq!(
+        seen.as_slice(),
+        ["GET -> 200".to_string()].as_slice(),
+        "第二轮该被答成整份 200，而且只要一次：{seen:?}"
+    );
     srv.stop().await;
 }

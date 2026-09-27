@@ -156,10 +156,17 @@ impl ProxyProfile {
     pub fn describe(&self) -> String {
         match self.mode {
             ProxyMode::Direct => "direct".into(),
-            ProxyMode::System => format!("system({})", self.endpoint().unwrap_or_else(|| "auto".into())),
+            ProxyMode::System => format!(
+                "system({})",
+                self.endpoint().unwrap_or_else(|| "auto".into())
+            ),
             m => format!(
                 "{m}{}://{}<credential:{}>",
-                if m == ProxyMode::Socks5 && self.resolve_remote_dns { "h" } else { "" },
+                if m == ProxyMode::Socks5 && self.resolve_remote_dns {
+                    "h"
+                } else {
+                    ""
+                },
                 self.endpoint().unwrap_or_else(|| "?".into()),
                 self.password.as_deref().map_or("none", |_| "redacted")
             ),
@@ -276,7 +283,11 @@ mod tests {
     #[test]
     fn bypass_matches_without_dns() {
         let p = ProxyProfile {
-            bypass: vec!["10.0.0.0/8".into(), "*.corp.internal".into(), "webdav.local".into()],
+            bypass: vec![
+                "10.0.0.0/8".into(),
+                "*.corp.internal".into(),
+                "webdav.local".into(),
+            ],
             ..ProxyProfile::default()
         };
         assert!(p.is_bypassed("10.1.2.3"));

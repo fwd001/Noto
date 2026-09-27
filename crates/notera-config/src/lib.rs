@@ -51,7 +51,6 @@ pub enum TlsPolicyKind {
     InsecureLocal,
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ProxyMode {
     #[default]
@@ -280,13 +279,18 @@ pub fn validate_account(a: &AccountConfig) -> Result<(), ConfigError> {
 }
 
 pub fn validate_base_url(raw: &str) -> Result<(), ConfigError> {
-    let bad = |why: String| ConfigError::Invalid { field: "base_url", why };
+    let bad = |why: String| ConfigError::Invalid {
+        field: "base_url",
+        why,
+    };
     let u = url2(raw).ok_or_else(|| bad("格式无法解析".into()))?;
     match u.scheme {
         "https" => {}
         "http" => {
             if !is_local_host(raw) {
-                return Err(bad("明文 http 仅允许 localhost；内网请装证书或显式选择 insecure_local".into()));
+                return Err(bad(
+                    "明文 http 仅允许 localhost；内网请装证书或显式选择 insecure_local".into(),
+                ));
             }
         }
         other => return Err(bad(format!("不支持的协议 {other}"))),
@@ -304,7 +308,10 @@ pub fn validate_base_url(raw: &str) -> Result<(), ConfigError> {
 }
 
 pub fn validate_proxy(p: &ProxyProfile) -> Result<(), ConfigError> {
-    let bad = |why: String| ConfigError::Invalid { field: "proxy", why };
+    let bad = |why: String| ConfigError::Invalid {
+        field: "proxy",
+        why,
+    };
     match p.mode {
         ProxyMode::Direct | ProxyMode::System => return Ok(()),
         _ => {}
@@ -337,7 +344,10 @@ pub fn validate_proxy(p: &ProxyProfile) -> Result<(), ConfigError> {
 pub fn bypass_matches(host: &str, rules: &[String]) -> bool {
     let h = host.trim_end_matches('.').to_ascii_lowercase();
     // 允许传 "host:port"，判定按主机部分。
-    let hp = h.split_once(':').map(|(a, _)| a.to_string()).unwrap_or_else(|| h.clone());
+    let hp = h
+        .split_once(':')
+        .map(|(a, _)| a.to_string())
+        .unwrap_or_else(|| h.clone());
     for raw in rules {
         let r = raw.trim().to_ascii_lowercase();
         if r.is_empty() {
@@ -348,13 +358,19 @@ pub fn bypass_matches(host: &str, rules: &[String]) -> bool {
         }
         // CIDR：只在规则本身含 / 且两侧都是 IPv4 时判定
         if r.contains('/') {
-            let probe = hp.split_once(':').map(|(a, _)| a.to_string()).unwrap_or(hp.clone());
+            let probe = hp
+                .split_once(':')
+                .map(|(a, _)| a.to_string())
+                .unwrap_or(hp.clone());
             if ip_in_cidr(&probe, &r) {
                 return true;
             }
             continue;
         }
-        let r_host = r.split_once(':').map(|(a, _)| a.to_string()).unwrap_or(r.clone());
+        let r_host = r
+            .split_once(':')
+            .map(|(a, _)| a.to_string())
+            .unwrap_or(r.clone());
         if let Some(suffix) = r_host.strip_prefix("*.") {
             // `*.example.com` 匹配 example.com 自身与任意子域，但**不**匹配 evilexample.com
             if hp == suffix || hp.ends_with(&format!(".{suffix}")) {
@@ -380,8 +396,16 @@ fn is_local_host(raw: &str) -> bool {
         .strip_prefix('[')
         .map(|x| x.trim_end_matches(']').to_string())
         .filter(|x| x.contains(':'))
-        .unwrap_or_else(|| raw.split_once(':').map(|(a, _)| a.to_string()).unwrap_or(raw.clone()));
-    h == "localhost" || h == "127.0.0.1" || h == "::1" || h.starts_with("192.168.") || h.starts_with("10.")
+        .unwrap_or_else(|| {
+            raw.split_once(':')
+                .map(|(a, _)| a.to_string())
+                .unwrap_or(raw.clone())
+        });
+    h == "localhost"
+        || h == "127.0.0.1"
+        || h == "::1"
+        || h.starts_with("192.168.")
+        || h.starts_with("10.")
 }
 
 /// 极简 URL 拆分（避免为一个字段拉一个依赖）。只用于校验，不用于请求构造。
@@ -403,7 +427,12 @@ fn url2(raw: &str) -> Option<Bits<'_>> {
     if scheme.is_empty() || host.is_empty() {
         return None;
     }
-    Some(Bits { scheme, userinfo, host, path })
+    Some(Bits {
+        scheme,
+        userinfo,
+        host,
+        path,
+    })
 }
 
 fn ip_in_cidr(ip: &str, cidr: &str) -> bool {
@@ -423,7 +452,11 @@ fn ip_in_cidr(ip: &str, cidr: &str) -> bool {
         Some(v) => v,
         None => return false,
     };
-    let mask: u32 = if bits == 0 { 0 } else { u32::MAX << (32 - bits) };
+    let mask: u32 = if bits == 0 {
+        0
+    } else {
+        u32::MAX << (32 - bits)
+    };
     (a & mask) == (b & mask)
 }
 
@@ -452,7 +485,9 @@ pub struct ConfigRepository {
 
 impl ConfigRepository {
     pub fn new(data_dir: &Path) -> Self {
-        Self { path: data_dir.join(CONFIG_FILE) }
+        Self {
+            path: data_dir.join(CONFIG_FILE),
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -467,7 +502,10 @@ impl ConfigRepository {
                 let cfg: AppConfig = serde_json::from_str(&s)
                     .map_err(|e| ConfigError::Io(format!("配置文件已损坏，未覆盖：{e}")))?;
                 if cfg.version > CONFIG_VERSION {
-                    return Err(ConfigError::TooNew { found: cfg.version, supported: CONFIG_VERSION });
+                    return Err(ConfigError::TooNew {
+                        found: cfg.version,
+                        supported: CONFIG_VERSION,
+                    });
                 }
                 Ok(cfg)
             }
@@ -521,7 +559,9 @@ impl ConfigRepository {
     }
 
     pub fn active(cfg: &AppConfig) -> Option<&AccountConfig> {
-        cfg.accounts.iter().find(|a| Some(&a.id) == cfg.active_account.as_ref() && a.enabled)
+        cfg.accounts
+            .iter()
+            .find(|a| Some(&a.id) == cfg.active_account.as_ref() && a.enabled)
     }
 }
 
@@ -578,7 +618,10 @@ mod tests {
         a.proxy.port = Some(1080);
         assert!(validate_account(&a).is_ok());
         a.proxy.username_ref = Some("u".into());
-        assert!(validate_account(&a).is_err(), "只有用户名引用、无密码引用必须拒");
+        assert!(
+            validate_account(&a).is_err(),
+            "只有用户名引用、无密码引用必须拒"
+        );
         a.proxy.password_ref = Some("p".into());
         assert!(validate_account(&a).is_ok());
     }
@@ -610,10 +653,17 @@ mod tests {
 
     #[test]
     fn bypass_matches_without_dns() {
-        let rules = vec!["*.corp.internal".to_string(), "10.0.0.0/8".to_string(), "localhost".to_string()];
+        let rules = vec![
+            "*.corp.internal".to_string(),
+            "10.0.0.0/8".to_string(),
+            "localhost".to_string(),
+        ];
         assert!(bypass_matches("dav.corp.internal", &rules));
         assert!(bypass_matches("corp.internal", &rules));
-        assert!(!bypass_matches("evilcorp.internal", &rules), "后缀匹配必须看点号边界");
+        assert!(
+            !bypass_matches("evilcorp.internal", &rules),
+            "后缀匹配必须看点号边界"
+        );
         assert!(bypass_matches("10.20.30.40", &rules));
         assert!(!bypass_matches("11.20.30.40", &rules));
         assert!(bypass_matches("localhost:5005", &rules));
@@ -635,7 +685,8 @@ mod tests {
         // 不存在 → 默认值（首次启动）
         let mut cfg = repo.load().unwrap();
         assert!(cfg.accounts.is_empty());
-        repo.upsert_account(&mut cfg, acct("https://d.example.com")).unwrap();
+        repo.upsert_account(&mut cfg, acct("https://d.example.com"))
+            .unwrap();
         cfg.device_id = new_id();
         repo.save(&cfg).unwrap();
         let back = repo.load().unwrap();
@@ -643,7 +694,10 @@ mod tests {
         // 存在但损坏 → 报错且**不覆盖**（否则用户服务器地址被抹掉）
         std::fs::write(repo.path(), b"{ this is not json").unwrap();
         assert!(repo.load().is_err());
-        assert_eq!(std::fs::read_to_string(repo.path()).unwrap(), "{ this is not json");
+        assert_eq!(
+            std::fs::read_to_string(repo.path()).unwrap(),
+            "{ this is not json"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -652,7 +706,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("notera-cfg2-{}", new_id()));
         let repo = ConfigRepository::new(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let cfg = AppConfig { version: CONFIG_VERSION + 5, ..Default::default() };
+        let cfg = AppConfig {
+            version: CONFIG_VERSION + 5,
+            ..Default::default()
+        };
         std::fs::write(repo.path(), serde_json::to_string(&cfg).unwrap()).unwrap();
         match repo.load() {
             Err(ConfigError::TooNew { .. }) => {}
@@ -676,7 +733,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("notera-cfg4-{}", new_id()));
         let repo = ConfigRepository::new(&dir);
         let mut cfg = AppConfig::default();
-        repo.upsert_account(&mut cfg, acct("https://a.example.com")).unwrap();
+        repo.upsert_account(&mut cfg, acct("https://a.example.com"))
+            .unwrap();
         let mut b = acct("https://b.example.com");
         b.id = "a2".into();
         repo.upsert_account(&mut cfg, b).unwrap();

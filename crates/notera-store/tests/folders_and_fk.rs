@@ -22,26 +22,50 @@ fn delete_folder_moves_children_up_and_never_cascades_notes() {
     store.delete_folder(&child.id).unwrap();
 
     // 笔记总数不变，且仍然全部可见（ADR-0006 的验收点）
-    assert_eq!(store.list_notes(&NoteQuery::all()).unwrap().len(), notes_before, "笔记数必须不变");
+    assert_eq!(
+        store.list_notes(&NoteQuery::all()).unwrap().len(),
+        notes_before,
+        "笔记数必须不变"
+    );
     assert_eq!(store.stats().unwrap().notes_trash, 0, "一条都不该进回收站");
     for id in [&n1.id, &n2.id] {
         let n = store.get_note(id).unwrap().expect("笔记必须还在");
-        assert_eq!(n.folder_id, root, "笔记移入默认本（DATA-MODEL §9：子文件夹上移、笔记进默认本）");
+        assert_eq!(
+            n.folder_id, root,
+            "笔记移入默认本（DATA-MODEL §9：子文件夹上移、笔记进默认本）"
+        );
         assert!(n.deleted_at.is_none());
     }
-    assert_eq!(store.get_note(&n3.id).unwrap().unwrap().folder_id, parent.id, "未被删的文件夹里的笔记原地不动");
+    assert_eq!(
+        store.get_note(&n3.id).unwrap().unwrap().folder_id,
+        parent.id,
+        "未被删的文件夹里的笔记原地不动"
+    );
 
     // 只新增一条墓碑（文件夹自己的）
     let st = store.stats().unwrap();
     assert_eq!(st.tombstones, tomb_before + 1, "只能有文件夹本身那一条墓碑");
     assert_eq!(st.tombstones_purged, 0, "软删文件夹不写 purged");
-    let t = store.get_tombstone(EntityKind::Folder, &child.id).unwrap().expect("文件夹墓碑");
+    let t = store
+        .get_tombstone(EntityKind::Folder, &child.id)
+        .unwrap()
+        .expect("文件夹墓碑");
     assert_eq!(t.title_snap.as_deref(), Some("子项目"));
     assert!(!t.purged);
 
     // 文件夹行进回收站，子内容不跟着消失
-    assert!(store.get_folder(&child.id).unwrap().unwrap().deleted_at.is_some());
-    assert!(store.get_folder(&parent.id).unwrap().unwrap().deleted_at.is_none());
+    assert!(store
+        .get_folder(&child.id)
+        .unwrap()
+        .unwrap()
+        .deleted_at
+        .is_some());
+    assert!(store
+        .get_folder(&parent.id)
+        .unwrap()
+        .unwrap()
+        .deleted_at
+        .is_none());
     assert!(store.verify().is_empty(), "{:?}", store.verify());
 }
 
@@ -58,9 +82,18 @@ fn delete_folder_moves_child_folders_up_one_level() {
     store.delete_folder(&b.id).unwrap();
     let c_now = store.get_folder(&c.id).unwrap().unwrap();
     assert_eq!(c_now.parent_id.as_ref(), Some(&a.id), "C 上移一级到 A 之下");
-    assert_eq!(store.get_note(&notes_in_c.id).unwrap().unwrap().folder_id, c.id, "笔记留在自己的文件夹里");
+    assert_eq!(
+        store.get_note(&notes_in_c.id).unwrap().unwrap().folder_id,
+        c.id,
+        "笔记留在自己的文件夹里"
+    );
     // B 的子内容被上移之后，删除 B 不再受外键 RESTRICT 阻塞
-    assert!(store.get_folder(&b.id).unwrap().unwrap().deleted_at.is_some());
+    assert!(store
+        .get_folder(&b.id)
+        .unwrap()
+        .unwrap()
+        .deleted_at
+        .is_some());
     assert!(store.verify().is_empty());
 }
 
@@ -69,10 +102,22 @@ fn default_folder_is_protected() {
     let fx = Fix::new();
     let store = fx.open();
     let root = default_folder(&store);
-    assert!(matches!(store.delete_folder(&root), Err(StoreError::Constraint(_))));
-    assert!(matches!(store.rename_folder(&root, "改名"), Err(StoreError::Constraint(_))));
-    assert!(matches!(store.move_folder(&root, None), Err(StoreError::Constraint(_))));
-    assert_eq!(store.get_folder(&root).unwrap().unwrap().name, notera_store::DEFAULT_FOLDER_NAME);
+    assert!(matches!(
+        store.delete_folder(&root),
+        Err(StoreError::Constraint(_))
+    ));
+    assert!(matches!(
+        store.rename_folder(&root, "改名"),
+        Err(StoreError::Constraint(_))
+    ));
+    assert!(matches!(
+        store.move_folder(&root, None),
+        Err(StoreError::Constraint(_))
+    ));
+    assert_eq!(
+        store.get_folder(&root).unwrap().unwrap().name,
+        notera_store::DEFAULT_FOLDER_NAME
+    );
 }
 
 #[test]
@@ -86,12 +131,25 @@ fn move_folder_rejects_cycles_including_grandparent_loop() {
 
     // A → C（C 是 A 的孙）＝成环
     let e = store.move_folder(&a.id, Some(&c.id)).unwrap_err();
-    assert!(matches!(e, StoreError::Constraint(_)), "成环必须被拒，实际 {e:?}");
-    assert_eq!(store.get_folder(&a.id).unwrap().unwrap().parent_id.as_ref(), Some(&root), "被拒后树形不变");
+    assert!(
+        matches!(e, StoreError::Constraint(_)),
+        "成环必须被拒，实际 {e:?}"
+    );
+    assert_eq!(
+        store.get_folder(&a.id).unwrap().unwrap().parent_id.as_ref(),
+        Some(&root),
+        "被拒后树形不变"
+    );
     // 自己成为自己的父
-    assert!(matches!(store.move_folder(&b.id, Some(&b.id)), Err(StoreError::Constraint(_))));
+    assert!(matches!(
+        store.move_folder(&b.id, Some(&b.id)),
+        Err(StoreError::Constraint(_))
+    ));
     // 直接子节点回环
-    assert!(matches!(store.move_folder(&a.id, Some(&b.id)), Err(StoreError::Constraint(_))));
+    assert!(matches!(
+        store.move_folder(&a.id, Some(&b.id)),
+        Err(StoreError::Constraint(_))
+    ));
     // 合法移动：C 移到根下
     let moved = store.move_folder(&c.id, None).unwrap();
     assert_eq!(moved.parent_id, None);
@@ -99,7 +157,10 @@ fn move_folder_rejects_cycles_including_grandparent_loop() {
     // 移到不存在的父 → NotFound
     assert!(matches!(
         store.move_folder(&c.id, Some(&missing_id())),
-        Err(StoreError::NotFound { kind: EntityKind::Folder, .. })
+        Err(StoreError::NotFound {
+            kind: EntityKind::Folder,
+            ..
+        })
     ));
     assert!(store.verify().is_empty());
 }
@@ -115,10 +176,14 @@ fn foreign_keys_are_enforced_and_delete_never_cascades_notes() {
     let notes_before = store.stats().unwrap().notes;
 
     let conn = rusqlite::Connection::open(fx.db_file()).unwrap();
-    let fk_on: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+    let fk_on: i64 = conn
+        .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(fk_on, 1, "该连接必须处于 FK ON 状态才谈得上级联语义");
 
-    let e = conn.execute("DELETE FROM folders WHERE id = ?1", [f.id.to_string()]).unwrap_err();
+    let e = conn
+        .execute("DELETE FROM folders WHERE id = ?1", [f.id.to_string()])
+        .unwrap_err();
     assert!(
         matches!(&e, rusqlite::Error::SqliteFailure(_, Some(msg)) if msg.contains("FOREIGN KEY")),
         "删有子节点的文件夹必须被 FK 拦住，实际 {e}"
@@ -128,11 +193,22 @@ fn foreign_keys_are_enforced_and_delete_never_cascades_notes() {
 
     // 子文件夹同样受保护（folders.parent_id 自引用 RESTRICT）
     let child = store.create_folder(Some(&f.id), "子").unwrap();
-    assert!(conn.execute("DELETE FROM folders WHERE id = ?1", [f.id.to_string()]).is_err());
+    assert!(conn
+        .execute("DELETE FROM folders WHERE id = ?1", [f.id.to_string()])
+        .is_err());
     // 把笔记移走、子文件夹上移之后，才允许走 Store 的正常删除路径
     store.delete_folder(&f.id).unwrap();
-    assert!(store.get_folder(&child.id).unwrap().unwrap().deleted_at.is_none());
-    assert_eq!(store.stats().unwrap().notes, notes_before, "整条路径零笔记损失");
+    assert!(store
+        .get_folder(&child.id)
+        .unwrap()
+        .unwrap()
+        .deleted_at
+        .is_none());
+    assert_eq!(
+        store.stats().unwrap().notes,
+        notes_before,
+        "整条路径零笔记损失"
+    );
     assert!(store.verify().is_empty());
 }
 
@@ -140,10 +216,30 @@ fn foreign_keys_are_enforced_and_delete_never_cascades_notes() {
 fn notes_cannot_point_at_a_missing_folder_and_folders_are_uuid_shaped() {
     let fx = Fix::new();
     let store = fx.open();
-    let e = store.create_note(&missing_id(), doc_text("悬空")).unwrap_err();
-    assert!(matches!(e, StoreError::NotFound { kind: EntityKind::Folder, .. }), "实际 {e:?}");
-    assert!(matches!(store.create_folder(Some(&missing_id()), "孤儿"), Err(StoreError::NotFound { .. })));
-    assert!(matches!(store.create_folder(None, "   "), Err(StoreError::Constraint(_))), "空名必须被拒");
+    let e = store
+        .create_note(&missing_id(), doc_text("悬空"))
+        .unwrap_err();
+    assert!(
+        matches!(
+            e,
+            StoreError::NotFound {
+                kind: EntityKind::Folder,
+                ..
+            }
+        ),
+        "实际 {e:?}"
+    );
+    assert!(matches!(
+        store.create_folder(Some(&missing_id()), "孤儿"),
+        Err(StoreError::NotFound { .. })
+    ));
+    assert!(
+        matches!(
+            store.create_folder(None, "   "),
+            Err(StoreError::Constraint(_))
+        ),
+        "空名必须被拒"
+    );
     assert!(store.verify().is_empty());
 }
 
@@ -159,7 +255,14 @@ fn folder_rename_and_move_bump_rev_via_next_rev_only() {
     assert_eq!(b.rev, notera_core::Rev(2));
     assert_eq!(b.name, "A 改名");
     // 远端头部更高时，本地推进必须取 max（I2 的 Lamport 语义，禁止手写 +1）
-    store.set_remote_rev(EntityKind::Folder, &b.id, notera_core::Rev(41), "aabbccddeeff").unwrap();
+    store
+        .set_remote_rev(
+            EntityKind::Folder,
+            &b.id,
+            notera_core::Rev(41),
+            "aabbccddeeff",
+        )
+        .unwrap();
     let c = store.rename_folder(&b.id, "再改名").unwrap();
     assert_eq!(c.rev, notera_core::Rev(42), "rev 必须是 max(本地,远端)+1");
     assert_eq!(c.remote_rev, notera_core::Rev(41));

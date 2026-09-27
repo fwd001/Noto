@@ -20,7 +20,10 @@ fn block(id: &str, text: &str) -> Block {
         id: id.to_string(),
         type_: BlockType::Paragraph,
         attrs: Default::default(),
-        content: vec![Inline { text: text.to_string(), marks: vec![] }],
+        content: vec![Inline {
+            text: text.to_string(),
+            marks: vec![],
+        }],
     }
 }
 
@@ -52,7 +55,11 @@ fn raw(blocks: Vec<Value>) -> Document {
 }
 
 fn text_of(d: &Document) -> String {
-    d.content.iter().map(|b| b.plain_text()).collect::<Vec<_>>().join("\n")
+    d.content
+        .iter()
+        .map(|b| b.plain_text())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn auto(outcome: MergeOutcome) -> Document {
@@ -68,13 +75,18 @@ fn ids_of(d: &Document) -> BTreeSet<String> {
 
 fn conflict_ids(outcome: &MergeOutcome) -> Vec<String> {
     match outcome {
-        MergeOutcome::Conflict { conflicting_block_ids } => conflicting_block_ids.clone(),
+        MergeOutcome::Conflict {
+            conflicting_block_ids,
+        } => conflicting_block_ids.clone(),
         other => panic!("期望 Conflict，实际 {other:?}"),
     }
 }
 
 fn base() -> Document {
-    doc(vec![para("b1aaaaaa", "第一段原文"), para("b2aaaaaa", "第二段原文")])
+    doc(vec![
+        para("b1aaaaaa", "第一段原文"),
+        para("b2aaaaaa", "第二段原文"),
+    ])
 }
 
 /// INV-01 的可机检形式：AutoMerged 之后，任何一侧的块要么还在结果里，要么有
@@ -86,16 +98,14 @@ fn assert_no_silent_loss(b: &Document, l: &Document, r: &Document, m: &Document)
                 continue;
             }
             let in_base = b.content.iter().any(|y| y.id == x.id);
-            let unchanged = b
-                .content
-                .iter()
-                .any(|y| y.id == x.id && y.same_content(x));
+            let unchanged = b.content.iter().any(|y| y.id == x.id && y.same_content(x));
             if in_base && unchanged && !other.content.iter().any(|y| y.id == x.id) {
                 continue; // 无争议的删除
             }
-            if m.content.iter().any(|y| {
-                y.type_ == x.type_ && y.plain_text() == x.plain_text()
-            }) {
+            if m.content
+                .iter()
+                .any(|y| y.type_ == x.type_ && y.plain_text() == x.plain_text())
+            {
                 continue; // 同内容去重
             }
             if m.content.iter().any(|y| {
@@ -118,8 +128,14 @@ fn assert_no_silent_loss(b: &Document, l: &Document, r: &Document, m: &Document)
 #[test]
 fn sy_mrg_01_different_blocks_auto_merge_without_conflict() {
     // SY-CONF-02/07：两侧改**不同块** → 无损自动合并，且不得产生任何冲突提示。
-    let local = doc(vec![para("b1aaaaaa", "本地改过的第一段"), para("b2aaaaaa", "第二段原文")]);
-    let remote = doc(vec![para("b1aaaaaa", "第一段原文"), para("b2aaaaaa", "远端改过的第二段")]);
+    let local = doc(vec![
+        para("b1aaaaaa", "本地改过的第一段"),
+        para("b2aaaaaa", "第二段原文"),
+    ]);
+    let remote = doc(vec![
+        para("b1aaaaaa", "第一段原文"),
+        para("b2aaaaaa", "远端改过的第二段"),
+    ]);
     let out = merge(&base(), &local, &remote);
     let merged = match out {
         MergeOutcome::AutoMerged {
@@ -141,18 +157,30 @@ fn sy_mrg_01_different_blocks_auto_merge_without_conflict() {
 #[test]
 fn sy_mrg_02_same_block_text_conflict_never_picks_a_winner() {
     // SY-CONF-01/08：同一块两侧都改且无法证明无损 → 必须上报，绝不"整篇二选一"。
-    let local = doc(vec![para("b1aaaaaa", "START middle"), para("b2aaaaaa", "第二段原文")]);
-    let remote = doc(vec![para("b1aaaaaa", "start MIDDLE"), para("b2aaaaaa", "第二段原文")]);
+    let local = doc(vec![
+        para("b1aaaaaa", "START middle"),
+        para("b2aaaaaa", "第二段原文"),
+    ]);
+    let remote = doc(vec![
+        para("b1aaaaaa", "start MIDDLE"),
+        para("b2aaaaaa", "第二段原文"),
+    ]);
     let out = merge(&base(), &local, &remote);
     assert_eq!(conflict_ids(&out), vec!["b1aaaaaa".to_string()]);
-    assert!(matches!(out, MergeOutcome::Conflict { .. }), "同块文本冲突不能自动合并");
+    assert!(
+        matches!(out, MergeOutcome::Conflict { .. }),
+        "同块文本冲突不能自动合并"
+    );
 }
 
 #[test]
 fn sy_mrg_03_delete_versus_edit_is_a_conflict_not_a_silent_delete() {
     // §1.2 明写"一侧改、另一侧删除 → 是冲突"（C4/P11）。
     let deleted = doc(vec![para("b2aaaaaa", "第二段原文")]);
-    let edited = doc(vec![para("b1aaaaaa", "远端把第一段改了"), para("b2aaaaaa", "第二段原文")]);
+    let edited = doc(vec![
+        para("b1aaaaaa", "远端把第一段改了"),
+        para("b2aaaaaa", "第二段原文"),
+    ]);
     let out = merge(&base(), &deleted, &edited);
     assert_eq!(conflict_ids(&out), vec!["b1aaaaaa".to_string()]);
     // 镜像：改的一方当 local、删的一方当 remote，结论必须一样。
@@ -179,7 +207,10 @@ fn sy_mrg_03_delete_versus_edit_is_a_conflict_not_a_silent_delete() {
 #[test]
 fn sy_mrg_04_identical_content_converges() {
     // §1.2 第一行：两侧最终内容相同 → 收敛（回环同步、两台设备各自打开又保存）。
-    let same = doc(vec![para("b1aaaaaa", "两边都改成一样"), para("b2aaaaaa", "第二段原文")]);
+    let same = doc(vec![
+        para("b1aaaaaa", "两边都改成一样"),
+        para("b2aaaaaa", "第二段原文"),
+    ]);
     assert_eq!(merge(&base(), &same, &same), MergeOutcome::Converged);
     assert_eq!(merge(&base(), &base(), &base()), MergeOutcome::Converged);
     // 内容相同但键序不同也必须判收敛（canonical 稳定性直接决定这一条）。
@@ -195,7 +226,11 @@ fn sy_mrg_05_format_only_difference_auto_merges_via_m1() {
     let italic = doc(vec![marked("b1aaaaaa", "第一段原文", &["italic"])]);
     let merged = auto(merge(&b, &bold, &italic));
     assert_eq!(text_of(&merged), "第一段原文", "M1 不许改变一个字");
-    assert_eq!(merged.content[0].content[0].marks.len(), 1, "必须带走一侧的格式");
+    assert_eq!(
+        merged.content[0].content[0].marks.len(),
+        1,
+        "必须带走一侧的格式"
+    );
     validate(&merged).unwrap();
     // 结果与"谁是 local"无关（INV-15 的收敛前提）。
     assert_eq!(
@@ -218,8 +253,14 @@ fn sy_mrg_06_pure_appends_are_concatenated_via_m3() {
     let merged = auto(merge(&b, &local, &remote));
     let t = text_of(&merged);
     assert!(t.starts_with("hello"), "{t}");
-    assert!(t.contains("world") && t.contains("there"), "两侧追加都必须在：{t}");
-    assert_eq!(t, "hello there world", "追加段按文本字典序拼接，保证跨设备一致");
+    assert!(
+        t.contains("world") && t.contains("there"),
+        "两侧追加都必须在：{t}"
+    );
+    assert_eq!(
+        t, "hello there world",
+        "追加段按文本字典序拼接，保证跨设备一致"
+    );
     validate(&merged).unwrap();
     assert_no_silent_loss(&b, &local, &remote, &merged);
     // 交换角色必须逐字节相同，否则下一轮又冲突。
@@ -379,8 +420,16 @@ fn empty_new_blocks_are_never_deduped() {
 #[test]
 fn order_change_on_one_side_is_respected() {
     // §3.2 第 4 步：一侧调顺序、另一侧没调 → 采纳调整后的顺序。
-    let b = doc(vec![para("x1aaaaaa", "一"), para("x2aaaaaa", "二"), para("x3aaaaaa", "三")]);
-    let local = doc(vec![para("x3aaaaaa", "三"), para("x1aaaaaa", "一"), para("x2aaaaaa", "二")]);
+    let b = doc(vec![
+        para("x1aaaaaa", "一"),
+        para("x2aaaaaa", "二"),
+        para("x3aaaaaa", "三"),
+    ]);
+    let local = doc(vec![
+        para("x3aaaaaa", "三"),
+        para("x1aaaaaa", "一"),
+        para("x2aaaaaa", "二"),
+    ]);
     let merged = auto(merge(&b, &local, &b.clone()));
     assert_eq!(block_ids(&merged), vec!["x3aaaaaa", "x1aaaaaa", "x2aaaaaa"]);
 }
@@ -388,7 +437,11 @@ fn order_change_on_one_side_is_respected() {
 #[test]
 fn contradictory_reorders_are_reported_as_conflict() {
     // §3.2 第 4 步："两侧都调整了顺序 → 顺序判为冲突"。
-    let b = doc(vec![para("y1aaaaaa", "一"), para("y2aaaaaa", "二"), para("y3aaaaaa", "三")]);
+    let b = doc(vec![
+        para("y1aaaaaa", "一"),
+        para("y2aaaaaa", "二"),
+        para("y3aaaaaa", "三"),
+    ]);
     // 两侧都调序且方向矛盾，同时各改一个块的文本以躲过文档级收敛。
     let local = doc(vec![
         para("y3aaaaaa", "三·本地"),
@@ -453,8 +506,14 @@ fn doc_version_too_new_short_circuits_to_read_only() {
 #[test]
 fn merge_does_not_mutate_its_inputs() {
     let b = base();
-    let l = doc(vec![para("b1aaaaaa", "本地改"), para("b2aaaaaa", "第二段原文")]);
-    let r = doc(vec![para("b1aaaaaa", "第一段原文"), para("b2aaaaaa", "远端改")]);
+    let l = doc(vec![
+        para("b1aaaaaa", "本地改"),
+        para("b2aaaaaa", "第二段原文"),
+    ]);
+    let r = doc(vec![
+        para("b1aaaaaa", "第一段原文"),
+        para("b2aaaaaa", "远端改"),
+    ]);
     let (cb, cl, cr) = (canonical(&b), canonical(&l), canonical(&r));
     let _ = merge(&b, &l, &r);
     assert_eq!(
@@ -473,7 +532,10 @@ fn prop_merge_is_deterministic() {
         para("b2aaaaaa", "第二段原文"),
         para("n1aaaaaa", "新"),
     ]);
-    let r = doc(vec![para("b1aaaaaa", "改过的第一段"), para("b3aaaaaa", "远端独有")]);
+    let r = doc(vec![
+        para("b1aaaaaa", "改过的第一段"),
+        para("b3aaaaaa", "远端独有"),
+    ]);
     let first = merge(&b, &l, &r);
     for i in 0..50 {
         assert_eq!(merge(&b, &l, &r), first, "第 {i} 次结果不同 = 不确定");
@@ -486,7 +548,9 @@ fn malformed_documents_never_panic() {
     let nasty: Vec<Document> = vec![
         Document::default(),
         doc(vec![para("z1aaaaaa", "")]),
-        doc(vec![json!({ "id": "zzzzzzzz", "type": "completely:unknown", "attrs": { "a": [1, {"b": null}] } })]),
+        doc(vec![
+            json!({ "id": "zzzzzzzz", "type": "completely:unknown", "attrs": { "a": [1, {"b": null}] } }),
+        ]),
         raw(vec![
             json!({ "id": "t1aaaaaa", "type": "table" }),
             json!({ "id": "t3aaaaaa", "type": "tableCell" }), // 中间行被删：结构不合法
@@ -502,7 +566,9 @@ fn malformed_documents_never_panic() {
             json!({ "id": "", "type": "paragraph", "content": [{ "text": "无 id" }] }),
             json!({ "type": "paragraph", "content": [{ "text": "也无 id" }] }),
         ]),
-        raw(vec![json!({ "id": "n1aaaaaa", "type": "paragraph", "content": [{ "text": "带未知键", "future": [1, 2] }] })]),
+        raw(vec![
+            json!({ "id": "n1aaaaaa", "type": "paragraph", "content": [{ "text": "带未知键", "future": [1, 2] }] }),
+        ]),
     ];
     for a in &nasty {
         for b in &nasty {
@@ -511,14 +577,16 @@ fn malformed_documents_never_panic() {
                 match out {
                     MergeOutcome::AutoMerged { doc, .. } => {
                         assert!(supports(doc.v));
-                        validate(&doc)
-                            .expect("AutoMerged 的产物必须过 validate（§3.4）");
+                        validate(&doc).expect("AutoMerged 的产物必须过 validate（§3.4）");
                         assert_ne!(canonical(&doc), canonical(a));
                     }
                     MergeOutcome::Conflict {
                         conflicting_block_ids,
                     } => {
-                        assert!(!conflicting_block_ids.is_empty(), "Conflict 必须指出是哪几块");
+                        assert!(
+                            !conflicting_block_ids.is_empty(),
+                            "Conflict 必须指出是哪几块"
+                        );
                     }
                     MergeOutcome::Converged | MergeOutcome::ReadOnly { .. } => {}
                 }
@@ -544,7 +612,10 @@ fn merge_survives_docs_that_only_contain_unknown_and_empty_nodes() {
     let remote = doc(remote_blocks);
     let merged = auto(merge(&weird, &weird.clone(), &remote));
     let c = canonical(&merged);
-    assert!(c.contains("unknown:未来节点"), "未知节点不许被降级丢弃：{c}");
+    assert!(
+        c.contains("unknown:未来节点"),
+        "未知节点不许被降级丢弃：{c}"
+    );
     assert!(c.contains("\"y\":[1,2]"), "未知节点的嵌套属性必须在：{c}");
     assert!(c.contains("unknown:brandNew"), "新增未知节点必须在：{c}");
     assert!(c.contains("\"unknown:sparkle\""), "未知 mark 必须在：{c}");
@@ -577,13 +648,7 @@ impl Rng {
 }
 
 const IDS: [&str; 7] = [
-    "a1aaaaaa",
-    "a2aaaaaa",
-    "a3aaaaaa",
-    "a4aaaaaa",
-    "a5aaaaaa",
-    "a6aaaaaa",
-    "a7aaaaaa",
+    "a1aaaaaa", "a2aaaaaa", "a3aaaaaa", "a4aaaaaa", "a5aaaaaa", "a6aaaaaa", "a7aaaaaa",
 ];
 const TEXTS: [&str; 8] = [
     "",
@@ -638,7 +703,10 @@ fn rand_doc(rng: &mut Rng) -> Document {
         picked.swap(i, j);
     }
     let keep = rng.below(IDS.len() + 1);
-    let blocks: Vec<Value> = picked[..keep].iter().map(|id| rand_block(rng, id)).collect();
+    let blocks: Vec<Value> = picked[..keep]
+        .iter()
+        .map(|id| rand_block(rng, id))
+        .collect();
     parse_from_value(&json!({ "v": DOC_FORMAT, "content": blocks }))
         .unwrap_or_else(|_| Document::default())
 }
@@ -653,15 +721,24 @@ fn edit(rng: &mut Rng, base: &Document) -> Document {
         match rng.below(6) {
             0 => {} // 不动
             1 => {
-                blk.content = vec![Inline { text: TEXTS[rng.below(TEXTS.len())].into(), marks: vec![] }];
+                blk.content = vec![Inline {
+                    text: TEXTS[rng.below(TEXTS.len())].into(),
+                    marks: vec![],
+                }];
             }
             2 => {
                 let m = MarkKind::from_wire_name(MARKS[rng.below(MARKS.len())]);
-                let mk = Mark { kind: m, attrs: Default::default() };
+                let mk = Mark {
+                    kind: m,
+                    attrs: Default::default(),
+                };
                 if let Some(first) = blk.content.first_mut() {
                     first.marks = vec![mk];
                 } else {
-                    blk.content = vec![Inline { text: String::new(), marks: vec![mk] }];
+                    blk.content = vec![Inline {
+                        text: String::new(),
+                        marks: vec![mk],
+                    }];
                 }
             }
             3 => {
@@ -673,12 +750,18 @@ fn edit(rng: &mut Rng, base: &Document) -> Document {
                 if let Some(last) = blk.content.last_mut() {
                     last.text.push_str(extra);
                 } else {
-                    blk.content = vec![Inline { text: extra.into(), marks: vec![] }];
+                    blk.content = vec![Inline {
+                        text: extra.into(),
+                        marks: vec![],
+                    }];
                 }
             }
             _ => {
                 blk.type_ = BlockType::Paragraph;
-                blk.content = vec![Inline { text: format!("{}·改", blk.plain_text()), marks: vec![] }];
+                blk.content = vec![Inline {
+                    text: format!("{}·改", blk.plain_text()),
+                    marks: vec![],
+                }];
             }
         }
     }
@@ -692,7 +775,10 @@ fn edit(rng: &mut Rng, base: &Document) -> Document {
                 id,
                 type_: BlockType::Paragraph,
                 attrs: Default::default(),
-                content: vec![Inline { text: TEXTS[rng.below(TEXTS.len())].into(), marks: vec![] }],
+                content: vec![Inline {
+                    text: TEXTS[rng.below(TEXTS.len())].into(),
+                    marks: vec![],
+                }],
             });
         }
     }
@@ -737,7 +823,11 @@ fn prop_merge_never_panics_and_always_returns_validatable_output() {
                 validate(&doc).unwrap_or_else(|e| {
                     panic!("第 {round} 轮合并产物不合法（{e}）：{}", canonical(&doc))
                 });
-                assert_ne!(canonical(&doc), canonical(&b), "H(merged) 必须不同于 H(base)");
+                assert_ne!(
+                    canonical(&doc),
+                    canonical(&b),
+                    "H(merged) 必须不同于 H(base)"
+                );
                 assert_no_silent_loss(&b, &l, &r, &doc);
             }
             MergeOutcome::Conflict {
@@ -824,7 +914,10 @@ fn prop_auto_merged_result_is_a_fixed_point_for_the_next_round() {
             changed.content.push(block("zzfinish", "又加了一段"));
             match merge(&doc, &changed, &doc) {
                 MergeOutcome::AutoMerged { doc: m, .. } => {
-                    assert!(m.content.iter().any(|x| x.id == "zzfinish"), "新加的一段必须进来");
+                    assert!(
+                        m.content.iter().any(|x| x.id == "zzfinish"),
+                        "新加的一段必须进来"
+                    );
                 }
                 other => panic!("单侧改动不该升级成冲突：{other:?}"),
             }
@@ -835,7 +928,10 @@ fn prop_auto_merged_result_is_a_fixed_point_for_the_next_round() {
 
 #[test]
 fn taken_counts_are_truthful_and_unknown_types_survive_merge() {
-    let local = doc(vec![para("b1aaaaaa", "本地改一"), para("b2aaaaaa", "本地改二")]);
+    let local = doc(vec![
+        para("b1aaaaaa", "本地改一"),
+        para("b2aaaaaa", "本地改二"),
+    ]);
     match merge(&base(), &local, &base()) {
         MergeOutcome::AutoMerged {
             taken_local,

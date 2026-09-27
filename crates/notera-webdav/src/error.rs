@@ -64,7 +64,9 @@ pub fn map_net(e: NetError) -> RemoteError {
         NetError::Cancelled => RemoteError::Cancelled,
         NetError::Unsupported => RemoteError::Protocol("服务器不支持所需语义（405/501）".into()),
         NetError::Tls => RemoteError::Protocol("证书不受信任，已停止访问该服务器".into()),
-        NetError::RedirectCrossOrigin => RemoteError::Protocol("跨源重定向被拒绝（不携带凭据跟随）".into()),
+        NetError::RedirectCrossOrigin => {
+            RemoteError::Protocol("跨源重定向被拒绝（不携带凭据跟随）".into())
+        }
         NetError::Protocol(msg) => RemoteError::Protocol(msg),
     }
 }
@@ -73,7 +75,9 @@ impl WebDavError {
     /// 端口词汇形态（供 `Result<_, RemoteError>` 边界使用）。
     pub fn to_remote(&self) -> RemoteError {
         match self {
-            WebDavError::Config(m) | WebDavError::Net(NetError::Protocol(m)) => RemoteError::Protocol(m.clone()),
+            WebDavError::Config(m) | WebDavError::Net(NetError::Protocol(m)) => {
+                RemoteError::Protocol(m.clone())
+            }
             WebDavError::Path(p) => RemoteError::Protocol(p.to_string()),
             WebDavError::Net(e) => map_net(e.clone()),
         }
@@ -96,8 +100,14 @@ mod tests {
         assert_eq!(map_status(507), RemoteError::Quota);
         assert_eq!(map_status(500), RemoteError::Server);
         assert_eq!(map_status(503), RemoteError::Server);
-        assert!(map_status(405).halts_round(), "405 语义不支持必须停轮并记诊断");
-        assert!(map_net(NetError::Connect).retryable(), "离线可继续下一轮，不是终止态");
+        assert!(
+            map_status(405).halts_round(),
+            "405 语义不支持必须停轮并记诊断"
+        );
+        assert!(
+            map_net(NetError::Connect).retryable(),
+            "离线可继续下一轮，不是终止态"
+        );
         assert!(!map_net(NetError::Connect).halts_round());
         assert!(map_net(NetError::Auth).halts_round(), "401 必须停轮");
         assert!(!map_net(NetError::Tls).retryable(), "证书错误不得降级重试");

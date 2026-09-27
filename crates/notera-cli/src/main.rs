@@ -118,7 +118,10 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
             };
             match notera_host::devserver::start(app.clone(), port) {
                 Ok(_srv) => {
-                    println!("dev 桥已启动: http://127.0.0.1:{port}  (数据目录 {})", dir.display());
+                    println!(
+                        "dev 桥已启动: http://127.0.0.1:{port}  (数据目录 {})",
+                        dir.display()
+                    );
                     println!("健康检查: curl http://127.0.0.1:{port}/health");
                     // 常驻：由调用方（CI / 开发脚本）终止
                     loop {
@@ -155,7 +158,14 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
                 for v in violations.iter().chain(search.iter()) {
                     println!("不变式 {} 被违反: {}", v.id, v.detail);
                 }
-                println!("{}", if violations.is_empty() && search.is_empty() { "不变式检查通过" } else { "存在不变式违反" });
+                println!(
+                    "{}",
+                    if violations.is_empty() && search.is_empty() {
+                        "不变式检查通过"
+                    } else {
+                        "存在不变式违反"
+                    }
+                );
             }
             if violations.is_empty() && search.is_empty() {
                 EXIT_OK
@@ -176,7 +186,10 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
                 }
                 Ok(v) => {
                     for c in &v {
-                        println!("#{} 「{}」 本地 rev {} / 远端 rev {}", c.id, c.note_title, c.local_rev, c.remote_rev);
+                        println!(
+                            "#{} 「{}」 本地 rev {} / 远端 rev {}",
+                            c.id, c.note_title, c.local_rev, c.remote_rev
+                        );
                     }
                     EXIT_FAIL
                 }
@@ -198,17 +211,31 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
             let stats = match rt().block_on(app.sync_once()) {
                 Ok(s) => s,
                 Err(e) => {
-                    let why = e.detail.as_ref().map(|d| format!(" {}", d)).unwrap_or_default();
+                    let why = e
+                        .detail
+                        .as_ref()
+                        .map(|d| format!(" {}", d))
+                        .unwrap_or_default();
                     eprintln!("sync-once 未能执行：{}{why}（BLOCKED，不是 PASS）", e.code);
                     return EXIT_BLOCKED;
                 }
             };
             if json {
-                println!("{}", serde_json::to_string(&stats).unwrap_or_else(|_| "{}".into()));
+                println!(
+                    "{}",
+                    serde_json::to_string(&stats).unwrap_or_else(|_| "{}".into())
+                );
             } else {
                 println!(
                     "一轮完成: {:?} 请求 {} 次 ↑{}B ↓{}B 推 {} 拉 {} 冲突 {} CAS 重试 {}",
-                    stats.outcome, stats.requests, stats.bytes_up, stats.bytes_down, stats.pushed, stats.pulled, stats.conflicts, stats.cas_retries
+                    stats.outcome,
+                    stats.requests,
+                    stats.bytes_up,
+                    stats.bytes_down,
+                    stats.pushed,
+                    stats.pulled,
+                    stats.conflicts,
+                    stats.cas_retries
                 );
             }
             match stats.outcome {
@@ -231,7 +258,10 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
             match rt().block_on(app.probe_and_store_caps()) {
                 Ok(v) => {
                     if json {
-                        println!("{}", serde_json::to_string(&v).unwrap_or_else(|_| "{}".into()));
+                        println!(
+                            "{}",
+                            serde_json::to_string(&v).unwrap_or_else(|_| "{}".into())
+                        );
                     } else {
                         println!("{}", v["describe"].as_str().unwrap_or(""));
                         println!("写入策略: {}", v["writeStrategy"].as_str().unwrap_or("?"));
@@ -266,7 +296,10 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
             match app.route_for(&target) {
                 Ok(v) => {
                     if json {
-                        println!("{}", serde_json::to_string(&v).unwrap_or_else(|_| "{}".into()));
+                        println!(
+                            "{}",
+                            serde_json::to_string(&v).unwrap_or_else(|_| "{}".into())
+                        );
                     } else {
                         println!("配置来源: {}", v["configFrom"].as_str().unwrap_or("?"));
                         println!("{}", v["oneLine"].as_str().unwrap_or(""));
@@ -294,7 +327,10 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
             match app.export_data(cmd) {
                 Ok(v) => {
                     if json {
-                        println!("{}", serde_json::to_string(&v).unwrap_or_else(|_| "{}".into()));
+                        println!(
+                            "{}",
+                            serde_json::to_string(&v).unwrap_or_else(|_| "{}".into())
+                        );
                     } else {
                         println!("已导出: {}", v["path"].as_str().unwrap_or(""));
                         println!("范围: {} · 计数: {}", v["scope"], v["counts"]);
@@ -303,7 +339,11 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
                     // 否则"文件存在"就成了"数据可恢复"的假证据。
                     match notera_importer::read_bundle(&out) {
                         Ok(b) => {
-                            println!("回读校验通过: {} 条笔记 / {} 个附件", b.notes.len(), b.attachments.len());
+                            println!(
+                                "回读校验通过: {} 条笔记 / {} 个附件",
+                                b.notes.len(),
+                                b.attachments.len()
+                            );
                             // 数量也要对得上：这里曾经只打印不判定，于是"包能打开但一个附件
                             // 都没有"的导出照样算通过 —— 用户手里是一份缺全部附件的"完整备份"。
                             // 按文件夹导时基准必须是**那一棵子树**的附件：直接拿勾选的那几个
@@ -317,7 +357,9 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
                                     .filter_map(|s| notera_core::EntityId::parse(s).ok())
                                     .collect();
                                 match app.store().folder_subtree(&ids) {
-                                    Ok(set) => app.store().attachment_shas_in_folders(&set.into_iter().collect::<Vec<_>>()),
+                                    Ok(set) => app.store().attachment_shas_in_folders(
+                                        &set.into_iter().collect::<Vec<_>>(),
+                                    ),
                                     Err(e) => {
                                         eprintln!("导出范围算不出来：{e}（ASSERT_FAIL）");
                                         return EXIT_FAIL;
@@ -352,7 +394,13 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
             };
             match app.backup_db(Some(&out)) {
                 Ok(info) => {
-                    println!("备份: {} ({} 字节, SHA-256 {}, 建于 {})", info.path.display(), info.bytes, info.sha256, info.created_at);
+                    println!(
+                        "备份: {} ({} 字节, SHA-256 {}, 建于 {})",
+                        info.path.display(),
+                        info.bytes,
+                        info.sha256,
+                        info.created_at
+                    );
                     EXIT_OK
                 }
                 Err(e) => {
@@ -384,7 +432,8 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
                 Ok(v) => v,
                 Err(_) => return EXIT_FAIL,
             };
-            let created = match app.create_note(&root_id, doc("自检：跨设备同步不应复活已删笔记")) {
+            let created = match app.create_note(&root_id, doc("自检：跨设备同步不应复活已删笔记"))
+            {
                 Ok(n) => n,
                 Err(e) => {
                     eprintln!("建笔记失败: {}", e.code);
@@ -395,12 +444,23 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
                 Ok(v) => v,
                 Err(_) => return EXIT_FAIL,
             };
-            let edited = app.edit_note(&nid, doc("自检：两字中文检索必须能命中这条笔记"), notera_core::Rev(created.rev));
+            let edited = app.edit_note(
+                &nid,
+                doc("自检：两字中文检索必须能命中这条笔记"),
+                notera_core::Rev(created.rev),
+            );
             if edited.is_err() {
-                eprintln!("编辑失败（expectedRev 应为 {}）: {:?}", created.rev, edited.err().map(|e| e.code));
+                eprintln!(
+                    "编辑失败（expectedRev 应为 {}）: {:?}",
+                    created.rev,
+                    edited.err().map(|e| e.code)
+                );
                 return EXIT_FAIL;
             }
-            let hits = app.search(commands::SearchCmd { text: "两字".into(), limit: 20 });
+            let hits = app.search(commands::SearchCmd {
+                text: "两字".into(),
+                limit: 20,
+            });
             match hits {
                 Ok(h) if !h.iter().any(|x| x.note_id == created.id) => {
                     eprintln!("两字中文检索未命中刚写入的笔记（回归！见 DATA-MODEL §7.2）");
@@ -416,7 +476,12 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
                 eprintln!("删除失败: {e}");
                 return EXIT_FAIL;
             }
-            if app.store().get_note(&nid).map(|n| n.is_some()).unwrap_or(true) {
+            if app
+                .store()
+                .get_note(&nid)
+                .map(|n| n.is_some())
+                .unwrap_or(true)
+            {
                 eprintln!("删除后仍可读到笔记");
                 return EXIT_FAIL;
             }

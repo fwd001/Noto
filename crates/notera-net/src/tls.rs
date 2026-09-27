@@ -21,7 +21,6 @@
 //!   仍可能被降级 —— 因此 `Pin` 档**不**关闭链校验，只在其之上叠加指纹白名单。
 //! * `InsecureLocal`：只允许 loopback 主机；其它主机直接拒绝建客户端。
 
-
 /// 证书/传输安全策略。
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum TlsPolicy {
@@ -62,7 +61,9 @@ impl TlsPolicy {
     pub fn normalize_pin(s: &str) -> String {
         let t = s.trim().to_ascii_lowercase();
         let t = t.strip_prefix("sha256:").unwrap_or(&t);
-        t.chars().filter(|c| !matches!(c, ':' | '-' | ' ')).collect()
+        t.chars()
+            .filter(|c| !matches!(c, ':' | '-' | ' '))
+            .collect()
     }
 
     /// 校验目标主机在本档下是否被允许。

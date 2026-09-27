@@ -34,7 +34,10 @@ struct Tmp(PathBuf);
 impl Tmp {
     fn new(tag: &str) -> Self {
         let n = SEQ.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("notera-compaction-{tag}-{}-{n}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "notera-compaction-{tag}-{}-{n}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
@@ -71,7 +74,10 @@ impl Device {
         let mut rows: Vec<(String, String)> = self
             .app
             .store()
-            .list_notes(&NoteQuery { limit: ROW_CAP, ..NoteQuery::all() })
+            .list_notes(&NoteQuery {
+                limit: ROW_CAP,
+                ..NoteQuery::all()
+            })
             .unwrap()
             .into_iter()
             .map(|r| (r.title, r.content_hash))
@@ -89,7 +95,10 @@ impl Device {
                 "{:?} pushed={} pulled={} dirty={} pending={}",
                 stats.outcome, stats.pushed, stats.pulled, st.dirty_notes, st.outbox_pending
             ));
-            if stats.outcome != RoundOutcome::Partial && st.dirty_notes == 0 && st.outbox_pending == 0 {
+            if stats.outcome != RoundOutcome::Partial
+                && st.dirty_notes == 0
+                && st.outbox_pending == 0
+            {
                 return trace;
             }
         }
@@ -110,7 +119,9 @@ async fn the_manifest_compacts_and_a_fresh_device_still_converges() {
     a.app.sync_once().await.expect("A 入伙");
     let folder = a.app.default_folder_id().unwrap();
     for i in 0..NOTES {
-        a.app.create_note(&folder, doc(&format!("压实笔记 {i:03}"))).unwrap();
+        a.app
+            .create_note(&folder, doc(&format!("压实笔记 {i:03}")))
+            .unwrap();
     }
     let trace = a.settle(12).await;
     let st = a.app.store().stats().unwrap();
@@ -122,19 +133,28 @@ async fn the_manifest_compacts_and_a_fresh_device_still_converges() {
         &std::fs::read_to_string(root.join(".notes/manifest/index.json")).expect("索引在盘上"),
     )
     .expect("索引是 JSON");
-    let window = index["window"]["entries"].as_array().map(|a| a.len()).unwrap_or(usize::MAX);
+    let window = index["window"]["entries"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(usize::MAX);
     let refs = index["segments"].as_array().cloned().unwrap_or_default();
     assert!(
         !refs.is_empty(),
         "260 条变更早超过窗口上限 200，索引里却一条分段都没有 —— 说明写侧从不压实，清单会一直长大：{trace:?}"
     );
-    assert!(window <= notera_sync::manifest::WINDOW_MAX, "压实后窗口该回落到上限以内，实际 {window} 条");
+    assert!(
+        window <= notera_sync::manifest::WINDOW_MAX,
+        "压实后窗口该回落到上限以内，实际 {window} 条"
+    );
 
     // INV-09：索引引用的每个分段都必须真的在盘上
     let dir = root.join(".notes/manifest");
     for r in &refs {
         let name = r["n"].as_str().unwrap_or_default();
-        assert!(dir.join(format!("{name}.json")).exists(), "索引引用了不存在的分段 {name}");
+        assert!(
+            dir.join(format!("{name}.json")).exists(),
+            "索引引用了不存在的分段 {name}"
+        );
         let on_disk = std::fs::read(dir.join(format!("{name}.json"))).expect("分段可读");
         assert_eq!(
             r["bytes"].as_u64().unwrap_or(usize::MAX as u64),
@@ -155,13 +175,30 @@ async fn the_manifest_compacts_and_a_fresh_device_still_converges() {
     let b = Device::boot("comp-b", &url);
     let btrace = b.settle(14).await;
     let bs = b.app.store().stats().unwrap();
-    assert_eq!(bs.notes, NOTES as u32, "压实后新设备应追平到 {NOTES} 条，实际 {}：\n  A {}\n  B {}", bs.notes, trace.join("\n  "), btrace.join("\n  "));
-    assert_eq!(b.fingerprints(), a.fingerprints(), "两台设备标题/内容哈希不一致");
-    assert_eq!(bs.fts_rows, bs.notes, "搜索索引没跟着到位：{} vs {}", bs.fts_rows, bs.notes);
+    assert_eq!(
+        bs.notes,
+        NOTES as u32,
+        "压实后新设备应追平到 {NOTES} 条，实际 {}：\n  A {}\n  B {}",
+        bs.notes,
+        trace.join("\n  "),
+        btrace.join("\n  ")
+    );
+    assert_eq!(
+        b.fingerprints(),
+        a.fingerprints(),
+        "两台设备标题/内容哈希不一致"
+    );
+    assert_eq!(
+        bs.fts_rows, bs.notes,
+        "搜索索引没跟着到位：{} vs {}",
+        bs.fts_rows, bs.notes
+    );
 
     // 压实过一次之后，任何一条新改动的 id 都必然落在已有分段的 cover 里。
     // 重叠率规则若只看比率不看量，这里就会为了一个字节的新笔记重写整份基线分段。
-    a.app.create_note(&folder, doc("压实之后又写的一条")).unwrap();
+    a.app
+        .create_note(&folder, doc("压实之后又写的一条"))
+        .unwrap();
     srv.clear_log().await;
     a.settle(6).await;
     let rewritten: Vec<String> = srv
@@ -170,7 +207,10 @@ async fn the_manifest_compacts_and_a_fresh_device_still_converges() {
         .filter(|r| r.method == "PUT" && r.path.contains("/manifest/seg-"))
         .map(|r| format!("{} ({} B)", r.path, r.bytes))
         .collect();
-    assert!(rewritten.is_empty(), "只改了一条笔记就把基线分段重写了：{rewritten:?}");
+    assert!(
+        rewritten.is_empty(),
+        "只改了一条笔记就把基线分段重写了：{rewritten:?}"
+    );
 
     srv.stop().await;
 }

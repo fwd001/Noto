@@ -26,7 +26,8 @@ struct Tmp(PathBuf);
 impl Tmp {
     fn new(tag: &str) -> Self {
         let n = SEQ.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("notera-cost-{tag}-{}-{n}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("notera-cost-{tag}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
@@ -80,7 +81,8 @@ async fn an_idle_round_costs_one_request_and_no_body() {
     // 两边都有内容并互相收敛 —— 之后才是"什么都没改"的空轮
     let folder = a.default_folder_id().unwrap();
     for i in 0..12 {
-        a.create_note(&folder, doc(&format!("空轮笔记 {i}"))).unwrap();
+        a.create_note(&folder, doc(&format!("空轮笔记 {i}")))
+            .unwrap();
     }
     converge(&a, 8).await;
     converge(&b, 8).await;
@@ -91,19 +93,46 @@ async fn an_idle_round_costs_one_request_and_no_body() {
 
     // 第一版：对面刚写过，这一轮"读到变化"是应该的（整份清单一次）
     let warm = a.sync_once().await.expect("读到变化的一轮");
-    assert!(warm.requests <= 2, "读到变化的一轮用了 {} 次请求", warm.requests);
+    assert!(
+        warm.requests <= 2,
+        "读到变化的一轮用了 {} 次请求",
+        warm.requests
+    );
     // 空轮：只许一次请求、零正文、清单走 304
     srv.clear_log().await;
     let stats = a.sync_once().await.expect("空轮");
-    assert_eq!(stats.outcome, RoundOutcome::NoOp, "什么都没改，这一轮却有活干：{stats:?}");
-    assert!(stats.requests <= 2, "空轮用了 {} 次请求（预算 ≤2）", stats.requests);
+    assert_eq!(
+        stats.outcome,
+        RoundOutcome::NoOp,
+        "什么都没改，这一轮却有活干：{stats:?}"
+    );
+    assert!(
+        stats.requests <= 2,
+        "空轮用了 {} 次请求（预算 ≤2）",
+        stats.requests
+    );
     let transferred = stats.bytes_up + stats.bytes_down;
-    assert!(transferred <= 2048, "空轮传输了 {transferred} 字节（预算 ≤2 KiB）");
+    assert!(
+        transferred <= 2048,
+        "空轮传输了 {transferred} 字节（预算 ≤2 KiB）"
+    );
     let log = srv.request_log();
-    let index_304 = log.iter().any(|r| r.status == 304 && r.path.contains("index.json"));
-    assert!(index_304, "清单没走条件请求（304），每轮都在整份下载：{}", log.iter().map(|r| format!("{} {} -> {}", r.method, r.path, r.status)).collect::<Vec<_>>().join(" | "));
+    let index_304 = log
+        .iter()
+        .any(|r| r.status == 304 && r.path.contains("index.json"));
+    assert!(
+        index_304,
+        "清单没走条件请求（304），每轮都在整份下载：{}",
+        log.iter()
+            .map(|r| format!("{} {} -> {}", r.method, r.path, r.status))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
     let propfinds = log.iter().filter(|r| r.method == "PROPFIND").count();
-    assert!(propfinds <= 1, "一轮里发了 {propfinds} 次 PROPFIND（预算 ≤1）");
+    assert!(
+        propfinds <= 1,
+        "一轮里发了 {propfinds} 次 PROPFIND（预算 ≤1）"
+    );
 
     // 对面也没活干：同样便宜
     srv.clear_log().await;

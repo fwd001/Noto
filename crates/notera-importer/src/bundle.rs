@@ -69,7 +69,10 @@ fn write_options() -> zip::write::FileOptions<'static, ()> {
 }
 
 pub fn write_bundle(path: &Path, bundle: &Bundle) -> Result<(), ImportError> {
-    let file = std::fs::File::create(path).map_err(|e| ImportError::Io { path: path.display().to_string(), source: e })?;
+    let file = std::fs::File::create(path).map_err(|e| ImportError::Io {
+        path: path.display().to_string(),
+        source: e,
+    })?;
     let mut zip = zip::ZipWriter::new(file);
     let opts = write_options();
 
@@ -93,9 +96,11 @@ pub fn write_bundle(path: &Path, bundle: &Bundle) -> Result<(), ImportError> {
     for (sha, bytes) in &bundle.attachments {
         zip.start_file(format!("{ATTACH_PREFIX}{sha}"), opts)
             .map_err(|e| ImportError::Bundle(e.to_string()))?;
-        zip.write_all(bytes).map_err(|e| ImportError::Bundle(e.to_string()))?;
+        zip.write_all(bytes)
+            .map_err(|e| ImportError::Bundle(e.to_string()))?;
     }
-    zip.finish().map_err(|e| ImportError::Bundle(e.to_string()))?;
+    zip.finish()
+        .map_err(|e| ImportError::Bundle(e.to_string()))?;
     Ok(())
 }
 
@@ -106,25 +111,38 @@ fn write_json<T: Serialize>(
     value: &T,
 ) -> Result<(), ImportError> {
     let body = serde_json::to_vec_pretty(value).map_err(|e| ImportError::Bundle(e.to_string()))?;
-    zip.start_file(name, *opts).map_err(|e| ImportError::Bundle(e.to_string()))?;
-    zip.write_all(&body).map_err(|e| ImportError::Bundle(e.to_string()))?;
+    zip.start_file(name, *opts)
+        .map_err(|e| ImportError::Bundle(e.to_string()))?;
+    zip.write_all(&body)
+        .map_err(|e| ImportError::Bundle(e.to_string()))?;
     Ok(())
 }
 
 pub fn read_bundle(path: &Path) -> Result<Bundle, ImportError> {
-    let file = std::fs::File::open(path).map_err(|e| ImportError::Io { path: path.display().to_string(), source: e })?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| ImportError::Bundle(format!("不是可读的 ZIP: {e}")))?;
+    let file = std::fs::File::open(path).map_err(|e| ImportError::Io {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    let mut zip = zip::ZipArchive::new(file)
+        .map_err(|e| ImportError::Bundle(format!("不是可读的 ZIP: {e}")))?;
     let mut bundle = Bundle::default();
     let mut raw_attachments: BTreeMap<String, Vec<u8>> = BTreeMap::new();
 
     for index in 0..zip.len() {
-        let mut entry = zip.by_index(index).map_err(|e| ImportError::Bundle(e.to_string()))?;
+        let mut entry = zip
+            .by_index(index)
+            .map_err(|e| ImportError::Bundle(e.to_string()))?;
         let name = entry.name().to_string();
         let mut buf = Vec::new();
-        entry.read_to_end(&mut buf).map_err(|e| ImportError::Bundle(e.to_string()))?;
+        entry
+            .read_to_end(&mut buf)
+            .map_err(|e| ImportError::Bundle(e.to_string()))?;
         match name.as_str() {
             MANIFEST => {
-                bundle.manifest = Some(serde_json::from_slice(&buf).map_err(|e| ImportError::Bundle(format!("manifest.json 读不懂: {e}")))?);
+                bundle.manifest = Some(
+                    serde_json::from_slice(&buf)
+                        .map_err(|e| ImportError::Bundle(format!("manifest.json 读不懂: {e}")))?,
+                );
             }
             FOLDERS => bundle.folders = read_array(&name, &buf)?,
             TOMBSTONES => bundle.tombstones = read_array(&name, &buf)?,
@@ -142,17 +160,25 @@ pub fn read_bundle(path: &Path) -> Result<Bundle, ImportError> {
         .clone()
         .ok_or_else(|| ImportError::Bundle("缺少 manifest.json：无法判断这是什么包".to_string()))?;
     if manifest.format != BUNDLE_FORMAT {
-        return Err(ImportError::Bundle(format!("bundle 格式号 {} 不认识（本程序写的是 {BUNDLE_FORMAT}）", manifest.format)));
+        return Err(ImportError::Bundle(format!(
+            "bundle 格式号 {} 不认识（本程序写的是 {BUNDLE_FORMAT}）",
+            manifest.format
+        )));
     }
     if manifest.protocol > MAX_PROTOCOL {
-        return Err(ImportError::Bundle(format!("协议号 {} 高于本程序支持 {MAX_PROTOCOL}", manifest.protocol)));
+        return Err(ImportError::Bundle(format!(
+            "协议号 {} 高于本程序支持 {MAX_PROTOCOL}",
+            manifest.protocol
+        )));
     }
 
     // 附件按内容寻址：文件名说的 sha 必须等于字节自己算出来的，否则整包作废。
     for (sha, bytes) in &raw_attachments {
         let got = notera_crypto::sha256_hex(bytes);
         if &got != sha {
-            return Err(ImportError::Bundle(format!("附件 {sha} 内容与文件名不符（实际 {got}）")));
+            return Err(ImportError::Bundle(format!(
+                "附件 {sha} 内容与文件名不符（实际 {got}）"
+            )));
         }
     }
     bundle.attachments = raw_attachments.into_iter().collect();

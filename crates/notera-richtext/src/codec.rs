@@ -3,9 +3,7 @@
 //! 顺序是规范的一部分：`parse = 读入 → normalize → validate`，任一步失败即拒绝提交，
 //! 坏数据绝不进入权威表（I6）。
 
-use crate::model::{
-    supports, Block, BlockType, Document, Mark, MarkKind, RichError,
-};
+use crate::model::{supports, Block, BlockType, Document, Mark, MarkKind, RichError};
 use notera_core::canonical_json;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -64,7 +62,8 @@ fn normalize_block(b: &mut Block) {
         i.marks = kept;
     }
     // 丢弃无 text 的空 inline（无文字又无样式的行内节点没有任何信息）。
-    b.content.retain(|i| !i.text.is_empty() || !i.marks.is_empty());
+    b.content
+        .retain(|i| !i.text.is_empty() || !i.marks.is_empty());
     if b.id.is_empty() {
         // 手搓/外部导入的块可能没 id。合并必须有锚点，这里按内容派生一个确定性 id，
         // 从而"同一内容 → 同一 id"，跨设备也不会撞出两个不同含义的 id。
@@ -296,9 +295,7 @@ pub(crate) fn count_changed_blocks(base: &Document, other: &Document) -> u32 {
 impl Block {
     /// 内容相等（不含 id）：合并算法判断"这块被改过吗"的唯一依据。
     pub fn same_content(&self, other: &Block) -> bool {
-        self.type_ == other.type_
-            && self.attrs == other.attrs
-            && self.content == other.content
+        self.type_ == other.type_ && self.attrs == other.attrs && self.content == other.content
     }
 
     /// 内容哈希用的规范化 JSON（逐块比较用）。

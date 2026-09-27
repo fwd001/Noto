@@ -51,7 +51,11 @@ pub(crate) fn kind_from_tag(s: &str) -> Result<EntityKind, StoreError> {
 
 /// 行映射内部用：错误借道 `rusqlite::Error`。
 fn map_id(s: &str) -> rusqlite::Result<EntityId> {
-    EntityId::parse(s).map_err(|e| into_sql(StoreError::Constraint(format!("库内 id 不是合法 UUID: {e}"))))
+    EntityId::parse(s).map_err(|e| {
+        into_sql(StoreError::Constraint(format!(
+            "库内 id 不是合法 UUID: {e}"
+        )))
+    })
 }
 
 pub(crate) fn parse_id(s: &str) -> Result<EntityId, StoreError> {
@@ -72,8 +76,11 @@ fn bool_of(row: &Row, i: usize) -> rusqlite::Result<bool> {
 
 pub(crate) fn note_from_row(row: &Row) -> rusqlite::Result<Note> {
     let doc_text: String = row.get(2)?;
-    let doc: serde_json::Value = serde_json::from_str(&doc_text)
-        .map_err(|e| into_sql(StoreError::Constraint(format!("notes.doc 不是合法 JSON: {e}"))))?;
+    let doc: serde_json::Value = serde_json::from_str(&doc_text).map_err(|e| {
+        into_sql(StoreError::Constraint(format!(
+            "notes.doc 不是合法 JSON: {e}"
+        )))
+    })?;
     Ok(Note {
         id: map_id(&row.get::<_, String>(0)?)?,
         folder_id: map_id(&row.get::<_, String>(1)?)?,
@@ -112,7 +119,11 @@ pub(crate) fn read_note(conn: &Connection, id: &EntityId) -> Result<Option<Note>
 /// 读 `notes.rowid`（FTS external-content 的连接键）。
 pub(crate) fn note_rowid(conn: &Connection, id: &EntityId) -> Result<Option<i64>, StoreError> {
     Ok(conn
-        .query_row("SELECT rowid FROM notes WHERE id = ?1", [id.as_str()], |r| r.get(0))
+        .query_row(
+            "SELECT rowid FROM notes WHERE id = ?1",
+            [id.as_str()],
+            |r| r.get(0),
+        )
         .optional()?)
 }
 
@@ -220,7 +231,12 @@ pub(crate) fn attachment_from_row(row: &Row) -> rusqlite::Result<Attachment> {
 // external content 表没有触发器（DATA-MODEL §5.3）：更新必须先按**旧值**删索引行、
 // 再按**新值**插入，且两步都在写事务里（I5）。
 
-pub(crate) fn fts_delete(conn: &Connection, rowid: i64, title: &str, plain_text: &str) -> Result<(), StoreError> {
+pub(crate) fn fts_delete(
+    conn: &Connection,
+    rowid: i64,
+    title: &str,
+    plain_text: &str,
+) -> Result<(), StoreError> {
     conn.execute(
         "INSERT INTO notes_fts(notes_fts, rowid, title, plain_text) VALUES ('delete', ?1, ?2, ?3)",
         params![rowid, title, plain_text],
@@ -228,7 +244,12 @@ pub(crate) fn fts_delete(conn: &Connection, rowid: i64, title: &str, plain_text:
     Ok(())
 }
 
-pub(crate) fn fts_insert(conn: &Connection, rowid: i64, title: &str, plain_text: &str) -> Result<(), StoreError> {
+pub(crate) fn fts_insert(
+    conn: &Connection,
+    rowid: i64,
+    title: &str,
+    plain_text: &str,
+) -> Result<(), StoreError> {
     conn.execute(
         "INSERT INTO notes_fts(rowid, title, plain_text) VALUES (?1, ?2, ?3)",
         params![rowid, title, plain_text],
@@ -240,7 +261,9 @@ pub(crate) fn fts_insert(conn: &Connection, rowid: i64, title: &str, plain_text:
 
 pub(crate) fn meta_get(conn: &Connection, key: &str) -> Result<Option<String>, StoreError> {
     Ok(conn
-        .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get::<_, String>(0))
+        .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| {
+            r.get::<_, String>(0)
+        })
         .optional()?)
 }
 
@@ -262,7 +285,9 @@ pub(crate) fn meta_i64(conn: &Connection, key: &str, default: i64) -> Result<i64
 
 pub(crate) fn enabled_accounts(conn: &Connection) -> Result<Vec<String>, StoreError> {
     let mut stmt = conn.prepare("SELECT id FROM sync_accounts WHERE enabled = 1 ORDER BY id")?;
-    let v = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+    let v = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(v)
 }
 
@@ -276,9 +301,8 @@ pub(crate) fn enabled_accounts(conn: &Connection) -> Result<Vec<String>, StoreEr
 /// 真正该排除的是"用户后来禁用的真实账户" —— 否则引擎永不消费它，
 /// 它的 outbox 行会无界堆积。
 pub(crate) fn all_accounts(conn: &Connection) -> Result<Vec<String>, StoreError> {
-    let mut stmt = conn.prepare(
-        "SELECT id FROM sync_accounts WHERE enabled = 1 OR id = ?1 ORDER BY id",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT id FROM sync_accounts WHERE enabled = 1 OR id = ?1 ORDER BY id")?;
     let sentinel = crate::types::LOCAL_ACCOUNT_ID;
     let v = stmt
         .query_map([sentinel], |r| r.get::<_, String>(0))?
@@ -292,8 +316,16 @@ pub(crate) fn all_accounts(conn: &Connection) -> Result<Vec<String>, StoreError>
 /// 少了 account，第二个账户的 INSERT 会撞上第一个账户已建的同一个键、被
 /// `ON CONFLICT DO UPDATE` 吸收掉，那一行仍属于第一个账户 —— 结果是
 /// "本地写入只同步到其中一台服务器"，且完全静默（本仓库实测踩过）。
-pub(crate) fn dedupe_key(account: &str, kind: EntityKind, id: &str, op: OpKind, rev: Option<Rev>) -> String {
-    let r = rev.map(|r| r.to_string()).unwrap_or_else(|| "-".to_string());
+pub(crate) fn dedupe_key(
+    account: &str,
+    kind: EntityKind,
+    id: &str,
+    op: OpKind,
+    rev: Option<Rev>,
+) -> String {
+    let r = rev
+        .map(|r| r.to_string())
+        .unwrap_or_else(|| "-".to_string());
     format!("{account}:{}:{id}:{}:{r}", kind_tag(kind), op.as_str())
 }
 
@@ -330,7 +362,14 @@ pub(crate) fn enqueue_key(
                   WHERE account_id = ?1 AND entity_type = ?3 AND entity_id = ?4 AND op = ?5
                     AND state IN ('pending','inflight')
                     AND (payload_rev IS NULL OR payload_rev < ?6)",
-                params![account, now, kind_tag(kind), entity_key, op.as_str(), rev.get() as i64],
+                params![
+                    account,
+                    now,
+                    kind_tag(kind),
+                    entity_key,
+                    op.as_str(),
+                    rev.get() as i64
+                ],
             )?;
         }
         let key = dedupe_key(&account, kind, entity_key, op, payload_rev);
@@ -357,7 +396,12 @@ pub(crate) fn enqueue_key(
 }
 
 /// 把某实体所有未完成的上行动作标 `superseded`（永久删除后不得再上传旧内容）。
-pub(crate) fn supersede_pending(conn: &Connection, now: &str, kind: EntityKind, id: &EntityId) -> Result<(), StoreError> {
+pub(crate) fn supersede_pending(
+    conn: &Connection,
+    now: &str,
+    kind: EntityKind,
+    id: &EntityId,
+) -> Result<(), StoreError> {
     conn.execute(
         "UPDATE sync_operations
             SET state = 'superseded', updated_at = ?3
@@ -390,7 +434,11 @@ pub(crate) fn insert_revision(
     Ok(())
 }
 
-pub(crate) fn revision_doc(conn: &Connection, note_id: &EntityId, rev: Rev) -> Result<Option<serde_json::Value>, StoreError> {
+pub(crate) fn revision_doc(
+    conn: &Connection,
+    note_id: &EntityId,
+    rev: Rev,
+) -> Result<Option<serde_json::Value>, StoreError> {
     let raw: Option<String> = conn
         .query_row(
             "SELECT doc FROM note_revisions WHERE note_id = ?1 AND rev = ?2",
@@ -405,7 +453,10 @@ pub(crate) fn revision_doc(conn: &Connection, note_id: &EntityId, rev: Rev) -> R
 }
 
 /// 派生列里的 `has_attachment`：doc 内的附件块 **或** `note_attachments` 链接（§7.1）。
-pub(crate) fn has_linked_attachment(conn: &Connection, note_id: &EntityId) -> Result<bool, StoreError> {
+pub(crate) fn has_linked_attachment(
+    conn: &Connection,
+    note_id: &EntityId,
+) -> Result<bool, StoreError> {
     let n: i64 = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM note_attachments WHERE note_id = ?1)",
         [note_id.as_str()],
@@ -413,4 +464,3 @@ pub(crate) fn has_linked_attachment(conn: &Connection, note_id: &EntityId) -> Re
     )?;
     Ok(n != 0)
 }
-

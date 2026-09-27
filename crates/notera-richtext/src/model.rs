@@ -362,14 +362,18 @@ impl Block {
         let id = match map.get("id") {
             None | Some(serde_json::Value::Null) => String::new(),
             Some(serde_json::Value::String(s)) => s.clone(),
-            Some(other) => return Err(RichError::Malformed(format!("块 id 必须是字符串: {other}"))),
+            Some(other) => {
+                return Err(RichError::Malformed(format!("块 id 必须是字符串: {other}")))
+            }
         };
 
         let type_ = match map.get("type") {
             None | Some(serde_json::Value::Null) => BlockType::Unknown(String::new()),
             Some(serde_json::Value::String(s)) => BlockType::from_wire_name(s),
             Some(other) => {
-                return Err(RichError::Malformed(format!("块的 type 必须是字符串: {other}")))
+                return Err(RichError::Malformed(format!(
+                    "块的 type 必须是字符串: {other}"
+                )))
             }
         };
 
@@ -382,7 +386,9 @@ impl Block {
                 }
             }
             Some(other) => {
-                return Err(RichError::Malformed(format!("块 attrs 必须是对象: {other}")))
+                return Err(RichError::Malformed(format!(
+                    "块 attrs 必须是对象: {other}"
+                )))
             }
         }
 
@@ -400,7 +406,8 @@ impl Block {
                         }),
                         serde_json::Value::Object(_) => {
                             if x.get("text").is_some() || x.get("marks").is_some() {
-                                content.push(Inline::from_value(x).map_err(|e| context_inline(e, i))?)
+                                content
+                                    .push(Inline::from_value(x).map_err(|e| context_inline(e, i))?)
                             } else {
                                 // 嵌套块：本模型是扁平的，折进 attrs 保证一个字节都不丢。
                                 folded_nodes.push(x.clone());
@@ -415,7 +422,9 @@ impl Block {
                 }
             }
             Some(other) => {
-                return Err(RichError::Malformed(format!("块 content 必须是数组: {other}")))
+                return Err(RichError::Malformed(format!(
+                    "块 content 必须是数组: {other}"
+                )))
             }
         }
         if !folded_nodes.is_empty() {
@@ -472,7 +481,9 @@ impl Inline {
                     None | Some(serde_json::Value::Null) => String::new(),
                     Some(serde_json::Value::String(s)) => s.clone(),
                     Some(other) => {
-                        return Err(RichError::Malformed(format!("inline text 必须是字符串: {other}")))
+                        return Err(RichError::Malformed(format!(
+                            "inline text 必须是字符串: {other}"
+                        )))
                     }
                 };
                 let mut marks = Vec::new();
@@ -484,7 +495,9 @@ impl Inline {
                         }
                     }
                     Some(other) => {
-                        return Err(RichError::Malformed(format!("inline marks 必须是数组: {other}")))
+                        return Err(RichError::Malformed(format!(
+                            "inline marks 必须是数组: {other}"
+                        )))
                     }
                 }
                 // ProseMirror 的 text 节点带 `type:"text"`，那是本模型的固有事实，忽略。
@@ -530,7 +543,9 @@ impl Mark {
                     None | Some(serde_json::Value::Null) => String::new(),
                     Some(serde_json::Value::String(s)) => s.clone(),
                     Some(other) => {
-                        return Err(RichError::Malformed(format!("mark kind 必须是字符串: {other}")))
+                        return Err(RichError::Malformed(format!(
+                            "mark kind 必须是字符串: {other}"
+                        )))
                     }
                 };
                 let kind = MarkKind::from_wire_name(&raw);
@@ -543,7 +558,9 @@ impl Mark {
                         }
                     }
                     Some(other) => {
-                        return Err(RichError::Malformed(format!("mark attrs 必须是对象: {other}")))
+                        return Err(RichError::Malformed(format!(
+                            "mark attrs 必须是对象: {other}"
+                        )))
                     }
                 }
                 const KNOWN: [&str; 3] = ["kind", "attrs", "type"];

@@ -29,8 +29,12 @@ impl Caps {
     pub const CHUNKED: u32 = 1 << 5;
 
     /// 全部已知位。
-    pub const ALL: u32 =
-        Self::STRONG_ETAG | Self::CONDITIONAL_PUT | Self::OVERWRITE_F_MOVE | Self::DEPTH_INFINITY | Self::RANGE | Self::CHUNKED;
+    pub const ALL: u32 = Self::STRONG_ETAG
+        | Self::CONDITIONAL_PUT
+        | Self::OVERWRITE_F_MOVE
+        | Self::DEPTH_INFINITY
+        | Self::RANGE
+        | Self::CHUNKED;
 
     pub const fn from_mask(mask: u32) -> Caps {
         Caps(mask)
@@ -92,7 +96,10 @@ impl std::fmt::Debug for Caps {
                 names.push(name);
             }
         }
-        f.debug_struct("Caps").field("mask", &self.0).field("caps", &names).finish()
+        f.debug_struct("Caps")
+            .field("mask", &self.0)
+            .field("caps", &names)
+            .finish()
     }
 }
 
@@ -114,8 +121,14 @@ mod tests {
     #[test]
     fn strategy_follows_the_capability_table() {
         assert_eq!(Caps::full().write_strategy(), WriteStrategy::S1);
-        assert_eq!(Caps::from_mask(Caps::OVERWRITE_F_MOVE | Caps::STRONG_ETAG).write_strategy(), WriteStrategy::S2);
-        assert_eq!(Caps::from_mask(Caps::STRONG_ETAG).write_strategy(), WriteStrategy::S3);
+        assert_eq!(
+            Caps::from_mask(Caps::OVERWRITE_F_MOVE | Caps::STRONG_ETAG).write_strategy(),
+            WriteStrategy::S2
+        );
+        assert_eq!(
+            Caps::from_mask(Caps::STRONG_ETAG).write_strategy(),
+            WriteStrategy::S3
+        );
         assert_eq!(Caps::none().write_strategy(), WriteStrategy::S3);
     }
 

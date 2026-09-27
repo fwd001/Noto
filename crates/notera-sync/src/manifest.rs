@@ -132,7 +132,11 @@ impl Manifest {
             software: software.into(),
             counts: BTreeMap::new(),
             segments: Vec::new(),
-            window: Window { since_seq: 0, complete: true, entries: Vec::new() },
+            window: Window {
+                since_seq: 0,
+                complete: true,
+                entries: Vec::new(),
+            },
             attachments: Vec::new(),
             checksum: String::new(),
         };
@@ -144,7 +148,9 @@ impl Manifest {
     fn canonical_body(&self) -> String {
         let mut clone = self.clone();
         clone.checksum = String::new();
-        notera_core::canonical_json(&serde_json::to_value(&clone).unwrap_or(serde_json::Value::Null))
+        notera_core::canonical_json(
+            &serde_json::to_value(&clone).unwrap_or(serde_json::Value::Null),
+        )
     }
 
     pub fn refresh_checksum(&mut self) {
@@ -157,7 +163,10 @@ impl Manifest {
         let mut m: Manifest =
             serde_json::from_slice(wire).map_err(|e| ManifestError::Malformed(e.to_string()))?;
         if m.protocol != PROTOCOL {
-            return Err(ManifestError::Protocol { found: m.protocol, supported: PROTOCOL });
+            return Err(ManifestError::Protocol {
+                found: m.protocol,
+                supported: PROTOCOL,
+            });
         }
         let expected = format!("sha256:{}", sha256_hex(m.canonical_body().as_bytes()));
         if m.checksum != expected {
@@ -180,7 +189,10 @@ impl Manifest {
 
     /// 有效远端状态 = 分段条目被窗口覆盖（窗口优先）。
     /// 分段内容需另行传入（它们是不可变文件）。
-    pub fn effective(&self, segments: &BTreeMap<String, Vec<EntryRef>>) -> BTreeMap<(String, String), EntryRef> {
+    pub fn effective(
+        &self,
+        segments: &BTreeMap<String, Vec<EntryRef>>,
+    ) -> BTreeMap<(String, String), EntryRef> {
         let mut out: BTreeMap<(String, String), EntryRef> = BTreeMap::new();
         for seg in &self.segments {
             if let Some(entries) = segments.get(&seg.n) {
@@ -198,26 +210,42 @@ impl Manifest {
     /// 把一批变更提交进清单（不压实）。返回新清单；原清单不变。
     ///
     /// 幂等：同 (kind,id) 同 rev 重复提交结果相同（SYNC-PROTOCOL §11.1）。
-    pub fn with_commit(&self, device: &str, at: &str, writes: &[EntryRef], deletes: &[EntryRef]) -> Self {
+    pub fn with_commit(
+        &self,
+        device: &str,
+        at: &str,
+        writes: &[EntryRef],
+        deletes: &[EntryRef],
+    ) -> Self {
         let mut next = self.clone();
         next.seq = self.seq + 1;
         next.generated_at = at.into();
         next.generated_by = device.into();
-        let mut window: BTreeMap<(String, String), EntryRef> =
-            self.window.entries.iter().map(|e| (e.key(), e.clone())).collect();
+        let mut window: BTreeMap<(String, String), EntryRef> = self
+            .window
+            .entries
+            .iter()
+            .map(|e| (e.key(), e.clone()))
+            .collect();
         for w in writes.iter().chain(deletes.iter()) {
             window.insert(w.key(), w.clone());
         }
         let mut entries: Vec<EntryRef> = window.into_values().collect();
         entries.sort_by_key(|a| a.key());
-        next.window = Window { since_seq: self.window.since_seq, complete: true, entries };
+        next.window = Window {
+            since_seq: self.window.since_seq,
+            complete: true,
+            entries,
+        };
         next.recount();
         next.refresh_checksum();
         next
     }
 
     pub fn segment_of(&self, id: &str) -> Option<&SegmentRef> {
-        self.segments.iter().find(|s| s.cover[0].as_str() <= id && id <= s.cover[1].as_str())
+        self.segments
+            .iter()
+            .find(|s| s.cover[0].as_str() <= id && id <= s.cover[1].as_str())
     }
 
     /// 重算条目计数。
@@ -236,7 +264,10 @@ impl Manifest {
         for e in &self.window.entries {
             let covered = self.segment_of(&e.i).is_some();
             match (e.is_deleted(), covered) {
-                (true, true) => *c.entry(e.t.clone()).or_insert(0) = c.get(&e.t).copied().unwrap_or(0).saturating_sub(1),
+                (true, true) => {
+                    *c.entry(e.t.clone()).or_insert(0) =
+                        c.get(&e.t).copied().unwrap_or(0).saturating_sub(1)
+                }
                 (true, false) => {}
                 (false, true) => {} // 覆盖分段里的同一条，不重复计数
                 (false, false) => *c.entry(e.t.clone()).or_insert(0) += 1,
@@ -269,7 +300,12 @@ impl Manifest {
 
     /// 压实：把窗口折进受影响分段，窗口清空，seq 再 +1。
     /// 返回（新清单, 需要重写的分段名, 新的分段内容）。
-    pub fn compact(&self, segments: &BTreeMap<String, Vec<EntryRef>>, device: &str, at: &str) -> (Self, Vec<String>, BTreeMap<String, Vec<EntryRef>>) {
+    pub fn compact(
+        &self,
+        segments: &BTreeMap<String, Vec<EntryRef>>,
+        device: &str,
+        at: &str,
+    ) -> (Self, Vec<String>, BTreeMap<String, Vec<EntryRef>>) {
         let mut new_segments = segments.clone();
         let mut touched: Vec<String> = Vec::new();
         // 按 id 决定归属分段（落在哪个 cover 内；否则进最后一段）
@@ -326,13 +362,21 @@ impl Manifest {
         next.seq = self.seq + 1;
         next.generated_at = at.into();
         next.generated_by = device.into();
-        next.window = Window { since_seq: next.seq, complete: true, entries: Vec::new() };
+        next.window = Window {
+            since_seq: next.seq,
+            complete: true,
+            entries: Vec::new(),
+        };
         // 分段引用必须覆盖**每一个桶**，包括这次压实新建的那些。首次压实就是这种情形：
         // 索引里还一条分段都没有，而窗口里的条目全被折进了新桶 `seg-0000`。以前这里只
         // 遍历已有的 `self.segments`，于是新桶进不了索引、窗口又已被清空 —— **清单上所有
         // 条目一起消失**（比不压实严重得多）。
-        let mut refs: BTreeMap<String, SegmentRef> =
-            self.segments.iter().cloned().map(|s| (s.n.clone(), s)).collect();
+        let mut refs: BTreeMap<String, SegmentRef> = self
+            .segments
+            .iter()
+            .cloned()
+            .map(|s| (s.n.clone(), s))
+            .collect();
         for (name, entries) in &new_segments {
             let wire = segment_wire(entries);
             let r = refs.entry(name.clone()).or_insert_with(|| SegmentRef {
@@ -360,7 +404,12 @@ impl Manifest {
     pub fn segments_needed_for(&self, cached_seg_hashes: &BTreeMap<String, String>) -> Vec<String> {
         self.segments
             .iter()
-            .filter(|s| cached_seg_hashes.get(&s.n).map(|h| *h != s.hash12).unwrap_or(true))
+            .filter(|s| {
+                cached_seg_hashes
+                    .get(&s.n)
+                    .map(|h| *h != s.hash12)
+                    .unwrap_or(true)
+            })
             .map(|s| s.n.clone())
             .collect()
     }
@@ -405,7 +454,15 @@ mod tests {
     use super::*;
 
     fn entry(id: &str, rev: u64, h: &str) -> EntryRef {
-        EntryRef { i: id.into(), t: "n".into(), r: rev, h: h.into(), s: 100, d: None, p: 0 }
+        EntryRef {
+            i: id.into(),
+            t: "n".into(),
+            r: rev,
+            h: h.into(),
+            s: 100,
+            d: None,
+            p: 0,
+        }
     }
 
     fn seg(name: &str, lo: &str, hi: &str, entries: Vec<EntryRef>) -> (SegmentRef, Vec<EntryRef>) {
@@ -413,18 +470,38 @@ mod tests {
             notera_core::canonical_json(&serde_json::to_value(&entries).unwrap()).as_bytes(),
         ));
         (
-            SegmentRef { n: name.into(), cover: [lo.into(), hi.into()], count: entries.len(), hash12: hash, bytes: 10 },
+            SegmentRef {
+                n: name.into(),
+                cover: [lo.into(), hi.into()],
+                count: entries.len(),
+                hash12: hash,
+                bytes: 10,
+            },
             entries,
         )
     }
 
     fn sample() -> Manifest {
-        let mut m = Manifest::initial("root-1", "dev-1", "2026-09-25T00:00:00.000Z", "notera 0.1.0");
-        let (s1, e1) = seg("seg-0000", "a", "m", vec![entry("a", 1, "aaaaaaaaaaaa"), entry("m", 1, "bbbbbbbbbbbb")]);
+        let mut m = Manifest::initial(
+            "root-1",
+            "dev-1",
+            "2026-09-25T00:00:00.000Z",
+            "notera 0.1.0",
+        );
+        let (s1, e1) = seg(
+            "seg-0000",
+            "a",
+            "m",
+            vec![entry("a", 1, "aaaaaaaaaaaa"), entry("m", 1, "bbbbbbbbbbbb")],
+        );
         m.segments = vec![s1];
         let mut map = BTreeMap::new();
         map.insert("seg-0000".to_string(), e1);
-        m.window = Window { since_seq: 1, complete: true, entries: vec![entry("z", 3, "cccccccccccc")] };
+        m.window = Window {
+            since_seq: 1,
+            complete: true,
+            entries: vec![entry("z", 3, "cccccccccccc")],
+        };
         m.recount();
         m.refresh_checksum();
         let _ = map;
@@ -459,7 +536,12 @@ mod tests {
     fn effective_state_lets_window_override_segments() {
         let m = sample();
         let mut segs = BTreeMap::new();
-        let (_, e) = seg("seg-0000", "a", "m", vec![entry("a", 1, "aaaaaaaaaaaa"), entry("m", 1, "bbbbbbbbbbbb")]);
+        let (_, e) = seg(
+            "seg-0000",
+            "a",
+            "m",
+            vec![entry("a", 1, "aaaaaaaaaaaa"), entry("m", 1, "bbbbbbbbbbbb")],
+        );
         segs.insert("seg-0000".to_string(), e);
         // 窗口把 m 改成 rev 9
         m.window.entries.iter().for_each(|_| {});
@@ -467,8 +549,16 @@ mod tests {
         m2.window.entries.push(entry("m", 9, "dddddddddddd"));
         m2.refresh_checksum();
         let eff = m2.effective(&segs);
-        assert_eq!(eff.get(&("n".into(), "m".into())).unwrap().r, 9, "窗口必须覆盖分段");
-        assert_eq!(eff.get(&("n".into(), "a".into())).unwrap().r, 1, "未触及的分段条目必须保留");
+        assert_eq!(
+            eff.get(&("n".into(), "m".into())).unwrap().r,
+            9,
+            "窗口必须覆盖分段"
+        );
+        assert_eq!(
+            eff.get(&("n".into(), "a".into())).unwrap().r,
+            1,
+            "未触及的分段条目必须保留"
+        );
     }
 
     #[test]
@@ -489,7 +579,12 @@ mod tests {
     fn compaction_moves_window_into_segments_and_resets_window() {
         let mut m = sample();
         let mut segs = BTreeMap::new();
-        let (sref, e) = seg("seg-0000", "a", "m", vec![entry("a", 1, "aaaaaaaaaaaa"), entry("m", 1, "bbbbbbbbbbbb")]);
+        let (sref, e) = seg(
+            "seg-0000",
+            "a",
+            "m",
+            vec![entry("a", 1, "aaaaaaaaaaaa"), entry("m", 1, "bbbbbbbbbbbb")],
+        );
         m.segments = vec![sref];
         segs.insert("seg-0000".into(), e);
         m.refresh_checksum();
@@ -498,8 +593,14 @@ mod tests {
         assert!(next.window.entries.is_empty(), "压实后窗口必须清空");
         assert_eq!(next.window.since_seq, next.seq);
         assert!(!touched.is_empty());
-        assert!(newsegs.values().flatten().any(|x| x.i == "z"), "窗口条目应落入分段");
-        assert!(Manifest::parse(&next.to_wire()).is_ok(), "压实产物必须自校验通过");
+        assert!(
+            newsegs.values().flatten().any(|x| x.i == "z"),
+            "窗口条目应落入分段"
+        );
+        assert!(
+            Manifest::parse(&next.to_wire()).is_ok(),
+            "压实产物必须自校验通过"
+        );
     }
 
     /// 首次压实：索引里一条分段都还没有，窗口整批折进新建的 `seg-0000`。
@@ -524,11 +625,19 @@ mod tests {
             .collect();
         let mut m = Manifest::initial("", "dev-1", "2026-09-25T00:00:00.000Z", "notera");
         m.window.entries = entries.clone();
-        let (next, _touched, segs) = m.compact(&BTreeMap::new(), "dev-1", "2026-09-25T00:00:03.000Z");
+        let (next, _touched, segs) =
+            m.compact(&BTreeMap::new(), "dev-1", "2026-09-25T00:00:03.000Z");
 
         let counts: Vec<usize> = next.segments.iter().map(|r| r.count).collect();
-        assert_eq!(counts.len(), 3, "5000 条按 {SEGMENT_TARGET} 切应是 3 段，实际 {counts:?}");
-        assert!(counts.iter().all(|c| *c <= SEGMENT_TARGET), "有分段超容量：{counts:?}");
+        assert_eq!(
+            counts.len(),
+            3,
+            "5000 条按 {SEGMENT_TARGET} 切应是 3 段，实际 {counts:?}"
+        );
+        assert!(
+            counts.iter().all(|c| *c <= SEGMENT_TARGET),
+            "有分段超容量：{counts:?}"
+        );
         assert!(next.window.entries.is_empty(), "压实后窗口该清空");
         let index_bytes = next.to_wire().len();
         let folded: usize = segs.values().map(|v| v.len()).sum();
@@ -536,7 +645,10 @@ mod tests {
         // 有效视图 = 分段 ⊕ 窗口（窗口优先）：一条都不能少
         assert_eq!(next.effective(&segs).len(), 5000, "有效条目数与压实前不等");
         // 每轮提交重写的是索引，不是全库：给一个会随库线性放大的实现留一道坎
-        assert!(index_bytes < 4096, "5000 条时索引 {index_bytes} 字节，说明整份清单又被塞回索引里");
+        assert!(
+            index_bytes < 4096,
+            "5000 条时索引 {index_bytes} 字节，说明整份清单又被塞回索引里"
+        );
         println!("索引 {index_bytes} B · 分段 {counts:?} · 全库条目 5000");
     }
 
@@ -546,18 +658,36 @@ mod tests {
         m.window.entries = (0..2500)
             .map(|i| entry(&format!("{:026}", i), 1, &format!("h{i:06}")))
             .collect();
-        let (next, touched, newsegs) = m.compact(&BTreeMap::new(), "dev-1", "2026-09-25T00:00:03.000Z");
-        assert!(next.segments.len() > 1, "2500 条条目压成一条分段（{:#?}）—— SEGMENT_TARGET 没被用上", next.segments.len());
+        let (next, touched, newsegs) =
+            m.compact(&BTreeMap::new(), "dev-1", "2026-09-25T00:00:03.000Z");
+        assert!(
+            next.segments.len() > 1,
+            "2500 条条目压成一条分段（{:#?}）—— SEGMENT_TARGET 没被用上",
+            next.segments.len()
+        );
         for r in &next.segments {
-            assert!(r.count <= SEGMENT_TARGET, "分段 {} 有 {} 条，超过容量上限 {SEGMENT_TARGET}", r.n, r.count);
-            assert_eq!(r.count, newsegs.get(&r.n).map(|v| v.len()).unwrap_or(usize::MAX), "分段 {} 的 count 与内容不符", r.n);
+            assert!(
+                r.count <= SEGMENT_TARGET,
+                "分段 {} 有 {} 条，超过容量上限 {SEGMENT_TARGET}",
+                r.n,
+                r.count
+            );
+            assert_eq!(
+                r.count,
+                newsegs.get(&r.n).map(|v| v.len()).unwrap_or(usize::MAX),
+                "分段 {} 的 count 与内容不符",
+                r.n
+            );
         }
         let total: usize = next.segments.iter().map(|r| r.count).sum();
         assert_eq!(total, 2500, "分段容量拆完不能丢条目");
         // 引擎只写 `touched` 里那些分段。新切出来的分段必须在里面 —— 不然索引引用了它，
         // 服务器上却没有这个文件（INV-09 破了，读者 404）。
         for name in newsegs.keys() {
-            assert!(touched.contains(name), "分段 {name} 没被列进 touched，引擎不会把它写上去");
+            assert!(
+                touched.contains(name),
+                "分段 {name} 没被列进 touched，引擎不会把它写上去"
+            );
         }
     }
 
@@ -567,22 +697,38 @@ mod tests {
         m.segments = Vec::new();
         let ids: Vec<String> = m.window.entries.iter().map(|e| e.i.clone()).collect();
         assert!(!ids.is_empty(), "夹具的窗口要有条目");
-        let (next, touched, newsegs) = m.compact(&BTreeMap::new(), "dev-1", "2026-09-25T00:00:03.000Z");
+        let (next, touched, newsegs) =
+            m.compact(&BTreeMap::new(), "dev-1", "2026-09-25T00:00:03.000Z");
         assert!(next.window.entries.is_empty(), "窗口该清空");
-        assert_eq!(next.segments.len(), 1, "新建的分段必须进索引，否则条目凭空消失：{:?}", next.segments);
+        assert_eq!(
+            next.segments.len(),
+            1,
+            "新建的分段必须进索引，否则条目凭空消失：{:?}",
+            next.segments
+        );
         let listed: Vec<String> = next
             .segments
             .iter()
             .flat_map(|s| newsegs.get(&s.n).into_iter().flatten().map(|e| e.i.clone()))
             .collect();
         for id in &ids {
-            assert!(listed.contains(id), "条目 {id} 压实后既不在窗口也不在任何分段里");
+            assert!(
+                listed.contains(id),
+                "条目 {id} 压实后既不在窗口也不在任何分段里"
+            );
         }
         assert_eq!(next.segments[0].count, ids.len());
         assert!(!touched.is_empty());
         let body = segment_wire(newsegs.get(&next.segments[0].n).expect("分段内容"));
-        assert_eq!(next.segments[0].bytes, body.len() as u64, "bytes 要按真正落盘的那段字节算");
-        assert!(Manifest::parse(&next.to_wire()).is_ok(), "压实产物必须自校验通过");
+        assert_eq!(
+            next.segments[0].bytes,
+            body.len() as u64,
+            "bytes 要按真正落盘的那段字节算"
+        );
+        assert!(
+            Manifest::parse(&next.to_wire()).is_ok(),
+            "压实产物必须自校验通过"
+        );
     }
 
     /// 压实过一次之后，用户改**一条**笔记不该再把整份基线重写一遍。
@@ -594,11 +740,25 @@ mod tests {
     #[test]
     fn one_edit_after_a_compaction_does_not_rewrite_the_baseline() {
         let mut m = sample();
-        let (sref, _e) = seg("seg-0000", "a", "z", (0..2000).map(|i| entry(&format!("{i:026}"), 1, "aaaaaaaaaaaa")).collect());
+        let (sref, _e) = seg(
+            "seg-0000",
+            "a",
+            "z",
+            (0..2000)
+                .map(|i| entry(&format!("{i:026}"), 1, "aaaaaaaaaaaa"))
+                .collect(),
+        );
         m.segments = vec![sref];
-        m.window = Window { since_seq: m.seq, complete: true, entries: vec![entry("m000000000000000000000001", 7, "aaaaaaaaaaab")] };
+        m.window = Window {
+            since_seq: m.seq,
+            complete: true,
+            entries: vec![entry("m000000000000000000000001", 7, "aaaaaaaaaaab")],
+        };
         m.refresh_checksum();
-        assert!(!m.needs_compaction(m.window.since_seq), "只改了一条就把整份基线折回去重写");
+        assert!(
+            !m.needs_compaction(m.window.since_seq),
+            "只改了一条就把整份基线折回去重写"
+        );
     }
 
     #[test]
@@ -620,10 +780,17 @@ mod tests {
         let m = sample();
         let mut cached = BTreeMap::new();
         cached.insert("seg-0000".to_string(), m.segments[0].hash12.clone());
-        assert!(m.segments_needed_for(&cached).is_empty(), "hash 未变不应重拉分段");
+        assert!(
+            m.segments_needed_for(&cached).is_empty(),
+            "hash 未变不应重拉分段"
+        );
         cached.insert("seg-0000".to_string(), "ffffffffffff".into());
         assert_eq!(m.segments_needed_for(&cached), vec!["seg-0000".to_string()]);
-        assert_eq!(m.segments_needed_for(&BTreeMap::new()), vec!["seg-0000".to_string()], "全新设备需拉全部分段");
+        assert_eq!(
+            m.segments_needed_for(&BTreeMap::new()),
+            vec!["seg-0000".to_string()],
+            "全新设备需拉全部分段"
+        );
     }
 
     #[test]
@@ -643,6 +810,9 @@ mod tests {
         let mut m = sample();
         m.window.entries.push(entry("z", 3, "cccccccccccc"));
         m.refresh_checksum();
-        assert!(matches!(Manifest::parse(&m.to_wire()), Err(ManifestError::DuplicateEntry(_))));
+        assert!(matches!(
+            Manifest::parse(&m.to_wire()),
+            Err(ManifestError::DuplicateEntry(_))
+        ));
     }
 }

@@ -47,7 +47,10 @@ impl EntityId {
             && !self.0.contains("..")
             && !self.0.contains('/')
             && !self.0.contains('\\')
-            && self.0.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            && self
+                .0
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
     }
 
     /// 清单分段的二分定位用（v7 前缀即时间序）。
@@ -111,7 +114,9 @@ pub enum IdentityError {
 /// 修订号：每实体单调递增的 Lamport 式整数（I2）。
 ///
 /// **禁止**手写 `rev + 1`：一律经 [`next_rev`]，否则跨设备并发下会撞号。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(transparent)]
 pub struct Rev(pub u64);
 
@@ -160,7 +165,11 @@ pub fn same_content_hash(a: &str, b: &str) -> bool {
     if x.is_empty() || y.is_empty() {
         return false;
     }
-    let (short, long) = if x.len() <= y.len() { (x.as_str(), y.as_str()) } else { (y.as_str(), x.as_str()) };
+    let (short, long) = if x.len() <= y.len() {
+        (x.as_str(), y.as_str())
+    } else {
+        (y.as_str(), x.as_str())
+    };
     if short.len() == long.len() {
         return short == long;
     }
@@ -265,17 +274,22 @@ impl Timestamp {
         &self.0
     }
     pub fn parse(s: &str) -> Option<Self> {
-        chrono::DateTime::parse_from_rfc3339(s).ok().map(|d| Self::new(d.with_timezone(&chrono::Utc)))
+        chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|d| Self::new(d.with_timezone(&chrono::Utc)))
     }
     /// 毫秒刻度。只用于**缓存有效期**这类墙上时间差（探测节奏、退避），
     /// 不参与记录新旧判定（I4/R3 约束的是数据，不是时钟）。
     pub fn as_millis(&self) -> Option<i64> {
-        chrono::DateTime::parse_from_rfc3339(&self.0).ok().map(|d| d.timestamp_millis())
+        chrono::DateTime::parse_from_rfc3339(&self.0)
+            .ok()
+            .map(|d| d.timestamp_millis())
     }
     /// `as_millis` 的反向：给"多久之后过期"算一个时间戳。
     pub fn from_millis(ms: i64) -> Self {
         Self::new(
-            chrono::DateTime::from_timestamp(ms / 1000, ((ms % 1000).max(0) as u32) * 1_000_000).unwrap_or_default(),
+            chrono::DateTime::from_timestamp(ms / 1000, ((ms % 1000).max(0) as u32) * 1_000_000)
+                .unwrap_or_default(),
         )
     }
 }
@@ -469,9 +483,16 @@ mod crash_tests {
     #[test]
     fn crash_point_lists_partition_registry() {
         for extra in CRASH_POINTS_NEED_LARGE_LIBRARY {
-            assert!(CRASH_POINTS.contains(extra), "{extra} 未登记在 CRASH_POINTS");
+            assert!(
+                CRASH_POINTS.contains(extra),
+                "{extra} 未登记在 CRASH_POINTS"
+            );
         }
-        assert_eq!(CRASH_POINTS_NEED_LARGE_LIBRARY.len(), 1, "大库专属点应当逐个有据可查");
+        assert_eq!(
+            CRASH_POINTS_NEED_LARGE_LIBRARY.len(),
+            1,
+            "大库专属点应当逐个有据可查"
+        );
         assert!(CRASH_POINTS.len() > CRASH_POINTS_NEED_LARGE_LIBRARY.len());
     }
 
@@ -502,14 +523,20 @@ mod hash_shape_tests {
     #[test]
     fn full_hashes_match_regardless_of_prefix_and_case() {
         assert!(same_content_hash(FULL, &format!("sha256:{FULL}")));
-        assert!(same_content_hash(&format!("sha256:{}", FULL.to_ascii_uppercase()), FULL));
+        assert!(same_content_hash(
+            &format!("sha256:{}", FULL.to_ascii_uppercase()),
+            FULL
+        ));
     }
 
     #[test]
     fn a_12_char_manifest_hash_matches_the_full_hash_it_came_from() {
         // 生产形状：远端索引 `hash12` 存 12 位，本地行上存整条。
         assert!(same_content_hash(&FULL[..12], &format!("sha256:{FULL}")));
-        assert!(same_content_hash(&format!("sha256:{FULL}"), &FULL[..12]), "两侧谁长谁短都要成立");
+        assert!(
+            same_content_hash(&format!("sha256:{FULL}"), &FULL[..12]),
+            "两侧谁长谁短都要成立"
+        );
     }
 
     #[test]
@@ -571,7 +598,11 @@ mod tests {
         let h = ContentHash::of(b"notera");
         let full = h.as_str().to_string();
         // short() 是 hex 的**前缀**（截断提示），不是后缀。
-        assert!(full.starts_with(&format!("sha256:{}", h.short())), "{full} / {}", h.short());
+        assert!(
+            full.starts_with(&format!("sha256:{}", h.short())),
+            "{full} / {}",
+            h.short()
+        );
         assert_eq!(h.short().len(), 12);
         assert_eq!(full.len(), "sha256:".len() + 64);
     }

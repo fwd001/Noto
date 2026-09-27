@@ -149,7 +149,9 @@ impl WebDavRemote {
     async fn probe_range(&self) -> Result<bool, RemoteError> {
         let url = self.probe_url("range.bin");
         self.put_plain(&url, BODY2).await?;
-        let s = self.spec(HttpMethod::Get, &url)?.with_header("range", "bytes=0-0");
+        let s = self
+            .spec(HttpMethod::Get, &url)?
+            .with_header("range", "bytes=0-0");
         let resp = self.send_once(s).await?;
         if resp.status != 206 {
             return Ok(false);
@@ -158,7 +160,13 @@ impl WebDavRemote {
     }
 
     async fn cleanup_probe_files(&self) {
-        for name in ["etag.json", "cput.json", "mv-a.json", "mv-b.json", "range.bin"] {
+        for name in [
+            "etag.json",
+            "cput.json",
+            "mv-a.json",
+            "mv-b.json",
+            "range.bin",
+        ] {
             self.best_effort_delete(&self.probe_url(name)).await;
         }
     }

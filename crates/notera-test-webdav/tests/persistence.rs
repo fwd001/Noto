@@ -20,9 +20,15 @@ async fn fs_backend_survives_restart_with_identical_etags() {
     let etag_before = before.etag().unwrap_or_default().to_string();
 
     // 磁盘上真的有文件（不是"其实没重启"的假象）
-    assert!(dir.join(".notes").join("records").join("note").join("a.json").exists(),
+    assert!(
+        dir.join(".notes")
+            .join("records")
+            .join("note")
+            .join("a.json")
+            .exists(),
         "Fs 模式必须真的落盘: {:?}",
-        dir);
+        dir
+    );
 
     s.restart().await;
     assert_eq!(s.generation(), 2, "RESTART 要换代");
@@ -48,7 +54,14 @@ async fn fs_backend_survives_restart_with_identical_etags() {
     assert_eq!(re.status, 304, "重启后 If-None-Match 仍须命中");
 
     // 集合结构也从磁盘恢复
-    let pf = send(s.addr, "PROPFIND", "/.notes", &[support::h("depth", "1")], ALLPROP).await;
+    let pf = send(
+        s.addr,
+        "PROPFIND",
+        "/.notes",
+        &[support::h("depth", "1")],
+        ALLPROP,
+    )
+    .await;
     let t = String::from_utf8_lossy(&pf.body).into_owned();
     assert!(t.contains("<D:href>/.notes/records/</D:href>"), "{t}");
     assert!(t.contains("<D:href>/.notes/manifest/</D:href>"), "{t}");
@@ -110,12 +123,25 @@ async fn delete_and_move_are_reflected_on_disk() {
     )
     .await;
     assert_eq!(mv.status, 201);
-    assert!(!dir.join(".notes").join("tmp").join("dev-a.json").exists(), "MOVE 后旧文件必须消失");
-    assert!(dir.join(".notes").join("records").join("note").join("a.json").exists());
+    assert!(
+        !dir.join(".notes").join("tmp").join("dev-a.json").exists(),
+        "MOVE 后旧文件必须消失"
+    );
+    assert!(dir
+        .join(".notes")
+        .join("records")
+        .join("note")
+        .join("a.json")
+        .exists());
 
     let del = send(s.addr, "DELETE", "/.notes/records/note/a.json", &[], &[]).await;
     assert_eq!(del.status, 204);
-    assert!(!dir.join(".notes").join("records").join("note").join("a.json").exists());
+    assert!(!dir
+        .join(".notes")
+        .join("records")
+        .join("note")
+        .join("a.json")
+        .exists());
     s.stop().await;
     cleanup(&dir);
 }

@@ -116,9 +116,8 @@ fn dispatch(store: &mut Store, req: &Request, path: &str) -> Reply {
         "PROPPATCH" => proppatch(store, req, path),
         "MOVE" => move_it(store, req, path),
         "COPY" => copy_it(store, req, path),
-        "LOCK" | "UNLOCK" | "UNPROPFIND" | "SEARCH" => Reply::new(501).text(
-            "本测试服务器不实现 LOCK（租约是尽力而为，见 SYNC-PROTOCOL §11.2 / ADR）",
-        ),
+        "LOCK" | "UNLOCK" | "UNPROPFIND" | "SEARCH" => Reply::new(501)
+            .text("本测试服务器不实现 LOCK（租约是尽力而为，见 SYNC-PROTOCOL §11.2 / ADR）"),
         other => Reply::new(405)
             .with("allow", ALLOW)
             .text(&format!("未实现的方法 {other}")),
@@ -141,7 +140,9 @@ fn get(store: &Store, req: &Request, path: &str) -> Reply {
         return Reply::new(404).text(&format!("未找到 {path}"));
     };
     if node.is_dir {
-        return Reply::new(405).with("allow", ALLOW).text("GET 不能作用于集合");
+        return Reply::new(405)
+            .with("allow", ALLOW)
+            .text("GET 不能作用于集合");
     }
     let etag = node.etag();
 
@@ -170,10 +171,9 @@ fn get(store: &Store, req: &Request, path: &str) -> Reply {
                 .body_bytes(node.bytes[from..=to].to_vec());
         }
         if !range.trim().is_empty() {
-            return base.status(416).with(
-                "content-range",
-                format!("bytes */{}", node.bytes.len()),
-            );
+            return base
+                .status(416)
+                .with("content-range", format!("bytes */{}", node.bytes.len()));
         }
     }
     base.body_bytes(node.bytes.clone())
@@ -248,7 +248,12 @@ fn propfind(store: &Store, req: &Request, path: &str) -> Reply {
         entries.push(entry_of(store, path));
     } else if depth == "1" {
         entries.push(entry_of(store, path));
-        entries.extend(store.children(path).iter().filter_map(|p| entry_of_opt(store, p)));
+        entries.extend(
+            store
+                .children(path)
+                .iter()
+                .filter_map(|p| entry_of_opt(store, p)),
+        );
     } else if depth == "infinity" {
         entries.push(entry_of(store, path));
         entries.extend(

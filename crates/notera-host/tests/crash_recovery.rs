@@ -33,7 +33,8 @@ struct Tmp(PathBuf);
 impl Tmp {
     fn new(tag: &str) -> Self {
         let n = SEQ.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("notera-crash-{tag}-{}-{n}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("notera-crash-{tag}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
@@ -79,7 +80,10 @@ fn boot(dir: &Path, base_url: &str) -> App {
 /// 是为了让"新加了注入点却没人覆盖"变成编译期/断言期就炸，而不是静静少测一格。
 fn matrix_points() -> Vec<&'static str> {
     for extra in notera_core::CRASH_POINTS_NEED_LARGE_LIBRARY {
-        assert!(notera_core::CRASH_POINTS.contains(extra), "大库名单里的 {extra} 不在 CRASH_POINTS 里");
+        assert!(
+            notera_core::CRASH_POINTS.contains(extra),
+            "大库名单里的 {extra} 不在 CRASH_POINTS 里"
+        );
     }
     notera_core::CRASH_POINTS
         .iter()
@@ -93,8 +97,13 @@ fn child_writes_and_syncs() {
     let Ok(spec) = std::env::var(CHILD) else {
         return; // 不是子进程模式：这条测试什么都不做（父进程靠 spawn 显式启用）
     };
-    let Some((dir, url)) = spec.split_once('|') else { return };
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let Some((dir, url)) = spec.split_once('|') else {
+        return;
+    };
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     rt.block_on(async move {
         let app = boot(Path::new(dir), url);
         let folder = app.default_folder_id().unwrap();
@@ -144,12 +153,22 @@ fn stuck_report(app: &App) -> String {
     };
     let counts = format!(
         "outbox pending={} inflight={} failed={}",
-        app.store().outbox_len(&acct, &[notera_store::OpState::Pending]).unwrap_or(u32::MAX),
-        app.store().outbox_len(&acct, &[notera_store::OpState::Inflight]).unwrap_or(u32::MAX),
-        app.store().outbox_len(&acct, &[notera_store::OpState::Failed]).unwrap_or(u32::MAX),
+        app.store()
+            .outbox_len(&acct, &[notera_store::OpState::Pending])
+            .unwrap_or(u32::MAX),
+        app.store()
+            .outbox_len(&acct, &[notera_store::OpState::Inflight])
+            .unwrap_or(u32::MAX),
+        app.store()
+            .outbox_len(&acct, &[notera_store::OpState::Failed])
+            .unwrap_or(u32::MAX),
     );
     let mut dirty = Vec::new();
-    for r in app.store().list_notes(&NoteQuery::all()).unwrap_or_default() {
+    for r in app
+        .store()
+        .list_notes(&NoteQuery::all())
+        .unwrap_or_default()
+    {
         if let Ok(Some(n)) = app.store().get_note(&r.id) {
             if n.rev != n.sync_rev {
                 dirty.push(format!("{} rev={} sync_rev={}", n.title, n.rev, n.sync_rev));
@@ -158,14 +177,25 @@ fn stuck_report(app: &App) -> String {
     }
     let mut rows = Vec::new();
     for o in app.store().outbox_take(&acct, 8).unwrap_or_default() {
-        rows.push(format!("{} rev={:?} sha={:?} op={:?}", o.kind, o.payload_rev, o.sha256.map(|s| s[..8].to_string()), o.op));
+        rows.push(format!(
+            "{} rev={:?} sha={:?} op={:?}",
+            o.kind,
+            o.payload_rev,
+            o.sha256.map(|s| s[..8].to_string()),
+            o.op
+        ));
     }
     format!("{counts}；脏笔记 {dirty:?}；待办行 {rows:?}")
 }
 
 fn spawn_crashed(point: &str, dir: &Path, url: &str) -> i32 {
     let out = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "child_writes_and_syncs", "--nocapture", "--test-threads=1"])
+        .args([
+            "--exact",
+            "child_writes_and_syncs",
+            "--nocapture",
+            "--test-threads=1",
+        ])
         .env(CHILD, format!("{}|{}", dir.display(), url))
         .env("NOTERA_CRASH_AT", point)
         .env("NOTERA_DEV_WEBDAV_SECRET", SECRET)
@@ -175,7 +205,10 @@ fn spawn_crashed(point: &str, dir: &Path, url: &str) -> i32 {
     let code = out.status.code().unwrap_or(-1);
     // 死法也必须是"被注入杀死"：正常退出说明这一点根本没人经过；
     // panic / 其它非零码说明进程是被别的原因弄挂的 —— 那都不算崩溃注入的证据。
-    assert_eq!(code, CRASH_EXIT_CODE, "注入点 {point} 没有让进程死在那里（退出码 {code}）\nstderr={stderr}");
+    assert_eq!(
+        code, CRASH_EXIT_CODE,
+        "注入点 {point} 没有让进程死在那里（退出码 {code}）\nstderr={stderr}"
+    );
     code
 }
 
@@ -216,7 +249,10 @@ async fn every_crash_point_is_on_the_real_path_and_the_library_recovers() {
 
         // 重启 = 同一个目录再开一次，然后把这一轮跑完（正文 + 附件，和生产调度器一样）
         let stats = a.sync_once().await.expect("崩溃后的恢复轮");
-        assert!(stats.outcome != notera_sync::RoundOutcome::Failed, "在 {point} 崩过一次，恢复轮直接失败：{stats:?}");
+        assert!(
+            stats.outcome != notera_sync::RoundOutcome::Failed,
+            "在 {point} 崩过一次，恢复轮直接失败：{stats:?}"
+        );
         if let Some(remote) = a.remote_for_sync().await.expect("装配远端") {
             a.run_attachment_round(&remote).await;
         }
@@ -247,7 +283,10 @@ async fn every_crash_point_is_on_the_real_path_and_the_library_recovers() {
         .into_iter()
         .map(|r| r.title)
         .collect();
-    assert!(a_titles.iter().any(|t| t.contains("对面那台")), "别人的笔记没能拉下来：{a_titles:?}");
+    assert!(
+        a_titles.iter().any(|t| t.contains("对面那台")),
+        "别人的笔记没能拉下来：{a_titles:?}"
+    );
     for point in matrix_points() {
         let mine = a_titles.iter().filter(|t| t.ends_with(point)).count();
         assert_eq!(
@@ -258,15 +297,30 @@ async fn every_crash_point_is_on_the_real_path_and_the_library_recovers() {
 
     let b = boot(b_dir.path(), &url);
     b.sync_once().await.expect("B 拉取");
-    let mut b_titles: Vec<String> = b.store().list_notes(&NoteQuery::all()).unwrap().into_iter().map(|r| r.title).collect();
+    let mut b_titles: Vec<String> = b
+        .store()
+        .list_notes(&NoteQuery::all())
+        .unwrap()
+        .into_iter()
+        .map(|r| r.title)
+        .collect();
     b_titles.sort();
     let mut a_sorted = a_titles.clone();
     a_sorted.sort();
-    assert_eq!(b_titles, a_sorted, "崩了九次之后两台设备必须逐条一致（多了=造副本，少了=丢数据）");
+    assert_eq!(
+        b_titles, a_sorted,
+        "崩了九次之后两台设备必须逐条一致（多了=造副本，少了=丢数据）"
+    );
 
     let st = a.store().stats().unwrap();
-    assert_eq!(st.dirty_notes, 0, "崩溃若干次后本地还留着未公告的改动：{st:?}");
-    assert_eq!(st.outbox_pending, 0, "outbox 没结清，改动会永远悬着：{st:?}");
+    assert_eq!(
+        st.dirty_notes, 0,
+        "崩溃若干次后本地还留着未公告的改动：{st:?}"
+    );
+    assert_eq!(
+        st.outbox_pending, 0,
+        "outbox 没结清，改动会永远悬着：{st:?}"
+    );
     assert_eq!(
         st.attachments as usize,
         matrix_points().len() - 1,

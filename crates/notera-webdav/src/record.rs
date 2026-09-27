@@ -70,12 +70,20 @@ mod tests {
 
     #[test]
     fn outgoing_requires_rev_and_hash() {
-        assert!(WireMeta::parse_outgoing(b"{\"rev\":3}").is_err(), "缺 hash 的记录无法复验，必须拒写");
+        assert!(
+            WireMeta::parse_outgoing(b"{\"rev\":3}").is_err(),
+            "缺 hash 的记录无法复验，必须拒写"
+        );
         assert!(WireMeta::parse_outgoing(b"not json").is_err());
         assert!(WireMeta::parse_outgoing(b"[]").is_err());
-        let ok = WireMeta::parse_outgoing(br#"{"rev":3,"hash":"sha256:AA","kind":"note","id":"x"}"#).expect("合法");
+        let ok =
+            WireMeta::parse_outgoing(br#"{"rev":3,"hash":"sha256:AA","kind":"note","id":"x"}"#)
+                .expect("合法");
         assert_eq!(ok.rev, 3);
-        assert_eq!(ok.hash, "sha256:aa", "hash 归一小写，免得大小写两种写法判成两条内容");
+        assert_eq!(
+            ok.hash, "sha256:aa",
+            "hash 归一小写，免得大小写两种写法判成两条内容"
+        );
         assert_eq!(ok.kind.as_deref(), Some("note"));
     }
 

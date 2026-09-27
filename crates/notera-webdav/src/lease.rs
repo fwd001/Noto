@@ -73,8 +73,19 @@ impl WebDavRemote {
 
     /// 贴上/续上本设备的租约（无条件 PUT：这一份只有我们写）。
     /// 失败按 best-effort 处理：调用方记一条 debug 就继续，绝不因为贴不上而停止同步。
-    pub async fn lease_publish(&self, device: &str, token: &str, expires_at: &str, seq: u64) -> Result<(), RemoteError> {
-        let doc = LockDoc { device: device.to_string(), token: token.to_string(), expires_at: expires_at.to_string(), seq };
+    pub async fn lease_publish(
+        &self,
+        device: &str,
+        token: &str,
+        expires_at: &str,
+        seq: u64,
+    ) -> Result<(), RemoteError> {
+        let doc = LockDoc {
+            device: device.to_string(),
+            token: token.to_string(),
+            expires_at: expires_at.to_string(),
+            seq,
+        };
         let body = serde_json::to_vec(&doc).map_err(|e| RemoteError::Protocol(e.to_string()))?;
         let url = self.lock_url(device);
         let s = self
@@ -83,7 +94,10 @@ impl WebDavRemote {
             .with_body(body);
         let resp = self.send_once(s).await?;
         if !matches!(resp.status, 200 | 201 | 204) {
-            return Err(RemoteError::Protocol(format!("租约写入被拒: {}", resp.status)));
+            return Err(RemoteError::Protocol(format!(
+                "租约写入被拒: {}",
+                resp.status
+            )));
         }
         Ok(())
     }
@@ -98,7 +112,11 @@ impl WebDavRemote {
     /// * `PROPFIND Depth:1` 列目录（服务器普遍支持；不支持就跳过）；
     /// * 外加调用方给的一组"已知设备 id"逐个 `GET`——这是从清单的
     ///   `generated_by` 学到的对手，恰好就是最可能撞车的那台，且不需要列目录能力。
-    pub async fn lease_peers(&self, device: &str, known_devices: &[String]) -> Result<Vec<LockDoc>, RemoteError> {
+    pub async fn lease_peers(
+        &self,
+        device: &str,
+        known_devices: &[String],
+    ) -> Result<Vec<LockDoc>, RemoteError> {
         let mut found: Vec<LockDoc> = Vec::new();
         let mut seen: Vec<String> = Vec::new();
         for name in self.list_lock_names().await.unwrap_or_default() {

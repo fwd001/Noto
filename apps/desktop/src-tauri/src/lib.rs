@@ -38,10 +38,13 @@ async fn notera_command(
 ) -> Result<serde_json::Value, serde_json::Value> {
     let app = Arc::clone(&shell.app);
     // SQLite 是同步的：绝不在主线程跑命令，否则一次列表扫描就能冻结窗口。
-    let joined = tauri::async_runtime::spawn_blocking(move || commands::dispatch(&app, &name, args)).await;
+    let joined =
+        tauri::async_runtime::spawn_blocking(move || commands::dispatch(&app, &name, args)).await;
     match joined {
         Ok(Ok(value)) => Ok(value),
-        Ok(Err(err)) => Err(serde_json::to_value(&err).unwrap_or_else(|_| reject("serialize", false, err.code))),
+        Ok(Err(err)) => {
+            Err(serde_json::to_value(&err).unwrap_or_else(|_| reject("serialize", false, err.code)))
+        }
         Err(e) => Err(reject("handler_panic", true, e.to_string())),
     }
 }
@@ -57,7 +60,13 @@ fn pump_events(app: &App, handle: &tauri::AppHandle) {
             // 窗口不在前台时，"要人裁决"的那两类事实只能靠系统通知递到手边。
             // 判定是纯函数（`notice_for`），所以"哪些事件会响"这件事本身有测试。
             if let Some(n) = notice_for(&event) {
-                if let Err(e) = sink.notification().builder().title(&n.title).body(&n.body).show() {
+                if let Err(e) = sink
+                    .notification()
+                    .builder()
+                    .title(&n.title)
+                    .body(&n.body)
+                    .show()
+                {
                     eprintln!("[notera] 系统通知没送出去：{e}（界面上的冲突收件箱不受影响）");
                 }
             }
@@ -106,12 +115,18 @@ pub fn run() {
             let app = App::boot(&dir).map_err(|e| format!("核心启动失败：{e}"))?;
             let app = Arc::new(app);
             pump_events(&app, handle.app_handle());
-            handle.app_handle().manage(Shell { app: Arc::clone(&app) });
+            handle.app_handle().manage(Shell {
+                app: Arc::clone(&app),
+            });
             // 原生菜单在窗口显示**之前**挂好：第一帧就该看到本应用的菜单，
             // 而不是 Tauri 那份只有 Cut/Copy/Quit 的默认菜单。
             // 移动端没有原生菜单栏，`set_menu` 在那里是**会失败**的 —— 不加这道
             // 守卫，同一个 setup 会把 Android/iOS 构建直接顶死在启动上。
-            if cfg!(any(target_os = "windows", target_os = "macos", target_os = "linux")) {
+            if cfg!(any(
+                target_os = "windows",
+                target_os = "macos",
+                target_os = "linux"
+            )) {
                 attach_menu(handle.app_handle()).map_err(|e| format!("原生菜单挂载失败：{e}"))?;
             }
             if let Some(w) = handle.get_webview_window("main") {
@@ -133,7 +148,10 @@ pub fn run() {
                             // 配置在启动期间被改掉（拔了账户）：静默退回"只用本地"。
                             Ok(None) => return,
                             Err(e) => {
-                                host.emit(BusEvent::Toast { message_key: e.message_key, level: "warn".into() });
+                                host.emit(BusEvent::Toast {
+                                    message_key: e.message_key,
+                                    level: "warn".into(),
+                                });
                                 return;
                             }
                         };
@@ -144,19 +162,30 @@ pub fn run() {
                                 let att = host.clone();
                                 let att_remote = std::sync::Arc::clone(&remote);
                                 tauri::async_runtime::spawn(async move {
-                                    att.run_attachments(att_remote, std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)))
-                                        .await;
+                                    att.run_attachments(
+                                        att_remote,
+                                        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                                            false,
+                                        )),
+                                    )
+                                    .await;
                                 });
                                 host.start_sync(remote).run().await
                             }
                             Err(key) => {
-                                host.emit(BusEvent::Toast { message_key: key.to_string(), level: "warn".into() });
+                                host.emit(BusEvent::Toast {
+                                    message_key: key.to_string(),
+                                    level: "warn".into(),
+                                });
                             }
                         }
                     });
                 }
                 Ok(None) => {}
-                Err(e) => app.emit(BusEvent::Toast { message_key: e.message_key, level: "warn".into() }),
+                Err(e) => app.emit(BusEvent::Toast {
+                    message_key: e.message_key,
+                    level: "warn".into(),
+                }),
             }
             Ok(())
         })

@@ -235,9 +235,19 @@ impl Store {
         if let Some(p) = parent(path) {
             self.makedirs(&p)?;
         }
-        let props = self.nodes.get(path).map(|n| n.props.clone()).unwrap_or_default();
-        self.nodes
-            .insert(path.to_string(), Node { is_dir: false, bytes, props });
+        let props = self
+            .nodes
+            .get(path)
+            .map(|n| n.props.clone())
+            .unwrap_or_default();
+        self.nodes.insert(
+            path.to_string(),
+            Node {
+                is_dir: false,
+                bytes,
+                props,
+            },
+        );
         self.persist(path)
     }
 
@@ -500,7 +510,11 @@ impl Store {
             out.push(DumpEntry {
                 path: path.clone(),
                 is_dir: node.is_dir,
-                bytes: if node.is_dir { 0 } else { node.bytes.len() as u64 },
+                bytes: if node.is_dir {
+                    0
+                } else {
+                    node.bytes.len() as u64
+                },
                 sha256: if node.is_dir {
                     String::new()
                 } else {
@@ -585,8 +599,14 @@ mod tests {
         assert!(s.contains("/.notes"));
         assert!(s.contains("/.notes/records"));
         // 已存在 → Exists；父不存在 → NoParent。
-        assert!(matches!(s.mkdir("/.notes/records"), Ok(Err(MkdirError::Exists))));
-        assert!(matches!(s.mkdir("/deep/x/y"), Ok(Err(MkdirError::NoParent))));
+        assert!(matches!(
+            s.mkdir("/.notes/records"),
+            Ok(Err(MkdirError::Exists))
+        ));
+        assert!(matches!(
+            s.mkdir("/deep/x/y"),
+            Ok(Err(MkdirError::NoParent))
+        ));
         assert!(matches!(s.mkdir("/.notes/locks"), Ok(Ok(()))));
     }
 
@@ -642,7 +662,8 @@ mod tests {
     #[test]
     fn dump_reports_hash_and_size() {
         let mut s = Store::open(BackendKind::Mem).unwrap();
-        s.write_file("/.notes/protocol.json", b"{}".to_vec()).unwrap();
+        s.write_file("/.notes/protocol.json", b"{}".to_vec())
+            .unwrap();
         let d = s.dump(Some("/.notes"));
         assert_eq!(d.len(), 2, "{d:?}"); // 集合 + 文件
         let f = d.iter().find(|e| !e.is_dir).unwrap();

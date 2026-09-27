@@ -112,7 +112,11 @@ impl RemotePath {
             "attachments" => {
                 check_sha_hex(id)?;
                 let two = &id[..2];
-                Ok(RecordPath { url: self.url(&["attachments", two, id]), dir: "attachments", on_server: format!("/attachments/{two}/{id}") })
+                Ok(RecordPath {
+                    url: self.url(&["attachments", two, id]),
+                    dir: "attachments",
+                    on_server: format!("/attachments/{two}/{id}"),
+                })
             }
             d => {
                 check_uuid_id(id)?;
@@ -134,7 +138,13 @@ impl RemotePath {
     /// 记录原子写的暂存路径：`tmp/<device>-<nonce>-<kind>-<id>.json`。
     ///
     /// nonce 每次自增，因此同一实体的两个写永不撞名（§11.3 C2：残留交给 24h 维护轮清理）。
-    pub fn record_tmp(&self, kind: &str, id: &str, device: &str, nonce: u64) -> Result<String, PathError> {
+    pub fn record_tmp(
+        &self,
+        kind: &str,
+        id: &str,
+        device: &str,
+        nonce: u64,
+    ) -> Result<String, PathError> {
         let dir = kind_dir(kind)?;
         if dir == "attachments" {
             check_sha_hex(id)?;
@@ -142,7 +152,10 @@ impl RemotePath {
             check_uuid_id(id)?;
         }
         let name = format!("{}-{}-{}-{}", checked_token(device)?, nonce, dir, id);
-        Ok(self.url(&["tmp", &format!("{}.json", checked_name(&name, "记录暂存名")?)]))
+        Ok(self.url(&[
+            "tmp",
+            &format!("{}.json", checked_name(&name, "记录暂存名")?),
+        ]))
     }
 
     /// 一个 URL 是否落在本根之内（`MOVE` 的 `Destination` 必须满足，否则是把数据搬出根）。
@@ -185,7 +198,8 @@ pub fn kind_matches(kind: &str, other: &str) -> bool {
 
 fn check_uuid_id(id: &str) -> Result<(), PathError> {
     let parsed = EntityId::parse(id).map_err(|_| PathError::BadId(id.to_string()))?;
-    notera_core::assert_id_valid(&parsed).map_err(|e| PathError::BadId(format!("{id} ({})", e.detail)))?;
+    notera_core::assert_id_valid(&parsed)
+        .map_err(|e| PathError::BadId(format!("{id} ({})", e.detail)))?;
     if parsed.as_str() != id {
         return Err(PathError::BadId(format!("{id} 不是规范化小写形态")));
     }
@@ -193,7 +207,11 @@ fn check_uuid_id(id: &str) -> Result<(), PathError> {
 }
 
 fn check_sha_hex(sha: &str) -> Result<(), PathError> {
-    if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+    if sha.len() != 64
+        || !sha
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
         return Err(PathError::BadId(format!("附件 sha256 非法: {sha}")));
     }
     Ok(())
@@ -201,7 +219,9 @@ fn check_sha_hex(sha: &str) -> Result<(), PathError> {
 
 /// 分段名必须是 `seg-<digits>`（§1）。分段名来自服务器清单，属于不可信输入。
 fn check_segment_name(name: &str) -> Result<(), PathError> {
-    let digits = name.strip_prefix("seg-").ok_or_else(|| PathError::BadSegment(name.to_string()))?;
+    let digits = name
+        .strip_prefix("seg-")
+        .ok_or_else(|| PathError::BadSegment(name.to_string()))?;
     if digits.is_empty() || digits.len() > 8 || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return Err(PathError::BadSegment(name.to_string()));
     }
@@ -211,7 +231,8 @@ fn check_segment_name(name: &str) -> Result<(), PathError> {
 /// 设备 id 当路径片段用：必须是路径安全 UUID。
 fn checked_token(device: &str) -> Result<String, PathError> {
     let parsed = EntityId::parse(device).map_err(|_| PathError::BadId(device.to_string()))?;
-    notera_core::assert_id_valid(&parsed).map_err(|e| PathError::BadId(format!("{device} ({})", e.detail)))?;
+    notera_core::assert_id_valid(&parsed)
+        .map_err(|e| PathError::BadId(format!("{device} ({})", e.detail)))?;
     Ok(parsed.as_str().to_string())
 }
 
@@ -228,9 +249,14 @@ fn validate_name(raw: &str, what: &str) -> Result<String, PathError> {
         return Err(PathError::BadSegment(format!("{what} 长度非法: {raw:?}")));
     }
     if raw.contains("..") || raw == "." || raw == ".." {
-        return Err(PathError::BadSegment(format!("{what} 含目录穿越片段: {raw:?}")));
+        return Err(PathError::BadSegment(format!(
+            "{what} 含目录穿越片段: {raw:?}"
+        )));
     }
-    if !raw.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')) {
+    if !raw
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
         // `/` `\` `%` `?` `#` `:` 空格 非 ASCII 全部落在这里。
         return Err(PathError::BadSegment(format!("{what} 含非法字符: {raw:?}")));
     }
@@ -243,14 +269,20 @@ fn normalize_base(raw: &str) -> Result<String, PathError> {
         return Err(PathError::BadUrl("base_url 为空".into()));
     }
     let Some((scheme, rest)) = t.split_once("//") else {
-        return Err(PathError::BadUrl(format!("base_url 缺少 scheme/authority: {t}")));
+        return Err(PathError::BadUrl(format!(
+            "base_url 缺少 scheme/authority: {t}"
+        )));
     };
     if scheme != "http:" && scheme != "https:" {
-        return Err(PathError::BadUrl(format!("只支持 http/https，得到 {scheme:?}")));
+        return Err(PathError::BadUrl(format!(
+            "只支持 http/https，得到 {scheme:?}"
+        )));
     }
     if rest.contains('@') {
         // 凭据写进 URL 会进日志，且跨源重定向的凭据闸门无法判定（PROXY.md §3/§9）。
-        return Err(PathError::BadUrl("base_url 不得含 user:pass@，请改用 Credentials".into()));
+        return Err(PathError::BadUrl(
+            "base_url 不得含 user:pass@，请改用 Credentials".into(),
+        ));
     }
     let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let (authority, tail) = rest.split_at(authority_end);
@@ -299,10 +331,22 @@ mod tests {
     fn layout_matches_protocol_section_1() {
         let p = paths();
         let id = EntityId::new();
-        assert_eq!(p.manifest_index(), "http://dav.local:5005/.notes/manifest/index.json");
-        assert_eq!(p.manifest_prev(), "http://dav.local:5005/.notes/manifest/index.json.prev");
-        assert_eq!(p.protocol_json(), "http://dav.local:5005/.notes/protocol.json");
-        assert_eq!(p.segment("seg-0000").unwrap(), "http://dav.local:5005/.notes/manifest/seg-0000.json");
+        assert_eq!(
+            p.manifest_index(),
+            "http://dav.local:5005/.notes/manifest/index.json"
+        );
+        assert_eq!(
+            p.manifest_prev(),
+            "http://dav.local:5005/.notes/manifest/index.json.prev"
+        );
+        assert_eq!(
+            p.protocol_json(),
+            "http://dav.local:5005/.notes/protocol.json"
+        );
+        assert_eq!(
+            p.segment("seg-0000").unwrap(),
+            "http://dav.local:5005/.notes/manifest/seg-0000.json"
+        );
         assert_eq!(
             p.record("n", id.as_str()).unwrap().url,
             format!("http://dav.local:5005/.notes/records/note/{id}.json")
@@ -312,19 +356,44 @@ mod tests {
             format!("http://dav.local:5005/.notes/records/folder/{id}.json")
         );
         let sha = "a".repeat(64);
-        assert_eq!(p.record("a", &sha).unwrap().url, format!("http://dav.local:5005/.notes/attachments/aa/{sha}"));
-        assert!(p.manifest_tmp(&id.to_string(), 7).unwrap().ends_with(&format!("manifest/index.json.tmp-{id}-7")));
-        assert!(p.record_tmp("n", id.as_str(), &id.to_string(), 3).unwrap().ends_with(&format!("tmp/{id}-3-note-{id}.json")));
-        assert!(p.tmp(&id.to_string(), 9).unwrap().ends_with(&format!("tmp/{id}-9.json")));
+        assert_eq!(
+            p.record("a", &sha).unwrap().url,
+            format!("http://dav.local:5005/.notes/attachments/aa/{sha}")
+        );
+        assert!(p
+            .manifest_tmp(&id.to_string(), 7)
+            .unwrap()
+            .ends_with(&format!("manifest/index.json.tmp-{id}-7")));
+        assert!(p
+            .record_tmp("n", id.as_str(), &id.to_string(), 3)
+            .unwrap()
+            .ends_with(&format!("tmp/{id}-3-note-{id}.json")));
+        assert!(p
+            .tmp(&id.to_string(), 9)
+            .unwrap()
+            .ends_with(&format!("tmp/{id}-9.json")));
     }
 
     #[test]
     fn traversal_and_smuggling_never_reach_a_url() {
         let p = paths();
         let evil = [
-            "../etc/passwd", "..\\..\\windows\\x", "/etc/passwd", "..%2F..%2Fx", "%2e%2e/%2e%2e/etc",
-            "..", ".", "a/../b", "seg-0000.json?x=1", "seg-0000#f", "note/../manifest/index",
-            "笔记", "seg 0000", "a\nb", "", "note\x00",
+            "../etc/passwd",
+            "..\\..\\windows\\x",
+            "/etc/passwd",
+            "..%2F..%2Fx",
+            "%2e%2e/%2e%2e/etc",
+            "..",
+            ".",
+            "a/../b",
+            "seg-0000.json?x=1",
+            "seg-0000#f",
+            "note/../manifest/index",
+            "笔记",
+            "seg 0000",
+            "a\nb",
+            "",
+            "note\x00",
         ];
         for bad in evil {
             assert!(p.segment(bad).is_err(), "分段名必须被拒绝: {bad:?}");
@@ -335,14 +404,31 @@ mod tests {
         assert!(p.record("a", &"z".repeat(64)).is_err());
         // 未知 kind 不是"退化成 note"，是拒绝。
         assert!(p.record("bogus", &EntityId::new().to_string()).is_err());
-        assert!(p.record_tmp("n", "../../x", &EntityId::new().to_string(), 1).is_err());
-        assert!(RemotePath::new("http://u:p@dav.local", "/.notes").is_err(), "凭据不得进 URL");
+        assert!(p
+            .record_tmp("n", "../../x", &EntityId::new().to_string(), 1)
+            .is_err());
+        assert!(
+            RemotePath::new("http://u:p@dav.local", "/.notes").is_err(),
+            "凭据不得进 URL"
+        );
         assert!(RemotePath::new("ftp://dav.local", "/.notes").is_err());
         assert!(RemotePath::new("http://dav.local", "/.notes/../../etc").is_err());
-        assert_eq!(RemotePath::new("http://dav.local/.notes/", "").unwrap().root_prefix(), "");
+        assert_eq!(
+            RemotePath::new("http://dav.local/.notes/", "")
+                .unwrap()
+                .root_prefix(),
+            ""
+        );
         // base_url 自带前缀时并入，不静默丢弃。
-        assert_eq!(RemotePath::new("https://d.example/remote.php/dav/files/u", DEFAULT_ROOT_PREFIX).unwrap().manifest_index(),
-                   "https://d.example/remote.php/dav/files/u/.notes/manifest/index.json");
+        assert_eq!(
+            RemotePath::new(
+                "https://d.example/remote.php/dav/files/u",
+                DEFAULT_ROOT_PREFIX
+            )
+            .unwrap()
+            .manifest_index(),
+            "https://d.example/remote.php/dav/files/u/.notes/manifest/index.json"
+        );
     }
 
     #[test]
@@ -354,4 +440,3 @@ mod tests {
         assert!(!p.is_in_root("http://dav.local:5005/.notesish/x"));
     }
 }
-

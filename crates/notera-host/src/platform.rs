@@ -33,22 +33,46 @@ pub fn menu_plan(mac: bool) -> MenuPlan {
         (
             "笔记",
             vec![
-                MenuSpec { id: "note.new", label: "新建笔记", accel: Some(note_new) },
-                MenuSpec { id: "note.search", label: "搜索笔记", accel: Some(search) },
+                MenuSpec {
+                    id: "note.new",
+                    label: "新建笔记",
+                    accel: Some(note_new),
+                },
+                MenuSpec {
+                    id: "note.search",
+                    label: "搜索笔记",
+                    accel: Some(search),
+                },
             ],
         ),
         (
             "同步",
             vec![
-                MenuSpec { id: "sync.now", label: "立即同步", accel: Some(sync) },
-                MenuSpec { id: "view.conflicts", label: "冲突收件箱", accel: Some(conflicts) },
+                MenuSpec {
+                    id: "sync.now",
+                    label: "立即同步",
+                    accel: Some(sync),
+                },
+                MenuSpec {
+                    id: "view.conflicts",
+                    label: "冲突收件箱",
+                    accel: Some(conflicts),
+                },
             ],
         ),
         (
             "前往",
             vec![
-                MenuSpec { id: "view.trash", label: "最近删除", accel: None },
-                MenuSpec { id: "view.settings", label: "设置", accel: Some(settings) },
+                MenuSpec {
+                    id: "view.trash",
+                    label: "最近删除",
+                    accel: None,
+                },
+                MenuSpec {
+                    id: "view.settings",
+                    label: "设置",
+                    accel: Some(settings),
+                },
             ],
         ),
     ];
@@ -58,7 +82,10 @@ pub fn menu_plan(mac: bool) -> MenuPlan {
 impl MenuPlan {
     #[cfg(test)]
     pub fn ids(&self) -> Vec<&'static str> {
-        self.groups.iter().flat_map(|(_, items)| items.iter().map(|i| i.id)).collect()
+        self.groups
+            .iter()
+            .flat_map(|(_, items)| items.iter().map(|i| i.id))
+            .collect()
     }
 }
 
@@ -80,7 +107,9 @@ pub fn notice_for(ev: &BusEvent) -> Option<Notice> {
             title: "有一条笔记需要处理".into(),
             body: format!("「{note_title}」在另一台设备上也改了，两版都留着，去挑一版"),
         }),
-        BusEvent::Sync { badge, error_code, .. } => {
+        BusEvent::Sync {
+            badge, error_code, ..
+        } => {
             // 只在"错误"这一下弹一次；徽标为 syncing/synced/offline 都不该响
             match badge {
                 Badge::Failed if error_code.as_deref().is_some() => Some(Notice {
@@ -104,12 +133,32 @@ mod tests {
         let m = menu_plan(true);
         let w = menu_plan(false);
         assert_eq!(m.ids(), w.ids(), "两个平台的菜单项必须一致，只差修饰键");
-        let accel = |plan: &MenuPlan, id: &str| plan.groups.iter().flat_map(|(_, v)| v.iter()).find(|i| i.id == id).unwrap().accel;
+        let accel = |plan: &MenuPlan, id: &str| {
+            plan.groups
+                .iter()
+                .flat_map(|(_, v)| v.iter())
+                .find(|i| i.id == id)
+                .unwrap()
+                .accel
+        };
         assert_eq!(accel(&m, "note.new"), Some("Cmd+N"));
         assert_eq!(accel(&w, "note.new"), Some("Ctrl+N"));
-        for (id, suffix) in [("note.new", "N"), ("note.search", "F"), ("sync.now", "S"), ("view.settings", ",")] {
-            assert!(accel(&m, id).unwrap().starts_with("Cmd") && accel(&m, id).unwrap().ends_with(suffix), "mac {id}");
-            assert!(accel(&w, id).unwrap().starts_with("Ctrl") && accel(&w, id).unwrap().ends_with(suffix), "win {id}");
+        for (id, suffix) in [
+            ("note.new", "N"),
+            ("note.search", "F"),
+            ("sync.now", "S"),
+            ("view.settings", ","),
+        ] {
+            assert!(
+                accel(&m, id).unwrap().starts_with("Cmd")
+                    && accel(&m, id).unwrap().ends_with(suffix),
+                "mac {id}"
+            );
+            assert!(
+                accel(&w, id).unwrap().starts_with("Ctrl")
+                    && accel(&w, id).unwrap().ends_with(suffix),
+                "win {id}"
+            );
         }
     }
 
@@ -119,30 +168,73 @@ mod tests {
         let mut sorted = ids.clone();
         sorted.sort();
         sorted.dedup();
-        assert_eq!(sorted.len(), ids.len(), "重复的 id 会让两个菜单项抢同一条前端路由");
+        assert_eq!(
+            sorted.len(),
+            ids.len(),
+            "重复的 id 会让两个菜单项抢同一条前端路由"
+        );
     }
 
     #[test]
     fn only_conflicts_and_failed_syncs_escalate_to_a_system_notification() {
-        assert!(notice_for(&BusEvent::Conflict { conflict_id: 1, note_title: "甲".into() }).is_some());
-        assert!(notice_for(&BusEvent::Sync { badge: Badge::Failed, progress: None, error_code: Some("net.timeout".into()) }).is_some());
+        assert!(notice_for(&BusEvent::Conflict {
+            conflict_id: 1,
+            note_title: "甲".into()
+        })
+        .is_some());
+        assert!(notice_for(&BusEvent::Sync {
+            badge: Badge::Failed,
+            progress: None,
+            error_code: Some("net.timeout".into())
+        })
+        .is_some());
         // 这三类必须安静：进度每轮都有、Toast 已经在界面里、NotesChanged 是自家写库的回声
-        assert!(notice_for(&BusEvent::Sync { badge: Badge::Syncing, progress: None, error_code: None }).is_none());
-        assert!(notice_for(&BusEvent::Sync { badge: Badge::Synced, progress: None, error_code: None }).is_none());
-        assert!(notice_for(&BusEvent::NotesChanged { ids: vec!["x".into()] }).is_none());
-        assert!(notice_for(&BusEvent::Toast { message_key: "x".into(), level: "warn".into() }).is_none());
+        assert!(notice_for(&BusEvent::Sync {
+            badge: Badge::Syncing,
+            progress: None,
+            error_code: None
+        })
+        .is_none());
+        assert!(notice_for(&BusEvent::Sync {
+            badge: Badge::Synced,
+            progress: None,
+            error_code: None
+        })
+        .is_none());
+        assert!(notice_for(&BusEvent::NotesChanged {
+            ids: vec!["x".into()]
+        })
+        .is_none());
+        assert!(notice_for(&BusEvent::Toast {
+            message_key: "x".into(),
+            level: "warn".into()
+        })
+        .is_none());
     }
 
     #[test]
     fn an_error_badge_without_a_code_does_not_nag() {
         // 没带原因的错误态弹出去只会得到一句"失败了"，用户什么也做不了
-        assert!(notice_for(&BusEvent::Sync { badge: Badge::Failed, progress: None, error_code: None }).is_none());
+        assert!(notice_for(&BusEvent::Sync {
+            badge: Badge::Failed,
+            progress: None,
+            error_code: None
+        })
+        .is_none());
     }
 
     #[test]
     fn the_conflict_notification_names_the_note_so_it_is_actionable() {
-        let n = notice_for(&BusEvent::Conflict { conflict_id: 7, note_title: "报销单".into() }).unwrap();
-        assert!(n.body.contains("报销单"), "通知里必须点出是哪一条：{}", n.body);
+        let n = notice_for(&BusEvent::Conflict {
+            conflict_id: 7,
+            note_title: "报销单".into(),
+        })
+        .unwrap();
+        assert!(
+            n.body.contains("报销单"),
+            "通知里必须点出是哪一条：{}",
+            n.body
+        );
     }
 
     /// 跨语言契约：壳声明的菜单 id 与前端路由表必须**一模一样**。
@@ -153,8 +245,12 @@ mod tests {
     /// 壳加一项"最近删除"忘了挂号，用户点了什么也不会发生。
     #[test]
     fn the_frontend_routes_exactly_the_ids_the_shell_declares() {
-        let spec = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/desktop/src/platform/menu.spec.ts");
-        let src = std::fs::read_to_string(spec).unwrap_or_else(|e| panic!("读不到前端路由表 {spec}：{e}"));
+        let spec = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../apps/desktop/src/platform/menu.spec.ts"
+        );
+        let src = std::fs::read_to_string(spec)
+            .unwrap_or_else(|e| panic!("读不到前端路由表 {spec}：{e}"));
         let routed: std::collections::BTreeSet<String> = src
             .lines()
             .filter_map(|line| {
@@ -162,11 +258,19 @@ mod tests {
                 let (before, after) = line.split_once("': '")?;
                 let id = before.split('\'').next_back()?;
                 let dotted = id.bytes().all(|b| b.is_ascii_lowercase() || b == b'.');
-                (id.contains('.') && dotted && after.starts_with(|c: char| c.is_alphabetic())).then_some(id.to_string())
+                (id.contains('.') && dotted && after.starts_with(|c: char| c.is_alphabetic()))
+                    .then_some(id.to_string())
             })
             .collect();
-        let declared: std::collections::BTreeSet<String> = menu_plan(false).ids().into_iter().map(str::to_string).collect();
+        let declared: std::collections::BTreeSet<String> = menu_plan(false)
+            .ids()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
         assert!(!declared.is_empty());
-        assert_eq!(declared, routed, "壳的菜单 id 与前端路由表不一致（左边=点了没反应，右边=永远不触发）");
+        assert_eq!(
+            declared, routed,
+            "壳的菜单 id 与前端路由表不一致（左边=点了没反应，右边=永远不触发）"
+        );
     }
 }

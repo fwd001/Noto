@@ -33,7 +33,8 @@ struct Tmp(PathBuf);
 impl Tmp {
     fn new(tag: &str) -> Self {
         let n = SEQ.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("notera-ccrash-{tag}-{}-{n}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("notera-ccrash-{tag}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
@@ -83,13 +84,18 @@ fn fingerprints(app: &App) -> Vec<(String, String)> {
 /// 子进程：写满 {NOTES} 条笔记，然后一轮一轮同步，直到被 `NOTERA_CRASH_AT` 打死。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn child_writes_a_big_library_until_it_is_killed() {
-    let Ok(spec) = std::env::var(CHILD) else { return };
-    let Some((dir, url)) = spec.split_once('|') else { return };
+    let Ok(spec) = std::env::var(CHILD) else {
+        return;
+    };
+    let Some((dir, url)) = spec.split_once('|') else {
+        return;
+    };
     let app = boot(Path::new(dir), url);
     app.sync_once().await.expect("入伙");
     let folder = app.default_folder_id().unwrap();
     for i in 0..NOTES {
-        app.create_note(&folder, doc(&format!("压实崩溃笔记 {i:03}"))).unwrap();
+        app.create_note(&folder, doc(&format!("压实崩溃笔记 {i:03}")))
+            .unwrap();
     }
     // 打死我们之前应该至少提交过几版清单（窗口要长过 200 才会压实）
     for round in 0..40 {
@@ -114,7 +120,12 @@ async fn a_crash_right_after_the_segment_write_leaves_a_readable_library() {
             "大库名单里的 {point} 忘了登记进 CRASH_POINTS"
         );
         let code = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "child_writes_a_big_library_until_it_is_killed", "--nocapture", "--test-threads=1"])
+            .args([
+                "--exact",
+                "child_writes_a_big_library_until_it_is_killed",
+                "--nocapture",
+                "--test-threads=1",
+            ])
             .env(CHILD, format!("{}|{}", a_dir.path().display(), url))
             .env("NOTERA_CRASH_AT", *point)
             .stdout(Stdio::piped())
@@ -133,7 +144,10 @@ async fn a_crash_right_after_the_segment_write_leaves_a_readable_library() {
             &std::fs::read_to_string(root.join(".notes/manifest/index.json")).expect("索引在盘上"),
         )
         .expect("索引是 JSON");
-        let window = index["window"]["entries"].as_array().map(|a| a.len()).unwrap_or(0);
+        let window = index["window"]["entries"]
+            .as_array()
+            .map(|a| a.len())
+            .unwrap_or(0);
         let refs = index["segments"].as_array().cloned().unwrap_or_default();
         for r in &refs {
             let name = r["n"].as_str().unwrap_or_default();
@@ -142,7 +156,10 @@ async fn a_crash_right_after_the_segment_write_leaves_a_readable_library() {
                 "崩在 {point} 之后，索引引用了一个不存在的分段 {name}（INV-09 破了）"
             );
         }
-        assert!(window <= notera_sync::manifest::WINDOW_MAX, "窗口 {window} 超过上限却没压实");
+        assert!(
+            window <= notera_sync::manifest::WINDOW_MAX,
+            "窗口 {window} 超过上限却没压实"
+        );
     }
 
     // 重启同一座库：这一刀不能丢数据，也不能让改动永远悬着
@@ -152,15 +169,25 @@ async fn a_crash_right_after_the_segment_write_leaves_a_readable_library() {
     for _ in 0..14 {
         let stats = a.sync_once().await.expect("重启后的一轮");
         let st = a.store().stats().unwrap();
-        trace.push(format!("{:?} pushed={} pulled={} dirty={} pending={}", stats.outcome, stats.pushed, stats.pulled, st.dirty_notes, st.outbox_pending));
+        trace.push(format!(
+            "{:?} pushed={} pulled={} dirty={} pending={}",
+            stats.outcome, stats.pushed, stats.pulled, st.dirty_notes, st.outbox_pending
+        ));
         if stats.outcome != RoundOutcome::Partial && st.dirty_notes == 0 && st.outbox_pending == 0 {
             settled = true;
             break;
         }
     }
-    assert!(settled, "崩过一次之后本机一直结不清：\n  {}", trace.join("\n  "));
+    assert!(
+        settled,
+        "崩过一次之后本机一直结不清：\n  {}",
+        trace.join("\n  ")
+    );
     let st = a.store().stats().unwrap();
-    assert_eq!(st.notes, NOTES as u32, "崩在压实那一刀之后本机笔记数就变了：{st:?}");
+    assert_eq!(
+        st.notes, NOTES as u32,
+        "崩在压实那一刀之后本机笔记数就变了：{st:?}"
+    );
 
     // 换设备：孤儿分段不影响读，另一台设备要拿到全部 240 条
     let b_dir = Tmp::new("b");
@@ -173,8 +200,16 @@ async fn a_crash_right_after_the_segment_write_leaves_a_readable_library() {
             break;
         }
     }
-    assert_eq!(b.store().stats().unwrap().notes, NOTES as u32, "另一台设备没追平：{btrace:?}");
-    assert_eq!(fingerprints(&b), fingerprints(&a), "崩过一次之后两台设备的标题/内容哈希不一致");
+    assert_eq!(
+        b.store().stats().unwrap().notes,
+        NOTES as u32,
+        "另一台设备没追平：{btrace:?}"
+    );
+    assert_eq!(
+        fingerprints(&b),
+        fingerprints(&a),
+        "崩过一次之后两台设备的标题/内容哈希不一致"
+    );
 
     srv.stop().await;
 }

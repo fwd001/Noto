@@ -103,7 +103,10 @@ fn a_bundle_written_before_the_partial_flag_still_reads_back_as_a_full_library()
     zip.finish().unwrap();
 
     let got = read_bundle(&path).expect("老包必须还能读");
-    assert!(!got.manifest.unwrap().partial, "缺 partial = 整库，不是子树");
+    assert!(
+        !got.manifest.unwrap().partial,
+        "缺 partial = 整库，不是子树"
+    );
 }
 
 #[test]
@@ -128,15 +131,23 @@ fn a_real_zip_tool_can_locate_and_read_each_note() {
 
     let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
     let want = format!("notes/{}.json", id.as_str());
-    let names = (0..zip.len()).map(|i| zip.by_index(i).unwrap().name().to_string()).collect::<Vec<_>>();
-    assert!(names.contains(&want), "每条笔记一个以 id 命名的文件，实际条目 {names:?}");
+    let names = (0..zip.len())
+        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        names.contains(&want),
+        "每条笔记一个以 id 命名的文件，实际条目 {names:?}"
+    );
     assert!(names.contains(&"manifest.json".to_string()));
 
     let mut entry = zip.by_name(&want).unwrap();
     let mut body = String::new();
     std::io::Read::read_to_string(&mut entry, &mut body).unwrap();
     assert!(body.contains("可移植"), "取回来的必须是能看懂的 JSON 正文");
-    assert!(body.contains("\"protocol\": 1"), "信封要带协议号，接收方才知道怎么解释");
+    assert!(
+        body.contains("\"protocol\": 1"),
+        "信封要带协议号，接收方才知道怎么解释"
+    );
 }
 
 #[test]
@@ -155,7 +166,10 @@ fn tampered_attachment_content_is_rejected_wholesale() {
     )
     .unwrap();
     let err = read_bundle(&path).expect_err("内容对不上文件名必须报错");
-    assert!(format!("{err}").contains("与文件名不符"), "错误要指出来龙去脉：{err}");
+    assert!(
+        format!("{err}").contains("与文件名不符"),
+        "错误要指出来龙去脉：{err}"
+    );
 }
 
 #[test]
@@ -164,14 +178,28 @@ fn unknown_format_or_protocol_is_refused_before_any_write() {
     let path = tmp.path().join("future.zip");
     let mut m = manifest();
     m.format = BUNDLE_FORMAT + 7;
-    write_bundle(&path, &Bundle { manifest: Some(m), ..Default::default() }).unwrap();
+    write_bundle(
+        &path,
+        &Bundle {
+            manifest: Some(m),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let err = read_bundle(&path).expect_err("不认识的格式号不能硬读");
     assert!(format!("{err}").contains("格式号"), "{err}");
 
     let path2 = tmp.path().join("proto.zip");
     let mut m2 = manifest();
     m2.protocol = 99;
-    write_bundle(&path2, &Bundle { manifest: Some(m2), ..Default::default() }).unwrap();
+    write_bundle(
+        &path2,
+        &Bundle {
+            manifest: Some(m2),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let err2 = read_bundle(&path2).expect_err("高于本程序的协议号必须拒绝");
     assert!(format!("{err2}").contains("协议号"), "{err2}");
 }

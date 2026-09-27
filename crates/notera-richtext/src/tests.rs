@@ -1,7 +1,7 @@
 //! 模型 / 规范化 / 校验 / 稳定序列化 的 L0 测试（TEST-PLAN.md RT-*、FWD-*、INV-10）。
 
 use crate::codec::{canonical, parse, parse_for_read, parse_from_value, to_json, validate};
-use crate::model::{BlockType, Document, MarkKind, RichError, supports, DOC_FORMAT};
+use crate::model::{supports, BlockType, Document, MarkKind, RichError, DOC_FORMAT};
 use crate::{block_ids, extract};
 use serde_json::{json, Value};
 
@@ -14,7 +14,11 @@ fn doc(blocks: Vec<Value>) -> Value {
 }
 
 fn doc_text(d: &Document) -> String {
-    d.content.iter().map(|b| b.plain_text()).collect::<Vec<_>>().join("\n")
+    d.content
+        .iter()
+        .map(|b| b.plain_text())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // ------------------------------------------------------------------ 往返 ---
@@ -99,7 +103,11 @@ fn unknown_block_type_mark_and_attr_all_survive_roundtrip() {
         .find(|b| matches!(b.type_, BlockType::Unknown(_)))
         .expect("未知 type 必须落 BlockType::Unknown");
     assert_eq!(unknown.type_, BlockType::Unknown("mermaid".into()));
-    assert_eq!(unknown.attrs.get("data-x"), Some(&json!("y")), "未知 attr 必须原样保留");
+    assert_eq!(
+        unknown.attrs.get("data-x"),
+        Some(&json!("y")),
+        "未知 attr 必须原样保留"
+    );
     assert_eq!(unknown.attrs.get("zoom"), Some(&json!(1.5)));
 
     let c = canonical(&d);
@@ -123,11 +131,18 @@ fn unknown_mark_survives_and_degrades_without_loss() {
     })]);
     let d = parse(&raw.to_string()).unwrap();
     let marks = &d.content[0].content[0].marks;
-    assert!(marks.iter().any(|m| m.kind == MarkKind::Unknown("sparkle".into())));
-    assert!(marks.iter().any(|m| m.kind == MarkKind::Unknown("already".into())));
+    assert!(marks
+        .iter()
+        .any(|m| m.kind == MarkKind::Unknown("sparkle".into())));
+    assert!(marks
+        .iter()
+        .any(|m| m.kind == MarkKind::Unknown("already".into())));
     assert!(marks.iter().any(|m| m.kind == MarkKind::Bold));
     let c = canonical(&d);
-    assert!(c.contains("\"unknown:sparkle\"") && c.contains("\"intensity\":3"), "{c}");
+    assert!(
+        c.contains("\"unknown:sparkle\"") && c.contains("\"intensity\":3"),
+        "{c}"
+    );
     assert_eq!(canonical(&parse(&c).unwrap()), c);
 }
 
@@ -157,7 +172,10 @@ fn nested_block_children_are_folded_not_destroyed() {
     })]);
     let d = parse(&raw.to_string()).unwrap();
     let c = canonical(&d);
-    assert!(c.contains("被嵌套的段落") && c.contains("inner1"), "嵌套子块必须保留：{c}");
+    assert!(
+        c.contains("被嵌套的段落") && c.contains("inner1"),
+        "嵌套子块必须保留：{c}"
+    );
     assert_eq!(canonical(&parse(&c).unwrap()), c);
 }
 
@@ -178,7 +196,8 @@ fn too_new_doc_version_is_read_only_not_corrupted() {
     assert_eq!(ro.content.len(), 1);
     assert!(canonical(&ro).contains("新版客户端写的一个段落"));
     // 结构问题在只读路径上同样要拒（只放版本闸门，不放质量闸门）。
-    let broken = json!({ "v": 99, "content": [{ "id": "a1aaaaaa", "type": "paragraph", "attrs": 3 }] });
+    let broken =
+        json!({ "v": 99, "content": [{ "id": "a1aaaaaa", "type": "paragraph", "attrs": 3 }] });
     assert!(matches!(
         parse_for_read(&broken),
         Err(RichError::Malformed(_))
@@ -247,31 +266,45 @@ fn normalize_strips_zero_width_but_keeps_emoji_joiners() {
     // 零宽字符一律写成转义：字面量摆在源码里谁也看不见，改错了都不会知道。
     let src = "零宽\u{200B}\u{FEFF}应被剥离，ZWJ\u{200D}家庭\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} 必须原样保留";
     // 夹具自己得先真的带上这些字符，否则"剥离成功"只是因为压根没放进去
-    assert!(src.contains('\u{200B}') && src.contains('\u{FEFF}'), "夹具没带上被测的零宽字符");
+    assert!(
+        src.contains('\u{200B}') && src.contains('\u{FEFF}'),
+        "夹具没带上被测的零宽字符"
+    );
     let raw = doc(vec![para("p1aaaa", src)]);
     let d = parse(&raw.to_string()).unwrap();
     let t = d.content[0].plain_text();
     assert!(!t.contains('\u{200B}') && !t.contains('\u{FEFF}'), "{t}");
-    assert!(t.contains("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"), "剥离 ZWJ 会拆散 emoji 序列：{t}");
+    assert!(
+        t.contains("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"),
+        "剥离 ZWJ 会拆散 emoji 序列：{t}"
+    );
     // 只有零宽字符的行内节点会被丢弃（它不携带任何信息），但空段落本身保留。
     let only_zw = doc(vec![para("p2aaaa", "\u{200B}"), para("p3aaaa", "留着")]);
     let d2 = parse(&only_zw.to_string()).unwrap();
     assert_eq!(d2.content[0].id, "p2aaaa");
-    assert!(d2.content[0].content.is_empty(), "空段落保留、空 inline 丢弃");
+    assert!(
+        d2.content[0].content.is_empty(),
+        "空段落保留、空 inline 丢弃"
+    );
     assert_eq!(doc_text(&d2), "\n留着");
 }
 
 #[test]
 fn blocks_without_ids_get_a_deterministic_derived_id() {
     // 外部导入/手搓 fixture 常常没有 id：不能因此拒收，也不能随机造（跨设备会撞）。
-    let raw = json!({ "v": 1, "content": [{ "type": "paragraph", "content": [{ "text": "无 id" }] }] });
+    let raw =
+        json!({ "v": 1, "content": [{ "type": "paragraph", "content": [{ "text": "无 id" }] }] });
     let d1 = parse(&raw.to_string()).unwrap();
     let d2 = parse(&raw.to_string()).unwrap();
     assert_eq!(block_ids(&d1), block_ids(&d2), "派生 id 必须只由内容决定");
     let id = &block_ids(&d1)[0];
-    assert!(id.starts_with("nb-") && id.len() >= 8 && id.len() <= 32, "{id}");
+    assert!(
+        id.starts_with("nb-") && id.len() >= 8 && id.len() <= 32,
+        "{id}"
+    );
     // 同内容不同位置 → 同 id（所以两份文档合并时会被认出是同一块）；不同内容 → 不同 id。
-    let other = json!({ "v": 1, "content": [{ "type": "paragraph", "content": [{ "text": "别的" }] }] });
+    let other =
+        json!({ "v": 1, "content": [{ "type": "paragraph", "content": [{ "text": "别的" }] }] });
     let d3 = parse(&other.to_string()).unwrap();
     assert_ne!(block_ids(&d1), block_ids(&d3));
 }
@@ -288,8 +321,13 @@ fn heading_and_list_defaults_are_filled_once() {
     // 幂等：第二遍不再改变任何东西。
     assert_eq!(canonical(&d), canonical(&parse(&canonical(&d)).unwrap()));
     // 已有值不许被默认值覆盖。
-    let with = doc(vec![json!({ "id": "h2aaaa", "type": "heading", "attrs": { "level": 4 } })]);
-    assert_eq!(parse(&with.to_string()).unwrap().content[0].attrs["level"], json!(4));
+    let with = doc(vec![
+        json!({ "id": "h2aaaa", "type": "heading", "attrs": { "level": 4 } }),
+    ]);
+    assert_eq!(
+        parse(&with.to_string()).unwrap().content[0].attrs["level"],
+        json!(4)
+    );
 }
 
 // ------------------------------------------------------------------- 派生 ---
@@ -315,12 +353,23 @@ fn extract_counts_chinese_by_codepoint_not_byte() {
     // summary 跳过标题。
     assert_eq!(x.summary, "中文 abc");
     let bytes = x.plain_text.len();
-    assert_eq!(bytes, 23, "顺带确认字节数远大于码点数：{bytes} vs {}", x.char_count);
+    assert_eq!(
+        bytes, 23,
+        "顺带确认字节数远大于码点数：{bytes} vs {}",
+        x.char_count
+    );
 }
 
 #[test]
 fn extract_title_falls_back_to_first_non_empty_block() {
-    let d = parse(&doc(vec![para("p1aaaa", "   "), para("p2aaaa", "没有标题的笔记")]).to_string()).unwrap();
+    let d = parse(
+        &doc(vec![
+            para("p1aaaa", "   "),
+            para("p2aaaa", "没有标题的笔记"),
+        ])
+        .to_string(),
+    )
+    .unwrap();
     let x = extract(&d);
     assert_eq!(x.title, "没有标题的笔记");
     let empty = extract(&parse(&doc(vec![]).to_string()).unwrap());
@@ -356,7 +405,11 @@ fn title_truncation_is_charwise_for_cjk() {
     let long: String = "测".repeat(300);
     let d = parse(&doc(vec![para("p1aaaa", &long)]).to_string()).unwrap();
     let x = extract(&d);
-    assert_eq!(x.title.chars().count(), 200, "截断必须按码点，否则切半个汉字");
+    assert_eq!(
+        x.title.chars().count(),
+        200,
+        "截断必须按码点，否则切半个汉字"
+    );
     assert!(x.title.is_char_boundary(x.title.len()));
 }
 
@@ -364,14 +417,24 @@ fn title_truncation_is_charwise_for_cjk() {
 
 #[test]
 fn block_ids_lists_top_level_in_document_order() {
-    let d: Document = parse(&doc(vec![para("b3aaaaaa", "3"), para("b1aaaaaa", "1"), para("b2aaaaaa", "2")]).to_string()).unwrap();
+    let d: Document = parse(
+        &doc(vec![
+            para("b3aaaaaa", "3"),
+            para("b1aaaaaa", "1"),
+            para("b2aaaaaa", "2"),
+        ])
+        .to_string(),
+    )
+    .unwrap();
     assert_eq!(block_ids(&d), vec!["b3aaaaaa", "b1aaaaaa", "b2aaaaaa"]);
 }
 
 #[test]
 fn deserialize_from_value_uses_the_same_tolerant_path() {
     // 其他 crate 会直接 `serde_json::from_value::<Document>`，那条路必须与 parse 同语义。
-    let v = doc(vec![json!({ "id": "p1aaaa", "type": "paragraph", "content": ["裸字符串也行"] })]);
+    let v = doc(vec![
+        json!({ "id": "p1aaaa", "type": "paragraph", "content": ["裸字符串也行"] }),
+    ]);
     let d: Document = serde_json::from_value(v).unwrap();
     assert_eq!(d.content[0].plain_text(), "裸字符串也行");
     let err = serde_json::from_value::<Document>(json!({ "v": 1, "content": [3] }));
@@ -410,5 +473,8 @@ fn attachments_lists_what_the_document_references_and_nothing_else() {
     assert_eq!(got[0].filename.as_deref(), Some("shot.png"));
     // 角色词汇之外的值一律丢回 None，由存储层按媒体类型判（表上有 CHECK(role IN (inline,file)))
     assert_eq!(got[1].role, None);
-    assert!(extract(&parse_from_value(&v).unwrap()).has_attachment, "畸形 sha 仍算\"这篇有附件\"，只是登记不了");
+    assert!(
+        extract(&parse_from_value(&v).unwrap()).has_attachment,
+        "畸形 sha 仍算\"这篇有附件\"，只是登记不了"
+    );
 }

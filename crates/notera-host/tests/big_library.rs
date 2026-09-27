@@ -19,7 +19,7 @@ use std::time::Instant;
 use notera_host::commands::AccountDraftCmd;
 use notera_host::App;
 use notera_store::NoteQuery;
-use notera_sync::manifest::{WINDOW_MAX, SEGMENT_TARGET};
+use notera_sync::manifest::{SEGMENT_TARGET, WINDOW_MAX};
 use notera_sync::RoundOutcome;
 use notera_test_webdav::{Backend, TestServer};
 use serde_json::json;
@@ -80,7 +80,10 @@ impl Device {
         let mut rows: Vec<(String, String)> = self
             .app
             .store()
-            .list_notes(&NoteQuery { limit: ROW_CAP, ..NoteQuery::all() })
+            .list_notes(&NoteQuery {
+                limit: ROW_CAP,
+                ..NoteQuery::all()
+            })
             .unwrap()
             .into_iter()
             .map(|r| (r.title, r.content_hash))
@@ -98,7 +101,10 @@ impl Device {
                 "{:?} pushed={} pulled={} dirty={} pending={}",
                 stats.outcome, stats.pushed, stats.pulled, st.dirty_notes, st.outbox_pending
             ));
-            if stats.outcome != RoundOutcome::Partial && st.dirty_notes == 0 && st.outbox_pending == 0 {
+            if stats.outcome != RoundOutcome::Partial
+                && st.dirty_notes == 0
+                && st.outbox_pending == 0
+            {
                 return trace;
             }
         }
@@ -113,10 +119,14 @@ fn doc(text: &str) -> serde_json::Value {
 /// 清单实际公告的条目数：窗口里的 + 每个分段里真实读盘数出来的条目。
 /// 不用索引自报的 count，免得它自己就对不上账。
 fn announced_entries(index: &serde_json::Value, dir: &Path) -> usize {
-    let mut n = index["window"]["entries"].as_array().map(|v| v.len()).unwrap_or(0);
+    let mut n = index["window"]["entries"]
+        .as_array()
+        .map(|v| v.len())
+        .unwrap_or(0);
     for s in index["segments"].as_array().cloned().unwrap_or_default() {
         let name = s["n"].as_str().unwrap_or_default();
-        let body = std::fs::read(dir.join(format!("{name}.json"))).expect("索引引用的分段必须在盘上");
+        let body =
+            std::fs::read(dir.join(format!("{name}.json"))).expect("索引引用的分段必须在盘上");
         let listed: serde_json::Value = serde_json::from_slice(&body).expect("分段是 JSON");
         n += listed
             .as_array()
@@ -140,7 +150,9 @@ async fn a_thousand_note_library_catches_up_within_a_bounded_number_of_rounds() 
     a.app.sync_once().await.expect("A 入伙");
     let folder = a.app.default_folder_id().unwrap();
     for i in 0..NOTES {
-        a.app.create_note(&folder, doc(&format!("千库笔记 {i:04}"))).unwrap();
+        a.app
+            .create_note(&folder, doc(&format!("千库笔记 {i:04}")))
+            .unwrap();
     }
     let atrace = a.settle(CATCH_UP_ROUND_CAP).await;
     let ast = a.app.store().stats().unwrap();
@@ -148,7 +160,11 @@ async fn a_thousand_note_library_catches_up_within_a_bounded_number_of_rounds() 
     assert_eq!(ast.dirty_notes, 0, "A 公告没结清：{atrace:?}");
     assert_eq!(ast.outbox_pending, 0, "A 的 outbox 没结清：{atrace:?}");
     let pushed_in = atrace.len();
-    assert!(pushed_in <= CATCH_UP_ROUND_CAP, "{NOTES} 条公告用了 {} 轮，超过上界 {CATCH_UP_ROUND_CAP}：{atrace:?}", pushed_in);
+    assert!(
+        pushed_in <= CATCH_UP_ROUND_CAP,
+        "{NOTES} 条公告用了 {} 轮，超过上界 {CATCH_UP_ROUND_CAP}：{atrace:?}",
+        pushed_in
+    );
 
     // ── 清单结构：索引只装引用 ────────────────────────────────────────
     let root = srv.fs_root().expect("fs 后端应有根目录");
@@ -159,31 +175,57 @@ async fn a_thousand_note_library_catches_up_within_a_bounded_number_of_rounds() 
         "{NOTES} 条的索引有 {} B（预算 {INDEX_BUDGET_BYTES} B）—— 索引在装条目而不是装引用，每轮空转都要整份搬",
         index_raw.len()
     );
-    let window = index["window"]["entries"].as_array().map(|v| v.len()).unwrap_or(usize::MAX);
-    assert!(window <= WINDOW_MAX, "压实后窗口 {window} 条，超过上限 {WINDOW_MAX}");
+    let window = index["window"]["entries"]
+        .as_array()
+        .map(|v| v.len())
+        .unwrap_or(usize::MAX);
+    assert!(
+        window <= WINDOW_MAX,
+        "压实后窗口 {window} 条，超过上限 {WINDOW_MAX}"
+    );
     let refs = index["segments"].as_array().cloned().unwrap_or_default();
-    assert!(!refs.is_empty(), "1000 条早超过窗口上限，索引里却没有分段 —— 基线没被折出去：{atrace:?}");
+    assert!(
+        !refs.is_empty(),
+        "1000 条早超过窗口上限，索引里却没有分段 —— 基线没被折出去：{atrace:?}"
+    );
     let mut announced = window;
     let dir = root.join(".notes/manifest");
     for r in &refs {
         let name = r["n"].as_str().unwrap_or_default();
-        let body = std::fs::read(dir.join(format!("{name}.json"))).expect("索引引用的分段必须在盘上");
+        let body =
+            std::fs::read(dir.join(format!("{name}.json"))).expect("索引引用的分段必须在盘上");
         let listed: serde_json::Value = serde_json::from_slice(&body).expect("分段是 JSON");
         let arr = listed
             .as_array()
             .cloned()
             .or_else(|| listed.get("entries").and_then(|v| v.as_array()).cloned())
             .unwrap_or_default();
-        assert_eq!(r["count"].as_u64().unwrap_or(0) as usize, arr.len(), "分段 {name} 的 count 与实际条目数不一致");
-        assert!(arr.len() <= SEGMENT_TARGET, "分段 {name} 有 {} 条，超过每段目标 {SEGMENT_TARGET}", arr.len());
+        assert_eq!(
+            r["count"].as_u64().unwrap_or(0) as usize,
+            arr.len(),
+            "分段 {name} 的 count 与实际条目数不一致"
+        );
+        assert!(
+            arr.len() <= SEGMENT_TARGET,
+            "分段 {name} 有 {} 条，超过每段目标 {SEGMENT_TARGET}",
+            arr.len()
+        );
         announced += arr.len();
     }
-    assert_eq!(announced, NOTES + 1, "清单公告的条目总数（分段 + 窗口）不等于 {NOTES} 篇 + 1 个文件夹");
+    assert_eq!(
+        announced,
+        NOTES + 1,
+        "清单公告的条目总数（分段 + 窗口）不等于 {NOTES} 篇 + 1 个文件夹"
+    );
 
     // ── 读侧：空库入伙，轮数有界、徽标说实话、逐条一致 ─────────────────
     let b = Device::boot("big-b", &url);
     let first = b.app.sync_once().await.expect("B 的第一轮");
-    assert_eq!(first.outcome, RoundOutcome::Partial, "夹具要改：千条的第一轮该被预算截断：{first:?}");
+    assert_eq!(
+        first.outcome,
+        RoundOutcome::Partial,
+        "夹具要改：千条的第一轮该被预算截断：{first:?}"
+    );
     assert_eq!(
         b.app.sync_status().unwrap().badge,
         "syncing",
@@ -191,18 +233,37 @@ async fn a_thousand_note_library_catches_up_within_a_bounded_number_of_rounds() 
     );
     let btrace = b.settle(CATCH_UP_ROUND_CAP).await;
     let caught_up = btrace.len() + 1;
-    assert!(caught_up <= CATCH_UP_ROUND_CAP, "{NOTES} 条追平用了 {caught_up} 轮，超过上界 {CATCH_UP_ROUND_CAP}：\n  A {}\n  B {}", atrace.join("\n  "), btrace.join("\n  "));
+    assert!(
+        caught_up <= CATCH_UP_ROUND_CAP,
+        "{NOTES} 条追平用了 {caught_up} 轮，超过上界 {CATCH_UP_ROUND_CAP}：\n  A {}\n  B {}",
+        atrace.join("\n  "),
+        btrace.join("\n  ")
+    );
 
     let bst = b.app.store().stats().unwrap();
-    assert_eq!(bst.notes, NOTES as u32, "干净设备追完之后应有 {NOTES} 条，实际 {}：\n  B {}", bst.notes, btrace.join("\n  "));
-    assert_eq!(bst.fts_rows, bst.notes, "搜索索引没跟着笔记到位（{} vs {}）", bst.fts_rows, bst.notes);
+    assert_eq!(
+        bst.notes,
+        NOTES as u32,
+        "干净设备追完之后应有 {NOTES} 条，实际 {}：\n  B {}",
+        bst.notes,
+        btrace.join("\n  ")
+    );
+    assert_eq!(
+        bst.fts_rows, bst.notes,
+        "搜索索引没跟着笔记到位（{} vs {}）",
+        bst.fts_rows, bst.notes
+    );
     assert_eq!(
         b.fingerprints(),
         a.fingerprints(),
         "两台设备标题/内容哈希不一致（漏了或变了）：\n  B {}",
         btrace.join("\n  ")
     );
-    assert_eq!(b.app.sync_status().unwrap().badge, "synced", "追平之后徽标没回到「已同步」");
+    assert_eq!(
+        b.app.sync_status().unwrap().badge,
+        "synced",
+        "追平之后徽标没回到「已同步」"
+    );
 
     // ── 角色实体：默认本在两台设备上必须是**同一个**条目 ────────────────
     // 默认本是"每个账户有且只有一个"的角色实体。它以前由各台设备各造一个随机 id，
@@ -211,8 +272,23 @@ async fn a_thousand_note_library_catches_up_within_a_bounded_number_of_rounds() 
     let atrace2 = a.settle(6).await;
     let fa = a.app.store().list_folders().unwrap();
     let fb = b.app.store().list_folders().unwrap();
-    assert_eq!(fa.len(), 1, "A 上有 {} 个文件夹，默认本被复制了：{:?} {}", fa.len(), fa.iter().map(|f| f.name.clone()).collect::<Vec<_>>(), atrace2.join(" | "));
-    assert_eq!(fb.len(), 1, "B 追平之后有 {} 个都叫默认本的文件夹：{:?}", fb.len(), fb.iter().map(|f| (f.id.to_string(), f.name.clone())).collect::<Vec<_>>());
+    assert_eq!(
+        fa.len(),
+        1,
+        "A 上有 {} 个文件夹，默认本被复制了：{:?} {}",
+        fa.len(),
+        fa.iter().map(|f| f.name.clone()).collect::<Vec<_>>(),
+        atrace2.join(" | ")
+    );
+    assert_eq!(
+        fb.len(),
+        1,
+        "B 追平之后有 {} 个都叫默认本的文件夹：{:?}",
+        fb.len(),
+        fb.iter()
+            .map(|f| (f.id.to_string(), f.name.clone()))
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         fa[0].id.as_str(),
         fb[0].id.as_str(),
@@ -225,7 +301,11 @@ async fn a_thousand_note_library_catches_up_within_a_bounded_number_of_rounds() 
     )
     .expect("索引是 JSON");
     let announced_after = announced_entries(&post, &dir);
-    assert_eq!(announced_after, NOTES + 1, "追平之后清单公告的条目数涨了 —— 有实体被复制：{announced_after}");
+    assert_eq!(
+        announced_after,
+        NOTES + 1,
+        "追平之后清单公告的条目数涨了 —— 有实体被复制：{announced_after}"
+    );
 
     // ── 千条规模下的空轮代价（PERF-05 的量级版）────────────────────────
     // sync_cost 用 12 条钉的是"一次请求"；那条在 506 B 的索引上过得很轻松。
@@ -239,23 +319,50 @@ async fn a_thousand_note_library_catches_up_within_a_bounded_number_of_rounds() 
         .filter(|r| r.path.contains("/manifest/"))
         .map(|r| format!("{} {} -> {}", r.method, r.path, r.status))
         .collect();
-    assert_eq!(idle.outcome, RoundOutcome::NoOp, "什么都没改，千库上这一轮却有活干：{idle:?}");
-    assert_eq!(idle.requests, 1, "千库空轮用了 {} 次请求（应为 1 次条件请求）：{idle_lines:?}", idle.requests);
-    assert_eq!(idle.bytes_down, 0, "千库空轮下载了 {} B 正文 —— 条件请求没命中，每轮都在重搬清单", idle.bytes_down);
-    assert_eq!(idle.bytes_up, 0, "千库空轮上行 {} B —— 没改动却公告了东西", idle.bytes_up);
+    assert_eq!(
+        idle.outcome,
+        RoundOutcome::NoOp,
+        "什么都没改，千库上这一轮却有活干：{idle:?}"
+    );
+    assert_eq!(
+        idle.requests, 1,
+        "千库空轮用了 {} 次请求（应为 1 次条件请求）：{idle_lines:?}",
+        idle.requests
+    );
+    assert_eq!(
+        idle.bytes_down, 0,
+        "千库空轮下载了 {} B 正文 —— 条件请求没命中，每轮都在重搬清单",
+        idle.bytes_down
+    );
+    assert_eq!(
+        idle.bytes_up, 0,
+        "千库空轮上行 {} B —— 没改动却公告了东西",
+        idle.bytes_up
+    );
     assert!(
-        idle_log.iter().any(|r| r.status == 304 && r.path.ends_with("/manifest/index.json")),
+        idle_log
+            .iter()
+            .any(|r| r.status == 304 && r.path.ends_with("/manifest/index.json")),
         "千库空轮没走 304：{idle_lines:?}"
     );
 
     // ── 收敛后的增量：一条改动只该花一条的代价 ────────────────────────
     let extra = "千库追平之后又写的一条";
-    b.app.create_note(&b.app.default_folder_id().unwrap(), doc(extra)).unwrap();
+    b.app
+        .create_note(&b.app.default_folder_id().unwrap(), doc(extra))
+        .unwrap();
     srv.clear_log().await;
     let incr = b.settle(6).await;
     a.settle(6).await;
-    assert_eq!(a.fingerprints().len(), NOTES + 1, "A 没收到 B 后来写的那条：{incr:?}");
-    assert!(a.fingerprints().iter().any(|(t, _)| t == extra), "后来那条标题不对");
+    assert_eq!(
+        a.fingerprints().len(),
+        NOTES + 1,
+        "A 没收到 B 后来写的那条：{incr:?}"
+    );
+    assert!(
+        a.fingerprints().iter().any(|(t, _)| t == extra),
+        "后来那条标题不对"
+    );
 
     let rewritten: Vec<String> = srv
         .request_log()
@@ -263,8 +370,16 @@ async fn a_thousand_note_library_catches_up_within_a_bounded_number_of_rounds() 
         .filter(|r| r.method == "PUT" && r.path.contains("/manifest/seg-"))
         .map(|r| format!("{} ({} B)", r.path, r.bytes))
         .collect();
-    assert!(rewritten.is_empty(), "{NOTES} 条的库里只改一条，就把基线分段重写了：{rewritten:?}");
-    let up_after = srv.request_log().iter().filter(|r| r.method == "PUT").map(|r| r.bytes).sum::<u64>();
+    assert!(
+        rewritten.is_empty(),
+        "{NOTES} 条的库里只改一条，就把基线分段重写了：{rewritten:?}"
+    );
+    let up_after = srv
+        .request_log()
+        .iter()
+        .filter(|r| r.method == "PUT")
+        .map(|r| r.bytes)
+        .sum::<u64>();
     assert!(
         up_after < index_raw.len() as u64 * 8,
         "一条增量的上行量 {up_after} B 相对索引 {} B 过大 —— 改动在放大成整份重写",

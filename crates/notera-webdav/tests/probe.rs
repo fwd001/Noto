@@ -19,8 +19,12 @@ struct Ctx {
 async fn ctx() -> Ctx {
     let srv = TestServer::start(Backend::Mem).await;
     let http = Arc::new(
-        HttpClient::build(&ProxyProfile::direct(), &TlsPolicy::Strict, Timeouts::short(Duration::from_secs(10)))
-            .expect("出口客户端"),
+        HttpClient::build(
+            &ProxyProfile::direct(),
+            &TlsPolicy::Strict,
+            Timeouts::short(Duration::from_secs(10)),
+        )
+        .expect("出口客户端"),
     );
     Ctx { srv, http }
 }
@@ -39,12 +43,31 @@ async fn a_normal_server_earns_the_strong_write_strategies() {
     let c = ctx().await;
     let r = c.remote().probe_caps().await.expect("探测不该失败");
     // 这两位决定 S1/S2。它们为真是"默认能走条件写"的依据；为假就必须是真观察到不支持。
-    assert!(r.conditional_put, "测试服务器实现 If-Match，探测却说没有：{:?}", r.describe());
-    assert!(r.overwrite_f_move, "测试服务器实现 Overwrite:F，探测却说没有：{:?}", r.describe());
-    assert!(r.strong_etag, "PUT 后 If-None-Match 应能拿到 304：{:?}", r.describe());
+    assert!(
+        r.conditional_put,
+        "测试服务器实现 If-Match，探测却说没有：{:?}",
+        r.describe()
+    );
+    assert!(
+        r.overwrite_f_move,
+        "测试服务器实现 Overwrite:F，探测却说没有：{:?}",
+        r.describe()
+    );
+    assert!(
+        r.strong_etag,
+        "PUT 后 If-None-Match 应能拿到 304：{:?}",
+        r.describe()
+    );
     let caps = r.to_caps();
-    assert!(caps.has(Caps::CONDITIONAL_PUT) && caps.has(Caps::OVERWRITE_F_MOVE) && caps.has(Caps::STRONG_ETAG));
-    assert!(!caps.has(Caps::CHUNKED), "发不出真 chunked 请求，就不该声称探到它");
+    assert!(
+        caps.has(Caps::CONDITIONAL_PUT)
+            && caps.has(Caps::OVERWRITE_F_MOVE)
+            && caps.has(Caps::STRONG_ETAG)
+    );
+    assert!(
+        !caps.has(Caps::CHUNKED),
+        "发不出真 chunked 请求，就不该声称探到它"
+    );
 }
 
 #[tokio::test]
@@ -90,9 +113,23 @@ async fn each_absence_is_detected_on_its_own() {
     for case in cases {
         let c = ctx().await;
         c.srv.inject(case.inject).await;
-        let r = c.remote().probe_caps().await.unwrap_or_else(|e| panic!("{}：探测本身失败 {e}", case.name));
-        assert!((case.cleared)(&r), "{}：该位没被认出来 —— {:?}", case.name, r.describe());
-        assert!((case.still_true)(&r), "{}：别的能力被误伤了 —— {:?}", case.name, r.describe());
+        let r = c
+            .remote()
+            .probe_caps()
+            .await
+            .unwrap_or_else(|e| panic!("{}：探测本身失败 {e}", case.name));
+        assert!(
+            (case.cleared)(&r),
+            "{}：该位没被认出来 —— {:?}",
+            case.name,
+            r.describe()
+        );
+        assert!(
+            (case.still_true)(&r),
+            "{}：别的能力被误伤了 —— {:?}",
+            case.name,
+            r.describe()
+        );
     }
 }
 
@@ -103,7 +140,10 @@ async fn an_unreachable_server_is_an_error_not_a_capability_verdict() {
     c.srv.stop().await;
     let err = remote.probe_caps().await.expect_err("服务器停了必须报错");
     // 关键是"报的是错"而不是"回一个全 false 的结论"：后者会把好服务器降级到 S3 盲写
-    assert!(matches!(err, notera_sync::RemoteError::Offline), "实际 {err:?}");
+    assert!(
+        matches!(err, notera_sync::RemoteError::Offline),
+        "实际 {err:?}"
+    );
     c.srv.restart().await;
 }
 
@@ -128,9 +168,14 @@ async fn probe_leaves_the_real_library_alone() {
         .expect("entries")
         .iter()
         .filter_map(|e| e["path"].as_str())
-        .filter(|p| p.contains("/records/") || p.contains("/manifest/") || p.contains("/attachments/"))
+        .filter(|p| {
+            p.contains("/records/") || p.contains("/manifest/") || p.contains("/attachments/")
+        })
         .collect::<Vec<_>>();
-    assert!(touched_real.is_empty(), "探测动了真实数据区：{touched_real:?}");
+    assert!(
+        touched_real.is_empty(),
+        "探测动了真实数据区：{touched_real:?}"
+    );
 }
 
 #[test]
@@ -142,9 +187,22 @@ fn caps_bits_map_exactly_as_the_table_says() {
         depth_infinity: true,
         range: true,
     };
-    assert_eq!(all.to_caps().mask(), Caps::STRONG_ETAG | Caps::CONDITIONAL_PUT | Caps::OVERWRITE_F_MOVE | Caps::DEPTH_INFINITY | Caps::RANGE);
+    assert_eq!(
+        all.to_caps().mask(),
+        Caps::STRONG_ETAG
+            | Caps::CONDITIONAL_PUT
+            | Caps::OVERWRITE_F_MOVE
+            | Caps::DEPTH_INFINITY
+            | Caps::RANGE
+    );
     assert_eq!(ProbeReport::default().to_caps(), Caps::none());
     // 探到条件写 ⇒ 选 S1；什么都没探到 ⇒ 只能 S3 盲写复验（§5 的写入策略表）
-    assert_eq!(all.to_caps().write_strategy(), notera_webdav::WriteStrategy::S1);
-    assert_eq!(ProbeReport::default().to_caps().write_strategy(), notera_webdav::WriteStrategy::S3);
+    assert_eq!(
+        all.to_caps().write_strategy(),
+        notera_webdav::WriteStrategy::S1
+    );
+    assert_eq!(
+        ProbeReport::default().to_caps().write_strategy(),
+        notera_webdav::WriteStrategy::S3
+    );
 }

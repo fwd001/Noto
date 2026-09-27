@@ -90,9 +90,9 @@ fn block_has_attachment_ref(b: &Block) -> bool {
         return true;
     }
     b.content.iter().any(|i| {
-        i.marks.iter().any(|m| {
-            matches!(m.kind, MarkKind::AttachmentRef) || m.attrs.contains_key("sha256")
-        })
+        i.marks
+            .iter()
+            .any(|m| matches!(m.kind, MarkKind::AttachmentRef) || m.attrs.contains_key("sha256"))
     })
 }
 
@@ -124,13 +124,25 @@ pub fn attachments(doc: &Document) -> Vec<BlockAttachment> {
     doc.content
         .iter()
         .filter_map(|b| {
-            let sha = b.attrs.get("sha256").and_then(|v| v.as_str()).filter(|s| is_sha256_hex(s))?;
-            let attr = |keys: &[&str]| keys.iter().find_map(|k| b.attrs.get(*k).and_then(|v| v.as_str())).map(|s| s.to_string());
+            let sha = b
+                .attrs
+                .get("sha256")
+                .and_then(|v| v.as_str())
+                .filter(|s| is_sha256_hex(s))?;
+            let attr = |keys: &[&str]| {
+                keys.iter()
+                    .find_map(|k| b.attrs.get(*k).and_then(|v| v.as_str()))
+                    .map(|s| s.to_string())
+            };
             Some(BlockAttachment {
                 block_id: b.id.clone(),
                 sha256: sha.to_string(),
                 role: attr(&["role"]).filter(|r| r == "inline" || r == "file"),
-                size: b.attrs.get("size").and_then(|v| v.as_i64()).filter(|n| *n >= 0),
+                size: b
+                    .attrs
+                    .get("size")
+                    .and_then(|v| v.as_i64())
+                    .filter(|n| *n >= 0),
                 media_type: attr(&["mediaType", "media_type"]),
                 filename: attr(&["name", "filename"]),
             })
@@ -140,7 +152,9 @@ pub fn attachments(doc: &Document) -> Vec<BlockAttachment> {
 
 /// 64 位小写十六进制 —— 与 `attachments` 主键上的 CHECK 同一套判据。
 fn is_sha256_hex(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    s.len() == 64
+        && s.bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 
 fn truncate_chars(s: &str, max: usize) -> String {
