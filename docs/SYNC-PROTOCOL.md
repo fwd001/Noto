@@ -140,7 +140,9 @@ Notera ⇄ 用户自有 WebDAV 的同步协议 v1。本文是**规范性**文档
 
 ### 4.3 压实（compaction）
 
-触发条件（任一）：`window.entries.len > 200`；窗口与某分段的 id 重叠率 > 20%；`seq` 距上次压实 > 5000。
+触发条件（任一）：`window.entries.len > 200`；**窗口攒够 `COMPACT_OVERLAP_MIN`(=SEGMENT_TARGET/4=500) 条之后**，与某分段的 id 重叠率 > 20%；`seq` 距上次压实 > 5000。
+
+> 重叠率那条为什么要有量下限：压实过一次之后，任何一条新改动的 id 都必然落在已有分段的 cover 里 —— 只看比率就是 100%，于是**每次编辑都重写整份基线分段**（2000 条 ≈ 159 KiB 上传 / 一次改动）。这条下限是 5000 条库的端到端跑测撞出来的，实测证据在 `manifest::tests::one_edit_after_a_compaction_does_not_rewrite_the_baseline` 与 `notera-host/tests/compaction.rs`。
 
 压实动作：把窗口折进受影响分段 → 重写这些分段文件 → 生成新 `index.json`（`window.since_seq = 新 seq`，`window.entries = []`）→ `seq += 1`。
 

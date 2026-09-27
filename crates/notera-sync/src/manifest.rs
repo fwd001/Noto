@@ -11,6 +11,14 @@ pub const WINDOW_MAX: usize = 200;
 pub const SEGMENT_TARGET: usize = 2000;
 /// 窗口与某分段 id 重叠率超过此值即值得压实。
 pub const COMPACT_OVERLAP: f64 = 0.20;
+
+/// 重叠率触发压实之前，窗口至少要攒够这么多条。
+///
+/// 重叠率的意图是"窗口里攒了一批与基线同范围的改动，折回去"。按字面只比率不总量时，
+/// 压实过一次之后**任何一条**新改动都落在已有分段的 cover 里 —— 比率 100%，于是每次
+/// 编辑都重写那条 2000 条的分段（≈159 KiB 上传 / 每次改动）。5000 条库的端到端跑测
+/// 把这件事撞了出来；下限取"四分之二段"是保守值：真要折回基线，得先攒够一批。
+pub const COMPACT_OVERLAP_MIN: usize = SEGMENT_TARGET / 4;
 pub const COMPACT_SEQ_GAP: u64 = 5000;
 
 pub type ShortHash = String; // 12 hex，仅快速路径提示
@@ -245,7 +253,11 @@ impl Manifest {
         if self.seq.saturating_sub(last_compacted_seq) > COMPACT_SEQ_GAP {
             return true;
         }
-        let total = self.window.entries.len().max(1);
+        let total = self.window.entries.len();
+        // 先看量：没攒够一批就不谈比率（否则单条改动必然 100% 重叠）
+        if total < COMPACT_OVERLAP_MIN {
+            return false;
+        }
         let overlap = self
             .window
             .entries
@@ -573,13 +585,31 @@ mod tests {
         assert!(Manifest::parse(&next.to_wire()).is_ok(), "压实产物必须自校验通过");
     }
 
+    /// 压实过一次之后，用户改**一条**笔记不该再把整份基线重写一遍。
+    ///
+    /// 重叠率这条规则的意图是"窗口里攒了不少与已有分段同范围的改动，折回去"。但按
+    /// 字面实现，窗口只有 1 条且它落在已有分段的 cover 里时，重叠率就是 100% ——
+    /// 于是每一次编辑都触发压实：重写那条 2000 条的分段（≈159 KiB），而这一切发生在
+    /// 一台刚改了一个字的设备上。5000 条库的端到端跑测把这件事暴露了出来。
+    #[test]
+    fn one_edit_after_a_compaction_does_not_rewrite_the_baseline() {
+        let mut m = sample();
+        let (sref, _e) = seg("seg-0000", "a", "z", (0..2000).map(|i| entry(&format!("{i:026}"), 1, "aaaaaaaaaaaa")).collect());
+        m.segments = vec![sref];
+        m.window = Window { since_seq: m.seq, complete: true, entries: vec![entry("m000000000000000000000001", 7, "aaaaaaaaaaab")] };
+        m.refresh_checksum();
+        assert!(!m.needs_compaction(m.window.since_seq), "只改了一条就把整份基线折回去重写");
+    }
+
     #[test]
     fn compaction_triggers_on_overlap() {
         let mut m = sample();
         let (sref, e) = seg("seg-0000", "a", "m", vec![entry("a", 1, "aaaaaaaaaaaa")]);
         m.segments = vec![sref];
-        // 全部窗口条目都落在已有分段覆盖范围内 → 重叠率 100%
-        m.window.entries = vec![entry("a", 2, "aaaaaaaaaaab"), entry("m", 2, "aaaaaaaaaaac")];
+        // 全部窗口条目都落在已有分段覆盖范围内 → 重叠率 100%，且**攒够了量**
+        m.window.entries = (0..COMPACT_OVERLAP_MIN)
+            .map(|i| entry(&format!("m{i:025}"), 2, "aaaaaaaaaaab"))
+            .collect();
         m.refresh_checksum();
         let _ = e;
         assert!(m.needs_compaction(m.seq), "重叠率超阈值应触发压实");

@@ -156,5 +156,18 @@ async fn the_manifest_compacts_and_a_fresh_device_still_converges() {
     assert_eq!(b.fingerprints(), a.fingerprints(), "两台设备标题/内容哈希不一致");
     assert_eq!(bs.fts_rows, bs.notes, "搜索索引没跟着到位：{} vs {}", bs.fts_rows, bs.notes);
 
+    // 压实过一次之后，任何一条新改动的 id 都必然落在已有分段的 cover 里。
+    // 重叠率规则若只看比率不看量，这里就会为了一个字节的新笔记重写整份基线分段。
+    a.app.create_note(&folder, doc("压实之后又写的一条")).unwrap();
+    srv.clear_log().await;
+    a.settle(6).await;
+    let rewritten: Vec<String> = srv
+        .request_log()
+        .iter()
+        .filter(|r| r.method == "PUT" && r.path.contains("/manifest/seg-"))
+        .map(|r| format!("{} ({} B)", r.path, r.bytes))
+        .collect();
+    assert!(rewritten.is_empty(), "只改了一条笔记就把基线分段重写了：{rewritten:?}");
+
     srv.stop().await;
 }
