@@ -618,6 +618,7 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
         if !written.is_empty() && events.iter().all(|e| !matches!(e, SyncEvent::Deferred { .. })) {
             if let Some(m) = manifest.as_ref() {
                 let mut next = m.with_commit(&self.local.device_id(), &self.local.now(), &written, &[]);
+                next = self.compact_if_needed(next).await;
                 let mut tries = 0u8;
                 loop {
                     st.requests += 1;
@@ -657,7 +658,7 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                             match self.remote.fetch_manifest(None).await {
                                 Ok(Some((bytes, e2))) => match Manifest::parse(&bytes) {
                                     Ok(fresh) => {
-                                        next = fresh.with_commit(&self.local.device_id(), &self.local.now(), &written, &[]);
+                                        next = self.compact_if_needed(fresh.with_commit(&self.local.device_id(), &self.local.now(), &written, &[])).await;
                                         new_etag = e2;
                                     }
                                     Err(_) => break,
@@ -701,6 +702,34 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
         }
         events.push(SyncEvent::Completed(st.outcome));
         (st, events)
+    }
+
+    /// 清单提交前的压实：窗口超标就把窗口折进分段，**分段先落、清单后落**。
+    ///
+    /// 任何一步失败都退回"这一轮不压实"：清单照旧提交（窗口继续长大，只是每轮多写几个
+    /// 字节），绝不会让索引引用一个还没落地的分段（INV-09 要的就是这个顺序）。
+    async fn compact_if_needed(&self, next: Manifest) -> Manifest {
+        if !next.needs_compaction(next.window.since_seq) {
+            return next;
+        }
+        let mut segs: BTreeMap<String, Vec<EntryRef>> = BTreeMap::new();
+        for s in &next.segments {
+            match self.remote.fetch_segment(&s.n).await {
+                Ok(entries) => {
+                    segs.insert(s.n.clone(), entries);
+                }
+                // 现有分段读不回来就整段放弃压实（不能凭残缺视图重写它）
+                Err(_) => return next,
+            }
+        }
+        let (compacted, touched, contents) = next.compact(&segs, &self.local.device_id(), &self.local.now());
+        for name in touched {
+            let Some(entries) = contents.get(&name) else { continue };
+            if self.remote.put_segment(&name, &crate::manifest::segment_wire(entries)).await.is_err() {
+                return next;
+            }
+        }
+        compacted
     }
 
     /// 本地时钟的毫秒刻度。读不出来就按 0 —— 方向是"别人的租约都算过期"，

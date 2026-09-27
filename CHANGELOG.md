@@ -8,10 +8,11 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 476 通过 / 0 失败 / 0 ignored（54 个测试二进制） |
+| `cargo test --workspace` | 478 通过 / 0 失败 / 0 ignored（55 个测试二进制） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
 | L5 崩溃注入 `--test crash_recovery` | 9 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零 |
 | 附件续传 `--test attachment_resume` | 2/2（真杀进程重启接着要；服务器不理 `Range` 时当整份覆盖） |
+| 清单压实 `--test compaction`（SY-INT-09 的一部分） | 1/1（>200 条变更后分段真的落盘、索引只引用存在的分段、空库靠分段基线追平） |
 | 大库追平 `--test late_device`（SY-INT-12） | 1/1（260 条变更 > 窗口上限，空库设备完整收敛） |
 | 链路抖动 `--test reconnect`（SY-INT-11） | 1/1（六轮各坏一次，恢复后账目归零、两台设备逐条一致） |
 | 前端 | 171 通过（18 文件）；`vue-tsc --noEmit` 无错误；构建 213 KB → gzip 73 KB |
@@ -24,6 +25,8 @@
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
 ### 新增
+
+- **清单压实这一步第一次被接进写侧**（SYNC-PROTOCOL §4.1，此前 `compact()`、`put_segment`、`segments_needed_for` 全都在，测试也都绿，**但引擎一次都没调用过** —— 于是"清单两段式解析与压实"这句文档是不成立的）：`SyncEngine::compact_if_needed` 在提交清单前判 `needs_compaction`，超窗口就把窗口折进分段，**分段先落盘、索引后提交**（INV-09 要的就是这个顺序），任何一步失败都退回"这一轮不压实"（窗口继续长大只是变贵，绝不会让索引引用一个还不存在的分段）。配套修掉 `compact()` 里一支从没被走过的路：它原来只遍历 `self.segments` 已有的引用，所以**首次压实**（索引里还没有任何分段）会把新桶 `seg-0000` 关在门外、而窗口又已被清空 —— 压实产物读起来等于"库里一条记录都没有"。新增 `segment_wire()` 把"写什么字节"和"`hash12`/`bytes` 按什么算"钉进同一个函数。证据：`notera-host/tests/compaction.rs`（分段落盘、索引引用的分段都在盘上、`bytes`/`count` 与文件实长与实际条目数一致、空库设备靠分段基线追平 260 条）+ `manifest::tests::first_compaction_creates_the_segment_that_carries_the_window`。两处变异自证：不接线压实 → 集成测试红；压实只重写已有分段 → 单元测红
 
 - **补上「反复断连重连最终收敛」这条门禁**（`notera-host/tests/reconnect.rs`，SY-INT-11）：§53 那条主循环（断网 → 继续写 → 恢复网络 → 自动追平 → 换设备一条不差）此前**一条测试都没有**。现在六轮里每轮换一种坏法轮着来 —— ① 服务器整个停监听（拔网线）② 连接建了就被掐（`FAIL(abort)`）③ 握手能过但**读清单**回 500 —— 每轮之后同地址恢复。断言四件事：坏的那一轮绝不报成功；坏轮之后**账还欠着**（`outbox_pending>=1`、`dirty_notes>=1`，界面那个"待同步"就来自这里）；断网期间刚写的笔记本机立刻读得回来（I8）；恢复后跑到账目归零，B 与 A 的**标题+内容哈希逐条一致**，服务器上不留 `.tmp-*` 半截对象
 - 这条门禁自己差点是假的，是变异测试揭穿的：最初只测①②两种坏法，把引擎"拉清单失败"那一支改成"报 Converged"它**照样绿** —— 这两种情况下 `App::sync_once` 在握手阶段就被 `negotiate` 拒了，根本走不到引擎那一支。加上③（握手通、清单 500）之后同一处变异立刻被打回红，然后才把产品代码改回来。教训写进 TEST-PLAN SY-INT-11：**三种坏法都得留着**，少一种就少一条真实路径

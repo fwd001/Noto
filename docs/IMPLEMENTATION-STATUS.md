@@ -11,7 +11,7 @@
 
 | 门禁 | 结果 | 出处 |
 |---|---|---|
-| `cargo test --workspace` | 476 通过 / 0 失败 / 0 ignored（54 个测试二进制） | 本机 |
+| `cargo test --workspace` | 478 通过 / 0 失败 / 0 ignored（55 个测试二进制） | 本机 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 / 0 | 本机（CI-CD 原样命令） |
 | `node scripts/arch-check.mjs` | 24/24 | 本机 |
 | `node scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 | 本机 |

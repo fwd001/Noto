@@ -122,8 +122,20 @@ async fn a_fresh_device_joining_an_over_window_library_gets_every_note() {
         &std::fs::read_to_string(root.join(".notes/manifest/index.json")).expect("清单在盘上"),
     )
     .expect("清单是 JSON");
-    let announced = index["window"]["entries"].as_array().map(|a| a.len()).unwrap_or(0);
-    assert_eq!(announced, NOTES + 1, "清单公告的条目数就不对，后面怎么追都是徒劳");
+    // 公告总数 = 窗口 + 所有分段里的条目（压实之后条目会挪进分段）
+    let mut announced = index["window"]["entries"].as_array().map(|a| a.len()).unwrap_or(0);
+    for seg in index["segments"].as_array().cloned().unwrap_or_default() {
+        let name = seg["n"].as_str().unwrap_or_default();
+        let body = std::fs::read(root.join(format!(".notes/manifest/{name}.json"))).unwrap_or_default();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+        announced += parsed
+            .as_array()
+            .cloned()
+            .or_else(|| parsed.get("entries").and_then(|v| v.as_array()).cloned())
+            .map(|a| a.len())
+            .unwrap_or(0);
+    }
+    assert_eq!(announced, NOTES + 1, "清单（窗口 + 分段）公告的条目数不对，后面怎么追都是徒劳");
 
     let btrace = b.settle(12).await;
     let bs = b.app.store().stats().unwrap();

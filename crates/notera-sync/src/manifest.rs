@@ -282,20 +282,31 @@ impl Manifest {
         next.generated_at = at.into();
         next.generated_by = device.into();
         next.window = Window { since_seq: next.seq, complete: true, entries: Vec::new() };
-        next.segments = next.segments.iter().map(|s| {
-            let mut s = s.clone();
-            let entries = new_segments.get(&s.n).cloned().unwrap_or_default();
-            s.count = entries.len();
-            s.hash12 = short(&sha256_hex(
-                notera_core::canonical_json(&serde_json::to_value(&entries).unwrap_or_default()).as_bytes(),
-            ));
-            s.cover = entries
+        // 分段引用必须覆盖**每一个桶**，包括这次压实新建的那些。首次压实就是这种情形：
+        // 索引里还一条分段都没有，而窗口里的条目全被折进了新桶 `seg-0000`。以前这里只
+        // 遍历已有的 `self.segments`，于是新桶进不了索引、窗口又已被清空 —— **清单上所有
+        // 条目一起消失**（比不压实严重得多）。
+        let mut refs: BTreeMap<String, SegmentRef> =
+            self.segments.iter().cloned().map(|s| (s.n.clone(), s)).collect();
+        for (name, entries) in &new_segments {
+            let wire = segment_wire(entries);
+            let r = refs.entry(name.clone()).or_insert_with(|| SegmentRef {
+                n: name.clone(),
+                cover: [String::new(), String::new()],
+                count: 0,
+                hash12: String::new(),
+                bytes: 0,
+            });
+            r.count = entries.len();
+            r.hash12 = short(&sha256_hex(&wire));
+            r.bytes = wire.len() as u64;
+            r.cover = entries
                 .first()
                 .zip(entries.last())
                 .map(|(a, b)| [a.i.clone(), b.i.clone()])
                 .unwrap_or_else(|| [String::new(), String::new()]);
-            s
-        }).collect();
+        }
+        next.segments = refs.into_values().collect();
         next.refresh_checksum();
         (next, touched, new_segments)
     }
@@ -308,6 +319,14 @@ impl Manifest {
             .map(|s| s.n.clone())
             .collect()
     }
+}
+
+/// 分段文件的字节形态：条目数组的 canonical JSON。
+///
+/// `SegmentRef.hash12` 与 `bytes` 都是**对这段字节**算的，读者 `fetch_segment` 接受
+/// 这个形态 —— 把"写什么"与"按什么算哈希"钉在同一个函数里，免得两处各写一份而漂移。
+pub fn segment_wire(entries: &[EntryRef]) -> Vec<u8> {
+    notera_core::canonical_json(&serde_json::to_value(entries).unwrap_or_default()).into_bytes()
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -426,6 +445,35 @@ mod tests {
         assert_eq!(next.window.since_seq, next.seq);
         assert!(!touched.is_empty());
         assert!(newsegs.values().flatten().any(|x| x.i == "z"), "窗口条目应落入分段");
+        assert!(Manifest::parse(&next.to_wire()).is_ok(), "压实产物必须自校验通过");
+    }
+
+    /// 首次压实：索引里一条分段都还没有，窗口整批折进新建的 `seg-0000`。
+    ///
+    /// 这一支以前是坏的 —— `compact()` 只遍历已有的 `self.segments`，于是新桶进不了索引、
+    /// 而窗口又已被清空，压实产物读起来等于"库里一条记录都没有"。写侧一旦真的接上压实，
+    /// 每个 >200 条变更的库都会撞上它，所以这条测试钉的是"条目一个都不能消失"。
+    #[test]
+    fn first_compaction_creates_the_segment_that_carries_the_window() {
+        let mut m = sample();
+        m.segments = Vec::new();
+        let ids: Vec<String> = m.window.entries.iter().map(|e| e.i.clone()).collect();
+        assert!(!ids.is_empty(), "夹具的窗口要有条目");
+        let (next, touched, newsegs) = m.compact(&BTreeMap::new(), "dev-1", "2026-09-25T00:00:03.000Z");
+        assert!(next.window.entries.is_empty(), "窗口该清空");
+        assert_eq!(next.segments.len(), 1, "新建的分段必须进索引，否则条目凭空消失：{:?}", next.segments);
+        let listed: Vec<String> = next
+            .segments
+            .iter()
+            .flat_map(|s| newsegs.get(&s.n).into_iter().flatten().map(|e| e.i.clone()))
+            .collect();
+        for id in &ids {
+            assert!(listed.contains(id), "条目 {id} 压实后既不在窗口也不在任何分段里");
+        }
+        assert_eq!(next.segments[0].count, ids.len());
+        assert!(!touched.is_empty());
+        let body = segment_wire(newsegs.get(&next.segments[0].n).expect("分段内容"));
+        assert_eq!(next.segments[0].bytes, body.len() as u64, "bytes 要按真正落盘的那段字节算");
         assert!(Manifest::parse(&next.to_wire()).is_ok(), "压实产物必须自校验通过");
     }
 
