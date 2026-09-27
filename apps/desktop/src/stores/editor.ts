@@ -82,6 +82,16 @@ export const useEditorStore = defineStore('editor', () => {
   let saveChain: Promise<void> = Promise.resolve();
 
   function hydrate(note: Note): void {
+    // 本地优先的一条硬规则：**同一份笔记、本地还有没保存的输入、而这次回读的 rev
+    // 并不比本地更新** —— 那它拿到的就是"保存之前的旧快照"（新建笔记后立刻打字时，
+    // 一次 notes-changed 回读就会走到这里）。此时保留本地正文与 dirty，让待发中的
+    // autosave 自己把内容写进去；盖掉的话表现就是"屏幕上有字、库里是空正文、
+    // 右下角写着已保存"（纯黑盒 UAT 三轮里两轮红就是这么来的）。
+    // rev 更新的情况照旧应用 —— 那是真的远端改动，不能拿本地挡住同步。
+    if (noteId.value === note.id && dirty.value && (note.rev ?? 0) <= rev.value) {
+      inTrash.value = note.deletedAt !== null && note.deletedAt !== undefined;
+      return;
+    }
     noteId.value = note.id;
     rev.value = typeof note.rev === 'number' ? note.rev : 0;
     docVersion.value = typeof note.doc?.v === 'number' ? note.doc.v : SUPPORTED_DOC_VERSION;

@@ -223,3 +223,43 @@ describe('写被挡下时不许静默', () => {
     expect(editor.saveState).toBe('saved');
   });
 });
+
+describe('同一笔记的回读不许盖掉未保存的输入', () => {
+  /**
+   * 实测缺陷的形态：新建笔记后立刻打字，某次"保存前的旧快照"回读把正文换回空文档，
+   * 于是屏幕上有字、库里是空正文、右下角写着"已保存"（纯黑盒 UAT 三轮里两轮红）。
+   */
+  it('本地有未保存编辑、回读的 rev 不更新 → 保留本地正文与 dirty', async () => {
+    const stale = noteFixture({ rev: 1 });
+    stubLocalService({ get_note: () => stale, edit_note: () => stale });
+    const editor = useEditorStore();
+    await editor.open('note-1');
+    const block = editor.blocks[0];
+    if (!block) return;
+    editor.updateBlock({ ...block, content: [{ text: '刚打还没保存的字' }] });
+    expect(editor.dirty).toBe(true);
+
+    editor.hydrate(asNote(stale));
+
+    expect(inlineText(editor.blocks[0].content)).toBe('刚打还没保存的字');
+    expect(editor.dirty).toBe(true);
+  });
+
+  it('回读带来更新的 rev（真的是远端改动）→ 照常应用，不挡同步', async () => {
+    const fresh = noteFixture({
+      rev: 9,
+      doc: { v: 1, content: [{ id: 'abcd1234', type: 'paragraph', content: [{ text: '对方版本' }] }] },
+    });
+    stubLocalService({ get_note: () => noteFixture({ rev: 1 }), edit_note: () => fresh });
+    const editor = useEditorStore();
+    await editor.open('note-1');
+    const block = editor.blocks[0];
+    if (!block) return;
+    editor.updateBlock({ ...block, content: [{ text: '我的改动' }] });
+
+    editor.hydrate(asNote(fresh));
+
+    expect(inlineText(editor.blocks[0].content)).toBe('对方版本');
+    expect(editor.dirty).toBe(false);
+  });
+});
