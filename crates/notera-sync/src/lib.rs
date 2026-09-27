@@ -33,7 +33,20 @@ pub trait LocalPort: Send + Sync {
     fn local_views(&self) -> Result<Vec<LocalView>, LocalError>;
     /// 已缓存的远端索引（清单的本地投影）
     fn cached_remote(&self) -> Result<Vec<RemoteView>, LocalError>;
+    /// 把**本轮读到的完整远端视图**整份存下来，下一轮据此跳过重复下载
+    /// （`sync_remote_index` 的建表注释说的就是这件事）。
+    ///
+    /// 引擎只在这一轮**没被请求预算截断**时调用：半份视图会让缺的条目被永久忘掉 ——
+    /// 跳过一次下载的前提是"那份内容还在别处读得回来"。允许空实现（不丢数据，只是每轮
+    /// 重下），但产品侧必须接上，否则 `cached_segment_hashes` 一类的跳过判据就不成立。
+    fn set_cached_remote(&self, _entries: Vec<RemoteView>) {}
     fn cached_segment_hashes(&self) -> BTreeMap<String, String>;
+    /// 记下"本机现在有这些分段，且内容与清单声明的 `hash12` **核对过**"。
+    ///
+    /// 与 `cached_segment_hashes` 是一对：只读不写等于缓存永远为空 —— 落后超过窗口的
+    /// 设备每一轮都要重下整份基线分段（实测千条库每轮 17~42 KiB、5000 条 186 KiB，
+    /// 而调度器 25 秒一轮）。允许空实现（不丢数据，只是贵），但产品实现必须接上。
+    fn set_cached_segment_hashes(&self, _map: BTreeMap<String, String>) {}
     /// 本机已经存下、且已经与远端确认过的实体头（`(kind,id)` → `(rev, 全哈希)`）。
     ///
     /// 默认空表 = "一条都不跳过"，也就是本方法出现之前的行为。实现方**必须**给出干净行：
@@ -516,6 +529,12 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 )
             }
         };
+        // 远端视图能不能落盘，判据是"**这一轮把索引投影读全了**"，不是"本轮没被截断"：
+        // 预算常常是花在逐条取正文时耗尽的，那时索引投影本身是完整的，存下来完全安全。
+        // 写成 `!capped` 会怎样：追平千条库要在正文上截断若干轮，于是视图永远存不下去，
+        // 而分段哈希缓存却已经记下"seg-0000 我有了"—— 下一轮照着跳过分段下载，
+        // 视图里就只剩窗口那 200 条，第二台设备永远停在 198/1000（实测）。
+        let mut view_complete = true;
         let remotes: Vec<RemoteView> = match &manifest {
             Some(m) => {
                 let mut out = self.local.cached_remote().unwrap_or_default();
@@ -523,14 +542,32 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 let window_covers =
                     m.window.complete && self.local.seq_applied() >= m.window.since_seq;
                 if !window_covers {
-                    for name in m.segments_needed_for(&self.local.cached_segment_hashes()) {
+                    let mut held = self.local.cached_segment_hashes();
+                    let before = held.clone();
+                    for name in m.segments_needed_for(&held) {
                         if st.requests >= self.cfg.round_request_cap {
                             capped = true;
+                            // 基线没读全就断了预算：这一轮的视图是半份的
+                            view_complete = false;
                             break;
                         }
+                        let want = m
+                            .segments
+                            .iter()
+                            .find(|s| s.n == name)
+                            .map(|s| s.hash12.clone());
                         match self.remote.fetch_segment(&name).await {
                             Ok(entries) => {
                                 st.requests += 1;
+                                // 核对过才缓存：重算出来的 hash12 与清单声明的同一个，才算
+                                // "本机这一段就是清单所指的那版"。对端刚重写过分段时二者会
+                                // 不一致 —— 那一段照旧要用（条目自己带 rev/哈希，判据在 P 规则
+                                // 里），只是别把它当成缓存，否则下一轮会跳过一份读不到的基线。
+                                if let Some(w) = want {
+                                    if crate::manifest::segment_hash12(&entries) == w {
+                                        held.insert(name.clone(), w);
+                                    }
+                                }
                                 out.retain(|r| {
                                     !entries
                                         .iter()
@@ -547,8 +584,18 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                                     });
                                 }
                             }
-                            Err(_) => st.outcome = RoundOutcome::Partial,
+                            Err(_) => {
+                                // 这一段没拿到 → 视图缺它涵盖的那批条目：既别落盘，也别记缓存
+                                st.outcome = RoundOutcome::Partial;
+                                view_complete = false;
+                            }
                         }
+                    }
+                    // 压实之后旧名字再也不会被引用；留着就是无界长大
+                    let live: Vec<&str> = m.segments.iter().map(|s| s.n.as_str()).collect();
+                    held.retain(|k, _| live.contains(&k.as_str()));
+                    if view_complete && held != before {
+                        self.local.set_cached_segment_hashes(held);
                     }
                 }
                 if window_covers || manifest.is_some() {
@@ -568,6 +615,11 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             }
             None => self.local.cached_remote().unwrap_or_default(),
         };
+        // 只有"这一轮读到了清单、且索引投影读全了"，remotes 才配落盘。半份视图存下去，
+        // 下一轮就会照着跳过分段下载，缺的那些条目永久没人认领。
+        if manifest.is_some() && view_complete {
+            self.local.set_cached_remote(remotes.clone());
+        }
         let plan = Plan::build(&locals, &remotes);
 
         // P7「内容已经一样」不等于"本轮无事可做"就完事：本地这条可能**还挂着脏**

@@ -220,6 +220,9 @@ async fn a_thousand_note_library_catches_up_within_a_bounded_number_of_rounds() 
 
     // ── 读侧：空库入伙，轮数有界、徽标说实话、逐条一致 ─────────────────
     let b = Device::boot("big-b", &url);
+    // 只数 B 追平这段时间的下载：A 的 settle 会反复重写同一个分段名，那段窗口里
+    // "同一个名字被下多次"是内容真的变了，不是缓存没接上。
+    let b_log_start = srv.request_log().len();
     let first = b.app.sync_once().await.expect("B 的第一轮");
     assert_eq!(
         first.outcome,
@@ -239,6 +242,35 @@ async fn a_thousand_note_library_catches_up_within_a_bounded_number_of_rounds() 
         atrace.join("\n  "),
         btrace.join("\n  ")
     );
+
+    /// 一段日志里"整份下载某个基线分段"的次数，按分段名分开数。
+    /// 只看 `GET seg-*.json` 且 200；404 / 304 都不算拿到内容。
+    fn segment_downloads(log: &[notera_test_webdav::LoggedRequest]) -> Vec<(String, usize)> {
+        let mut m: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        for r in log {
+            if r.method == "GET" && r.status == 200 {
+                if let Some(rest) = r.path.split("/manifest/seg-").nth(1) {
+                    *m.entry(format!("seg-{rest}")).or_default() += 1;
+                }
+            }
+        }
+        m.into_iter().collect()
+    }
+
+    // 基线分段每轮重下是这一档最容易漏的浪费：索引走 304 看着很省，分段却每次都整份搬。
+    // 追平期间 A 是闲着的 —— 分段内容一次都没变，所以每个分段最多下载一次。
+    // （`LocalPort::cached_segment_hashes` 曾经恒返回空表，于是这里实测每轮一次。）
+    let segs = segment_downloads(&srv.request_log()[b_log_start..]);
+    assert!(
+        !segs.is_empty(),
+        "追平过程一个分段都没下 —— 夹具没走到「基线回退」那条码路"
+    );
+    for (name, count) in &segs {
+        assert_eq!(
+            *count, 1,
+            "追平 {NOTES} 条时分段 {name} 被整份下载了 {count} 次（应为 1 次）—— 分段内容哈希缓存没接上"
+        );
+    }
 
     let bst = b.app.store().stats().unwrap();
     assert_eq!(

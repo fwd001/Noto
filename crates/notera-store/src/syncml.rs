@@ -234,6 +234,38 @@ impl Store {
         Ok(out)
     }
 
+    /// 分段内容哈希缓存（按账户存：`{分段名 → hash12}`）。
+    ///
+    /// 引擎据此决定"这一段的基线还要不要再下一遍"（`LocalPort::cached_segment_hashes`）。
+    /// 只有**核对过**的内容才会被写进来 —— 写方是引擎，这里只负责跨进程留住它。
+    /// 读不进来一律当"没有缓存"：代价是多下一次分段，绝不能把整轮同步顶死。
+    /// 按账户分开存：换服务器之后同名分段（`seg-0000`）是**另一份内容**，混用就会
+    /// 让新账户跳过一份本机其实没有的基线。
+    pub fn segment_hashes(
+        &self,
+        account: &str,
+    ) -> Result<std::collections::BTreeMap<String, String>, StoreError> {
+        let key = format!("segment_hashes:{account}");
+        let conn = self.read()?;
+        let raw = match rows::meta_get(&conn, &key)? {
+            Some(v) => v,
+            None => return Ok(std::collections::BTreeMap::new()),
+        };
+        Ok(serde_json::from_str(&raw).unwrap_or_default())
+    }
+
+    pub fn set_segment_hashes(
+        &self,
+        account: &str,
+        map: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), StoreError> {
+        let account = account.to_string();
+        let key = format!("segment_hashes:{account}");
+        let json = serde_json::to_string(map)
+            .map_err(|e| StoreError::Constraint(format!("分段哈希缓存写不出去: {e}")))?;
+        self.write_tx(|tx, _now| rows::meta_set(tx, &key, &json))
+    }
+
     /// 脏集 = `rev != sync_rev`（DATA-MODEL §4.2），外加"永久删除尚未被远端确认"的墓碑。
     ///
     /// 硬性要求 6：有 `purged=1` 墓碑的记录**不会**被当作新增列入脏集（否则设备 B 会把

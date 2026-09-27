@@ -231,7 +231,6 @@ struct Inner {
     cached_manifest: Mutex<Option<Vec<u8>>>,
     /// 上一轮提交后服务器给的清单 etag —— 下一轮带它才可能拿到 304（§6.3 空轮 0 字节）
     manifest_etag: Mutex<Option<String>>,
-    cached_remote: Mutex<Vec<RemoteView>>,
     seq_applied: AtomicU64,
     syncing: AtomicBool,
     dirty_ticks: AtomicU64,
@@ -270,7 +269,6 @@ impl App {
                 sync_view: Mutex::new(SyncView::initial()),
                 cached_manifest: Mutex::new(None),
                 manifest_etag: Mutex::new(None),
-                cached_remote: Mutex::new(Vec::new()),
                 seq_applied: AtomicU64::new(0),
                 syncing: AtomicBool::new(false),
                 dirty_ticks: AtomicU64::new(0),
@@ -2246,11 +2244,87 @@ impl LocalPort for HostLocalPort {
             })
             .collect()
     }
+    /// 远端视图读的是**库里那张表**，不是进程内存：重启之后的第一轮照样要面对整份基线，
+    /// 只活在内存里等于每次开机都重下一遍（也让 `cached_segment_hashes` 的跳过判据失去
+    /// 前提 —— 跳过下载得有个地方把条目读回来）。
     fn cached_remote(&self) -> Result<Vec<RemoteView>, LocalError> {
-        Ok(self.0.inner.cached_remote.lock().unwrap().clone())
+        let acct = self.account_id();
+        let rows = self
+            .0
+            .store()
+            .remote_index_list(&acct)
+            .map_err(|e| LocalError::Storage(e.to_string()))?;
+        Ok(rows
+            .into_iter()
+            .map(|r| RemoteView {
+                kind: kind_tag(r.kind).to_string(),
+                // 附件的身份是 sha256（内容寻址），表里就存在 sha256 列
+                id: r.sha256.clone().unwrap_or_else(|| r.id.to_string()),
+                rev: r.rev.get(),
+                hash: r.hash12.clone(),
+                deleted_at: r.deleted_at.clone(),
+                purged: r.purged,
+            })
+            .collect())
     }
+
+    fn set_cached_remote(&self, entries: Vec<RemoteView>) {
+        let acct = self.account_id();
+        let nil = match EntityId::parse("00000000-0000-0000-0000-000000000000") {
+            Ok(id) => id,
+            Err(_) => return,
+        };
+        let rows: Vec<notera_store::RemoteIndexEntry> = entries
+            .into_iter()
+            .filter_map(|v| {
+                let (kind, id, sha256) = match tag_kind(v.kind.as_str()) {
+                    Some(EntityKind::Note) => {
+                        (EntityKind::Note, EntityId::parse(&v.id).ok()?, None)
+                    }
+                    Some(EntityKind::Folder) => {
+                        (EntityKind::Folder, EntityId::parse(&v.id).ok()?, None)
+                    }
+                    Some(EntityKind::Attachment) => {
+                        (EntityKind::Attachment, nil.clone(), Some(v.id.clone()))
+                    }
+                    None => {
+                        // 认不出的类型整条跳过：宁可下一轮重下，也不能把它写成别的实体的行
+                        tracing::warn!(kind = v.kind, "远端视图里有未知类型，本条不缓存");
+                        return None;
+                    }
+                };
+                Some(notera_store::RemoteIndexEntry {
+                    kind,
+                    id,
+                    rev: Rev(v.rev),
+                    hash12: v.hash.clone(),
+                    size: None,
+                    deleted: v.deleted_at.is_some(),
+                    purged: v.purged,
+                    seg: None,
+                    sha256,
+                    deleted_at: v.deleted_at.clone(),
+                })
+            })
+            .collect();
+        // 写失败只是"下一轮多下一次"，不该把这一轮顶死（内容已经在本机落库了）
+        if let Err(e) = self.0.store().remote_index_replace(&acct, &rows) {
+            tracing::warn!(error = %e, "远端视图缓存写入失败：下一轮会重读，不影响正确性");
+        }
+    }
+
+    /// 分段缓存读的是**库里存的那一份**，不是进程内存：调度器每 25 秒一轮，而重启之后
+    /// 第一次追平照样要面对整份基线 —— 只活在内存里等于每次开机都重下一遍。
     fn cached_segment_hashes(&self) -> BTreeMap<String, String> {
-        BTreeMap::new()
+        let acct = self.account_id();
+        self.0.store().segment_hashes(&acct).unwrap_or_default()
+    }
+    fn set_cached_segment_hashes(&self, map: BTreeMap<String, String>) {
+        let acct = self.account_id();
+        // 写失败只让下一轮多下一次分段，不该把这一轮顶死（引擎已经拿到内容并落库了）
+        if let Err(e) = self.0.store().set_segment_hashes(&acct, &map) {
+            tracing::warn!(error = %e, "分段哈希缓存写入失败：下一轮会重读，不影响正确性");
+        }
     }
     /// 干净行也要给：只报脏行的话，一台追平了的设备每轮都会把整份清单重下一遍
     /// （见 `Store::synced_heads` 的注释里那条实测 196/260 的卡死）。
@@ -2551,6 +2625,19 @@ fn kind_tag(k: EntityKind) -> &'static str {
         EntityKind::Note => "n",
         EntityKind::Folder => "f",
         EntityKind::Attachment => "a",
+    }
+}
+
+/// [`kind_tag`] 的逆函数。远端视图的读写**两侧都必须走这一对**：
+/// 写侧当初按 `"note"`/`"folder"` 匹配，而引擎给的是线上标签 `"n"`/`"f"`/`"a"`，
+/// 于是整表被"未知类型"静默跳过 —— 表永远是空的，而分段哈希缓存已经说了"这段我有了"，
+/// 结果第二台设备停在 198/1000（`big_library` 当场抓到）。词汇漂移过一次，就别再给第二次机会。
+fn tag_kind(tag: &str) -> Option<EntityKind> {
+    match tag {
+        "n" => Some(EntityKind::Note),
+        "f" => Some(EntityKind::Folder),
+        "a" => Some(EntityKind::Attachment),
+        _ => None,
     }
 }
 // ------------------------------------------------------------- 调度器 ---

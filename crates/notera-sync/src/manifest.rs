@@ -387,7 +387,7 @@ impl Manifest {
                 bytes: 0,
             });
             r.count = entries.len();
-            r.hash12 = short(&sha256_hex(&wire));
+            r.hash12 = segment_hash12(entries);
             r.bytes = wire.len() as u64;
             r.cover = entries
                 .first()
@@ -430,6 +430,16 @@ fn next_segment_index(segs: &BTreeMap<String, Vec<EntryRef>>) -> u32 {
 /// 这个形态 —— 把"写什么"与"按什么算哈希"钉在同一个函数里，免得两处各写一份而漂移。
 pub fn segment_wire(entries: &[EntryRef]) -> Vec<u8> {
     notera_core::canonical_json(&serde_json::to_value(entries).unwrap_or_default()).into_bytes()
+}
+
+/// `SegmentRef.hash12` 的算法：`segment_wire` 那串字节的 sha256 前 12 位。
+///
+/// 写侧（`compact`）与读侧（引擎核对刚拿到的分段）**必须走这一个函数**：各写一份就会
+/// 漂移，而漂移的代价是要么缓存永不命中（每轮重下基线），要么把不相干的字节当成
+/// "清单引用的那一段"缓存下来。读侧还用它做一致性检查 —— 拿到的条目重算出来与清单
+/// 声明的不一致，说明服务器那一段不是清单所指的那版，绝不缓存。
+pub fn segment_hash12(entries: &[EntryRef]) -> ShortHash {
+    short(&sha256_hex(&segment_wire(entries)))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
