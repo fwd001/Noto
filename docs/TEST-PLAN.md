@@ -68,6 +68,15 @@
 | `CRASH(点)` | 令被测进程在指定提交点前 `process::exit(9)`（非优雅），等价 `taskkill /F` |
 | `A/B/C sync` | 在隔离数据目录运行的三个 `notera-cli` 实例各执行一次 `sync-once` |
 
+**这张记法表自己的账（2026-09-27 逐项对过工装实现）**：
+`hang` 的 `target=` 形态此前**不存在**（只有全局 `timeout_all`），已补成 `Injection::hang_for` +
+`hang_on("GET *<path>")`，与 `status_for` 共用同一套规则文法（`["METHOD "]pathglob`），
+并由 `notera-test-webdav/tests/injection.rs::hang_on_follows_the_same_rule_grammar_as_status_for`
+钉住文法本身。**仍未实现的是 `times`（命中次数，防粘连）**：`Injection` 里没有这个字段，
+所以本表下方凡是写成 `times=1 / times=2 / times=99` 的行（SY-FAULT-02/03/04/09/10 那几条）
+**都不可能按字面跑起来** —— 那是"设计了注入语法但没实现"的一格，按 §40 记在这里而不是当作已有。
+要做的是给 `status_for` 加一个剩余次数（命中一次减一、归零后规则失效），改动只在工装、不碰产品。
+
 ## 功能测试矩阵
 
 ### 笔记生命周期
@@ -137,6 +146,7 @@
 | FT-ATT-14 | 两台设备，正文与队列都就绪 | 附件请求一律 `FAIL(abort)`（连接被掐，不回应），恢复后再跑一轮 | 掐断的那轮 `down==0`、正式 blob 位置**一个字节都不许有**、账上不许 `available`、正文继续可用；恢复后一轮补齐且字节一字不差（不留永远下不完的队列）。注入必须打在**附件轮窗口上**：挂在 B 开机之前测到的是"网络不通"（`/_control/inject` 会把已服务计数清零，`abort_after(1)` 于是先掐掉清单）。证据：`attachment_faults.rs::a_dropped_connection_mid_download_promotes_nothing`；变异自证 M4 把传输失败写成 `remote_state=absent` → 恢复段红（(0,0,0)） | L3,L4 | P6 |
 | FT-ATT-15 | 源设备正文已推、图待传 | `FAIL(truncate-upload,bytes=400)` 只让附件 PUT 走一半，恢复后再跑一轮 | 半上传不许算成功（`up==0`）、`DUMP` 里**不得出现**含该 sha 的正式对象（INV-09）、账上更不许说远端 `present`（那样下一台设备会永远等一份不存在的字节）、正文可用；恢复后同一台设备重试成功且服务器上**最终恰好一份**。这条补的是 FT-ATT-04 一直只有文档声称、从未跑过的那个缺口。证据：`attachment_faults.rs::a_half_uploaded_attachment_lands_nothing_and_is_retried`；变异自证 M5 在上传失败分支写 `present` → 本条红 | L3,L4 | P6 |
 | FT-ATT-16 | 两台设备，服务器上那份被删（网页端手删 / 网盘回收） | 对该对象注入 `FAIL(status=404,target=GET ***<sha>)`，之后**再走两轮完整同步** | 404 是一个**结论**不是悬案：`down==0`、`local_state` 不许 `available`、`remote_state` 落成 `absent`、`.part` 不留、正文可用；关键在后半段 —— 后续轮次里针对该 sha 的请求数必须是 **0**（`attachment_downloads()` 的注释一直声称"就此收手、不每轮空转"，此前无任何测试撑着）。证据：`attachment_faults.rs::a_missing_remote_object_is_marked_absent_and_stops_being_retried`；变异自证 M6 拆掉 `absent` 那一句 → 本条红（停在 `unknown`，即每轮重问） | L3,L4 | P6 |
+| FT-ATT-17 | 两台设备 + 一台只有附件端点不答应的服务器 | 对**那一个对象**的 GET 注入 `FAIL(hang,target=GET *<sha>)`（其余端点照常），文本侧同时推一条新笔记 | 三件事分开证：① **文本轮没被拖住** —— 在附件请求还挂着的时候并发跑 B 的 `sync_once`，它要在 `per_request/4`（≈11 s）之内完成并把新笔记送到（这条同时兜住 §13 的队列隔离与 §28 的「网络问题永远不会让本地数据不可用」）；② 附件轮**自己会放手** —— 实测一轮耗在 45.01 s，正好等于 `notera_net::Timeouts::per_request`（重试与整体共用同一份预算，不是每试一次 45 s），期间不落正式 blob、不留 `.part`、账上不许 `available`、`failed` 计数 +1（状态页要看得出这一轮白跑）；③ 端点恢复后这一条**补得回来**（超时是"这次没取到"，不是"这条坏了"）。前置断言：请求日志里必须先出现一条 `GET … -> 0`，否则测的是"什么都没发生"。证据：`attachment_faults.rs::a_hanging_attachment_endpoint_never_blocks_the_text_round`；变异自证 M7 把 `Injection::hangs()` 写死成 `false` → 前置断言当场红（报的是"注入没打中"而不是"产品通过"） | L3,L4 | P6 |
 | FT-CHK-01 | 新笔记 | 建 checklist 3 项，勾选第 1、3 项 | 重开后勾选状态为 `[x][ ][x]`；纯文本抽取输出与该状态一致 | L1,L5 | P2 |
 | FT-CHK-02 | 同 checklist | 设备 A 勾第 1 项、设备 B 勾第 2 项（同一 base） → 双向同步 | 结果为两项都勾（块级三方合并不丢勾选）或产生冲突副本且两份内容完整可见；**禁止出现"只剩一项勾选"的静默覆盖**（INV-01/05） | L3 | P5 |
 | FT-CHK-03 | checklist 中间项 | 在第 2 项内换行 / 删除整项 | 项序连续无空项；重开后条目数 = 操作后预期数 | L5 | P2 |
@@ -154,11 +164,11 @@
 | 文件不存在 | 已覆盖（两半都在） | 远端没有 → FT-ATT-16；本机没有 → FT-ATT-11 |
 | 远端文件损坏 | 已覆盖 | FT-ATT-13（`Backend::Fs` 上原地改坏磁盘字节 + `RESTART`，DUMP 里核对服务器发的确实不是原字节） |
 | 本地附件缺失 | 已覆盖，**且这一条暴露了一个真缺陷** | FT-ATT-11：体检前这类行两个队列都看不见 → 那张图永久坏掉而系统以为自己修好了 |
-| 网络超时 | **未覆盖（BLOCKED）** | 附件端点上从未注入过 `FAIL(hang)`。缺口根因是工装：`timeout_all` 是**全局**的，一挂就把清单与探测一起挂住，测不到"只有附件超时"。解除条件：给 `Injection` 的 hang 加路径作用域（`status_for` 已有 glob，复用即可），再补一条 |
-| 服务器返回 412 | **未覆盖（BLOCKED，仅文本侧有）** | SY-FAULT-10 覆盖的是 manifest PUT 的 412 重规划；附件 PUT/MOVE 的 412 从未注入。它是"可重试"这一类，与 503 同分支，但**这是推断不是证据**，故记缺口 |
+| 网络超时 | 已覆盖（2026-09-27 补齐，先修了工装） | FT-ATT-17。此前做不出这条的原因很具体：注入器只有**全局** `timeout_all`，一挂就把清单与探测一起挂住，测到的是"网络不通"。现在有了 `hang_for`（与 `status_for` 同套 glob 文法），才能表达"只有那一个附件对象不答应"。文法本身另有一条单测盯着（`injection.rs::hang_on_follows_the_same_rule_grammar_as_status_for`），因为匹配器一旦漂掉，消费者的失败会长得像"产品没问题" |
+| 服务器返回 412 | **未覆盖（BLOCKED，仅文本侧有）** | SY-FAULT-10 覆盖的是 manifest PUT 的 412 重规划；附件 PUT/MOVE 的 412 从未注入。它是"可重试"这一类，与 503 同分支，但**这是推断不是证据**，故记缺口。顺带一条今天才发现的更大缺口：记法表里的 `times`（命中次数，防粘连）**在工装里根本没有实现**，所以 SY-FAULT-02/03/04/09/10 那些写着 `times=` 的行都还不能按字面跑 —— 见上面"这张记法表自己的账" |
 | 服务器返回 404 | 已覆盖（下载侧） | FT-ATT-16；上传侧收到 404 的形态未注入 |
 
-一句话账：**十条里七条有实证、三条明确记缺口**。三条缺口的共同原因是工装而不是产品 —— 注入器只有"全局挂起"和"按 glob 回状态"两种能力，缺"按 glob 挂起 / 按 glob 断连"。这条判断本身也还没被证明，所以它以缺口的形式留在这里，而不是以结论的形式收尾。
+一句话账：**十条里八条有实证、两条明确记缺口**（412 全缺、404 只覆盖下载侧；另有一个纯 `abort` 的上传形态没单独做）。三条缺口的共同原因从"工装没有能力"缩小成了"工装还差一个 `times` 与一处 412 分支" —— 这条判断本身也还没被证明，所以它以缺口的形式留在这里，而不是以结论的形式收尾。
 
 ### 富文本节点往返
 

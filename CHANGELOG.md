@@ -10,7 +10,7 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 523 通过 / 0 失败 / 0 ignored（62 个测试二进制） |
+| `cargo test --workspace` | 525 通过 / 0 失败 / 0 ignored（62 个测试二进制） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
 | L5 崩溃注入 `--test crash_recovery` | 小库矩阵 9 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零 |
 | L5 压实崩溃注入 `--test compaction_crash` | 1/1（240 条大库真死在 `after_segment_write`，索引不引用不存在的分段） |
@@ -23,7 +23,7 @@
 | P11 面板 `scripts/verify-p11-panel.mjs` | 11/11（真浏览器读**两台真设备留在盘上的现场**：右栏是服务器那一版、无载荷时说的是"没取回来"、冲突笔记留在正常列表且 ⚠ 只落在冲突行上；截图证据进 `docs/evidence/`） |
 | 性能基线 `scripts/verify-perf.mjs`（PERF-01/10/13） | 4/4（**空库预算口径已按用户决定定为 ≤1000 ms 含 WebView2**）：重编 release 壳后实测 空库最好 866 ms（首遍 1528）、5000 条 984 ms、滚动 434 帧 p95 17 ms、RSS 31.9/46.6→47.2 MiB；20000 条那一档 1322 ms。未采：100 附件规模、30 min 泄漏趋势、Android/macOS |
 | Windows 安装器 `pnpm tauri build --target x86_64-pc-windows-gnu --bundles nsis` | **`.exe` 产出 4.46 MiB**（`Notera_0.0.13_x64-setup.exe`）。出货产物侧另验通一件事：拿包内那个 `release/notera-desktop.exe` 起来后 `17323/health` **连不上** —— "dev 桥只关在 debug 构建里"在真正的 release 二进制上成立（不是只看 feature 门）。`--bundles msi` 仍 BLOCKED（WiX `LGHT0102` 的 loc 变量 + 我把自己 shell 的 cwd 留在了临时目录里造成文件锁），装移动作与代码签名未验。两个只露在真跑里的坑：`tauri build` 默认走 MSVC（被 Git Bash 的 coreutils `link` 顶掉），以及 JS/Rust 的 tauri 次版本错配会直接拒绝打包 —— 两侧已对到 2.12.0 |
-| §27 附件故障注入 `--test attachment_faults` | 6/6（本机 blob 丢了自愈、截断换整份、服务器同长度坏字节被拒、下载被掐不 promote、半上传不落正式对象、远端 404 收手不空转）—— 六条各配一次变异自证 M1..M6，见 §修复那一条 |
+| §27 附件故障注入 `--test attachment_faults` | 7/7（本机 blob 丢了自愈、截断换整份、服务器同长度坏字节被拒、下载被掐不 promote、半上传不落正式对象、远端 404 收手不空转、**只有附件端点超时**时文本轮并发验穿且附件轮在 45 s 预算内自己放手）—— 七条各配一次变异自证 M1..M7，见下面两条 commit 级的说明 |
 | 前端 | **200 通过（21 文件）+ `vue-tsc --noEmit` 0 错**（2026-09-27 与 §27 那批同批重跑；本轮没动前端，跑它是为了确认"没受影响"这句话也是量出来的）。`run build` 的产物体积那一档**本轮未重测**，仍挂着上一批的 216.65 KB → gzip 74.22 KB |
 | `scripts/arch-check.mjs` | 27/27（第 26 条是版本单源，第 27 条是"编译期嵌入的文件要进版本库"） |
 | 版本单源 | 一致（权威 + 三处派生 + **Cargo.lock**）；三处变异（派生位置偷改、crate 自己写死版本、**lock 慢一个版本**）都能打红 | `node scripts/check-versions.mjs` |
@@ -36,6 +36,11 @@
 
 ### 新增
 
+- **注入器补上"按路径挂起"（`Injection::hang_for` / `hang_on("GET *<path>")`），并把它换来的那条门禁跑上**：§27 的「网络超时」此前做不出来，不是因为产品缺超时，而是因为工装只有**全局** `timeout_all` —— 一挂就把清单、探测、文本轮一起挂住，测到的是"网络不通"而不是"只有附件端点不答应"。新规则与 `status_for` **共用同一个解析函数**（`rule_hit`），因为两套各写一遍的文法早晚会漂成两种语法；文法本身也补了一条单测（`injection.rs::hang_on_follows_the_same_rule_grammar_as_status_for`：方法限定不许失效、不许挂到别的对象上、全局 hang 与按路径 hang 是两个旋钮）。
+  - 换来的这条是 FT-ATT-17（`attachment_faults.rs::a_hanging_attachment_endpoint_never_blocks_the_text_round`）：只有那一个附件对象的 GET 不答应，三件事分开证 —— **文本轮在附件还挂着的时候照常跑完**（用 join 并发跑，不是先后跑；这条兜住 §13 的队列隔离与 §28 的「网络问题永远不会让本地数据不可用」）、**附件轮自己会放手**（实测 45.01 s，正好等于 `notera_net::Timeouts::per_request`；期间不落正式 blob、不留 `.part`、账上不 `available`、`failed` +1）、**端点恢复后这一条补得回来**。
+  - 一条自纠：这条测试第一版把"多久必须放手"写成我拍的 30 s，跑出来 45.01 s 直接红 —— 红的是我的判据，不是产品。现在上限从**产品自己的常量**推导（`Timeouts::default().per_request`），不再凭感觉写数字。变异自证 M7：把 `hangs()` 写死成 `false` → 前置断言当场红（报"注入没打中"而不是"产品通过"）。
+  - 顺手对了一笔更大的账：记法表里写的 `times`（命中次数，防粘连）**工装里没有这个字段**，所以 TEST-PLAN 下方那些 `times=1/2/99` 的 SY-FAULT 行都还不能按字面跑起来。已按 §40 写进"这张记法表自己的账"，没有偷偷当成已有。
+  - 复验：`cargo test --workspace` **525 通过 / 0 失败**（62 个测试二进制）、`fmt --check` 干净、`clippy --workspace --all-targets -- -D warnings` 0/0、`arch-check` 27/27。**这批不改产品行为，因此不升版本**（按用户定的口径：只有改了产品的 commit 才升 patch）。
 - **`.enex`（Evernote 导出）结构化导入，并补上"从文件导入"这个入口**。用户批准的第三项依赖（XML 解析）落在这里：`quick-xml` + `base64`，两个都已在 workspace 单一版本源里。
   - **两遍解析**是格式决定的，不是洁癖：`.enex` 的 `<content>` 里装的是**一整段 CDATA 包起来的 ENML**，第一遍读信封（title / 那段 CDATA / 字段 / `<resource>` 的 base64 字节），第二遍把 CDATA 当 XML 读。第一版写的是一遍 —— 编译得过、`Ok(0)` 也"绿"，但 8 条测试直接指出"正文里还留着 `<div>` 字样"：`Event::CData` 被我原来的 `Ok(_) => {}` 静静吞掉了。**这一条正是"新写的第一遍就抓到自己空转"的例子**：如果只跑一条"能出 2 条笔记"的断言，它当时也是过的（笔记数来自 `<note>` 标签，不依赖正文）。
   - **附件走 sha256，不走 Evernote 的 MD5**：`<en-media hash>` 是 MD5（历史包袱），本库按 sha256 内容寻址 —— 自己算 sha256、用 md5 只做"正文引用 ↔ resource"的配对，`md5` 原值留在块 attrs 里。内嵌的落成 `image` 块，"只挂不嵌"的（Evernote 允许）追加在文末，**一个都不许丢**；配对不上的引用进 `dangling_media_hashes` 点名。

@@ -482,7 +482,117 @@ async fn a_half_uploaded_attachment_lands_nothing_and_is_retried() {
     srv.stop().await;
 }
 
-// ———————————————————————————————————————————————— 远端文件不存在（404）
+// ———————————————————————————————————————————————— 附件端点超时（只有它超时）
+
+/// §27 最后一条有实证缺口的注入：**只有附件端点不回应**。
+///
+/// 这条同时兜住两句一直没人证明的声称：
+/// * `run_attachment_round` 的注释写着"任何失败都不向上抛：附件全失败时，文本同步必须
+///   照常完成（TEST-PLAN 的『只拔附件端点』用例）" —— 此前那个用例不存在；
+/// * §28 的保证句「网络问题永远不会让本地数据不可用」。
+///
+/// 为什么不能用现成的 `Injection::hang()`：那是**整台服务器**不应答，测到的是"网络不通"。
+/// 真实形态常常是附件挂在另一个反代/存储桶上 —— 文本端点好好的，只有图取不回来。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hanging_attachment_endpoint_never_blocks_the_text_round() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..20_000).map(|i| (i % 227) as u8).collect();
+    let a_dir = Tmp::new("hang-a");
+    let sha = seed_source(a_dir.path(), &url, &blob).await;
+
+    let b_dir = Tmp::new("hang-b");
+    let b = boot(b_dir.path(), &url);
+    b.sync_once().await.expect("B 拉到正文");
+    let remote = b.remote_for_sync().await.unwrap().expect("有适配器");
+    // 上限从**产品自己的预算**取，不用我拍的数：这台机器实测一次挂死的附件轮 = 45.01 s，
+    // 正好是 `notera_net::Timeouts::per_request`（重试与整体共用同一份预算，不是每试一次 45 s）。
+    let budget = notera_net::Timeouts::default().per_request;
+
+    srv.inject(Injection::hang_on(format!("GET *{sha}"))).await;
+    // A 在附件挂着的时候推一条新笔记，B 的文本轮必须照常在预算内跑完 ——
+    // 这两件事是**并发**发生的（常驻循环里附件与文本本来就是两个任务），所以用 join 而不是先后跑。
+    let a = boot(a_dir.path(), &url);
+    let folder = a.default_folder_id().unwrap();
+    a.create_note(&folder, doc("附件挂着也要写得下去的第二条"))
+        .expect("本机写入");
+    a.sync_once().await.expect("A 推正文");
+
+    let text_budget = budget / 4; // 文本轮本来只要几百毫秒，四分之一预算已经是极宽松的上界
+    let (round, text) = tokio::join!(b.run_attachment_round(&remote), async {
+        // 先确认真有一个请求挂在那儿（不然测的是"什么都没发生"）
+        let mut stuck = false;
+        for _ in 0..50 {
+            stuck = srv
+                .request_log()
+                .iter()
+                .any(|q| q.path.contains(&sha) && q.method == "GET" && q.status == 0);
+            if stuck {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(stuck, "前置不成立：注入压根没打中那个附件请求");
+        let started = std::time::Instant::now();
+        let stats = tokio::time::timeout(text_budget * 3, b.sync_once())
+            .await
+            .expect("附件端点挂死把文本同步一起拖住了（§13 的队列隔离破了）");
+        (started.elapsed(), stats)
+    });
+    let (text_took, text) = text;
+
+    assert!(
+        text.is_ok(),
+        "文本轮本身报了错（附件挂死不许外溢成文本轮的失败）：{text:?}"
+    );
+    assert!(
+        text_took < text_budget,
+        "文本轮等了 {text_took:?}（预算 {text_budget:?}）—— 它被那个挂死的附件请求拖住了，\
+         §28 的「网络问题永远不会让本地数据不可用」与 §13 的队列隔离都不成立"
+    );
+    let titles: Vec<String> = b
+        .store()
+        .list_notes(&notera_store::NoteQuery {
+            folder: None,
+            trash: false,
+            limit: 50,
+            offset: 0,
+        })
+        .expect("列表读得到")
+        .iter()
+        .map(|n| n.title.clone())
+        .collect();
+    assert!(
+        titles.iter().any(|t| t.contains("第二条")),
+        "附件挂着，B 就再也收不到新笔记了：{titles:?}"
+    );
+
+    assert_eq!(round.1, 0, "挂着的端点却报下载完成：{round:?}");
+    let (local, _r) = b.store().attachment_for_state(&sha);
+    assert_ne!(local.as_str(), "available", "没拿到字节就说本机有了");
+    assert!(
+        blob_on_disk(&b, &sha).is_empty(),
+        "超时的一轮往正式 blob 位置落了字节"
+    );
+    assert!(
+        !b.store().blob_part_path(&sha).exists(),
+        "超时的一轮不许留下 .part（半路没有进度就别装作有）"
+    );
+    assert!(
+        round.2 >= 1,
+        "超时没被算进失败数 —— 状态页上看不出这一轮白跑了：{round:?}"
+    );
+
+    // 端点恢复之后，这一条要还能补回来：超时是"这一次没取到"，不是"这条坏了"。
+    srv.inject(Injection::none()).await;
+    let recovered = b.run_attachment_round(&remote).await;
+    assert_eq!(
+        recovered.1, 1,
+        "端点恢复后这一条补不回来（超时把它变成永久坏掉）：{recovered:?}"
+    );
+    assert_eq!(blob_on_disk(&b, &sha), blob, "补回来的字节必须一字不差");
+    srv.stop().await;
+}
 
 /// §27「文件不存在」：正文引用着某个 sha，服务器上那份对象却没了（用户在网页端手删、
 /// 网盘侧回收站清掉、只同步了一半的镜像）。

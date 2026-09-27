@@ -34,6 +34,9 @@ use serde::{Deserialize, Serialize};
 ///   （`FAIL(ignore-range)`）。§14 兼容矩阵要的就是这个形态：**探测时老实答 206、
 ///   正式请求却忽略 Range**（后面挂了个不认 Range 的节点），客户端必须按"这是整份"处理。
 /// * `reset_after` —— 第 N 个数据请求处理完后清空全部状态（模拟服务器侧被清空）。
+/// * `hang_for` —— `FAIL(hang,target=…)`：只挂命中规则的请求，其余照常服务。
+///   与 `timeout_all`（整个服务器不应答）是两种脾气，§27「只有附件端点超时，
+///   文本轮必须照常完成」要的是前者。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Injection {
@@ -46,6 +49,13 @@ pub struct Injection {
     pub require_proxy: bool,
     pub ignore_range: bool,
     pub reset_after: Option<usize>,
+    /// `FAIL(hang, target=…)` —— 只挂**命中规则**的那些请求，其余照常服务。
+    ///
+    /// 为什么单独有它而不复用 `timeout_all`：那个是全服务器挂死，用来测"网络不通"；
+    /// 而 §27 要的形态是"**只有附件端点**不回应，文本轮必须照常完成"。两种脾气在真实
+    /// 服务器上都很常见（附件走的是另一个反代 / 另一个存储桶），用一个全局挂起去测它，
+    /// 测到的是别的东西。
+    pub hang_for: Vec<String>,
 }
 
 impl Injection {
@@ -75,6 +85,41 @@ impl Injection {
             timeout_all: true,
             ..Default::default()
         }
+    }
+
+    /// `FAIL(hang,target=pattern)` —— 只挂命中这一条规则（文法同 `status_for`）的请求。
+    pub fn hang_on(pattern: impl Into<String>) -> Injection {
+        Injection {
+            hang_for: vec![pattern.into()],
+            ..Default::default()
+        }
+    }
+
+    /// 这一条规则（`["METHOD "]pathglob`）是否命中该请求；`None` = 没命中，
+    /// `Some(post)` = 命中，并带回"是否先落盘再回错"那个 `post:` 标记。
+    /// `status_for` 与 `hang_for` 共用它 —— 两套规则各写一遍解析，早晚会漂成两种语法。
+    fn rule_hit(rule: &str, method: &str, path: &str) -> Option<bool> {
+        let (rule, post) = match rule.strip_prefix("post:") {
+            Some(r) => (r, true),
+            None => (rule, false),
+        };
+        let (m, glob) = match rule.split_once(' ') {
+            Some((m, g)) => (Some(m.to_ascii_uppercase()), g),
+            None => (None, rule),
+        };
+        if let Some(m) = m {
+            if m != method {
+                return None;
+            }
+        }
+        path_glob(glob, path).then_some(post)
+    }
+
+    /// 该请求是否要被**挂住**（永不回应）。
+    pub fn hangs(&self, method: &str, path: &str) -> bool {
+        self.hang_for
+            .iter()
+            .any(|rule| Self::rule_hit(rule, method, path).is_some())
     }
 
     /// `FAIL(latency,ms=…)`
@@ -109,20 +154,7 @@ impl Injection {
     /// 规则命中判定。返回 `(status, 是否先执行副作用)`。
     pub fn match_status(&self, method: &str, path: &str) -> Option<(u16, bool)> {
         for (rule, code) in &self.status_for {
-            let (rule, post) = match rule.strip_prefix("post:") {
-                Some(r) => (r, true),
-                None => (rule.as_str(), false),
-            };
-            let (m, glob) = match rule.split_once(' ') {
-                Some((m, g)) => (Some(m.to_ascii_uppercase()), g),
-                None => (None, rule),
-            };
-            if let Some(m) = m {
-                if m != method {
-                    continue;
-                }
-            }
-            if path_glob(glob, path) {
+            if let Some(post) = Self::rule_hit(rule, method, path) {
                 return Some((*code, post));
             }
         }

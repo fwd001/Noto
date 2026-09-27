@@ -467,3 +467,29 @@ async fn get(addr: &std::net::SocketAddr, path: &str) -> RawResp {
 async fn put(addr: &std::net::SocketAddr, path: &str, body: &[u8]) -> RawResp {
     send(*addr, "PUT", path, &[], body).await
 }
+
+/// 工装自己也要有门禁：`hang_on` 的匹配如果失效，"只有附件端点超时"那条测试会**安静地**
+/// 变成"什么都没注入"（它靠一个前置断言能发现，但报出来的会是消费者的名字而不是根因）。
+#[test]
+fn hang_on_follows_the_same_rule_grammar_as_status_for() {
+    let sha = "a".repeat(64);
+    let obj = format!("/.notes/attachments/aa/{sha}");
+    let only_get = Injection::hang_on(format!("GET *{sha}"));
+    assert!(only_get.hangs("GET", &obj), "该命中的没命中：规则文法漂了");
+    assert!(
+        !only_get.hangs("PUT", &obj),
+        "方法限定失效了 —— 那会把上传一起挂住，测的就不是下载超时"
+    );
+    assert!(
+        !only_get.hangs("GET", "/.notes/manifest/index.json"),
+        "挂到了别的对象上：这条注入不再是'只有附件端点'"
+    );
+    assert!(
+        Injection::hang_on("*.bin").hangs("PROPFIND", "/x/y.bin"),
+        "不带方法前缀应当任何方法都命中（与 status_for 同语法）"
+    );
+    assert!(
+        !Injection::hang().hangs("GET", &obj),
+        "全局 hang 与按路径 hang 是两个旋钮，不许互相串"
+    );
+}

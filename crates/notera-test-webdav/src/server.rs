@@ -451,6 +451,14 @@ fn decide(shared: &Arc<Shared>, req: &Request, proxied: bool) -> Decision {
         req
     };
 
+    // FAIL(hang,target=…)：只挂命中规则的那一类（其余照常服务）。放在全局 timeout_all 之前，
+    // 因为它是更具体的形态。
+    if inj.hangs(&req.method, &req.path) {
+        c.counters.hung += 1;
+        c.served_data += 1;
+        push_log(&mut c, &req.method, &req.path, 0, req.body.len() as u64);
+        return Decision::Silent;
+    }
     // FAIL(hang)
     if inj.timeout_all {
         c.counters.hung += 1;
