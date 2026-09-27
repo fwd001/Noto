@@ -33,7 +33,7 @@
 | 空轮代价（PERF-05/14） | 1/1（≤2 请求、≤2 KiB、清单必走 304、PROPFIND ≤1） | `cargo test -p notera-host --test sync_cost` | L3 |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` | L2 |
 | 浏览器端到端（真 Rust 核心，非 mock） | **35/35** | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` | L4 |
-| 纯黑盒 UAT（§23：只用界面） | **10/10**（修好第 3 节那条竞态之后连跑五轮全绿） | `node scripts/verify-blackbox.mjs` | L4 |
+| 纯黑盒 UAT（§23：只用界面） | **10/10** —— 修好第 3 节那条竞态之后**连跑十一轮全绿**（每轮独立空库；其中六轮是冷 vite 缓存的稳定性加测） | `node scripts/verify-blackbox.mjs` | L4 |
 | 真窗口（走真 `invoke`） | debug **8/8** 且 release **8/8**（跑前确认 5173/17323 无监听；页面 `http://tauri.localhost/`，真 SQLite、CSP 生效） | `cargo build [--release] -p notera-desktop` + `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223` + `node scripts/verify-tauri-window.mjs` | L4 |
 | `cargo fmt --check` | **BLOCKED** —— 本机工具链没装 `rustfmt` 组件 | 解除：`rustup component add --toolchain stable-x8_64-pc-windows-gnu rustfmt`（要联网、会改本机工具链，未擅自执行） | — |
 
@@ -68,7 +68,7 @@
 | B5 | `cargo fmt --check` | 工具链缺 `rustfmt` 组件 | 格式漂移只会在 CI 第一次暴露 | 见第 2 节命令（联网 + 改本机工具链，需用户同意） |
 | B6 | PERF-01/09/10/13/12 未建基线；PERF-14/05 已钉 | 需要真机首屏计时与假时钟（autosave 节拍）等前置 | 冷启动/搜索/大列表滚动等没有可回归的数字上界 | 建基线需决定"在什么硬件上测"；假时钟那条可在本机做 |
 
-另外说明一件诚实性相关的事：纯黑盒 UAT 曾经**不是**稳定门禁（3 轮 2 红）。第 3 节那条竞态修好后连跑五轮 5/5。这条 lane 的绿现在是可用证据，但**样本量是 5**，长跑稳定性仍待观察。
+另外说明一件诚实性相关的事：纯黑盒 UAT 曾经**不是**稳定门禁（3 轮 2 红）。第 3 节那条竞态修好后连跑五轮 5/5。修后累计**十一轮全绿**（每轮独立空库、含冷缓存六轮），这条 lane 的绿现在是可用证据；再往后的长跑稳定性仍按周期性复跑看，不当成已证明永久稳定。
 
 ---
 

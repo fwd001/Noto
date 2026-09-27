@@ -22,7 +22,7 @@
 | `scripts/arch-check.mjs` | 25/25 |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
 | `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 35/35 |
-| `scripts/verify-blackbox.mjs`（§23 纯黑盒：只用界面，零 `/cmd/*`） | 10/10 —— 曾经不是稳定门禁（连跑三轮 10/10、4/10、4/10；只修 hydrate 后四轮仍 1 绿 3 红），定位并修好「在飞保存的旧回包」之后**连跑五轮 5/5 全绿**，见下面修复一节 |
+| `scripts/verify-blackbox.mjs`（§23 纯黑盒：只用界面，零 `/cmd/*`） | **10/10** —— 曾是**不稳定门禁**（连跑三轮 10/10、4/10、4/10；只修 hydrate 那一版仍四轮 1 绿 3 红）。定位并修好「在飞保存的旧回包」那条竞态之后**连跑十一轮全绿**（每轮独立空库，含冷缓存六轮）
 | `scripts/verify-tauri-window.mjs`（真窗口，走真 `invoke`） | debug 8/8 **且 release 8/8**（开发服务器关闭、资源走内嵌 `frontendDist`） |
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
