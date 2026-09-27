@@ -1,8 +1,9 @@
 <script setup lang="ts">
 /** 编辑器工具条：全部动作以事件抛给 RichEditor（选区只有它知道）。 */
 import { computed, ref } from 'vue';
-import { t, type MessageKey } from '../i18n';
+import { t } from '../i18n';
 import { MARK_BUTTONS } from '../editor/marks';
+import { blockTypeLabel } from '../editor/labels';
 import type { TextBlockType } from '../editor/model';
 
 const props = withDefaults(
@@ -35,36 +36,20 @@ const linkValue = ref('');
 const showTypeMenu = ref(false);
 
 /**
- * 块型 → 文案键。必须写成表：之前这里是 `t(\`editor.block${Type}\`)`，
- * 而 MessageKey 就是 string，拼错/漏键编译期一声不响，7 种块型里 5 种在工具条上
- * 直接显示成 "editor.blockCodeBlock"。未知块型宁可显示原始类型名，也不假装是正文。
+ * 块型 → 文案键的表在 `editor/labels.ts`（全项目一份）。这里只留调用点：
+ * 读屏念的名字（编辑区每个文本块的 `aria-label`）与工具条显示的类型名必须是同一份，
+ * 两处各写一份迟早漂移。
  */
-const TYPE_LABELS: Record<string, MessageKey> = {
-  paragraph: 'editor.blockParagraph',
-  heading: 'editor.blockHeading',
-  bulletList: 'editor.blockListBullet',
-  orderedList: 'editor.blockListOrdered',
-  checklistItem: 'editor.blockChecklist',
-  blockquote: 'editor.blockQuote',
-  codeBlock: 'editor.blockCode',
-  image: 'editor.blockImage',
-  attachment: 'editor.blockAttachment',
-  rule: 'editor.blockRule',
-};
-
-const typeLabel = computed(() => {
-  if (props.blockType === 'heading') return t('editor.blockHeading', { level: props.headingLevel });
-  return TYPE_LABELS[props.blockType] ? t(TYPE_LABELS[props.blockType]) : props.blockType;
-});
+const typeLabel = computed(() => blockTypeLabel(props.blockType, props.headingLevel));
 
 /** 与浮动选区条同一份定义：glyph、文案键、顺序只有一处真相。 */
 const markButtons = MARK_BUTTONS;
 
 /** 类型菜单只列可切换的文本块型；顺序即菜单顺序。 */
 const TEXT_TYPE_ORDER: readonly TextBlockType[] = ['paragraph', 'blockquote', 'codeBlock', 'orderedList', 'bulletList', 'checklistItem'];
-const typeOptions: Array<{ value: TextBlockType; label: MessageKey }> = TEXT_TYPE_ORDER.map((value) => ({
+const typeOptions: Array<{ value: TextBlockType; label: string }> = TEXT_TYPE_ORDER.map((value) => ({
   value,
-  label: TYPE_LABELS[value] ?? 'editor.blockParagraph',
+  label: blockTypeLabel(value),
 }));
 
 function onMark(kind: string): void {

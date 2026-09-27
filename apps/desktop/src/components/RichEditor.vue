@@ -660,7 +660,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
           <div
             v-if="block.shape === 'text'"
             class="nb-content"
-            v-editable="{ content: block.content }"
+            v-editable="{ content: block.content, type: block.type }"
             :contenteditable="readOnly ? 'false' : 'true'"
             role="textbox"
             :aria-multiline="true"

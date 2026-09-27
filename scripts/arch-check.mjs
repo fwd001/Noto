@@ -336,6 +336,76 @@ const missingCommands = [...declaredCommands].filter((n) => !handledCommands.has
 check('edge:declared-commands-exist', 'ARCHITECTURE-MAP §5（命令面 = 前端声明的那一份）', missingCommands,
   `前端声明了核心没有的命令（调用必得 unknown_command）：${missingCommands.join(', ')}`);
 
+// 每个可交互控件都必须有"读得出来的名字"（§26：无障碍要有自动化验收，不能只靠
+// 对比度那种设计期证据）。静态扫模板而不是挂组件：挂载要看状态，而图标按钮、条件
+// 分支里的那一支，恰恰是"这次没渲染到"就漏掉的那一个 —— 静态扫每一支都看得见。
+// 名字来源按 WCAG 认：aria-label / aria-labelledby / <label for> / 包裹用的 <label>
+// / title / 可见文字（含 {{ t('…') }} 这类插值）。
+const OPEN_TAG = /<([a-zA-Z][\w-]*)\b([^>]*)>/g;
+// 什么算"可交互"：原生标签，以及带交互 role 的自定义控件（块把手就是 `div role=button`
+// —— 原生标签扫不到的那一批，恰恰是名字最容易漏的）。
+const INTERACTIVE_TAGS = new Set(['button', 'input', 'select', 'textarea', 'a']);
+const INTERACTIVE_ROLE = /\brole\s*=\s*"(button|switch|checkbox|radio|tab|textbox|slider|menuitem|link|combobox)"/;
+// 只看模板里的真控件。第一次跑就把注释里那句 `<input type=file>` 当成了控件 —— 注释、
+// script、style 一律抹掉（按长度抹成空格，偏移不变，`<label>` 的包裹判断还要用前文）。
+const maskNonTemplate = (text) => {
+  const blank = (s) => s.replace(/[^\n]/g, ' ');
+  let out = text;
+  for (const re of [/<script\b[\s\S]*?<\/script>/gi, /<style\b[\s\S]*?<\/style>/gi, /<!--[\s\S]*?-->/g]) {
+    out = out.replace(re, blank);
+  }
+  return out;
+};
+const NAME_ATTR = /\b(aria-label|aria-labelledby|title|placeholder)\b(?=\s*=)|\bid\s*=\s*"([^"]+)"/;
+const NAMED_BY_LABEL = (text, start, id) => {
+  // 两种合法情形：这一行之前有没闭合的 <label>（包裹式），或同文件里有 for="id" 指过来
+  const open = text.lastIndexOf('<label', start);
+  const close = text.lastIndexOf('</label>', start);
+  if (open > close) return true;
+  return id ? new RegExp(`\\bfor\\s*=\\s*"${id}"`).test(text) : false;
+};
+const unlabeled = [];
+const vueFiles = sources(join(ROOT, 'apps/desktop/src'), ['.vue']);
+for (const f of vueFiles) {
+  const text = maskNonTemplate(read(f));
+  for (const m of text.matchAll(OPEN_TAG)) {
+    const [, rawTag, attrs] = m;
+    const tag = rawTag.toLowerCase();
+    const roleM = INTERACTIVE_ROLE.exec(attrs);
+    if (!INTERACTIVE_TAGS.has(tag) && !roleM) continue;
+    if (/\baria-hidden\s*=\s*"true"/.test(attrs)) continue; // 明确排除在辅助技术之外
+    if (/\btype\s*=\s*"hidden"/.test(attrs)) continue;
+    const inline = attrs.slice(0, attrs.length);
+    // `v-editable` 的元素由指令负责命名（见 editor/editableDirective.ts 的注释：
+    // 在**那个元素上**加响应式 `:aria-label` 实测会把打字内容挡在模型之外）。
+    // 这条豁免只认指令名，不是通用后门。
+    if (/\bv-editable\b/.test(inline)) continue;
+    const idm = /\bid\s*=\s*"([^"]+)"/.exec(inline);
+    // 需要"读得出名字"的一类：按钮 / 链接 / role 控件（含自闭合的 role=button）
+    const needsBody = tag === 'button' || tag === 'a' || (roleM && !['input', 'select', 'textarea'].includes(tag));
+    if (/\b(aria-label|aria-labelledby|title)\s*=/.test(inline)) continue;
+    if (needsBody) {
+      const bodyStart = m.index + m[0].length;
+      if (/\/>$/.test(m[0])) {
+        // 自闭合：没有内容可读，名字只能来自属性，而属性那一关上面已经过了
+        unlabeled.push(`${rel(f)}: <${tag}${inline.slice(0, 60)}…> 自闭合且没有 aria-label / title`);
+        continue;
+      }
+      const body = text.slice(bodyStart, bodyStart + 400);
+      const end = body.indexOf(`</${rawTag}`);
+      const inner = end >= 0 ? body.slice(0, end) : body;
+      if (/\{\{[^}]+\}\}/.test(inner) || /[A-Za-z\u4e00-\u9fa5]/.test(inner.replace(/<[^>]*>/g, ''))) continue;
+      unlabeled.push(`${rel(f)}: <${tag}${inline.slice(0, 60)}…> 里既没有文字也没有名字`);
+      continue;
+    }
+    if (/\bplaceholder\s*=/.test(inline)) continue;
+    if (NAMED_BY_LABEL(text, m.index, idm && idm[1])) continue;
+    unlabeled.push(`${rel(f)}: <${tag}${inline.slice(0, 60)}…> 没有任何可读名字`);
+  }
+}
+check('hygiene:interactive-controls-labeled', '§26（每个交互控件都要有可读名字）', unlabeled,
+  `这些控件既没有可见文字也没有 aria-label / <label>，读屏软件只会念出"按钮"：\n    ${unlabeled.join('\n    ')}`);
+
 // ------------------------------------------------------------------------- 输出 ---
 
 // "扫了 0 个文件"和"扫了但没问题"必须能区分开：前者是门禁在空转，
