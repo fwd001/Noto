@@ -263,3 +263,48 @@ describe('同一笔记的回读不许盖掉未保存的输入', () => {
     expect(editor.dirty).toBe(false);
   });
 });
+
+describe('在飞的保存不许把状态打回旧的一版', () => {
+  /**
+   * 这条钉的是实测到的完整链条（纯黑盒 UAT 反复红的第 2 步就是它）：
+   * ① 第一次 autosave 带着"刚打了一半"的正文出发；
+   * ② 在飞期间用户继续打字；
+   * ③ 第一次的回包到了 —— 它代表的是**过去**那一版；
+   * ④ 此时若把 dirty 清掉，随后任何一次同一笔记的回读就有理由把正文换回旧版，
+   *    库里最后只剩半截（实测只剩一条换行），而屏幕上是一整句、右下角写着"已保存"。
+   */
+  const docOf = (text: string) => ({ v: 1, content: [{ id: 'b1', type: 'paragraph', content: [{ text }] }] });
+
+  it('回包对不上当前正文时：保持 dirty、应用回包不许抹掉新输入，并把新版本存出去', async () => {
+    const sent: unknown[] = [];
+    const waiters: Array<(v: unknown) => void> = []; // 数组装：避开 TS 对闭包内赋值的窄化
+    const service = stubLocalService({
+      get_note: () => noteFixture({ rev: 1, doc: docOf('') }),
+      edit_note: (args) => {
+        sent.push((args as { doc: unknown }).doc);
+        if (sent.length === 1) return new Promise((res) => { waiters.push(res as (v: unknown) => void); });
+        return noteFixture({ rev: 5, doc: (args as { doc: unknown }).doc });
+      },
+    });
+    const editor = useEditorStore();
+    await editor.open('note-1');
+    const first = editor.blocks[0];
+    if (!first) return;
+
+    editor.updateBlock({ ...first, content: [{ text: '半' }] });
+    await vi.advanceTimersByTimeAsync(1300);
+    expect(service.callsOf('edit_note')).toHaveLength(1); // 第一次保存现在"在飞"
+
+    editor.updateBlock({ ...editor.blocks[0], content: [{ text: '半句完整的话' }] }); // 在飞期间继续打
+
+    // 回包到达，代表的是过去那一版
+    waiters[0]?.(asNote(noteFixture({ rev: 2, doc: docOf('半') })));
+    await vi.advanceTimersByTimeAsync(1400);
+
+    expect(editor.dirty).toBe(false); // 新版本必须已经存出去
+    expect(inlineText(editor.blocks[0].content)).toBe('半句完整的话');
+    const lastArgs = service.callsOf('edit_note').at(-1)?.args as { doc: unknown };
+    expect(JSON.stringify(lastArgs.doc)).toContain('半句完整的话');
+    expect(editor.saveState).toBe('saved');
+  });
+});

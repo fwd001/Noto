@@ -215,12 +215,25 @@ export const useEditorStore = defineStore('editor', () => {
   async function doSave(): Promise<void> {
     if (noteId.value === null || !dirty.value || writeBlocked.value) return;
     const doc = currentDoc();
+    // 这一版发出去之后，用户完全可能又打了字。回包带来的是**过去**的那一版，
+    // 拿它当"当前状态"就会把后打的字抹掉（实测：库里只剩第一条换行，屏幕上是
+    // 整句，右下角还写着"已保存"）。所以先把发出去的签名记下来，回包时对照。
+    const sentSignature = JSON.stringify(doc);
     const targetId = noteId.value;
     saveState.value = 'saving';
     try {
       const note = await callCommand<Note>(Commands.editNote, { id: targetId, doc, expectedRev: rev.value });
       if (noteId.value !== targetId) return;
       if (typeof note?.rev === 'number') rev.value = note.rev;
+      if (JSON.stringify(currentDoc()) !== sentSignature) {
+        // 在飞的这段时间里正文又变了：这次回包不代表当前状态。保持 dirty、
+        // 不应用回包、不写 lastSavedAt，另起一轮把新版本存进去。
+        dirty.value = true;
+        saveState.value = 'pending';
+        saveErrorKey.value = null;
+        debouncedSave();
+        return;
+      }
       dirty.value = false;
       saveState.value = 'saved';
       lastSavedAt.value = Date.now();
