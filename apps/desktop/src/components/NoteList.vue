@@ -8,12 +8,16 @@ import { useNoteStore } from '../stores/notes';
 import { useEditorStore } from '../stores/editor';
 import { useFolderStore } from '../stores/folders';
 import { useShellStore } from '../stores/shell';
+import { useConflictStore } from '../stores/conflicts';
 import { t, messageFor } from '../i18n';
 import { formatWhen } from '../util/format';
 import type { NoteListRow, SearchHit } from '../api/types';
 
 const ROW_HEIGHT = 76;
 const OVERSCAN = 4;
+
+/** 正卡在未裁决冲突里的那些笔记（§5.1 第 4 步：用户没选之前，列表上就该看得出来）。 */
+const conflicts = useConflictStore();
 
 interface Entry {
   id: string;
@@ -178,6 +182,7 @@ onBeforeUnmount(() => {
           <div class="row-item__side">
             <span class="row-item__meta">
               <span v-if="entry.hasAttachment" :title="t('list.hasAttachment')" :aria-label="t('list.hasAttachment')">▤</span>
+              <span v-if="conflicts.contended.has(entry.id)" class="row-item__contended" data-testid="row-contended" :title="t('list.contendedNote')" :aria-label="t('list.contendedNote')">⚠</span>
               <span>{{ formatWhen(entry.updatedAt) }}</span>
             </span>
             <span class="row-item__actions">

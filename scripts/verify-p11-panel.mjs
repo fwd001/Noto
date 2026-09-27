@@ -175,7 +175,31 @@ try {
     return '无';
   });
 
+  await step('回正常列表：这条笔记还在，并且带着"有分歧"的标记（§5.1 第 4 步）', async () => {
+    await page.click('[data-testid="nav-all"]');
+    await must('[data-testid^="note-row-"]');
+    const marked = await page.locator('[data-testid="row-contended"]').count();
+    const rows = await page.locator('[data-testid^="note-row-"]').count();
+    if (marked === 0) throw new Error('列表上没有任何"等你处理"的标记：面板之外的用户不知道有分歧这回事');
+    // 标记数必须**严格少于**行数：这个设备上有四条行（两条冲突笔记 + 两条本机副本），
+    // 若判据只写"标记 > 0"，那么"每一行都无条件画个 ⚠"的坏实现照样能过 —— 那是假门禁。
+    if (marked >= rows) throw new Error(`${rows} 行里 ${marked} 行都带标记：⚠ 不是按冲突在册的笔记画的，等于没有信息`);
+    // 标记必须落在**真的卡在冲突里**的那条笔记上，落在别处等于 decoration
+    const row = `[data-testid="note-row-${expect.withPayload.noteId}"] [data-testid="row-contended"]`;
+    if ((await page.locator(row).count()) === 0) throw new Error(`有 ${marked} 个标记，但那台设备真正冲突的笔记行上没有：${expect.withPayload.noteId}`);
+    const title = await page.locator(`[data-testid="note-row-${expect.withPayload.noteId}"]`).first().innerText();
+    if (!title.includes(expect.withPayload.localText)) {
+      throw new Error(`P11 之后笔记没留在正常列表里（标题「${title.replace(/\s+/g, ' ')}」里没有本机那一版的文字）`);
+    }
+    return `标记 ${marked} 处，落在冲突那条上：「${title.replace(/\s+/g, ' ').slice(0, 40)}」`;
+  });
+
   await step('截图证据（带载荷 / 无载荷两张卡）', async () => {
+    // 上面那一步为了验列表标记已经跳到"全部笔记"了，这里得先回面板再截图。
+    if ((await page.locator('[data-testid="conflicts-view"]').count()) === 0) {
+      await page.click('[data-testid="nav-conflicts"]');
+      await must('[data-testid="conflicts-view"]');
+    }
     fs.mkdirSync(OUT, { recursive: true });
     await page.click(`[data-testid="conflict-${expect.withPayload.conflictId}"]`);
     await page.screenshot({ path: `${OUT}/p11-panel-with-payload.png` });

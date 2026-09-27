@@ -126,5 +126,16 @@ export const useConflictStore = defineStore('conflicts', () => {
     cards.value = [...cards.value, { conflictId }];
   }
 
-  return { cards, loading, errorKey, selectedId, selected, count, previews, previewFor, remoteMissing, load, resolve, noteNewConflict };
+  /**
+   * 正卡在未裁决冲突里的笔记 id 集合。
+   *
+   * CONFLICT-RESOLUTION §5.1 第 4 步要的就是这个：**用户还没选之前**，这条笔记既留在
+   * 正常列表里、又要在列表上看得出来"它跟别的设备有分歧"。只在冲突面板里报，等于要求
+   * 用户先知道去开面板才知道有这回事。
+   */
+  const contended = computed(
+    () => new Set(cards.value.map((card) => card.noteId).filter((id): id is string => typeof id === 'string' && id !== '')),
+  );
+
+  return { cards, loading, errorKey, selectedId, selected, count, contended, previews, previewFor, remoteMissing, load, resolve, noteNewConflict };
 });

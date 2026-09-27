@@ -174,4 +174,17 @@ describe('P11：对面那一版只能由卡片携带', () => {
         .some((call) => (call.args as { id?: string; rev?: number }).id === NOTE && (call.args as { rev?: number }).rev === 3),
     ).toBe(false);
   });
+
+  it('卡在未裁决冲突里的笔记，列表标记取得到（§5.1 第 4 步）', async () => {
+    stubLocalService({
+      open_conflicts: () => [
+        { id: 14, noteId: NOTE, noteTitle: '被另一台删掉的笔记', localRev: 4, remoteRev: 4, remotePreview: '对面那一版：删除前的正文', createdAt: '2026-09-27T00:00:00Z' },
+      ],
+      preview_text: () => '本机这一版的正文',
+    });
+    const conflicts = useConflictStore();
+    await conflicts.load();
+    await flush();
+    expect([...conflicts.contended]).toEqual([NOTE]);
+  });
 });
