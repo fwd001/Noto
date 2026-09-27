@@ -341,6 +341,13 @@ check('edge:declared-commands-exist', 'ARCHITECTURE-MAP §5（命令面 = 前端
 // 分支里的那一支，恰恰是"这次没渲染到"就漏掉的那一个 —— 静态扫每一支都看得见。
 // 名字来源按 WCAG 认：aria-label / aria-labelledby / <label for> / 包裹用的 <label>
 // / title / 可见文字（含 {{ t('…') }} 这类插值）。
+// 版本单源（CI-CD §版本与单一版本源）。这张表原来只是文档：规定要有 check-versions
+// 与 bump-version 两个脚本，但脚本并不存在 —— 于是"派生位置不许顺手改"没有任何东西在守。
+// 现在复用 check-versions 的同一个函数，两边判据不会分叉。
+const versionDrifts = await (await import('./check-versions.mjs')).checkVersions(ROOT);
+check('hygiene:version-single-source', 'CI-CD §版本与单一版本源（权威 = 根 Cargo.toml）', versionDrifts,
+  `版本号漂移（只有 scripts/bump-version.mjs 可以改版本号）：\n    ${versionDrifts.join('\n    ')}`);
+
 const OPEN_TAG = /<([a-zA-Z][\w-]*)\b([^>]*)>/g;
 // 什么算"可交互"：原生标签，以及带交互 role 的自定义控件（块把手就是 `div role=button`
 // —— 原生标签扫不到的那一批，恰恰是名字最容易漏的）。

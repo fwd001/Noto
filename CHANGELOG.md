@@ -2,7 +2,9 @@
 
 遵循 [SemVer](https://semver.org/lang/zh-CN/)。同步协议发生破坏性变更时，`SYNC_PROTOCOL_VERSION` 与版本号同步升级（见 CI-CD.md §版本与单一版本源）。
 
-## 0.1.0 — Phase 1–4（实现进行中）· 未发布
+## 0.0.0 — 未发布（开发线）
+
+> 版本策略（本轮按用户决定定下）：**从 0.0.0 起，改了产品的 commit 就升 patch**（`node scripts/bump-version.mjs patch`）。第一版未发布，**不承诺历史兼容** —— 迁移可以直接改表结构，不需要写兼容层。
 
 当前测试基线（2026-09-27 本机 GNU 工具链实测）：
 
@@ -19,7 +21,8 @@
 | 千库规模 `--test big_library`（SY-INT-14 / PERF-05 量级版） | 1/1，12.8 s（1000 条：追平轮数有界、空轮 1 请求 0 字节、默认本全网络只有一条、逐条比对读满） |
 | 链路抖动 `--test reconnect`（SY-INT-11） | 1/1（六轮各坏一次，恢复后账目归零、两台设备逐条一致） |
 | 前端 | 189 通过（20 文件）；`vue-tsc --noEmit` 无错误；构建 213 KB → gzip 73 KB |
-| `scripts/arch-check.mjs` | 25/25 |
+| `scripts/arch-check.mjs` | 26/26（第 26 条是版本单源） |
+| 版本单源 | 一致；两处变异（派生位置偷改、crate 自己写死版本）都能打红 | `node scripts/check-versions.mjs` |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
 | `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 35/35 |
 | `scripts/verify-blackbox.mjs`（§23 纯黑盒：只用界面，零 `/cmd/*`） | **10/10** —— 曾是**不稳定门禁**（连跑三轮 10/10、4/10、4/10；只修 hydrate 那一版仍四轮 1 绿 3 红）。定位并修好「在飞保存的旧回包」那条竞态之后**连跑十一轮全绿**（每轮独立空库，含冷缓存六轮）
@@ -29,6 +32,7 @@
 
 ### 新增
 
+- **版本号终于有单一来源与唯一写入口**（CI-CD §版本与单一版本源此前是**纯文档**：它规定的 `scripts/check-versions` 与 `scripts/bump-version` 两个脚本根本不存在，所以"派生位置不许顺手改"这句话没有任何东西在守）：权威 = 根 `Cargo.toml` 的 `[workspace.package] version`，派生 = `apps/desktop/package.json`、``tauri.conf.json`、以及各 crate 的 `version.workspace = true`。`bump-version.mjs` 是唯一写入口，改完立刻自证一致（不一致就 exit 1，不留"看着改好了"的状态）；`check-versions.mjs` 只读只报，并被 arch-check 第 26 条复用同一个函数（两边判据不会分叉）。按用户决定把基线定为 **0.0.0**，此后改产品的 commit 用 `bump-version patch` 递增。两处变异自证：把 `package.json` 偷改成 0.0.9 → 红；让某个 crate 自己写死 `version = "0.3.3"` → 红并点名该文件
 - **§26 的无障碍验收第一次有了自动化门禁**（arch-check 第 25 条 `hygiene:interactive-controls-labeled`）：静态扫 `apps/desktop/src/**/*.vue` 的模板，每个交互控件（`button/input/select/textarea/a`，**也包括 `div role="button"` 这类自定义控件**）都必须有读得出来的名字 —— aria-label / aria-labelledby / title / `<label for>` / 包裹式 `<label>` / 可见文字（含 `{{ t('…') }}`）。为什么静态扫而不挂组件：挂载要看状态，图标按钮和条件分支里的那一支恰恰是"这次没渲染到就漏掉"的那个。第一次跑就抓到**编辑区每个文本块是 `role="textbox"` 却没有名字**（`data-placeholder` 不是名字来源）。两处误报也顺手修了规则本身：注释里的 `<input type=file>` 被当成控件（现在先抹掉 `<!-- -->`、`<script>`、`<style>`），以及 `<a>`/自闭合元素的处理。变异自证：把块把手的 `:aria-label` + `:title` 摘掉 → 门禁立刻红；只摘文本块的 → 也红
 - **块型文案表下沉成 `editor/labels.ts` 一份实现**（按"共享组件下沉一份实现、一切走文案键"的要求）：工具条显示的类型名与读屏念的 `aria-label` 必须同源，两处各写一份迟早漂移。新增的 `labels.spec.ts` 逐个核对**每种块型的键在 i18n 里真的登记了** —— `t()` 查不到键时原样返回键名，所以拼错的键不会报错，只会把 `editor.blockCodeBlock` 念给用户听（这张表原来就在 `EditorToolbar.vue` 里用模板串拼键，7 种块型里 5 种就这么显示成原始键名）
 - **名字由 `v-editable` 指令写，不在模板里绑**：见下面的"没修成"那条

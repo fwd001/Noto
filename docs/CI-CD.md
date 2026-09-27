@@ -284,9 +284,9 @@ jobs:
 | **权威版本位置** | 根 `Cargo.toml` 的 `[workspace.package] version` —— 这是唯一可手改的版本号 |
 | 派生位置 | `apps/desktop/package.json` `version`、`apps/desktop/src-tauri/tauri.conf.json` `version`、`crates/*/Cargo.toml`（一律 `version.workspace = true`）、`protocol.json` 的 `app_version` 字段 |
 | **独立的第二权威** | `SYNC_PROTOCOL_VERSION`（Rust `notera-sync` 中的 `u16` 常量）与产品版本 **不同轴**：产品发 0.1.1 可以不改协议，协议变更必须同时改 `protocol.json` 与本常量 |
-| 一致性检查 | `scripts/check-versions`（Rust 或 tsx 实现，CI 与本地 pre-commit 同一入口）：读取权威值并逐处比对，**任一漂移即 exit 1**；`pr` 与 `release` 都跑 |
-| 允许的写入口 | 只有 `scripts/bump-version <x.y.z>` 可以批量改派生位置（禁止「顺手编辑其中一个」）；该脚本改动必须与 bump 同 commit |
-| SemVer 计划 | `0.1.0` 首发三产物（内部可用/可复现安装）→ `0.2.0` 功能补全（同步/WebDAV/导入完整）→ `1.0.0` 承诺数据格式与协议兼容策略 |
+| 一致性检查 | **已实现**：`scripts/check-versions.mjs`（只读只报，任一漂移 exit 1），并被 `scripts/arch-check.mjs` 第 26 条复用同一函数，所以本地门禁与 CI 走同一判据 |
+| 允许的写入口 | **已实现**：`node scripts/bump-version.mjs patch|minor|major|x.y.z` 一次改齐三处派生位置并立刻自证一致（不一致就 exit 1，不留"看着改好了"的状态）。禁止手改其中任何一个 |
+| 版本策略（2026-09-27 用户拍板） | **从 0.0.0 起**，改了产品的 commit 就 `bump-version patch`；`SYNC_PROTOCOL_VERSION` 仍单独一轴。**第一版未发布 → 不承诺历史兼容**：数据格式/协议要改就直接改迁移，不写兼容层。`1.0.0` 才是对外承诺兼容的起点 |
 
 ```yaml
 # 设计片段：scripts/check-versions 的失败面（伪 YAML，Phase 1 实现为真实脚本 + 单测）
