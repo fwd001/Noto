@@ -497,6 +497,7 @@
 | CI-CRASH-04/05 | `before_apply` / `after_apply` | 拉下来的内容要么完整生效要么没有，不留半条 revision | L3 |
 | CI-CRASH-06/07 | `before_attachment_upload` / `after_attachment_upload` | 字节在不在服务器与账上状态一致；不重复传也不谎报已传 | L4 |
 | CI-CRASH-08/09 | `before_manifest_commit` / `after_manifest_commit` | 公告失败 → 改动保持脏；**公告成功但本地未结清 → 下一轮必须把它结清**（今天就是这里坏过：P7 判 NoOp 后再没人回头，"待同步"计数永久挂着） | L3 |
+| （未覆盖）| 压实引入的新崩溃面：**分段已落盘、索引尚未提交** | — | 现在没有对应的 `NOTERA_CRASH_AT` 点，所以这一格**没有实测证据**，只有顺序论证：索引永远最后提交，所以清单不会引用还不存在的分段（INV-09 成立）；孤儿分段无人引用（读者只按索引的 `segments` 列表取），下一次压实会按同名重写它。要补的注入点是 `after_segment_write`，代价是崩溃矩阵必须扩到 >200 条实体才走得到那一步，目前 9 点夹具走不到 —— 因此登记为未覆盖而不是"顺带补上"。 | L4 | P7 |
 | CI-CRASH-ALL | 九个点连跑 | 崩完重启后两台设备笔记**逐条一致**（不多不少）、`dirty_notes=0`、`outbox_pending=0`、FTS 行数 == 笔记数（I5） | L3 |
 
 门禁自身的反空转证明：把 P7 的结清分支改回"永远跳过"，CI-CRASH-09 立刻红并打出
