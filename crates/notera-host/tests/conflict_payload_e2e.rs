@@ -314,6 +314,78 @@ async fn a_remote_purge_never_eats_an_edit_that_never_left_the_device() {
     );
 }
 
+/// 用户在 P11 卡片上按"用服务器那一版替换"（对面是删除）之后，删除必须**真的发生并传播**。
+///
+/// 为什么单独一条：`Store::resolve_conflict` 只是把卡片改成 `state='resolved'`（记账），
+/// 主机侧对 `"remote"` 这一支不做任何采纳动作 —— 于是"接受对面那一条删除"这个决定
+/// 落地后：笔记还在本机正常列表里，而本机那个未同步的 head 下一轮带更高 rev 推上去，
+/// **把对面已经确认的删除又覆盖回来**。用户按了按钮、面板说处理完了，实际什么都没发生，
+/// 还顺手替别人撤销了删除（主指令禁止的"静默覆盖"正对着这条）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn accepting_the_remote_delete_actually_deletes_and_propagates_it() {
+    let dav = Tmp::new("acc-dav");
+    let srv = TestServer::start(Backend::Fs(dav.path().to_path_buf())).await;
+    let url = srv.base_url();
+
+    let a = Device::boot("acc-a", &url);
+    a.app.sync_once().await.expect("A 入伙");
+    let folder = a.app.default_folder_id().unwrap();
+    let created = a
+        .app
+        .create_note(&folder, doc(REMOTE_TEXT))
+        .expect("A 建笔记");
+    let id = notera_core::EntityId::parse(&created.id).expect("id");
+    a.settle(8).await;
+
+    let b = Device::boot("acc-b", &url);
+    b.settle(8).await;
+    let head = b.app.store().get_note(&id).unwrap().expect("B 有这条");
+
+    a.app.store().delete_note(&id).expect("A 删除");
+    a.settle(8).await;
+    b.app
+        .edit_note(&id, doc(LOCAL_TEXT), head.rev)
+        .expect("B 改（不上行）");
+    b.app.sync_once().await.expect("B 的一轮");
+
+    let cards = b.app.open_conflicts().expect("卡片");
+    let card = cards
+        .iter()
+        .find(|c| c.note_id == id.to_string())
+        .unwrap_or_else(|| panic!("B 该有这条 P11 卡片：{cards:?}"));
+
+    // 用户决定：接受对面那一版（= 接受这条删除）
+    b.app
+        .resolve_conflict(notera_host::commands::ResolveConflictCmd {
+            id: card.id,
+            action: "replaceWithRemote".into(),
+        })
+        .expect("resolve_conflict 应当接受这个动词");
+
+    let after = b.app.store().get_note(&id).ok().flatten();
+    assert!(
+        after
+            .as_ref()
+            .map(|n| n.deleted_at.is_some())
+            .unwrap_or(true),
+        "按了\u{201c}用服务器那一版替换\u{201d}（对面是删除）之后，B 这条笔记还活着：\
+         卡片被关掉就等于处理完了？deleted_at={:?}",
+        after.as_ref().map(|n| n.deleted_at.clone())
+    );
+
+    // 而且不能反手替别人撤销删除：两边再各追一轮，服务器上必须仍是"已删除"
+    b.settle(8).await;
+    a.settle(8).await;
+    let a_note = a.app.store().get_note(&id).ok().flatten();
+    assert!(
+        a_note
+            .as_ref()
+            .map(|n| n.deleted_at.is_some())
+            .unwrap_or(true),
+        "A 那台的删除被 B 的旧 head 覆盖回来了：反复活 —— 用户接受删除反而让笔记在两台都复活"
+    );
+}
+
 // ——— 浏览器 lane 的留档现场 ———
 
 fn boot_at(dir: &Path, base_url: &str) -> App {

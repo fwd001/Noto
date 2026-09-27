@@ -752,6 +752,42 @@ impl App {
             self.emit(BusEvent::NotesChanged { ids: vec![] });
             return Ok(());
         }
+        // "用服务器那一版替换"在 P11 里就是**接受对面这条删除**。光把卡片改成 resolved 是不够的：
+        // 笔记还留在本机正常列表里，而本机那个从未上行过的 head 下一轮带着更高的 rev 推上去，
+        // 会把对面**已经确认**的删除又覆盖回来 —— 用户按了按钮、卡片消失了、实际什么都没发生，
+        // 还顺手替别人撤销了删除（主指令禁止的"静默覆盖"正对着这条）。
+        // 判据不看猜的：冲突行上挂着服务器返回的原始信封（`remote_wire`，迁移 0008），
+        // 它写着 `deleted_at` 就照它删；没带载荷（那一版没取回来）就不动内容，
+        // 只关卡片 —— 由面板那句"没能从服务器取回那一版"负责说明（§39 不许替他猜）。
+        if resolution == "remote" {
+            let row = self
+                .inner
+                .store
+                .open_conflicts()?
+                .into_iter()
+                .find(|r| r.conflict_id == c.id);
+            if let Some(r) = row {
+                let remote_deleted = matches!(r.kind, notera_core::EntityKind::Note)
+                    && r.remote_wire
+                        .as_deref()
+                        .and_then(|w| {
+                            serde_json::from_str::<serde_json::Value>(w)
+                                .ok()
+                                .map(|env| match env.get("deleted_at") {
+                                    Some(v) if v.is_null() => false,
+                                    Some(v) => v.as_str().map(|s| !s.is_empty()).unwrap_or(true),
+                                    None => false,
+                                })
+                        })
+                        .unwrap_or(false);
+                if remote_deleted {
+                    self.inner
+                        .store
+                        .delete_note(&r.id)
+                        .map_err(CmdError::from)?;
+                }
+            }
+        }
         self.inner.store.resolve_conflict(c.id, resolution)?;
         self.emit(BusEvent::NotesChanged { ids: vec![] });
         Ok(())
