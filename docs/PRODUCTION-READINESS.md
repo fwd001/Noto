@@ -34,7 +34,7 @@
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` | L2 |
 | 浏览器端到端（真 Rust 核心，非 mock） | **35/35** | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` | L4 |
 | 纯黑盒 UAT（§23：只用界面） | **10/10** —— 修好第 3 节那条竞态之后**连跑十一轮全绿**（每轮独立空库；其中六轮是冷 vite 缓存的稳定性加测） | `node scripts/verify-blackbox.mjs` | L4 |
-| 真窗口（走真 `invoke`） | debug **8/8** 且 release **8/8**（跑前确认 5173/17323 无监听；页面 `http://tauri.localhost/`，真 SQLite、CSP 生效） | `cargo build [--release] -p notera-desktop` + `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223` + `node scripts/verify-tauri-window.mjs` | L4 |
+| 真窗口（走真 `invoke`） | debug **9/9** 且 release **9/9**（第 3 步为 2026-09-27 新增：在跑着的壳里读 `platform_caps`，断言托盘 / 全局快捷键 / 原生菜单 / 通知四项**真的注册上了**；能力由注册结果写，摘掉上报那行重新构建真壳 → 8/9 并点名 `tray 不是 true`。跑前确认 5173/17323 无监听；页面 `http://tauri.localhost/`，真 SQLite、CSP 生效） | `cargo build [--release] -p notera-desktop` + `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223` + `node scripts/verify-tauri-window.mjs` | L4 |
 | `cargo fmt --all --check` | **退出码 0** —— 代理到位后装了 `rustfmt` 组件（B5 解除）。装上后第一次 `--check` 就报出 **92 个文件**格式漂移，已按纯机械格式化单独提交并复验（tests 487/0、clippy 0/0） | `cargo fmt --all --check` |
 
 复现步骤的单一出处是 `docs/ARCHITECTURE-MAP.md` §8；分领域状态是 `docs/IMPLEMENTATION-STATUS.md`。

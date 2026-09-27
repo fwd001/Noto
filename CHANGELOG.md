@@ -26,7 +26,7 @@
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
 | `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 35/35 |
 | `scripts/verify-blackbox.mjs`（§23 纯黑盒：只用界面，零 `/cmd/*`） | **10/10** —— 曾是**不稳定门禁**（连跑三轮 10/10、4/10、4/10；只修 hydrate 那一版仍四轮 1 绿 3 红）。定位并修好「在飞保存的旧回包」那条竞态之后**连跑十一轮全绿**（每轮独立空库，含冷缓存六轮）
-| `scripts/verify-tauri-window.mjs`（真窗口，走真 `invoke`） | debug **9/9**（新增一步：在跑着的壳里读 `platform_caps`，断言托盘与全局快捷键**真的注册上了**；release 侧 8/8 是这条断言加入前的版本，改完托盘接线后需复跑 release） |
+| `scripts/verify-tauri-window.mjs`（真窗口，走真 `invoke`） | debug **9/9** 且 **release 9/9**（第 3 步是本轮新增：在跑着的壳里读 `platform_caps`，断言托盘与全局快捷键**真的注册上了**；变异自证见 TEST-PLAN PLAT-05） |
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
