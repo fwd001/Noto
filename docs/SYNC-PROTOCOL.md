@@ -454,14 +454,20 @@ GET records/note/<id>.json → 404
 ```text
 upload 队列（独立 tokio 任务，与文本轮次解耦）
   HEAD/PROPFIND 判存 → 清单已含该 sha → 直接 present（去重，零上传）
-  否则 PUT attachments/xx/<sha>（流式，tmp→MOVE）→ GET Range 0-0 复验 → present
+  否则 PUT tmp → MOVE(Overwrite:F) attachments/xx/<sha> → GET 整份回来复算 sha256 → present
+       MOVE 收到 405/412：**不**当成功，只当"别人可能先传了同一份"这一种解释，
+       照样走上面那次复读 —— 服务器上有且哈希对得上才 present；读不到就报失败、留下一轮。
 download 队列
   缺失 blob → GET → 校验 sha256 → 原子 rename → 更新 local_state
 ```
 
 规范约束：
 
-* 文本同步轮次**必须**能在附件全部失败时正常完成（TEST-PLAN 有专门用例：拔网线只针对附件端点）。
+* 文本同步轮次**必须**能在附件全部失败时正常完成。这条现已有机读证据：FT-ATT-17 用
+  `FAIL(hang,target=GET *<sha>)` 只挂那一个附件对象、并发跑文本轮，实测文本轮在几百毫秒内完成，
+  而附件轮自己在 `Timeouts::per_request`（45 s）之内放手且不谎报。
+* **present 是一个主张，不是一次收据**：任何"服务器已经有这份了"的结论都要出自一次读回的内容比对，
+  而不是出自一个 HTTP 状态码。412/405 尤其如此 —— 内容寻址之外还有网关与代理会凭空造前置失败。
 * 单轮附件预算：≤ 4 个文件 / ≤ 64 MiB，超出留下一轮，避免移动网络长占连接。
 * sha256 是身份：内容相同即同一附件，跨笔记去重；因此"重复插入同一图片"不产生二次上传。
 * 附件加密（E2EE）时密文寻址：`sha256(ciphertext)` 作为远端名，`attachments` 表另存明文 sha 用于本地去重与校验（未决项，见 §16）。

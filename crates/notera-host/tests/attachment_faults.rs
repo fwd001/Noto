@@ -656,3 +656,91 @@ async fn a_missing_remote_object_is_marked_absent_and_stops_being_retried() {
     );
     srv.stop().await;
 }
+
+// ———————————————————————————————————————————————— 服务器返回 412
+
+/// §27「服务器返回 412」打在附件路径上。这一条要分的不是"412 该不该当成功"，而是
+/// **"当成功之前有没有去看一眼服务器"**。
+///
+/// MOVE 收到 405/412 时，`put_attachment` 原本直接 `return Ok(())` —— 而紧跟在它后面
+/// 那次复读校验就被跳过了。善意解释（并发下别人先传了同一份内容）常常是对的，
+/// 但它是一种**解释**，不是证据：412 也会由网关/代理凭空造出来，那时目标其实不存在。
+/// 表现是账上多出一个 `remote_state=present`，第二台设备从此永远等一份服务器上没有的字节。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_move_that_really_landed_counts_as_a_success() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..15_000).map(|i| (i % 241) as u8).collect();
+    let a_dir = Tmp::new("412-ok-a");
+    let (a, sha) = seed_ready_to_upload(a_dir.path(), &url, &blob).await;
+    let remote = a.remote_for_sync().await.unwrap().expect("有适配器");
+
+    // `post:` = 副作用先做完再回这个状态 —— 这就是"对面那个设备先落成了盘，我们这次 MOVE 被拒"。
+    srv.inject(Injection::partial_write("MOVE *", 412)).await;
+    let round = a.run_attachment_round(&remote).await;
+    srv.inject(Injection::none()).await;
+
+    assert_eq!(
+        round.0, 1,
+        "服务器上有这一份、只是 MOVE 被拒，就该当成功：{round:?}"
+    );
+    let served = served_blobs(&srv, &sha);
+    assert_eq!(
+        served.len(),
+        1,
+        "并发解释成立时服务器上该恰好一份：{served:?}"
+    );
+    assert_eq!(
+        served[0]
+            .get("sha256")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+        format!("sha256:{sha}"),
+        "落盘的那份内容必须就是我们要传的字节"
+    );
+    let (l, r) = a.store().attachment_for_state(&sha);
+    assert_eq!(
+        (l.as_str(), r.as_str()),
+        ("available", "present"),
+        "验过才能记 present"
+    );
+    srv.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_move_that_landed_nothing_is_not_a_success() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..15_000).map(|i| (i % 239) as u8).collect();
+    let a_dir = Tmp::new("412-lie-a");
+    let (a, sha) = seed_ready_to_upload(a_dir.path(), &url, &blob).await;
+    let remote = a.remote_for_sync().await.unwrap().expect("有适配器");
+
+    // 裸 412：拒绝，而且**什么都没落成**（网关凭空造一个前置失败就是这形态）。
+    srv.inject(Injection::status("MOVE *", 412)).await;
+    let round = a.run_attachment_round(&remote).await;
+    srv.inject(Injection::none()).await;
+
+    assert_eq!(
+        round.0, 0,
+        "被拒且服务器上根本没有，却报上传成功：{round:?}"
+    );
+    assert!(
+        served_blobs(&srv, &sha).is_empty(),
+        "这一轮没落成对象，账上更不许说服务器有了"
+    );
+    let (_l, r) = a.store().attachment_for_state(&sha);
+    assert_ne!(
+        r.as_str(),
+        "present",
+        "凭一个 412 就记 present —— 第二台设备会永远等一份不存在的东西"
+    );
+    assert_body_still_usable(&a, &sha);
+
+    // 412 是"这一次没成"，不是"这条坏了"：下一轮要能真的传上去。
+    let round2 = a.run_attachment_round(&remote).await;
+    assert_eq!(round2.0, 1, "被 412 拒过一次之后就再也传不上去：{round2:?}");
+    assert_eq!(served_blobs(&srv, &sha).len(), 1, "最终恰好一份");
+    assert_eq!(a.store().attachment_for_state(&sha).1.as_str(), "present");
+    srv.stop().await;
+}

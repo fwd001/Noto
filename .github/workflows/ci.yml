@@ -87,7 +87,7 @@ jobs:
       - name: Clippy（-D warnings，与本地同一条命令）
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Rust 全量（本机基线 525 通过 / 62 个测试二进制）
+      - name: Rust 全量（本机基线 527 通过 / 62 个测试二进制）
         run: cargo test --workspace
 
       - name: 前端单测（本机基线 200 通过 / 21 文件）

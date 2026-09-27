@@ -1010,13 +1010,16 @@ impl WebDavRemote {
         }
         let tmp = self.paths.tmp(&self.device, self.next_nonce())?;
         self.put_plain(&tmp, bytes).await?;
-        let moved = self.move_raw(&tmp, &dest, false, None).await;
-        match moved {
-            Ok(r) if r.is_success() => {}
-            // 405/412：并发下别人先传了同一份内容 —— 结果一致，当成功
+        // MOVE 被 405/412 拒时，"别人先传了同一份内容"只是**一种解释**，不是证据：
+        // 网关/代理也会凭空造一个前置失败出来。所以这里不当场报成功，只记下"被拒"，
+        // 成败交给下面那次复读 —— 服务器上有、且哈希对得上，才算真成功。
+        // 直接 return Ok 的旧写法跳过复读，于是账上会凭空多出一个 `present`，
+        // 第二台设备从此永远等一份服务器上并不存在的字节（实测就是这样红出来的）。
+        let refused = match self.move_raw(&tmp, &dest, false, None).await {
+            Ok(r) if r.is_success() => None,
             Ok(r) if matches!(r.status, 405 | 412) => {
                 self.best_effort_delete(&tmp).await;
-                return Ok(());
+                Some(r.status)
             }
             Ok(r) => {
                 self.best_effort_delete(&tmp).await;
@@ -1026,11 +1029,16 @@ impl WebDavRemote {
                 self.best_effort_delete(&tmp).await;
                 return Err(e);
             }
-        }
+        };
         // 复读校验：写进去的不是这份内容，比写失败更糟（会污染所有引用同 sha 的笔记）
         let back = self.get_raw(&dest, None).await?;
         if !back.is_success() {
-            return Err(RemoteError::Protocol(format!("附件上传后读不到: {sha256}")));
+            return Err(RemoteError::Protocol(match refused {
+                Some(code) => format!(
+                    "附件 MOVE 被 {code} 拒、服务器上也没有 {sha256}：不当成成功，留下一轮重试"
+                ),
+                None => format!("附件上传后读不到: {sha256}"),
+            }));
         }
         let got = notera_crypto::sha256_hex(&back.body);
         if got != sha256 {
