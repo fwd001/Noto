@@ -1702,6 +1702,71 @@ impl App {
         }
     }
 
+    /// 附件轮开工前的磁盘体检（§27「本地附件缺失」）：把"账上 available、盘上没有"的
+    /// 行降级成 `missing`，交给本轮既有的下载路补齐。
+    ///
+    /// 判据只有一条：**sha256 才是身份**。所以尺寸对不上时先复算一次哈希，不让一次
+    /// 登记误差把一份好文件重下 —— 那会每轮循环一次（降级→重下→`ingest_blob` 见
+    /// 目标已存在而不覆盖→尺寸还是对不上→再降级）。哈希确实不符才删文件：留着它，
+    /// 重下也只会保留坏字节。删不掉就不降级，否则下一轮读到的还是同一份坏文件。
+    ///
+    /// 成本：每条候选一次 `stat`（哈希只在尺寸对不上时才算）。这比"少一次下载"值钱 ——
+    /// 不体检的代价是那张图**永久**打不开，而且系统以为自己已经修好了。
+    fn demote_lost_local_blobs(&self) {
+        let mut lost = 0usize;
+        for (sha, size) in self
+            .inner
+            .store
+            .attachment_repair_candidates()
+            .unwrap_or_default()
+        {
+            let path = self.inner.store.blob_path(&sha);
+            let on_disk = match std::fs::metadata(&path) {
+                Ok(m) => m.len(),
+                Err(_) => {
+                    lost += 1;
+                    let _ = self
+                        .inner
+                        .store
+                        .set_attachment_states(&sha, Some("missing"), None);
+                    continue;
+                }
+            };
+            if size > 0 && on_disk == size as u64 {
+                continue;
+            }
+            let bytes = match std::fs::read(&path) {
+                Ok(b) => b,
+                Err(_) => {
+                    lost += 1;
+                    let _ = self
+                        .inner
+                        .store
+                        .set_attachment_states(&sha, Some("missing"), None);
+                    continue;
+                }
+            };
+            if notera_crypto::sha256_hex(&bytes) == sha {
+                tracing::debug!(%sha, on_disk, ledger = size, "尺寸与登记不符但哈希相符：以哈希为准");
+                continue;
+            }
+            tracing::warn!(%sha, on_disk, ledger = size, "本机附件内容坏了，删掉重下");
+            if std::fs::remove_file(&path).is_err() {
+                continue;
+            }
+            lost += 1;
+            let _ = self
+                .inner
+                .store
+                .set_attachment_states(&sha, Some("missing"), None);
+        }
+        if lost > 0 {
+            tracing::warn!(lost, "本机附件与账不符，降级重下（§27 本地附件缺失）");
+            // 离线时本轮补不回来：界面要先看到占位，而不是继续画一张打得开的图
+            self.emit(BusEvent::NotesChanged { ids: vec![] });
+        }
+    }
+
     /// §13 附件轮：与文本轮次**解耦**的独立传输。单轮预算 ≤4 个文件 / ≤64 MiB，
     /// 超出的留下一轮 —— 移动网络不该被一个大文件长期占住。
     ///
@@ -1719,6 +1784,8 @@ impl App {
         use std::io::Write;
         let (mut up, mut down, mut failed) = (0usize, 0usize, 0usize);
         let mut budget = BYTES;
+        // 先体检再挑活：降级出来的行要在**这一轮**就被下载队列看见
+        self.demote_lost_local_blobs();
 
         for (i, job) in self
             .inner

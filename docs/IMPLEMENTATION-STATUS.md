@@ -11,11 +11,11 @@
 
 | 门禁 | 结果 | 出处 |
 |---|---|---|
-| `cargo test --workspace` | 487 通过 / 0 失败 / 0 ignored（58 个测试二进制） | 本机 |
+| `cargo test --workspace` | 523 通过 / 0 失败 / 0 ignored（62 个测试二进制）—— 2026-09-27 §27 附件故障注入那批 | 本机 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 / 0 | 本机（CI-CD 原样命令） |
 | `cargo fmt --all --check` | 退出码 0（`rustfmt` 组件已装；全仓已格式化） | 本机 |
-| `node scripts/arch-check.mjs` | 26/26（第 26 条 = 版本单源，两处变异验过） | 本机 |
-| 版本单源 | 权威 = 根 Cargo.toml，基线 0.0.0；`check-versions` 一致 | 本机 |
+| `node scripts/arch-check.mjs` | 27/27（第 26 条 = 版本单源，第 27 条 = 编译期嵌入的文件要进版本库） | 本机 |
+| 版本单源 | 权威 = 根 Cargo.toml；`check-versions` 一致 | 本机 |
 | `node scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 | 本机 |
 | `node scripts/verify-app.mjs` | 35/35（真 Rust 核心，非 mock） | 本机 |
 | `node scripts/verify-tauri-window.mjs` | 8/8（真 `invoke`，控制台 0 error） | 本机 |

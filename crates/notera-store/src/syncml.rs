@@ -834,6 +834,25 @@ impl Store {
         self.attachment_jobs(limit, "missing", &["present", "unknown"])
     }
 
+    /// §27「本地附件缺失」的体检候选：账上 `available`、远端 `present`、盘上却没有的行。
+    ///
+    /// 为什么还要卡住 `remote_state='present'`：丢了文件的行如果服务器上也还没确认有货
+    /// （`unknown`/`absent`），**上传队列本来就看得见它**（那条队列的本地态含 `error`），
+    /// 会把它挂成"等你把文件放回来再传"；这里再降级成 `missing` 反而把它推进一张永远 404
+    /// 的下载单。反过来，远端确实有货的那才行两个队列都不看 —— `available` 不进下载队列、
+    /// `present` 不进上传队列 —— 不救就是永久坏掉。
+    /// `deleted_at IS NULL` 与两个队列同口径：回收站里等的东西不必救。
+    pub fn attachment_repair_candidates(&self) -> Result<Vec<(String, i64)>, StoreError> {
+        let conn = self.read()?;
+        let mut stmt = conn.prepare(
+            "SELECT sha256, size FROM attachments
+              WHERE local_state = 'available' AND remote_state = 'present'
+                AND deleted_at IS NULL ORDER BY sha256",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     fn attachment_jobs(
         &self,
         limit: usize,

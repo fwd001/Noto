@@ -126,14 +126,39 @@
 | FT-ATT-07 | 挂了一个附件的库 | `attach_file`（bytesBase64）→ `attachment_data` 读回 | sha256 由**核心**算（前端给的键不算数）；字节逐字节相同；`localPath` 与 `bytesBase64` 给两个或给零个都拒；坏 base64 不许"尽量解"；超过 32 MiB 在**读字节之前**就拒；`attachment_data` 的 sha 参数必须是 64 位小写 hex（它会被拼进 blob 路径，不校验等于给 `../../` 开门），形态对但盘上没有 → `attachment_missing` 而不是空成功 | L2 | P6 |
 | FT-ATT-02 | 已有附件 | 在设备 B 打开同一条笔记 | 附件按内容寻址取回并渲染；本地 sha256 校验通过；不产生第二份副本（同 sha256 只落一个文件）。**已有真服务器证据**：`notera-host/tests/sync_once.rs::an_attachment_follows_its_note_to_a_second_device` —— A 上传 → B 拉记录 → 登记 → 下载 → 两边字节与源一致 → 走 `attachment_data`（界面那条读路径）读得回来 → `attachment_refs==1`。注意它同时钉住一条顺序事实：引用住在 **doc** 里，所以"编辑器把附件块写进正文"那次保存必须发生，`attach_blob` 单独存在时第二台设备无从得知要取哪个 blob（另一半缺口见 ARCHITECTURE-MAP §尚未做） | L3 | P6 |
 | FT-ATT-03 | 20 MiB 附件，链路 `FAIL(latency,target=attachments/**)` 限速 1 Mbit | 上传附件的同时编辑并同步另一条纯文本笔记 | 文本笔记在设备 B 于 ≤25 s（设计周期）内可见；附件队列未完成不影响文本轮（`STATS` 显示文本轮请求不含 `attachments/**` 等待）；UI 不出现整体阻塞（输入延迟 <100 ms） | L3,L5 | P6 |
-| FT-ATT-04 | 上传中断（`FAIL(abort,target=attachments/**)`） | 下一轮同步 | 附件在后续轮重试成功；服务端仅存在 `.tmp-*` 残留，`DUMP` 中无残缺正式对象；引用该附件的 manifest 不出现（INV-09） | L3,L4 | P6 |
+| FT-ATT-04 | 上传中断（`FAIL(abort,target=attachments/**)`） | 下一轮同步 | 附件在后续轮重试成功；服务端仅存在 `.tmp-*` 残留，`DUMP` 中无残缺正式对象；引用该附件的 manifest 不出现（INV-09）。**2026-09-27 更正：这一行长期只有声称、没有实证**（全仓从未对 `attachments/**` 注入过任何东西）。同一性质更狠的形态（服务器只读到半份 body）现由 FT-ATT-15 真跑过；纯 `abort` 形态未单独再做一条，不以此充数 | L3,L4 | P6 |
 | FT-ATT-05 | 删除含附件笔记 → 清空回收站 | `DUMP` + 检查 tombstone | `purged` 置位；tombstone 不被自动 GC（INV-11） | L3 | P6 |
 | FT-ATT-08 | 干净库（没有任何 `attachments` 行） | `apply_remote` 一条 doc 里带 `image` 块的远端笔记 | 与笔记**同一事务**登记 `attachments` + `note_attachments`：`attachment_refs == 1`、起始态是 `missing`/`unknown`、`attachment_downloads()` 真的给出这一条（漏登记 = 第二台设备永远占位 + 引用计数恒为 0 让 GC 删掉还在用的 blob）。畸形 sha（非 64 位小写 hex）不入库、也不许把整批同步拖回滚；重放同一条记录不产生第二行 | L1,L2 | P6 |
 | FT-ATT-09 | 4 MiB + 1234 字节的附件，服务器支持 Range | 一轮只取回一个 4 MiB 窗口后**真杀掉进程**，重启再跑一轮 | 第一轮：`.part` 恰好 4 MiB、**正式 blob 不存在**、outbox 仍是 pending（没下完不许结清）。第二轮：只发**一个** `Range: bytes=4194304-…` 请求（请求日志逐条核对，不是"看起来变快了"），拼完字节与源**逐字节相同**、`.part` 被删、`local_state=available`。拼接后 sha256 与期望不符 → 丢弃半截 + 记 failed，绝不把半截文件当完整附件（§10）。服务器探得不支持 Range 时整块取，不发一个注定被答 200 的请求骗自己。证据：`notera-host/tests/attachment_resume.rs::a_partial_attachment_keeps_its_progress_and_finishes_after_a_restart`。门禁自证：把 `want_range` 写死成 `false` → 立刻红 | L3,L4 | P6 |
 | FT-ATT-10 | 同 FT-ATT-09 的库，但第二轮起服务器 `FAIL(ignore-range)` | 重启后再跑一轮 | 服务器把我们的 Range **没理**、答 200 + 全文 ⇒ 客户端必须**当整份覆盖**，不许往 4 MiB 半截后面追加（那会拼出一份内容重复、哈希永远对不上的文件，用户看到的是"这张图永远下不下来"）。断言：该轮请求日志恰好一条 `GET -> 200`、正式 blob 与源**逐字节相同**、`.part` 不在、账上 `available`。证据：`attachment_resume.rs::a_server_that_ignores_range_still_lands_the_right_bytes`；变异自证：把"非 206 一律报偏移 0"那一句拆掉 → 本条与 `notera-webdav` 的 4 条偏移判定一起红 | L3,L4 | P6 |
+| FT-ATT-11 | 两台设备，图已在服务器、B 已下完 | **删掉 B 盘上那份 blob**（磁盘清理 / 杀毒隔离 / 换盘没搬完），重启 B 再跑一轮 | `local_state=available` 而盘上没有的行**两个队列都看不见**（available 不进下载队列、present 不进上传队列），所以附件轮开工前必须先做一次磁盘体检把它降级。断言：本轮 `down==1`、重下回来的字节与源**逐字节相同**、账上重新 `available`、且删文件之后、同步之前**正文照旧读得到**（§8 收尾句）。证据：`attachment_faults.rs::a_lost_local_blob_is_repaired_and_never_strands_the_note`；变异自证 M1 拆掉体检调用 → 本条与 FT-ATT-12 一起红（`round=(0,0,0)`） | L3,L4 | P6 |
+| FT-ATT-12 | 同 FT-ATT-11 的库 | 把 B 盘上那份 blob **截断一半**（长度与账不符）后重启 | 坏文件必须**先删再重下**：`ingest_blob` 见目标已存在就不覆盖，留着它的后果是"重下成功、账也标回 available、盘上还是那半截"——比不修更骗人。断言：`down==1`、正式 blob 等于整份源字节、`.part` 不在。尺寸对不上但哈希相符的那些**不降级**（哈希才是身份；否则每轮重下一遍）。证据：`attachment_faults.rs::a_truncated_local_blob_is_replaced_not_reused`；变异自证 M2 拆掉 `remove_file` → 本条红 | L3,L4 | P6 |
+| FT-ATT-13 | 两台设备 + `Backend::Fs` | 把服务器上那份对象的原地改成**同长度坏字节**，`RESTART` 让服务器以磁盘为准，再让 B 同步 | 客户端拿到"看起来对"的字节时**绝不落进正式 blob**：拼完先复算 sha256（`run_attachment_round`），落盘前 `ingest_blob` 再算一次 —— 两处独立拦截，实测**同时拆掉两处判据（M3b）才让本条变红**，这正是内容寻址要的纵深。断言：`down==0`、正式 blob 位置为空、账上不许 `available`、正文照旧可用、界面走 `attachment_*` 命令读到的是**具名失败**而不是那张坏图。注意 Fs 后端平时服务**内存表**：不改完磁盘就 `RESTART`，测的其实是"客户端拿到了好字节"（第一版就这么假绿过）。证据：`attachment_faults.rs::a_corrupted_remote_blob_is_refused_and_the_note_stays_readable` | L3,L4 | P6 |
+| FT-ATT-14 | 两台设备，正文与队列都就绪 | 附件请求一律 `FAIL(abort)`（连接被掐，不回应），恢复后再跑一轮 | 掐断的那轮 `down==0`、正式 blob 位置**一个字节都不许有**、账上不许 `available`、正文继续可用；恢复后一轮补齐且字节一字不差（不留永远下不完的队列）。注入必须打在**附件轮窗口上**：挂在 B 开机之前测到的是"网络不通"（`/_control/inject` 会把已服务计数清零，`abort_after(1)` 于是先掐掉清单）。证据：`attachment_faults.rs::a_dropped_connection_mid_download_promotes_nothing`；变异自证 M4 把传输失败写成 `remote_state=absent` → 恢复段红（(0,0,0)） | L3,L4 | P6 |
+| FT-ATT-15 | 源设备正文已推、图待传 | `FAIL(truncate-upload,bytes=400)` 只让附件 PUT 走一半，恢复后再跑一轮 | 半上传不许算成功（`up==0`）、`DUMP` 里**不得出现**含该 sha 的正式对象（INV-09）、账上更不许说远端 `present`（那样下一台设备会永远等一份不存在的字节）、正文可用；恢复后同一台设备重试成功且服务器上**最终恰好一份**。这条补的是 FT-ATT-04 一直只有文档声称、从未跑过的那个缺口。证据：`attachment_faults.rs::a_half_uploaded_attachment_lands_nothing_and_is_retried`；变异自证 M5 在上传失败分支写 `present` → 本条红 | L3,L4 | P6 |
+| FT-ATT-16 | 两台设备，服务器上那份被删（网页端手删 / 网盘回收） | 对该对象注入 `FAIL(status=404,target=GET ***<sha>)`，之后**再走两轮完整同步** | 404 是一个**结论**不是悬案：`down==0`、`local_state` 不许 `available`、`remote_state` 落成 `absent`、`.part` 不留、正文可用；关键在后半段 —— 后续轮次里针对该 sha 的请求数必须是 **0**（`attachment_downloads()` 的注释一直声称"就此收手、不每轮空转"，此前无任何测试撑着）。证据：`attachment_faults.rs::a_missing_remote_object_is_marked_absent_and_stops_being_retried`；变异自证 M6 拆掉 `absent` 那一句 → 本条红（停在 `unknown`，即每轮重问） | L3,L4 | P6 |
 | FT-CHK-01 | 新笔记 | 建 checklist 3 项，勾选第 1、3 项 | 重开后勾选状态为 `[x][ ][x]`；纯文本抽取输出与该状态一致 | L1,L5 | P2 |
 | FT-CHK-02 | 同 checklist | 设备 A 勾第 1 项、设备 B 勾第 2 项（同一 base） → 双向同步 | 结果为两项都勾（块级三方合并不丢勾选）或产生冲突副本且两份内容完整可见；**禁止出现"只剩一项勾选"的静默覆盖**（INV-01/05） | L3 | P5 |
 | FT-CHK-03 | checklist 中间项 | 在第 2 项内换行 / 删除整项 | 项序连续无空项；重开后条目数 = 操作后预期数 | L5 | P2 |
+
+### 原始指令 §27「附件故障注入」十条 —— 实证账（2026-09-27）
+
+判定口径只有一条：**这条有没有一条会因为它而红的自动测试**（§40：不接受"理论通过 / 应该没问题"）。
+
+| §27 原句 | 现状 | 证据 / 缺口 |
+| --- | --- | --- |
+| 上传中断 | 已覆盖（半上传形态） | FT-ATT-15。纯 `FAIL(abort)` 打在 `attachments/**` 的那一形态**没有单独一条**，不拿这条充数 |
+| 下载中断 | 已覆盖 | FT-ATT-14 |
+| Range 恢复 | 已覆盖 | FT-ATT-09、FT-ATT-10（含"服务器探测答 206、正式请求忽略 Range"） |
+| 错误 hash | 已覆盖 | FT-ATT-13（客户端复算 + `ingest_blob` 两处独立拦截，实测两处同时拆掉才红） |
+| 文件不存在 | 已覆盖（两半都在） | 远端没有 → FT-ATT-16；本机没有 → FT-ATT-11 |
+| 远端文件损坏 | 已覆盖 | FT-ATT-13（`Backend::Fs` 上原地改坏磁盘字节 + `RESTART`，DUMP 里核对服务器发的确实不是原字节） |
+| 本地附件缺失 | 已覆盖，**且这一条暴露了一个真缺陷** | FT-ATT-11：体检前这类行两个队列都看不见 → 那张图永久坏掉而系统以为自己修好了 |
+| 网络超时 | **未覆盖（BLOCKED）** | 附件端点上从未注入过 `FAIL(hang)`。缺口根因是工装：`timeout_all` 是**全局**的，一挂就把清单与探测一起挂住，测不到"只有附件超时"。解除条件：给 `Injection` 的 hang 加路径作用域（`status_for` 已有 glob，复用即可），再补一条 |
+| 服务器返回 412 | **未覆盖（BLOCKED，仅文本侧有）** | SY-FAULT-10 覆盖的是 manifest PUT 的 412 重规划；附件 PUT/MOVE 的 412 从未注入。它是"可重试"这一类，与 503 同分支，但**这是推断不是证据**，故记缺口 |
+| 服务器返回 404 | 已覆盖（下载侧） | FT-ATT-16；上传侧收到 404 的形态未注入 |
+
+一句话账：**十条里七条有实证、三条明确记缺口**。三条缺口的共同原因是工装而不是产品 —— 注入器只有"全局挂起"和"按 glob 回状态"两种能力，缺"按 glob 挂起 / 按 glob 断连"。这条判断本身也还没被证明，所以它以缺口的形式留在这里，而不是以结论的形式收尾。
 
 ### 富文本节点往返
 

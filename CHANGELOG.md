@@ -10,7 +10,7 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 517 通过 / 0 失败 / 0 ignored（61 个测试二进制） |
+| `cargo test --workspace` | 523 通过 / 0 失败 / 0 ignored（62 个测试二进制） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
 | L5 崩溃注入 `--test crash_recovery` | 小库矩阵 9 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零 |
 | L5 压实崩溃注入 `--test compaction_crash` | 1/1（240 条大库真死在 `after_segment_write`，索引不引用不存在的分段） |
@@ -23,7 +23,8 @@
 | P11 面板 `scripts/verify-p11-panel.mjs` | 11/11（真浏览器读**两台真设备留在盘上的现场**：右栏是服务器那一版、无载荷时说的是"没取回来"、冲突笔记留在正常列表且 ⚠ 只落在冲突行上；截图证据进 `docs/evidence/`） |
 | 性能基线 `scripts/verify-perf.mjs`（PERF-01/10/13） | 4/4（**空库预算口径已按用户决定定为 ≤1000 ms 含 WebView2**）：重编 release 壳后实测 空库最好 866 ms（首遍 1528）、5000 条 984 ms、滚动 434 帧 p95 17 ms、RSS 31.9/46.6→47.2 MiB；20000 条那一档 1322 ms。未采：100 附件规模、30 min 泄漏趋势、Android/macOS |
 | Windows 安装器 `pnpm tauri build --target x86_64-pc-windows-gnu --bundles nsis` | **`.exe` 产出 4.46 MiB**（`Notera_0.0.13_x64-setup.exe`）。出货产物侧另验通一件事：拿包内那个 `release/notera-desktop.exe` 起来后 `17323/health` **连不上** —— "dev 桥只关在 debug 构建里"在真正的 release 二进制上成立（不是只看 feature 门）。`--bundles msi` 仍 BLOCKED（WiX `LGHT0102` 的 loc 变量 + 我把自己 shell 的 cwd 留在了临时目录里造成文件锁），装移动作与代码签名未验。两个只露在真跑里的坑：`tauri build` 默认走 MSVC（被 Git Bash 的 coreutils `link` 顶掉），以及 JS/Rust 的 tauri 次版本错配会直接拒绝打包 —— 两侧已对到 2.12.0 |
-| 前端 | 196 通过（21 文件）；`vue-tsc --noEmit` 无错误；构建 214 KB → gzip 73 KB |
+| §27 附件故障注入 `--test attachment_faults` | 6/6（本机 blob 丢了自愈、截断换整份、服务器同长度坏字节被拒、下载被掐不 promote、半上传不落正式对象、远端 404 收手不空转）—— 六条各配一次变异自证 M1..M6，见 §修复那一条 |
+| 前端 | **200 通过（21 文件）+ `vue-tsc --noEmit` 0 错**（2026-09-27 与 §27 那批同批重跑；本轮没动前端，跑它是为了确认"没受影响"这句话也是量出来的）。`run build` 的产物体积那一档**本轮未重测**，仍挂着上一批的 216.65 KB → gzip 74.22 KB |
 | `scripts/arch-check.mjs` | 27/27（第 26 条是版本单源，第 27 条是"编译期嵌入的文件要进版本库"） |
 | 版本单源 | 一致（权威 + 三处派生 + **Cargo.lock**）；三处变异（派生位置偷改、crate 自己写死版本、**lock 慢一个版本**）都能打红 | `node scripts/check-versions.mjs` |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
@@ -150,6 +151,15 @@
 - **导出选择器"列表非空"被当成"列表最新"**：`toggleScoped` 原来只在 `folders.flat.length === 0` 时才重拉，于是本次会话里新建/同步带回的文件夹永远补不进来。改成每次打开开关都重拉
 
 ### 修复（都是会静默丢数据或静默错的那些，不是整理）
+
+- **本机附件丢了，系统永远以为自己修好了 ——「本地附件缺失」这条注入一补就抓到真缺陷**。§27 那份十条清单里，"远端文件损坏 / 本地附件缺失 / 网络超时"三条**此前一条都没注入过**（全仓对 `attachments/**` 的注入次数为 0，包括文档声称"已覆盖"的 FT-ATT-04）。把三条补齐之后，第一条就红了：`round=(0, 0, 0)`。
+  - **根因是队列的挑活口径没有这一格**：下载队列要 `local_state IN ('missing','partial','error')`，上传队列要远端**还没** `present`。所以"账上 available、盘上文件没了"这一格**两边都不看它** —— 用户侧的表现是那张图永久打不开，而界面、状态页、"待同步"计数全都显示正常。触发条件很日常：磁盘清理、杀毒软件隔离、误删 `attachments/` 目录、换盘没搬完。
+  - **修法**：附件轮开工前做一次磁盘体检（`App::demote_lost_local_blobs` + 新查询 `Store::attachment_repair_candidates`）。只扫 `available ∧ remote_state='present'` 那一格 —— 远端还没确认有货的那些**上传队列本来就看得见**，再降级等于把它推进一张永远 404 的下载单，反而更糟。文件不在 → 降级；长度与登记不符 → 先复算 sha256，相符就以哈希为准不动（否则一次登记误差会让这条每轮重下一遍），不符就**删掉再降级**（`ingest_blob` 见目标已存在就不覆盖，留着坏文件会把坏字节一直用下去）。
+  - **门禁**：`crates/notera-host/tests/attachment_faults.rs` 6 条，两台设备 + 真 TCP 服务器：本机 blob 删掉后自愈（FT-ATT-11）、截断后换整份（FT-ATT-12）、服务器同长度坏字节被拒且正文照旧可用（FT-ATT-13）、下载连接被掐不 promote（FT-ATT-14）、半上传不落正式对象且能重试成功（FT-ATT-15）、远端 404 记成结论后**不再每轮空转**（FT-ATT-16，这条把 `attachment_downloads()` 注释里那句一直无人证明的声称钉住了）。
+  - **变异自证 6 次，每条各杀一次**：M1 拆掉体检调用 → FT-ATT-11/12 红；M2 拆掉坏文件删除 → FT-ATT-12 红；M3a 只拆 `ingest_blob` 的哈希判定 → **全绿**（附件轮的复算先拦住了），M3b 两处同时拆 → FT-ATT-13 红（结论：这两处是纵深防御，不是重复实现）；M4 把传输失败写成 `remote_state='absent'` → FT-ATT-14 恢复段红；M5 上传失败却写 `present` → FT-ATT-15 红；M6 404 不写 `absent` → FT-ATT-16 红（停在 `unknown`，即每轮重问）。
+  - **两条自己踩到的工装坑，记下来免得再踩**：① `Backend::Fs` 平时服务的是**内存表**，直接改磁盘文件不影响它发出去的字节 —— 第一版 FT-ATT-13 因此假绿（测的其实是"客户端拿到了好内容"），必须 `RESTART` 让它以磁盘为准，并用 DUMP 里的 `sha256` 当面确认服务器发的确实不是原字节；② `/_control/inject` 会把"已服务数据请求数"清零，`abort_after(1)` 于是先掐掉的是**清单**那一枪 —— 挂在设备开机之前测到的是"网络不通"不是"下载中断"，注入窗口必须只罩住附件轮。
+  - **仍未覆盖的按 §40 记着，不当作已完成**：附件端点上的 `FAIL(hang)`（超时）与附件 PUT/MOVE 的 412 —— 前者卡在工装（`timeout_all` 是全局的，会把清单一起挂住，需要先给注入加路径作用域），后者从未注入过。逐条状态见 TEST-PLAN「§27 十条 —— 实证账」。
+  - 复验：`cargo test --workspace` **523 通过 / 0 失败 / 0 ignored**（62 个测试二进制，517 → +6）、`cargo fmt --all --check` 干净、`cargo clippy --workspace --all-targets -- -D warnings` 0/0（它当场抓到测试里一处 `needless_borrows_for_generic_args` —— 全量测试放得过，CI 放不过）、`attachment_resume` 2/2 与 `attachment_faults` 6/6 同批复跑、`arch-check` 27/27、`pnpm test` 与前端门禁未受影响（本轮没动前端）。文档同批：DATA-MODEL §8 补上 `available → missing` 这条反向迁移与它的**边界**（不做整库周期性重哈希，所以"长度分毫不差的静默位腐"不在覆盖内），TEST-PLAN 补 FT-ATT-11..16 + FT-ATT-04 那条"只有声称没有实证"的更正。
 
 - **接上一条 P11：读回的接口位置写错了一次，被两台真设备的测试当场抓红 —— 那条测试的价值就在这里**。第一版把"读对面那一版"接在 `preview_text(id, remoteRev)` 的回落上，听着顺理成章，其实 `rev` 是**各设备自己的编号**：本机历史上同一个号常常是另一份内容，于是右栏显示回来的是**本机这一版**（正是 §6.1 早已写明要避免的"左右两栏同一段文字"）。`notera-host/tests/conflict_payload_e2e.rs` 第一次跑就红在这里。修法：载荷只由卡片带（`ConflictDto.remote_preview`，取自冲突行的 `remote_wire`），面板右栏**不许**再按 `(noteId, remoteRev)` 去查本机历史；顺手把 `Store::conflict_remote_wire()` 删掉 —— 一个只有测试会调的读法，等于留着一条会假装自己被验过的 API。新增的另一个门禁位：`notera-store/tests/conflict_payload.rs` 里"同一条笔记多次登记时，载荷只能挂到面板真正显示的那条最新未裁决行"（挂到旧行等于没挂，因为那张卡已经不显示）。
 

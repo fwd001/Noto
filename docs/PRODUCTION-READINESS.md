@@ -19,13 +19,14 @@
 
 | 门禁 | 结果 | 命令 | 层级 |
 |---|---|---|---|
-| Rust 全量测试 | **517 通过 / 0 失败 / 0 ignored（61 个测试二进制）** | `cargo test --workspace` | L0–L4 |
+| Rust 全量测试 | **523 通过 / 0 失败 / 0 ignored（62 个测试二进制）** | `cargo test --workspace` | L0–L4 |
 | Clippy（CI 原样命令） | 0 error / 0 warning | `cargo clippy --workspace --all-targets -- -D warnings` | L0 |
 | 架构适应度 | **27/27**（含最后一条"扫描台账"：任何源码门禁扫到 0 个文件即判失败） | `node scripts/arch-check.mjs` | 静态 |
 | 前端 | **200 通过（21 文件）**；`vue-tsc --noEmit` 0 错；构建 216.65 KB → gzip 74.22 KB | | `pnpm --dir apps/desktop test` / `run typecheck` / `run build` | L0/L1 |
 | §26 无障碍 | 静态门禁 + 3 条专项测试（见 TEST-PLAN A11Y-01…04） | `arch-check` / `pnpm test` | L1 |
 | 崩溃注入（小库 9 点 + 大库压实 1 点） | 逐个**真把子进程杀死**（退出码 77）后重启，两台设备逐条一致、待办归零 | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery --test compaction_crash` | L5 |
 | 附件下载续传 | 2/2（真杀进程重启接着要；服务器**不理** `Range` 时当整份覆盖） | `cargo test -p notera-host --test attachment_resume` | L3/L5 |
+| §27 附件故障注入 | 6/6（本机 blob 丢了能自愈、截断换整份、服务器同长度坏字节被拒、下载被掐不 promote、半上传不落正式对象、远端 404 收手不空转；六条各配一次变异自证 M1..M6）。**其中"本机附件缺失"是一条真缺陷**：那种行两个队列都看不见，图永久坏掉而系统以为自己修好了 | `cargo test -p notera-host --test attachment_faults` | L3/L5 |
 | 清单压实 + 分段读回 | 1/1（>200 条变更后分段落盘、索引不引用不存在的分段、空库靠分段基线追平） | `cargo test -p notera-host --test compaction` | L3 |
 | 落后设备追平（260 条） | 1/1（标题+内容哈希逐条一致） | `cargo test -p notera-host --test late_device` | L3 |
 | **千条规模追平（1000 条，12.8 s）** | 1/1（轮数有界、索引只装引用、空轮 1 请求 + 304 + 上下行 0 字节、默认本全网络只有一条） | `cargo test -p notera-host --test big_library` | L3 |
