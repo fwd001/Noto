@@ -10,7 +10,7 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 527 通过 / 0 失败 / 0 ignored（62 个测试二进制） |
+| `cargo test --workspace` | 530 通过 / 0 失败 / 0 ignored（63 个测试二进制） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
 | L5 崩溃注入 `--test crash_recovery` | 小库矩阵 9 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零 |
 | L5 压实崩溃注入 `--test compaction_crash` | 1/1（240 条大库真死在 `after_segment_write`，索引不引用不存在的分段） |
@@ -36,6 +36,11 @@
 
 ### 新增
 
+- **代理第一次有了会红的门禁（`crates/notera-webdav/tests/proxy_routing.rs`，3 条）**：§28 那十二条此前全部只有 `notera-cli net probe` 的一次性 PROBE —— PROXY.md §9 把证据链设计写得很清楚，但"手工跑过一次"和"每次提交都会跑"是两件事，任何一次改动把代理静默吞掉都不会红。现在判据是**差分的**：同一台服务器挂上"只接受经代理到达"的策略之后，配了 HTTP 代理必须成、直连必须 403（还要读服务器自己的 `rejections_403_not_proxied` 计数）；另配死代理必须失败、`bypass` 命中必须可用、不相干的 bypass 不许顺手放行、代理主机名解析不出来必须失败、撤掉死代理换回直连立刻可读。
+  - **变异自证 M9**：把 `configure()` 里那条 `b.proxy(p)` 换成 `b.no_proxy()`（就是历史上那类"配了代理等于没配"）→ 两条测试同时红，报的分别是 `配了 HTTP 代理却被服务器拒掉：403` 与 `指向死代理的请求居然成功了`。所以这条门禁不是"跑过了就算数"。
+  - **顺手修掉一处测试自身的错判**：第三腿原来写的是"bypass 命中一条就把别的 target 也放行了"—— 那是我把两个 target 都指到同一个 host:port，而 bypass 匹配的是 host，产品行为本来是对的。改成对照组（列表里放一条**不相干**的主机名 → 必须仍然失败），否则这条测试会把正确行为判成缺陷。
+  - **仍缺四条按 §40 逐条记着**（详见 TEST-PLAN「§28 十二条 —— 实证账」）：SOCKS5 端到端、`407` 错误密码、真 TLS 握手失败、取消的端到端断言。根因是同一个：**工装的"代理"是源站自己扮的**（它认识 CONNECT 与绝对形式，不认识 SOCKS 握手），而且没有 TLS。要一次解掉前三条需要一个新的 harness 组件（客户端 → 真转发代理 → 独立源站），不是补几条用例。
+  - 复验：`cargo test --workspace` **530 通过 / 0 失败 / 0 ignored**（63 个测试二进制）、`fmt --check` 干净、`clippy --workspace --all-targets -- -D warnings` 0/0、`arch-check` 27/27。这批只加测试与文档，不改产品行为，**不升版本**。
 - **注入器补上"按路径挂起"（`Injection::hang_for` / `hang_on("GET *<path>")`），并把它换来的那条门禁跑上**：§27 的「网络超时」此前做不出来，不是因为产品缺超时，而是因为工装只有**全局** `timeout_all` —— 一挂就把清单、探测、文本轮一起挂住，测到的是"网络不通"而不是"只有附件端点不答应"。新规则与 `status_for` **共用同一个解析函数**（`rule_hit`），因为两套各写一遍的文法早晚会漂成两种语法；文法本身也补了一条单测（`injection.rs::hang_on_follows_the_same_rule_grammar_as_status_for`：方法限定不许失效、不许挂到别的对象上、全局 hang 与按路径 hang 是两个旋钮）。
   - 换来的这条是 FT-ATT-17（`attachment_faults.rs::a_hanging_attachment_endpoint_never_blocks_the_text_round`）：只有那一个附件对象的 GET 不答应，三件事分开证 —— **文本轮在附件还挂着的时候照常跑完**（用 join 并发跑，不是先后跑；这条兜住 §13 的队列隔离与 §28 的「网络问题永远不会让本地数据不可用」）、**附件轮自己会放手**（实测 45.01 s，正好等于 `notera_net::Timeouts::per_request`；期间不落正式 blob、不留 `.part`、账上不 `available`、`failed` +1）、**端点恢复后这一条补得回来**。
   - 一条自纠：这条测试第一版把"多久必须放手"写成我拍的 30 s，跑出来 45.01 s 直接红 —— 红的是我的判据，不是产品。现在上限从**产品自己的常量**推导（`Timeouts::default().per_request`），不再凭感觉写数字。变异自证 M7：把 `hangs()` 写死成 `false` → 前置断言当场红（报"注入没打中"而不是"产品通过"）。

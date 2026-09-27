@@ -174,10 +174,23 @@ NetAudit { ts, method, host, path, proxy_mode, proxy_endpoint, bypassed,
 
 ### 怎么证明"真的走了代理"（需求 §19 要求可测试）
 
-三条互补证据，缺一不可：
+三条互补证据，缺一不可。**今天（2026-09-27）起证据 1 与 2 已经是自动门禁**，不再只是手工 PROBE：
+`cargo test -p notera-webdav --test proxy_routing`（`crates/notera-webdav/tests/proxy_routing.rs`，3 条）。
 
-1. **差分测试**：同一目标，`proxy=死代理` 必须失败、`no_proxy` 必须成功。若死代理下仍成功 → 代理被静默忽略 → 缺陷。（探针已实测此形态：`dead-proxy→error=true; no_proxy→HTTP 200`）
+1. **差分测试**：同一目标，`proxy=死代理` 必须失败、`no_proxy` 必须成功。若死代理下仍成功 → 代理被静默忽略 → 缺陷。
+   已进门禁的形态：死代理端口（`127.0.0.1:1`）、代理主机名解析不出来（`no-such-proxy-host.invalid`）、
+   `bypass` 命中目标时照常可用、`bypass` 列表里只有一条不相干主机名时**不许**顺手放行、
+   撤掉代理换回直连立刻可读（"恢复"那一腿）。此前只有 `dead-proxy→error=true; no_proxy→HTTP 200` 的一次性探针记录。
+   **变异自证**：把 `notera-net::configure()` 里那条 `b.proxy(p)` 换成 `b.no_proxy()`（即"配了代理等于没配"这类缺陷）
+   → 两条测试同时红，分别报 `配了 HTTP 代理却被服务器拒掉：403` 与 `指向死代理的请求居然成功了`。
 2. **代理独占**：`notera-test-webdav` 支持"仅接受经前置代理到达的连接"模式 —— 直连一律 403。于是"同步成功"本身就构成"确实走了代理"的证明，无需信任客户端自述。
+   已进门禁：配 HTTP 代理写 + 读回必须 2xx，直连必须 403，且要读服务器自己的 `rejections_403_not_proxied` 计数
+   （不看客户端自述，也不假设"没被挡"）。
+   **这一条的边界要说清**：工装里那个"代理"**就是源站本身** —— 它认识 CONNECT 与绝对形式请求，收下之后由自己的存储应答。
+   因此这套门禁证的是"我们的出口确实按代理的方式发了请求"，**不证**"请求被转发到了另一台独立源站"，
+   也**不覆盖 SOCKS5**（源站听不懂 SOCKS 握手）与 **`407` 代理鉴权**（没有会回 407 的端点）。
+   要补这三块需要一个新的 harness 组件：客户端 → 真转发代理（HTTP 可选 407 / SOCKS5 应答器）→ 独立源站（可 TLS）。
+   逐条缺口见 `docs/TEST-PLAN.md`「§28 十二条 —— 实证账」。
 3. **RouteProof 回传**：每次同步的 `RoundStats` 带实际出口（`proxy_endpoint`），`notera-cli net probe` 打印三者一致性。
 
 `net probe` 输出示例（人读 + `--json`）：目标解析、实际连接地址、CONNECT 是否成功、TLS 链、服务端证书指纹、往返分段耗时。

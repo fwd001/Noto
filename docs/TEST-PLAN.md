@@ -172,6 +172,34 @@
 
 一句话账：**十条里九条有实证**（Range 恢复、下载中断、上传半途中断、错误 hash、远端损坏、本地缺失、文件不存在/404、网络超时、412），剩下一条**"服务器返回 404"只覆盖了下载侧**（上传那一侧收到 404 从未注入），另有一个纯 `FAIL(abort)` 的上传形态没单独做（半上传形态已覆盖同一分支）。还有一条更大的、跨章节的账要记：记法表里的 `times` 参数**工装里没有实现**，所以 `SY-FAULT-02/03/04/09/10` 那些写着 `times=` 的行都还不能按字面跑起来 —— 见上面"这张记法表自己的账"。
 
+### 原始指令 §28「代理故障注入」十二条 —— 实证账（2026-09-27）
+
+同一把尺子：**这条有没有一条会因为它而红的自动测试**。此前 §28 的全部证据都是
+`notera-cli net probe` 手工跑出来的一次性 PROBE（PROXY.md §9 把三条证据链写得很清楚，
+但"跑过一次"和"每次提交都会跑"是两件事）。今天把能变成门禁的先变成了门禁：
+`crates/notera-webdav/tests/proxy_routing.rs`。
+
+| §28 原句 | 现状 | 证据 / 缺口 |
+| --- | --- | --- |
+| direct | 已覆盖 | 全仓每一条同步测试都是直连；`proxy_routing.rs` 里另有"直连写入 → 换回直连读出"两条腿 |
+| HTTP proxy | **已覆盖（今天新增门禁）** | `an_http_proxy_route_is_the_only_way_through`：服务器挂"只接受经代理到达"的策略 ⇒ 配了 HTTP 代理必须成、直连必须 403，并且要读服务器自己的 `rejections_403_not_proxied` 计数。**判据是差分的** —— 这是唯一能证"真的用了代理"的形态。变异自证 M9：把 `configure()` 里那条 `b.proxy(p)` 换成 `no_proxy()` → 两条测试同时红（`配了 HTTP 代理却被服务器拒掉：403` / `指向死代理的请求居然成功了`） |
+| SOCKS5 | **未覆盖（BLOCKED）** | 只有配置解析与 `proxy_url` 构造的单测（含"明文 http 代理不许带凭据"那条）。端到端做不了的原因很具体：本工装的"代理"其实是**源站自己**扮的 —— 它认识 CONNECT 与绝对形式，但不认识 SOCKS 握手。解除条件：写一个会答 `05 00` 并连到**另一个**监听端的迷你 SOCKS5 应答器，代理与源站分开 |
+| 错误密码 | **未覆盖（BLOCKED）** | 需要一个会回 `407 Proxy-Authenticate` 的代理，工装没有。已覆盖的是最容易出错的那一半：口令不外泄（`proxy_credentials_never_leak_into_the_route_proof` + notera-net 的 `debug_never_leaks_the_password` / `userinfo_is_stripped_everywhere`） |
+| 错误 proxy host | 已覆盖（端口形态） | `a_dead_proxy_fails_and_a_bypassed_host_still_works` 第一腿：指向没人监听的端口必须失败；成功就等于"配了代理等于没配" |
+| 代理 DNS | 已覆盖 | 同一测试 ①b 腿：`no-such-proxy-host.invalid` 必须失败（静默直连会被当场抓住） |
+| TLS 失败 | **未覆盖（BLOCKED）** | `TlsPolicy` 三种构造有单测（Strict / CaBundle 解析 / Pin 归一化），但**没有一次真 TLS 握手失败**：工装是明文 HTTP 服务器。与 PROXY.md U2/U3 同一条根因，解除条件同 B2（可访问的真实端点） |
+| 超时 | 已覆盖（同步路径上） | 预算是 `Timeouts::per_request`，生效证据在 FT-ATT-17（挂死的附件请求在 45 s 内自己放手而文本轮照常）。"代理握手超时"没单独做，与 TLS 那条同根 |
+| 取消 | 部分（只有 PROBE） | PROXY.md §7 记的 402–416 ms 实测是手工 PROBE，不是门禁。要做成门禁需要 `hang_for`（今天已有）+ 一个把"取消发生"打进审计的断言点 |
+| 重试 | 部分 | 传输失败的重试与 `Retry-After` 两种形态有单测（`retry_after_accepts_both_forms`）；**"观察到一次带退避的第二次尝试"这种端到端断言仍缺**，因为它需要 `times`（见本文开头"这张记法表自己的账"） |
+| 退避 | 已覆盖（纯函数层） | `delay_is_monotonic_and_capped`、`jitter_is_reproducible_and_bounded` |
+| 恢复 | 已覆盖 | 同一测试第四腿：撤掉死代理换回直连，同一份内容立刻可读（前一次失败不在出口层留脏状态）；跨进程恢复在 `reconnect.rs` |
+| **保证句「网络问题永远不会让本地数据不可用」** | 已覆盖（今天补齐关键一环） | FT-ATT-17（只有附件端点挂死时，正文与新笔记的同步照常完成）、`reconnect.rs`（六轮各坏一次，恢复后两台逐条一致、待办归零）、`crash_recovery.rs`（崩在提交点之后数据仍完整） |
+
+一句话账：**十二条里 7 条有门禁、2 条部分、4 条明确记缺口**（SOCKS5 端到端、407 错误密码、真 TLS 握手失败、取消的端到端断言）。
+四条缺口的根因是同一件事：**工装的"代理"由源站扮演，且没有 TLS**。一次解掉前三条要做的是把测试拓扑改成
+"客户端 → 真转发代理（HTTP，可选 407 / SOCKS5）→ 独立源站（可 TLS）" —— 那是**一个新的 harness 组件**，
+不是几条用例，故按 §40 记在这里而不是顺手做完。
+
 ### 富文本节点往返
 
 统一做法：golden 文档 fixture → 客户端加载 → 立即保存 → 导出 canonical JSON → 与 fixture **逐字节**比较；同时断言纯文本抽取等于 fixture 的 `plain` 字段（PROBE:`canonical-json-for-hashing`）。
