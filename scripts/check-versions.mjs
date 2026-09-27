@@ -46,6 +46,35 @@ export function checkVersions(root = ROOT) {
       drifts.push(`${rel} 既没有 version.workspace = true，也没有版本号 —— 版本来源不明`);
     }
   }
+  // Cargo.lock 也要跟着走：`bump-version.mjs` 只改三个源文件，锁文件要等下一次 cargo
+  // 跑起来才自己追平 —— 于是"已提交的状态"里 lock 比权威慢一个版本（0.0.1 那次是手工
+  // 补的，0.0.2 又漂了一次：手工补过一次的东西第二次一定会忘）。
+  const names = [];
+  for (const rel of manifests) {
+    const pkgSection = /^\[package\]\n([\s\S]*?)(?=\n\[|$)/m.exec(read(rel));
+    const name = pkgSection && /^name\s*=\s*"([^"]+)"/m.exec(pkgSection[1]);
+    if (name) names.push({ rel, name: name[1] });
+    else drifts.push(`${rel} 读不出 [package] name`);
+  }
+  let lock = null;
+  try {
+    lock = read('Cargo.lock');
+  } catch {
+    drifts.push('Cargo.lock 不存在');
+  }
+  if (lock) {
+    const locked = new Map();
+    // 逐个 [[package]] 块按"名字后面紧跟的 version"配对（跳过只有 name+source 的
+    // 别名块：那条没有 version 行，配对会错位）
+    for (const m of lock.matchAll(/\[\[package\]\]\r?\nname\s*=\s*"([^"]+)"\r?\nversion\s*=\s*"([^"]+)"/g)) {
+      locked.set(m[1], m[2]);
+    }
+    for (const { rel, name } of names) {
+      const got = locked.get(name);
+      if (got === undefined) drifts.push(`Cargo.lock 里没有 ${name}（${rel}）`);
+      else if (got !== want) drifts.push(`Cargo.lock 里 ${name} = ${got}，权威是 ${want} —— 跑 cargo update --workspace`);
+    }
+  }
   return drifts;
 }
 

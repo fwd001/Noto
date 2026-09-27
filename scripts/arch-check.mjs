@@ -8,7 +8,7 @@
  *   node scripts/arch-check.mjs        # exit 0 = 全部通过；exit 1 = 有违规
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, dirname, resolve, normalize } from 'node:path';
 
 const ROOT = process.argv[2] ?? new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 const results = [];
@@ -412,6 +412,45 @@ for (const f of vueFiles) {
 }
 check('hygiene:interactive-controls-labeled', '§26（每个交互控件都要有可读名字）', unlabeled,
   `这些控件既没有可见文字也没有 aria-label / <label>，读屏软件只会念出"按钮"：\n    ${unlabeled.join('\n    ')}`);
+
+// 编译期嵌入的文件必须在版本库里。`include_str!` 指向一个未跟踪的文件时，本机一定
+// 编得过（工作树里有那个文件），干净检出直接编不过 —— 0007 迁移就是这么漏出去的：
+// 那次提交改了 migrate.rs 的 include_str! 列表，却漏列了 .sql 本身。所有门禁都在
+// 自己那台已经检出过的工作树上跑，所以没有一条看得见它。
+const untrackedIncludes = [];
+{
+  let tracked = null;
+  try {
+    const { execFileSync } = await import('node:child_process');
+    tracked = new Set(
+      execFileSync('git', ['-C', ROOT, 'ls-files'], { encoding: 'utf8' })
+        .split(/\r?\n/)
+        .filter(Boolean),
+    );
+  } catch (e) {
+    untrackedIncludes.push(`读不到 git 索引（${e.message}）—— 本条无从判断，按失败处理而不是放过`);
+  }
+  if (tracked) {
+    const rustFiles = [...walkSources(join(ROOT, 'crates'), ['.rs']), ...walkSources(join(ROOT, 'apps'), ['.rs'])];
+    let sites = 0;
+    for (const f of rustFiles) {
+      for (const m of read(f).matchAll(/\binclude_(?:str|bytes)!\s*\(\s*"([^"]+)"/g)) {
+        sites++;
+        const abs = normalize(resolve(dirname(f), m[1])).replaceAll('\\', '/');
+        if (!statSafe(abs) && !statSafe(abs, true)) {
+          untrackedIncludes.push(`${rel(f)}: include_str! 指向 "${m[1]}"，这个文件在磁盘上都不存在`);
+          continue;
+        }
+        const r = relative(ROOT, abs).replace(/\\/g, '/');
+        if (!tracked.has(r)) untrackedIncludes.push(`${rel(f)}: "${r}" 没进版本库 —— 本机编得过，干净检出编不过`);
+      }
+    }
+    // 空转保护：一条都没扫到就是门禁坏了（迁移序列至少嵌在 migrate.rs 里）
+    if (sites === 0) untrackedIncludes.push('一个 include_str!/include_bytes! 都没扫到 —— 本条在空转');
+  }
+}
+check('hygiene:include-paths-tracked', 'ARCHITECTURE-MAP §5（编译期嵌入的文件要进版本库）', untrackedIncludes,
+  `这些编译期嵌入的目标不在版本库里：\n    ${untrackedIncludes.join('\n    ')}`);
 
 // ------------------------------------------------------------------------- 输出 ---
 

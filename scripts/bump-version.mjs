@@ -14,6 +14,7 @@
  *   patch +1；minor/major 归零其后位。
  */
 import { readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { checkVersions } from './check-versions.mjs';
 
@@ -59,9 +60,24 @@ for (const [rel, re, build] of edits) {
   writeFileSync(p, src.replace(re, (...gs) => build(gs[1])));
 }
 
+// Cargo.lock 里每个 workspace crate 都带自己的版本号，而它不属于"三处派生位置"：
+// 只改源文件的话 lock 会慢一个版本，得等下一次 cargo 跑起来才自己追平 —— 于是提交
+// 出去的状态是不一致的（0.0.1、0.0.2 各漂过一次，第二次没人记得手工补）。
+// 这一步只改 lock 的元数据，不编译，所以不需要指定 toolchain。
+try {
+  execFileSync('cargo', ['update', '--workspace', '--offline', '--manifest-path', join(ROOT, 'Cargo.toml')], {
+    stdio: 'pipe',
+    encoding: 'utf8',
+  });
+} catch (e) {
+  console.error(`版本号已写成 ${next}，但 Cargo.lock 没能自动追平（${e.message}）。\n` +
+    `请手工跑 \`cargo update --workspace --offline\` 再提交 —— 不许带着漂移的 lock 提交。`);
+  process.exit(1);
+}
+
 const drifts = checkVersions(ROOT);
 if (drifts.length !== 0) {
   console.error(`已经写成 ${next}，但一致性检查没过：\n  - ${drifts.join('\n  - ')}`);
   process.exit(1);
 }
-console.log(`版本：${cur} → ${next}（三处派生位置已同步，check-versions 通过）`);
+console.log(`版本：${cur} → ${next}（三处派生位置 + Cargo.lock 已同步，check-versions 通过）`);

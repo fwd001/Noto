@@ -282,10 +282,11 @@ jobs:
 | 项 | 规定 |
 | --- | --- |
 | **权威版本位置** | 根 `Cargo.toml` 的 `[workspace.package] version` —— 这是唯一可手改的版本号 |
-| 派生位置 | `apps/desktop/package.json` `version`、`apps/desktop/src-tauri/tauri.conf.json` `version`、`crates/*/Cargo.toml`（一律 `version.workspace = true`）、`protocol.json` 的 `app_version` 字段 |
+| 派生位置（仓库内，`check-versions` 逐一对账） | `apps/desktop/package.json` `version`、`apps/desktop/src-tauri/tauri.conf.json` `version`、`crates/*/Cargo.toml` 与 `apps/desktop/src-tauri/Cargo.toml`（一律 `version.workspace = true`）、**`Cargo.lock` 里每个 workspace crate 的 `version`** |
+| 派生位置（仓库外，本机无从对账） | 远端 `.notes/protocol.json` —— 它不是仓库文件，由首次建库时 `provision_protocol` 写出去：`software` 字段是 `format!("notera {}", env!("CARGO_PKG_VERSION"))`，`protocol`/`min_protocol` 取自 `SYNC_PROTOCOL_VERSION`（**独立的第二权威，与产品版本不同轴**）。两者都只能随构建走，**没有"顺手改一下"的入口**，也就不需要门禁对账。注意：**这个文件里没有 `app_version` 字段**（此前本表写的是"protocol.json 的 app_version"，与实际字节不符 —— 该字段只在导出包 `manifest.json` 里，取自同一处 `CARGO_PKG_VERSION`） |
 | **独立的第二权威** | `SYNC_PROTOCOL_VERSION`（Rust `notera-sync` 中的 `u16` 常量）与产品版本 **不同轴**：产品发 0.1.1 可以不改协议，协议变更必须同时改 `protocol.json` 与本常量 |
 | 一致性检查 | **已实现**：`scripts/check-versions.mjs`（只读只报，任一漂移 exit 1），并被 `scripts/arch-check.mjs` 第 26 条复用同一函数，所以本地门禁与 CI 走同一判据 |
-| 允许的写入口 | **已实现**：`node scripts/bump-version.mjs patch|minor|major|x.y.z` 一次改齐三处派生位置并立刻自证一致（不一致就 exit 1，不留"看着改好了"的状态）。禁止手改其中任何一个 |
+| 允许的写入口 | **已实现**：`node scripts/bump-version.mjs patch|minor|major|x.y.z` 一次改齐三处仓库内派生位置、跑 `cargo update --workspace --offline` 追平 `Cargo.lock`，并立刻自证一致（不一致就 exit 1，不留"看着改好了"的状态）。禁止手改其中任何一个 |
 | 版本策略（2026-09-27 用户拍板） | **从 0.0.0 起**，改了产品的 commit 就 `bump-version patch`；`SYNC_PROTOCOL_VERSION` 仍单独一轴。**第一版未发布 → 不承诺历史兼容**：数据格式/协议要改就直接改迁移，不写兼容层。`1.0.0` 才是对外承诺兼容的起点 |
 
 ```yaml
