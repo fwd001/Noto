@@ -308,3 +308,31 @@ describe('在飞的保存不许把状态打回旧的一版', () => {
     expect(editor.saveState).toBe('saved');
   });
 });
+
+/**
+ * PERF-12：自动保存的**节拍上界**。上一条钉的是"停止输入 1200ms 后才保存"，
+ * 这条钉的是"一直打字不会每次击键都发一次请求" —— 那等于让笔记本的无线电一直
+ * 醒着，也给 WebDAV 服务器凭空加上几百次 PUT。用假时钟跑，不依赖墙钟。
+ */
+describe('自动保存的节拍有上界（PERF-12）', () => {
+  it('连续敲 30 下（每 50ms 一下）不会发出 30 次保存', async () => {
+    const service = stubLocalService({
+      edit_note: (args) => noteFixture({ rev: 9, doc: (args as { doc: unknown }).doc }),
+    });
+    const editor = useEditorStore();
+    editor.hydrate(asNote(noteFixture({ rev: 1 })));
+    const block = editor.blocks[0];
+    if (!block) return;
+
+    for (let i = 1; i <= 30; i++) {
+      editor.updateBlock({ ...editor.blocks[0], content: [{ text: '字'.repeat(i) }] });
+      await vi.advanceTimersByTimeAsync(50);
+    }
+    await vi.advanceTimersByTimeAsync(2500);
+
+    const saves = service.callsOf('edit_note').length;
+    expect(saves).toBeGreaterThan(0);        // 确实存过，内容没丢
+    expect(saves).toBeLessThanOrEqual(3);    // 但不是每次击键一趟
+    expect(inlineText(editor.blocks[0].content)).toBe('字'.repeat(30));
+  });
+});

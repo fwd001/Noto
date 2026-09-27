@@ -361,7 +361,7 @@
 | PERF-09 | argon2id（m=19 MiB / t=2 / p=1） | 单次 ~370–400 ms，且 **UI 线程零占用** | L1：主线程在 KDF 期间每帧阻塞 ≤16 ms（PROBE:`kdf-argon2id` = 19MiB/2it/1p → 400 ms，deterministic=true） | 已实测 |
 | PERF-10 | 内存上限（桌面，20000 条 + 100 附件索引） | 暂定 RSS ≤450 MiB；单轮同步峰值增量 ≤50 MiB | L5 采样（30 min 使用 + 5 轮同步），增长趋势 ≤5%/轮以排除泄漏 | 待建基线 |
 | PERF-11 | 附件不阻塞文本 | 附件在飞时文本轮 ≤25 s 到达对端；`STATS` 证明文本轮不等待 `attachments/**` | L3 + `FAIL(latency,target=attachments/**,ms=…)`；PROBE:`timeout-and-cancel` 证明取消语义真实可用 | 待建基线（机制已实测） |
-| PERF-12 | 自动保存落盘频率 | ≤3 次 / 20 次快速输入；输入到落盘 ≤1500 ms | L1 fake clock；暂定 | 待建基线 |
+| PERF-12 | 自动保存落盘频率 | ≤3 次 / 20 次快速输入；输入到落盘 ≤1500 ms | L1 fake clock；暂定 | 待建基线 **已实现并通过**（`notera-host/../stores/editor.spec.ts` 的「自动保存的节拍有上界（PERF-12）」：假时钟下连打 30 下、每 50ms 一次，`edit_note` 次数必须 >0 且 ≤3，且末次正文完整 —— 不是"理论上有防抖"）|
 | PERF-13 | 列表滚动 / 大数据量渲染 | 20000 条列表滚动无 >50 ms 掉帧（暂定），首屏 ≤1 s | L5 采集（CDP trace） | 待建基线 |
 | PERF-14 | 网络层出站请求数（一轮） | 与 `DUMP` 差分一致：无多余 PROPFIND（每轮 ≤1） | L3 `STATS`；**已实测**（`sync_cost` 断言 PROPFIND ≤1/轮，且空轮总请求 ≤2） |
 | PERF-15 | Android 冷启动（arm64-v8a，中端机） | 暂定 ≤2500 ms | L6 + 真机；无法本机测量 | 待建基线（本机 **BLOCKED**，见 Q2） |
