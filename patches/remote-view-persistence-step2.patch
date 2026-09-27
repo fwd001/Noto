@@ -1,0 +1,121 @@
+diff --git a/crates/notera-host/src/lib.rs b/crates/notera-host/src/lib.rs
+index 7daa2dd..ab0a8e7 100644
+--- a/crates/notera-host/src/lib.rs
++++ b/crates/notera-host/src/lib.rs
+@@ -222,7 +222,6 @@ struct Inner {
+     cached_manifest: Mutex<Option<Vec<u8>>>,
+     /// 上一轮提交后服务器给的清单 etag —— 下一轮带它才可能拿到 304（§6.3 空轮 0 字节）
+     manifest_etag: Mutex<Option<String>>,
+-    cached_remote: Mutex<Vec<RemoteView>>,
+     seq_applied: AtomicU64,
+     syncing: AtomicBool,
+     dirty_ticks: AtomicU64,
+@@ -261,7 +260,6 @@ impl App {
+                 sync_view: Mutex::new(SyncView::initial()),
+                 cached_manifest: Mutex::new(None),
+                 manifest_etag: Mutex::new(None),
+-                cached_remote: Mutex::new(Vec::new()),
+                 seq_applied: AtomicU64::new(0),
+                 syncing: AtomicBool::new(false),
+                 dirty_ticks: AtomicU64::new(0),
+@@ -2146,9 +2144,69 @@ impl LocalPort for HostLocalPort {
+             })
+             .collect()
+     }
++    /// 远端视图读的是**库里那张表**，不是进程内存：重启之后的第一轮照样要面对整份基线，
++    /// 只活在内存里等于每次开机都重下一遍（也让 `cached_segment_hashes` 的跳过判据失去
++    /// 前提 —— 跳过下载得有个地方把条目读回来）。
+     fn cached_remote(&self) -> Result<Vec<RemoteView>, LocalError> {
+-        Ok(self.0.inner.cached_remote.lock().unwrap().clone())
++        let acct = self.account_id();
++        let rows = self
++            .0
++            .store()
++            .remote_index_list(&acct)
++            .map_err(|e| LocalError::Storage(e.to_string()))?;
++        Ok(rows
++            .into_iter()
++            .map(|r| RemoteView {
++                kind: kind_tag(r.kind).to_string(),
++                // 附件的身份是 sha256（内容寻址），表里就存在 sha256 列
++                id: r.sha256.clone().unwrap_or_else(|| r.id.to_string()),
++                rev: r.rev.get(),
++                hash: r.hash12.clone(),
++                deleted_at: r.deleted_at.clone(),
++                purged: r.purged,
++            })
++            .collect())
+     }
++
++    fn set_cached_remote(&self, entries: Vec<RemoteView>) {
++        let acct = self.account_id();
++        let nil = match EntityId::parse("00000000-0000-0000-0000-000000000000") {
++            Ok(id) => id,
++            Err(_) => return,
++        };
++        let rows: Vec<notera_store::RemoteIndexEntry> = entries
++            .into_iter()
++            .filter_map(|v| {
++                let (kind, id, sha256) = match v.kind.as_str() {
++                    "note" => (EntityKind::Note, EntityId::parse(&v.id).ok()?, None),
++                    "folder" => (EntityKind::Folder, EntityId::parse(&v.id).ok()?, None),
++                    "attachment" => (EntityKind::Attachment, nil.clone(), Some(v.id.clone())),
++                    other => {
++                        // 认不出的类型整条跳过：宁可下一轮重下，也不能把它写成别的实体的行
++                        tracing::warn!(kind = other, "远端视图里有未知类型，本条不缓存");
++                        return None;
++                    }
++                };
++                Some(notera_store::RemoteIndexEntry {
++                    kind,
++                    id,
++                    rev: Rev(v.rev),
++                    hash12: v.hash.clone(),
++                    size: None,
++                    deleted: v.deleted_at.is_some(),
++                    purged: v.purged,
++                    seg: None,
++                    sha256,
++                    deleted_at: v.deleted_at.clone(),
++                })
++            })
++            .collect();
++        // 写失败只是"下一轮多下一次"，不该把这一轮顶死（内容已经在本机落库了）
++        if let Err(e) = self.0.store().remote_index_replace(&acct, &rows) {
++            tracing::warn!(error = %e, "远端视图缓存写入失败：下一轮会重读，不影响正确性");
++        }
++    }
++
+     fn cached_segment_hashes(&self) -> BTreeMap<String, String> {
+         BTreeMap::new()
+     }
+diff --git a/crates/notera-sync/src/lib.rs b/crates/notera-sync/src/lib.rs
+index b3c5564..b120c69 100644
+--- a/crates/notera-sync/src/lib.rs
++++ b/crates/notera-sync/src/lib.rs
+@@ -33,6 +33,13 @@ pub trait LocalPort: Send + Sync {
+     fn local_views(&self) -> Result<Vec<LocalView>, LocalError>;
+     /// 已缓存的远端索引（清单的本地投影）
+     fn cached_remote(&self) -> Result<Vec<RemoteView>, LocalError>;
++    /// 把**本轮读到的完整远端视图**整份存下来，下一轮据此跳过重复下载
++    /// （`sync_remote_index` 的建表注释说的就是这件事）。
++    ///
++    /// 引擎只在这一轮**没被请求预算截断**时调用：半份视图会让缺的条目被永久忘掉 ——
++    /// 跳过一次下载的前提是"那份内容还在别处读得回来"。允许空实现（不丢数据，只是每轮
++    /// 重下），但产品侧必须接上，否则 `cached_segment_hashes` 一类的跳过判据就不成立。
++    fn set_cached_remote(&self, _entries: Vec<RemoteView>) {}
+     fn cached_segment_hashes(&self) -> BTreeMap<String, String>;
+     /// 本机已经存下、且已经与远端确认过的实体头（`(kind,id)` → `(rev, 全哈希)`）。
+     ///
+@@ -559,6 +566,11 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
+             }
+             None => self.local.cached_remote().unwrap_or_default(),
+         };
++        // 只有"这一轮读到了清单、且没被请求预算截断"时，remotes 才是完整视图，才配落盘。
++        // 被截断时它是半份的 —— 存下去下一轮就会照着跳过下载，缺的那些条目永久没人认领。
++        if manifest.is_some() && !capped {
++            self.local.set_cached_remote(remotes.clone());
++        }
+         let plan = Plan::build(&locals, &remotes);
+ 
+         // P7「内容已经一样」不等于"本轮无事可做"就完事：本地这条可能**还挂着脏**
