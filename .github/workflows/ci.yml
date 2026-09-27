@@ -43,8 +43,14 @@ jobs:
       # 依赖可能不是同一套，而这类差异最后表现为"CI 红/本地绿"或反过来，且没人知道信谁。
       # 版本由 apps/desktop/package.json 的 `packageManager` 字段钉住；这一步要排在 setup-node
       # 之前，否则 pnpm 的依赖缓存拿不到 lockfile 就命中不了。
-      - name: 准备 pnpm（版本取自 packageManager）
+      # `package_json_file` 不是可有可无的装饰：本仓库**根目录没有 package.json**（前端在
+      # apps/desktop），而该 action 默认去仓库根读 `packageManager` —— 读不到就直接失败。
+      # run #5 就是这样红的：第 4 步"准备 pnpm"失败，一条构建都没开始。这个坑只有 CI 能暴露，
+      # 因为本机 pnpm 是全局装的，永远不会去找根 package.json。
+      - name: 准备 pnpm（版本取自 apps/desktop/package.json 的 packageManager）
         uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/desktop/package.json
 
       - uses: actions/setup-node@v4
         with:
