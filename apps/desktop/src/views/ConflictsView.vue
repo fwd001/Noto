@@ -95,7 +95,14 @@ onMounted(() => {
             </figure>
             <figure class="conflicts__pane">
               <figcaption>{{ t('conflict.theirs') }}</figcaption>
-              <pre class="conflicts__text">{{ remoteText }}</pre>
+              <pre v-if="remoteText" class="conflicts__text">{{ remoteText }}</pre>
+              <!-- 右栏空着不等于"对方那一版是空的"。引擎取那一版会失败（请求预算用尽、
+                   记录被别的设备清掉、网络断了），那时必须把这句话说出来 ——
+                   一片空白会被用户读成"对方确实没内容"，那就成了替他做决定。 -->
+              <p v-else-if="selected && conflicts.remoteMissing(selected)" class="field-hint" data-testid="conflict-remote-missing">
+                {{ t('conflict.remoteNotFetched') }}
+              </p>
+              <pre v-else class="conflicts__text">{{ remoteText }}</pre>
               <button type="button" class="btn" @click="act('replaceWithRemote')">{{ t('conflict.replaceWithThis') }}</button>
             </figure>
           </div>

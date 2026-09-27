@@ -90,3 +90,56 @@ describe('冲突卡片的并排预览', () => {
     expect(service.callsOf('preview_text').map((call) => call.args)).toEqual([{ id: NOTE, rev: 2 }]);
   });
 });
+
+/**
+ * P11（删除 vs 修改）里右栏那份"对面那一版"。
+ *
+ * 判据故意写得像事故本身：让 `preview_text` 返回**本机**那一版的文字。
+ * 只要代码还按 `(noteId, remoteRev)` 去查本机历史（rev 是各设备自己的编号，同号常是
+ * 另一份内容），右栏就会被本机内容冒充 —— 那正是第一版写错、被两台真设备测试抓红的地方。
+ */
+describe('P11：对面那一版只能由卡片携带', () => {
+  it('卡片带 remotePreview 时右栏读它，且不被本机历史的内容冒充', async () => {
+    stubLocalService({
+      open_conflicts: () => [
+        {
+          id: 11,
+          noteId: NOTE,
+          noteTitle: '被另一台删掉的笔记',
+          localRev: 4,
+          remoteRev: 4,
+          remotePreview: '对面那一版：删除前的正文',
+          createdAt: '2026-09-27T00:00:00Z',
+        },
+      ],
+      // 任何一次针对 (noteId, remoteRev) 的本机查询都会把右栏冲掉 → 断言能看见
+      preview_text: () => '本机这一版的正文',
+    });
+    const conflicts = useConflictStore();
+    await conflicts.load();
+    await flush();
+    const card = conflicts.cards[0];
+    expect(card).toBeTruthy();
+    expect(conflicts.previewFor(card, 'remote')).toBe('对面那一版：删除前的正文');
+    expect(conflicts.remoteMissing(card)).toBe(false);
+  });
+
+  it('没取回来时右栏是"缺"，由界面说清而不是留一片空白', async () => {
+    stubLocalService({
+      open_conflicts: () => [
+        { id: 12, noteId: NOTE, noteTitle: '取不到那一版', localRev: 5, remoteRev: 3, createdAt: '2026-09-27T00:00:00Z' },
+      ],
+      preview_text: () => {
+        throw new Error('这一版本机历史上也没有');
+      },
+    });
+    const conflicts = useConflictStore();
+    await conflicts.load();
+    await flush();
+    const card = conflicts.cards[0];
+    expect(conflicts.previewFor(card, 'remote')).toBe('');
+    expect(conflicts.remoteMissing(card)).toBe(true);
+    // 本机那一版仍然读得到：缺的只是对面那半，不是整个卡片失效
+    expect(conflicts.previewFor(card, 'local')).not.toBe('对面那一版');
+  });
+});

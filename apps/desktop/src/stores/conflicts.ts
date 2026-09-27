@@ -91,8 +91,17 @@ export const useConflictStore = defineStore('conflicts', () => {
     }
   }
 
-  function previewFor(card: ConflictCard, side: 'local' | 'remote'): string {
-    return previews.value[previewKey(card, side)] ?? '';
+  /**
+   * 右栏到底有没有"对面那一版"可读。
+   *
+   * `false` 才算缺。缺了必须被说出来：引擎取那一版会失败（预算用尽 / 记录被清理 /
+   * 网络断），而一片空白会被用户读成"对方那版就是空的"，等于替他做了决定。
+   */
+  function remoteMissing(card: ConflictCard): boolean {
+    return typeof card.remoteRev === 'number' && previewFor(card, 'remote') === '';
+  }
+
+  function previewFor(card: ConflictCard, side: 'local' | 'remote'): string {    return previews.value[previewKey(card, side)] ?? '';
   }
 
   async function resolve(card: ConflictCard, action: ConflictAction): Promise<boolean> {
@@ -114,5 +123,5 @@ export const useConflictStore = defineStore('conflicts', () => {
     cards.value = [...cards.value, { conflictId }];
   }
 
-  return { cards, loading, errorKey, selectedId, selected, count, previews, previewFor, load, resolve, noteNewConflict };
+  return { cards, loading, errorKey, selectedId, selected, count, previews, previewFor, remoteMissing, load, resolve, noteNewConflict };
 });

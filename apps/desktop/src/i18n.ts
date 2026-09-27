@@ -238,6 +238,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'error.quota_full': '服务器空间不足，同步暂停，本机内容不受影响。',
   'error.protocol_mismatch': '与服务器上的数据格式不匹配，请升级后重试。',
   'error.folder_missing': '找不到默认笔记本，导入没有进行。本机的笔记不受影响，请重启应用再试。',
+  'conflict.remoteNotFetched': '没能从服务器取回那一版的正文（可能这一轮同步的预算用完了，或那条记录已被清理）。本机这一版完好，可以再点一次同步，或先保留本机版。',
   'error.db_too_new': '本地数据来自更新版本的 Notera，已按只读方式打开。',
   'error.conflict_needs_attention': '有几条笔记出现分歧，请到"需要处理的版本"里确认。',
   'error.sync_failed': '这一轮同步没完成，会自动重试。',
