@@ -158,6 +158,15 @@ pub enum ApplyOp {
         id: String,
         wire: Vec<u8>,
     },
+    /// **只登记、不采纳**：把服务器那一版的原始字节存进冲突行，供界面显示。
+    ///
+    /// P11（删除 vs 修改）保留哪一边必须由用户决定，所以这条与 `AdoptConflict`
+    /// 分开走 —— 用它才能取回"对面那一版"的内容，又绝不改动本机任何笔记。
+    ConflictPayload {
+        kind: String,
+        id: String,
+        wire: Vec<u8>,
+    },
     SetRemote {
         kind: String,
         id: String,
@@ -776,6 +785,24 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                                 if rep.applied == 1 {
                                     st.pulled += 1;
                                 }
+                            }
+                        }
+                        // P11（删除 vs 修改，双向）：引擎**不许**替用户选，可用户必须看得见
+                        // 对面那一版 —— 所以这里取回来**只登记、不采纳**
+                        // （CONFLICT-RESOLUTION §5.1.1）。取不到就照旧留哈希卡片：
+                        // 冲突绝不因为取料失败而消失，也不因为要好看而伪造内容。
+                        if matches!(ck, ConflictKind::UpdateDelete | ConflictKind::DeleteUpdate)
+                            && l.kind == "n"
+                            && st.requests < self.cfg.round_request_cap
+                        {
+                            if let Ok(Some(wire)) = self.remote.fetch_record(&l.kind, &l.id).await {
+                                st.requests += 1;
+                                st.bytes_down += wire.len() as u64;
+                                let _ = self.local.apply(vec![ApplyOp::ConflictPayload {
+                                    kind: l.kind.clone(),
+                                    id: l.id.clone(),
+                                    wire,
+                                }]);
                             }
                         }
                     }

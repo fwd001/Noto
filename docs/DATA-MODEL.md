@@ -351,7 +351,11 @@ CREATE TABLE sync_conflicts (
   state         TEXT NOT NULL CHECK (state IN ('open','resolved','dismissed')),
   resolution    TEXT CHECK (resolution IN ('kept_both','local','remote','merged','manual')),
   created_at    TEXT NOT NULL,
-  resolved_at   TEXT
+  resolved_at   TEXT,
+  -- 迁移 0008：服务器那一版的**原始记录信封**（不是摘要）。NULL = 这一轮没取回来
+  -- （请求预算用尽 / 记录 404 / 网络失败）—— 界面退回显示哈希并照实说明，
+  -- 冲突本身绝不因为取料失败而消失。见 CONFLICT-RESOLUTION §5.1.1。
+  remote_wire   TEXT
 );
 ```
 

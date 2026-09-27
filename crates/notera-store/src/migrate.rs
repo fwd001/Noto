@@ -56,6 +56,11 @@ pub(crate) static MIGRATIONS: &[Migration] = &[
         name: "0007_remote_index_deleted_at",
         sql: include_str!("../../../migrations/0007_remote_index_deleted_at.sql"),
     },
+    Migration {
+        ver: 8,
+        name: "0008_conflict_remote_wire",
+        sql: include_str!("../../../migrations/0008_conflict_remote_wire.sql"),
+    },
 ];
 
 pub(crate) fn supported_version() -> u32 {

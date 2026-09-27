@@ -179,6 +179,10 @@ impl LocalPort for Device {
         let n = ops.len();
         for op in ops.clone() {
             match op {
+                // P11 的取料**只登记、不改本机正文**（该保留哪一边由用户决定）。
+                // 这个假实现故意什么都不做 —— `applied` 里那条就是测试的断言点：
+                // 收到了载荷，而下面 notes/envelopes 都没被它动过。
+                ApplyOp::ConflictPayload { .. } => {}
                 // 冲突采纳在这个假实现里与"拉到即一致点"落法相同：正文换成远端那份、rev == sync_rev
                 ApplyOp::Upsert { kind, id, wire } | ApplyOp::AdoptConflict { kind, id, wire } => {
                     let v: Value = serde_json::from_slice(&wire)

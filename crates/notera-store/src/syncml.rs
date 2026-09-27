@@ -1265,10 +1265,72 @@ fn tombstone_wire(
     )))
 }
 
+impl Store {
+    /// 把"服务器那一版"的原始记录字节挂到**该实体最新的未裁决冲突**上（迁移 0008）。
+    ///
+    /// 只挑 `state='open'` 里 id 最大的那一行：一轮里同一条笔记可能登记过多条冲突，
+    /// 用户看到的是最新那条；往已裁决的行上写会造出"处理完了却被改动"的假象。
+    ///
+    /// 返回 0 行是**合法结果**（冲突刚好已被用户裁决），调用方按"这次没挂上"处理 ——
+    /// 不许为了拿个返回值去新建一行，也不许因此丢弃冲突本身（卡片退回显示哈希 + 说明）。
+    pub fn conflict_attach_payload(
+        &self,
+        account_id: &str,
+        kind: EntityKind,
+        id: &EntityId,
+        wire: &[u8],
+    ) -> Result<u32, StoreError> {
+        let wire = String::from_utf8_lossy(wire).into_owned();
+        let acct = account_id.to_string();
+        let tag = rows::kind_tag(kind).to_string();
+        let id = id.as_str().to_string();
+        self.write_tx(move |tx, _now| {
+            let n = tx.execute(
+                "UPDATE sync_conflicts SET remote_wire = ?1
+                  WHERE rowid = (
+                    SELECT rowid FROM sync_conflicts
+                     WHERE account_id = ?2 AND entity_type = ?3 AND entity_id = ?4
+                       AND state = 'open'
+                     ORDER BY id DESC LIMIT 1)",
+                params![wire, acct, tag, id],
+            )?;
+            Ok(n as u32)
+        })
+    }
+    /// 该笔记**最新一条未裁决冲突**上登记的服务器信封原文（迁移 0008 的 `remote_wire`）。
+    ///
+    /// 只认 `remote_rev` 对得上的那一行：界面问的是"服务器那一版（rev=N）"，若行上挂的是
+    /// 别的 rev（更早一轮留下的），拿它当答案就是给错内容 —— 宁可返回 `None`，
+    /// 让界面照实说"这一版没取回来"。
+    pub fn conflict_remote_wire(
+        &self,
+        id: &EntityId,
+        rev: u64,
+    ) -> Result<Option<String>, StoreError> {
+        let id = id.as_str().to_string();
+        let rev = rev as i64;
+        let conn = self.read()?;
+        let row: Option<Option<String>> = conn
+            .query_row(
+                "SELECT remote_wire FROM sync_conflicts
+                  WHERE entity_type = 'note' AND entity_id = ?1 AND remote_rev = ?2
+                    AND state = 'open'
+                  ORDER BY id DESC LIMIT 1",
+                params![id, rev],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?;
+        // 两层 Option 都要压平：外层"没有这一行"，内层"这一行的 remote_wire 是 NULL"
+        // —— 两者对界面是同一种意思（没取回来），不该让调用方去分辨。
+        Ok(row.flatten())
+    }
+}
+
 fn conflicts_where(conn: &Connection, cond: &str) -> Result<Vec<ConflictRow>, StoreError> {
     let sql = format!(
         "SELECT id, account_id, entity_type, entity_id, base_rev, local_rev, remote_rev, local_hash,
-                remote_hash, auto_merged, copy_note_id, state, resolution, created_at, resolved_at
+                remote_hash, auto_merged, copy_note_id, state, resolution, created_at, resolved_at,
+                remote_wire
            FROM sync_conflicts WHERE {cond} ORDER BY created_at DESC, id DESC"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -1294,6 +1356,7 @@ fn conflicts_where(conn: &Connection, cond: &str) -> Result<Vec<ConflictRow>, St
                 resolution: r.get(12)?,
                 created_at: r.get(13)?,
                 resolved_at: r.get(14)?,
+                remote_wire: r.get(15)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;

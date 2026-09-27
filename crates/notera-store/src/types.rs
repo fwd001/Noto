@@ -474,6 +474,9 @@ pub struct ConflictRow {
     pub resolution: Option<String>,
     pub created_at: String,
     pub resolved_at: Option<String>,
+    /// 服务器那一版的**原始记录信封字节**（`None` = 这一轮没取回来）。
+    /// 界面读它来决定右栏显示"对面那一版"还是"没取到 + 原因"，见迁移 0008。
+    pub remote_wire: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

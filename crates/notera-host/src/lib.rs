@@ -1076,14 +1076,24 @@ impl App {
     /// 预览因此不会和列表/正文用的是"另一种算法"—— 两套算法迟早会给出不同的文本。
     pub fn preview_text(&self, id: &str, rev: u64) -> Result<String, CmdError> {
         let id = EntityId::parse(id).map_err(|_| CmdError::of("bad_id", false))?;
-        let doc = self
-            .inner
-            .store
-            .revision_doc(&id, Rev(rev))?
-            .ok_or_else(|| {
-                CmdError::of("not_found", false)
-                    .with(serde_json::json!({ "kind": "note", "id": id.to_string(), "rev": rev }))
-            })?;
+        let doc = match self.inner.store.revision_doc(&id, Rev(rev))? {
+            Some(d) => Some(d),
+            // 本机修订历史里没有这一版，而冲突面板问的正是"对面那一版"：
+            // P11（删除 vs 修改）里那一版从没进过本机历史 —— 引擎对它是**只登记不采纳**
+            // （该保留哪一边必须由用户决定）。所以这里退回冲突行上挂着的服务器信封正文，
+            // 用户才真的看得见自己在挑哪两份（CONFLICT-RESOLUTION §5.1.1）。
+            // 拿不到就照旧 not_found：界面会退回哈希并说明没取回来，绝不拿本机内容冒充对面。
+            None => self
+                .inner
+                .store
+                .conflict_remote_wire(&id, rev)?
+                .and_then(|w| serde_json::from_str::<serde_json::Value>(&w).ok())
+                .and_then(|env| env.get("payload").or_else(|| env.get("doc")).cloned()),
+        }
+        .ok_or_else(|| {
+            CmdError::of("not_found", false)
+                .with(serde_json::json!({ "kind": "note", "id": id.to_string(), "rev": rev }))
+        })?;
         let parsed = notera_richtext::parse_from_value(&doc).map_err(|e| {
             CmdError::of("corrupt_record", false).with(serde_json::json!({ "why": e.to_string() }))
         })?;
@@ -2288,6 +2298,31 @@ impl LocalPort for HostLocalPort {
                     match kind.as_str() {
                         "f" => mapped.push(StoreApplyOp::UpsertFolder { env }),
                         _ => mapped.push(StoreApplyOp::UpsertNote { env }),
+                    }
+                }
+                ApplyOp::ConflictPayload { kind, id, wire } => {
+                    // 只把服务器那一版的原始字节登记到冲突行上，**不碰任何笔记**：
+                    // P11 保留哪一边由用户决定（CONFLICT-RESOLUTION §5.1.1）。
+                    // 命中 0 行是合法的（冲突刚被裁决掉），这里不报错也不补建行。
+                    let entity = if kind == "f" {
+                        notera_core::EntityKind::Folder
+                    } else {
+                        notera_core::EntityKind::Note
+                    };
+                    let ok = match notera_core::EntityId::parse(&id) {
+                        Ok(eid) => self
+                            .0
+                            .store()
+                            .conflict_attach_payload(&self.account_id(), entity, &eid, &wire)
+                            .map_err(|e| LocalError::Storage(e.to_string()))?,
+                        Err(_) => {
+                            return Err(LocalError::Storage(format!(
+                                "冲突载荷里的 id 不合法：{id}"
+                            )))
+                        }
+                    };
+                    if ok == 0 {
+                        tracing::debug!("冲突载荷没挂上（{kind}/{id} 已无未裁决冲突）");
                     }
                 }
                 ApplyOp::AdoptConflict { kind, id, wire } => {
