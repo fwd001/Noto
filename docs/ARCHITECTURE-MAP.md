@@ -187,11 +187,12 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 
 | 门禁 | 结果 | 怎么复现 |
 |---|---|---|
-| Rust 测试 | 474 通过 / 0 失败 / 0 ignored（52 个测试二进制） | `cargo test --workspace` |
+| Rust 测试 | 475 通过 / 0 失败 / 0 ignored（53 个测试二进制） | `cargo test --workspace` |
 | 前端 | 171 通过（18 文件）、`vue-tsc` 无错误、构建 213 KB→gzip 73 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
 | 架构适应度 | 24/24（最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |
 | L5 崩溃注入 | 9 个提交点逐个杀死真子进程 + 重启收敛（`crash_recovery`，2 条测试） | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery` |
 | 附件续传 + Range 兼容 | 2/2（一条真杀进程重启接着要、一条让服务器**不理** Range 头看它当不当整份覆盖） | `cargo test -p notera-host --test attachment_resume` |
+| 链路抖动收敛（§53 主循环） | 1/1（六轮各坏一次：停监听 / 建连就掐 / 读清单 500；恢复后本机账目归零，两台设备标题+内容哈希逐条一致） | `cargo test -p notera-host --test reconnect` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
 | 浏览器端到端 | 35/35（真 Rust 核心，非 mock；含"设置页存服务器 → 能力块读回"、"库统计五行全是数字"、"删除 → 回收站 → 恢复 → 永久删除"、"勾一个文件夹 → 包就只有那一棵子树"、"侧栏建子文件夹 → '移动到'选得到"五条真实往返） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
 | L5 纯黑盒 UAT | 10/10（只用点击/输入/键盘/文件选择器/刷新，零 `/cmd/*`、零读库；含"插图后屏幕上真的解出像素、刷新后仍在"） | `node scripts/verify-blackbox.mjs` |

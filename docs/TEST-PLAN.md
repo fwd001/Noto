@@ -261,6 +261,7 @@
 | SY-INT-08 | duplicate push（幂等） | 对同一实体连发 2 次 `A sync`（人为阻止本地 last-pushed 缓存 / 重复执行同 payload） | `A sync` ×2 | 第 2 次请求 `DUMP` 前后 hash 相同、服务端对象不变；客户端不把重复成功当作新 rev（本地 rev 不变）；无冲突副本产生。INV-07,12 | L1,L3 | P4 |
 | SY-INT-09 | 大 manifest 分片 | 预置 5000 实体（manifest ≈438.7 KiB raw / **186 KiB gzip**，实测） | `B sync`（首次全量） | 分片 `manifest/seg-*.json` 全部拉齐；条目数 = 5000；`index.json` 引用的每个 seg 都存在（无部分应用状态）；本轮传输字节 ≤ 实测 gzip 之和 + 5%（回归容差）。INV-08,09 | L3 | P7 |
 | SY-INT-10 | 落后设备超过变更窗口 | 预置 A 落后：远端已有 200+ 条变更（实测 200-entry 窗口 ≈16 KiB raw / 7.8 KiB gzip），A 的 last-sync rev 早于窗口起点 | `A sync` | 自动降级为"全量 manifest 拉取"（而非静默丢变更）；同步后 A 条目数与 B 完全一致；`notera-cli diag` 报告窗口溢出原因；无实体被跳过。INV-05,08 | L1,L3 | P7 |
+| SY-INT-11 | 链路抖动（反复断连重连） | A 连着写 6 条，每轮换一种坏法轮着来：① 服务器整个停监听（拔网线）② 连接建了就被掐（`FAIL(abort)`）③ 握手能过但**读清单**回 500（`FAIL(status=500,target=.notes/manifest/*)`）；每轮之后同地址恢复 | 链路恢复后按调度器节奏继续跑 | **坏的那一轮绝不报成功**（只允许 Failed/Partial，或直接拒发）；坏轮之后**账必须还欠着**（`outbox_pending>=1`、`dirty_notes>=1`，界面那个"待同步"就来自这里）；断网期间刚写的笔记**本机立刻读得回来**（I8）；恢复后跑到本机结清（两个计数归零），B 拉两轮后与 A 的**标题+内容哈希逐条一致**（6 条，不多不少不重）；服务器上不留 `.tmp-*` 半截对象。证据：`notera-host/tests/reconnect.rs`。门禁自证：把"拉清单失败"改成"报 Converged" → 只有第③种坏法能让这条红（前两种在握手阶段就被拒，走不到引擎那一支）——**因此三种都得留着** | L3,L4 | P5 |
 
 ### 身份 / 时钟 / 顺序类
 
