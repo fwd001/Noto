@@ -17,6 +17,16 @@ pub const LOCAL_ACCOUNT_ID: &str = "local";
 /// 内置默认本名字（DATA-MODEL §9：文件夹删除不级联，笔记移入默认本）。
 pub const DEFAULT_FOLDER_NAME: &str = "默认本";
 
+/// 内置默认本的**固定** id。
+///
+/// 这个 id 不能每台设备新生成：默认本是"每个账户有且只有一个"的角色实体，
+/// 而清单按 `(kind, id)` 认条目。以前每台设备 `EntityId::new()` 各造一个，两台设备
+/// 入伙之后远端清单就有两条 `folder/default`，各自都叫"默认本"，并互相把对方的那一份
+/// 拉回来 —— 实测 1000 条笔记的库上，第二台设备本地变成 2 个文件夹、清单公告 1002 条
+/// （见 `notera-host/tests/big_library.rs`）。固定 id 让"同一个角色"在协议里真的只是
+/// 同一个条目，内容哈希也自然相同。
+pub const DEFAULT_FOLDER_ID: &str = "00000000-0000-7000-8000-6e6f74657261";
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StorePaths {
     pub db: PathBuf,

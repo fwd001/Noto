@@ -183,17 +183,18 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 
 **阶段**：Phase 1–5 的核心已落地，Windows x64（GNU 工具链）debug 构建**可运行**；macOS/Android/iOS 仅有架构预留，未在本机验证。
 
-**实测基线**（2026-09-26，本机 `stable-x86_64-pc-windows-gnu`）：
+**实测基线**（2026-09-27，本机 `stable-x86_64-pc-windows-gnu`）：
 
 | 门禁 | 结果 | 怎么复现 |
 |---|---|---|
-| Rust 测试 | 486 通过 / 0 失败 / 0 ignored（57 个测试二进制） | `cargo test --workspace` |
+| Rust 测试 | 487 通过 / 0 失败 / 0 ignored（58 个测试二进制） | `cargo test --workspace` |
 | 前端 | 171 通过（18 文件）、`vue-tsc` 无错误、构建 213 KB→gzip 73 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
 | 架构适应度 | 24/24（最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |
 | L5 崩溃注入 | 小库矩阵 9 点 + 大库压实 1 点，逐个杀死真子进程 + 重启收敛（`crash_recovery` 2 条 + `compaction_crash` 1 条，名单由 `CRASH_POINTS_NEED_LARGE_LIBRARY` 减法拼回全表） | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery --test compaction_crash` |
 | 附件续传 + Range 兼容 | 2/2（一条真杀进程重启接着要、一条让服务器**不理** Range 头看它当不当整份覆盖） | `cargo test -p notera-host --test attachment_resume` |
 | 清单压实 + 分段读回 | 1/1（>200 条变更：分段落盘、索引不引用不存在的分段、空库设备追平 260 条） | `cargo test -p notera-host --test compaction` |
 | 大库换设备追平 | 1/1（260 条变更 > 窗口上限：空库设备完整收敛、标题+内容哈希逐条一致） | `cargo test -p notera-host --test late_device` |
+| **千库规模**（SY-INT-14，12.8 s） | 1/1（1000 条：公告/追平轮数有界、索引只装引用 ≤8 KiB、逐条比对**读满**、空轮 1 请求 + 304 + 0 字节、默认本全网络只有一条） | `cargo test -p notera-host --test big_library` |
 | 链路抖动收敛（§53 主循环） | 1/1（六轮各坏一次：停监听 / 建连就掐 / 读清单 500；恢复后本机账目归零，两台设备标题+内容哈希逐条一致） | `cargo test -p notera-host --test reconnect` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
 | 浏览器端到端 | 35/35（真 Rust 核心，非 mock；含"设置页存服务器 → 能力块读回"、"库统计五行全是数字"、"删除 → 回收站 → 恢复 → 永久删除"、"勾一个文件夹 → 包就只有那一棵子树"、"侧栏建子文件夹 → '移动到'选得到"五条真实往返） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |

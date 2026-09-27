@@ -5,13 +5,13 @@
 > `VERIFIED` 一律带**可重放的证据出处**，没有证据就往下写。
 > `SKIP / TODO / 理论通过 / 应该没问题 / 本地没环境所以跳过` 在这份表里不算 PASS。
 >
-> 更新时间：2026-09-26 · 本轮提交链到 `原生菜单/通知` 那一条 · 本机工具链 `stable-x86_64-pc-windows-gnu`
+> 更新时间：2026-09-27 · 本轮新增门禁：千库规模追平（`big_library`，SY-INT-14） · 本机工具链 `stable-x86_64-pc-windows-gnu`
 
 ## 门禁总览（今天实测）
 
 | 门禁 | 结果 | 出处 |
 |---|---|---|
-| `cargo test --workspace` | 486 通过 / 0 失败 / 0 ignored（57 个测试二进制） | 本机 |
+| `cargo test --workspace` | 487 通过 / 0 失败 / 0 ignored（58 个测试二进制） | 本机 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 / 0 | 本机（CI-CD 原样命令） |
 | `node scripts/arch-check.mjs` | 24/24 | 本机 |
 | `node scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 | 本机 |

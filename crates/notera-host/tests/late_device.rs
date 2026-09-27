@@ -21,6 +21,9 @@ use serde_json::json;
 const SECRET: &str = "sup3r-s3cr3t";
 /// 比 `WINDOW_MAX`（200）多出一截，确保溢出那条码路被踩到。
 const NOTES: usize = 260;
+/// 逐条比对时一次读满：`limit: 0` 在 store 里是"默认 500 条"，库一旦超过 500 条，
+/// 两台的截断结果会"相等"而实际漏掉后面的行。
+const ROW_CAP: u32 = 100_000;
 static SEQ: AtomicUsize = AtomicUsize::new(0);
 
 struct Tmp(PathBuf);
@@ -65,7 +68,7 @@ impl Device {
         let mut rows: Vec<(String, String)> = self
             .app
             .store()
-            .list_notes(&NoteQuery::all())
+            .list_notes(&NoteQuery { limit: ROW_CAP, ..NoteQuery::all() })
             .unwrap()
             .into_iter()
             .map(|r| (r.title, r.content_hash))

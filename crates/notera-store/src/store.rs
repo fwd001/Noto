@@ -1461,7 +1461,10 @@ fn bootstrap(conn: &mut Connection, device_id: &DeviceId) -> Result<DeviceId, St
     } else if let Some(existing) = existing_default_folder(&tx)? {
         rows::meta_set(&tx, META_CACHED_ROOT, &existing.to_string())?;
     } else {
-        let id = EntityId::new();
+        // 固定 id：默认本是角色实体，不是"本机第一次开机时随手造的一个文件夹"。
+        // 用随机 id 的话两台设备各公告一条，远端清单里就有两条 system_kind='default'
+        //（实测第二台入伙后本地变 2 个文件夹、清单 1002 条），详见 types.rs 上的注释。
+        let id = EntityId::parse(DEFAULT_FOLDER_ID).expect("默认本 id 是写死的合法 uuid");
         let rev = next_rev(Rev::ZERO, Rev::ZERO);
         let hash = folder_hash(DEFAULT_FOLDER_NAME, &None, &None, 0, &Some("default".to_string()));
         tx.execute(
