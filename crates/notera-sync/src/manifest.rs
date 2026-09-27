@@ -500,6 +500,34 @@ mod tests {
     /// 分段的意义是"读者只下载与自己相关的那一段"。如果 2500 条全塞进一个 `seg-0000`，
     /// 那"两段式清单"就退化成"把整份清单改个文件名"：每个新设备仍要下全量基线，
     /// §4.1 的尺寸实测（2000 条 ≈ 159 KB）正是为了避开这件事。
+    /// 5000 条实体的清单结构长什么样，用数字而不是形容词回答（TEST-PLAN SY-INT-09 的
+    /// "索引尺寸"那一半在这里量；**端到端跑 5000 条**仍然没有测过，见 TEST-PLAN 同一行）。
+    ///
+    /// 要成立的是：压实之后每轮重写的那份索引必须是小的（与库规模弱相关），
+    /// 大头留在不可变分段里；而把分段与窗口合回去看，条目一条都不能少。
+    #[test]
+    fn index_stays_small_at_five_thousand_entities() {
+        let entries: Vec<EntryRef> = (0..5000)
+            .map(|i| entry(&format!("{i:026}"), 1, &format!("h{i:06}")))
+            .collect();
+        let mut m = Manifest::initial("", "dev-1", "2026-09-25T00:00:00.000Z", "notera");
+        m.window.entries = entries.clone();
+        let (next, _touched, segs) = m.compact(&BTreeMap::new(), "dev-1", "2026-09-25T00:00:03.000Z");
+
+        let counts: Vec<usize> = next.segments.iter().map(|r| r.count).collect();
+        assert_eq!(counts.len(), 3, "5000 条按 {SEGMENT_TARGET} 切应是 3 段，实际 {counts:?}");
+        assert!(counts.iter().all(|c| *c <= SEGMENT_TARGET), "有分段超容量：{counts:?}");
+        assert!(next.window.entries.is_empty(), "压实后窗口该清空");
+        let index_bytes = next.to_wire().len();
+        let folded: usize = segs.values().map(|v| v.len()).sum();
+        assert_eq!(folded, 5000, "分段里的条目数不对：{folded}");
+        // 有效视图 = 分段 ⊕ 窗口（窗口优先）：一条都不能少
+        assert_eq!(next.effective(&segs).len(), 5000, "有效条目数与压实前不等");
+        // 每轮提交重写的是索引，不是全库：给一个会随库线性放大的实现留一道坎
+        assert!(index_bytes < 4096, "5000 条时索引 {index_bytes} 字节，说明整份清单又被塞回索引里");
+        println!("索引 {index_bytes} B · 分段 {counts:?} · 全库条目 5000");
+    }
+
     #[test]
     fn compaction_respects_the_segment_target() {
         let mut m = Manifest::initial("", "dev-1", "2026-09-25T00:00:00.000Z", "notera");

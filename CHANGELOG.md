@@ -8,7 +8,7 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 482 通过 / 0 失败 / 0 ignored（56 个测试二进制） |
+| `cargo test --workspace` | 483 通过 / 0 失败 / 0 ignored（56 个测试二进制） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
 | L5 崩溃注入 `--test crash_recovery` | 小库矩阵 9 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零 |
 | L5 压实崩溃注入 `--test compaction_crash` | 1/1（240 条大库真死在 `after_segment_write`，索引不引用不存在的分段） |
@@ -123,6 +123,8 @@
 - `Tauri` 壳配置里 `bundle.targets` 含协议外的取值，构建脚本直接失败
 
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
+
+- **5000 条实体的清单结构第一次有了实测数字**（`notera-sync` 的 `index_stays_small_at_five_thousand_entities`）：压实之后索引 **711 B**、分段 **[2000, 2000, 1000]**、`分段 ⊕ 窗口` 折回来的有效条目 **5000** 条一条不少。这条断言挡的是"清单又长回索引里"那类回归（把窗口清空那一步拆掉做变异 → 索引大小断言立刻红）。同一层的尺寸表在 SYNC-PROTOCOL §4.1 已按实测更新；**端到端真跑 5000 条的同步**（多轮请求预算、对端追平耗时）仍然没测过，TEST-PLAN SY-INT-09 那行没改成"已验"
 
 - **`SEGMENT_TARGET`(2000) 也不是摆设了 —— 压实现在会按容量切段**：同一个形状的缺陷往下一层还藏着一个：`compact()` 只把窗口折进"已有分段或 `seg-0000`"，于是 2500 条会全部落进同一条分段。那等于把"基线分段"退化成"给整份清单换个文件名" —— 新设备照样要下全量基线，而 §4.1 那张尺寸表（2000 条 ≈ 159 KB）存在的理由正是不这么干。修法：折完之后按 `SEGMENT_TARGET` 切（新段名取现有编号之后），并把新切出来的段名一并报进 `touched`（引擎只写 `touched` 里的分段，漏报就是"索引引用了却没落盘"= INV-09 破）。证据：单元测 `compaction_respects_the_segment_target`（2500 条 → 多段、每段 ≤2000、总数不丢、每段都在 touched 里）；两处变异自证：把 `created` 并进 touched 的那步拆掉 → 报"分段 seg-0001 没被列进 touched"；把容量判据失效 → 报"2500 条压成一条分段（1）"
 
