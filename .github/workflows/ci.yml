@@ -76,7 +76,7 @@ jobs:
       - name: 版本单源（CI-CD §版本与单一版本源）
         run: node scripts/check-versions.mjs
 
-      - name: 架构适应度 + §26 无障碍 + 扫描台账（本机基线 27/27）
+      - name: 架构适应度 + §26 无障碍 + 扫描台账（本机基线 28/28）
         run: node scripts/arch-check.mjs
 
       # 本机 rustfmt 组件已装上并跑过 `cargo fmt --all`（当时发现 92 个文件有漂移，已单独

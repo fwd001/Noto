@@ -349,6 +349,7 @@ async fn empty_round_costs_exactly_one_request_and_zero_bytes() {
     assert_eq!(st.bytes_up, 0);
     assert_eq!(st.outcome, RoundOutcome::NoOp);
     assert_eq!(r.req(), 1);
+    // 或断言：空轮次允许两种等价形态 —— 要么不发事件，要么发一个 NoOp 完成事件，两种都算「什么都没发生」
     assert!(ev.is_empty() || ev.contains(&SyncEvent::Completed(RoundOutcome::NoOp)));
 }
 

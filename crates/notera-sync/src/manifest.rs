@@ -598,6 +598,7 @@ mod tests {
         m.segments = vec![sref];
         segs.insert("seg-0000".into(), e);
         m.refresh_checksum();
+        // 或断言：窗口不超上限有两条合法路径 —— 该压实了（下一步就是压实），或压实后仍在窗口内
         assert!(m.needs_compaction(0) || m.window.entries.len() <= WINDOW_MAX);
         let (next, touched, newsegs) = m.compact(&segs, "dev-1", "2026-09-25T00:00:03.000Z");
         assert!(next.window.entries.is_empty(), "压实后窗口必须清空");

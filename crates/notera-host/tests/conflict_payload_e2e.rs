@@ -306,6 +306,8 @@ async fn a_remote_purge_never_eats_an_edit_that_never_left_the_device() {
         card.is_some(),
         "①§5.2 要求这种处境进收件箱，B 的未裁决冲突里却没有它（卡片：{cards:?}）"
     );
+    // 两种形态都算没丢：它仍是当前正文（kept_live），或作为副本挂在冲突卡片上（kept_copy）
+    // 或断言：§5.2 只规定"B 那一版不许被吃掉"，上面两条路径任一成立即满足；两者全无才是静默丢失
     assert!(
         kept_live || kept_copy,
         "③静默丢失：远端的 purged 墓碑把 B 从未上传的那一版吃掉了 —— 正文没了，\

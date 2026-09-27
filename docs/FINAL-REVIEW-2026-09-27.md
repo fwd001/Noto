@@ -37,7 +37,7 @@
 
 ## 二、架构视角：重复实现 / 跨层依赖 / 状态泄漏 / 隐性耦合 / 破坏不变量
 
-**结构上没有新增违规**（arch-check 27/27 包含"只向下依赖""前端不许有 WebDAV 逻辑""同步协议只有一份实现"），
+**结构上没有新增违规**（arch-check 28/28 包含"只向下依赖""前端不许有 WebDAV 逻辑""同步协议只有一份实现"），
 本轮新增/改动的东西逐个说：
 
 * **磁盘体检 `App::demote_lost_local_blobs`**（`crates/notera-host/src/lib.rs`）
@@ -134,7 +134,7 @@ assert!(got.get("code").is_some() || got.get("data").and_then(|v| v.as_str()).is
 | `cargo test --workspace` | **534 通过 / 0 失败 / 0 ignored（64 个测试二进制）** |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 / 0（它在本轮抓到 `unused` 变量、`doc_lazy_continuation`、`needless_borrows_for_generic_args` —— 都是 `cargo test` 放得过、CI 放不过的） |
 | `cargo fmt --all --check` | 退出码 0 |
-| `node scripts/arch-check.mjs` | 27/27 |
+| `node scripts/arch-check.mjs` | **28/28**（新增第 28 条：测试里的「或」断言必须就地写理由，带空转保护；反注了一条恒真断言证它会红，并顺手查出第三处以前没看过的或断言（合理，已补理由） |
 | `node scripts/verify-diagram.mjs` | 59/59 |
 | `pnpm test` / `vue-tsc --noEmit` | 201 通过（21 文件）/ 0 错 |
 | `node scripts/check-versions.mjs` | 一致（权威 = 根 `Cargo.toml`，当前 **0.0.17**） |

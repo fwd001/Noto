@@ -452,6 +452,68 @@ const untrackedIncludes = [];
 check('hygiene:include-paths-tracked', 'ARCHITECTURE-MAP §5（编译期嵌入的文件要进版本库）', untrackedIncludes,
   `这些编译期嵌入的目标不在版本库里：\n    ${untrackedIncludes.join('\n    ')}`);
 
+// 或断言（`assert!(a || b)`）是"不会红的门禁"最常见的诞生方式：本轮真出过一次 ——
+// `got.get("code").is_some() || got.get("data")…is_none()`，而 dispatch 根本没有 {ok,data}
+// 那层包，于是右半对任何成功响应恒真、左半对任何错误恒真，整条断言**数学上不可能失败**，
+// 却被算进了"§27 有几条实证"。合理的二选一确实存在（本仓两处：空轮次事件的两种等价形态、
+// 窗口上限的两种达成方式），所以规则不是禁用，而是**必须就地写一句为什么**：
+// 在本行或上一行写标记 `// 或断言：` + 理由。
+//
+// 只看断言的**条件那一段**（第一个逗号之前、括号深度为 0 的位置），不然
+// `assert!(v.is_empty(), "...")` 前面那个 `.filter(|p| a || b)` 闭包会被误当成或断言。
+const disjViolations = [];
+let disjSites = 0;
+function assertCondition(text, start) {
+  // text[start] 起是 `assert!(` 之后第一个字符；返回条件部分（到顶层逗号或收尾括号为止）
+  let depth = 0;
+  let out = '';
+  for (let i = start; i < text.length && i < start + 4000; i++) {
+    const c = text[i];
+    if ('([{'.includes(c)) depth++;
+    else if (')]}'.includes(c)) {
+      if (depth === 0) return out;
+      depth--;
+    } else if (c === ',' && depth === 0) return out;
+    out += c;
+  }
+  return out;
+}
+for (const dir of ['crates', 'apps/desktop/src']) {
+  for (const f of sources(join(ROOT, dir), ['.rs', '.ts', '.vue', '.js'])) {
+    const r = rel(f);
+    // 只看测试面：生产代码里的 || 是逻辑，不是断言
+    if (!/(^|[\\/])tests[\\/]|\.spec\.|(^| )src[\\/]/.test(r)) continue;
+    const text = read(f);
+    const lines = text.split(/\r?\n/);
+    // 用一个游标遍历 `assert!(`：绝不能再 slice(text) 去 exec，那会原地打转（实测卡死过一次）
+    let cur = 0;
+    for (;;) {
+      const hit = text.indexOf('assert!', cur);
+      if (hit < 0) break;
+      const open = text.indexOf('(', hit);
+      if (open < 0) {
+        cur = hit + 7;
+        continue;
+      }
+      cur = open + 1;
+      const cond = assertCondition(text, cur);
+      if (!cond.includes('||')) continue;
+      const line = text.slice(0, hit).split('\n').length - 1;
+      disjSites++;
+      const here = lines[line] || '';
+      const prev = line > 0 ? lines[line - 1] : '';
+      if (!/或断言：/.test(here) && !/或断言：/.test(prev)) {
+        disjViolations.push(`${r}:${line + 1} 有一条「或」断言没写理由`);
+      }
+    }
+  }
+}
+// 空转保护：一条都没扫到就是本条坏了（入口守卫写反毁掉过 8 条源码规则）
+if (disjSites === 0) disjViolations.push('一条「或」断言都没扫到 —— 本条在空转（遍历或匹配模式坏了）');
+check('hygiene:disjunctive-assertions-justified', '§45（不会红的断言比没有断言更糟）', disjViolations,
+  `这些「或」断言没有就地写明为什么允许二选一：\n    ${disjViolations.join('\n    ')}`);
+
+
 // ------------------------------------------------------------------------- 输出 ---
 
 // "扫了 0 个文件"和"扫了但没问题"必须能区分开：前者是门禁在空转，

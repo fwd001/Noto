@@ -21,7 +21,7 @@
 |---|---|---|---|
 | Rust 全量测试 | **534 通过 / 0 失败 / 0 ignored（64 个测试二进制）** | `cargo test --workspace` | L0–L4 |
 | Clippy（CI 原样命令） | 0 error / 0 warning | `cargo clippy --workspace --all-targets -- -D warnings` | L0 |
-| 架构适应度 | **27/27**（含最后一条"扫描台账"：任何源码门禁扫到 0 个文件即判失败） | `node scripts/arch-check.mjs` | 静态 |
+| 架构适应度 | **28/28**（含"扫描台账"：任何源码门禁扫到 0 个文件即判失败；第 28 条是本轮新增：测试里的「或」断言必须就地写理由，含空转保护，并用一条恒真断言反注验过） | `node scripts/arch-check.mjs` | 静态 |
 | 前端 | **200 通过（21 文件）**；`vue-tsc --noEmit` 0 错；构建 216.65 KB → gzip 74.22 KB | | `pnpm --dir apps/desktop test` / `run typecheck` / `run build` | L0/L1 |
 | §26 无障碍 | 静态门禁 + 3 条专项测试（见 TEST-PLAN A11Y-01…04） | `arch-check` / `pnpm test` | L1 |
 | 崩溃注入（小库 9 点 + 大库压实 1 点） | 逐个**真把子进程杀死**（退出码 77）后重启，两台设备逐条一致、待办归零 | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery --test compaction_crash` | L5 |
