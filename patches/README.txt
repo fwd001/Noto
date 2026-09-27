@@ -15,3 +15,11 @@ PARKED WORK — 已落地，留作证据（2026-09-27）。
 
  当时"不划算所以回退"的判断是对的：单独进第 2 级确实是纯成本，且那条 `set_cached_remote`
  调用没有门禁守着。半修不交，这条规矩继续留着。
+
+ —— keepboth-p11-repro.patch（2026-09-27，红着的复现，不是待应用的补丁）——
+测试 `keep_both_on_a_p11_card_keeps_both_copies_and_reverts_the_remote_delete` 断言 P11 卡片上
+按“保留两份”之后的三件事：① 正文仍是本机那一版 ② 卡片承诺的那份副本读得出同一版
+③ 两边追平后笔记在对面那台也回来（“保留内容”=不采纳删除）。
+第一条跑法：把补丁 apply 回 conflict_payload_e2e.rs，然后
+  cargo +stable-x86_64-pc-windows-gnu test -p notera-host --test conflict_payload_e2e -- keep_both_on_a_p11
+红在第几条与结论见本文件末尾的状态行。

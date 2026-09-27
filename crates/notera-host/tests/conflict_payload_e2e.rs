@@ -386,6 +386,101 @@ async fn accepting_the_remote_delete_actually_deletes_and_propagates_it() {
     );
 }
 
+/// P11 卡片上按"保留两份"（`keepBoth`）到底留下了什么 —— 把语义钉住，不许悄悄变。
+///
+/// 为什么这条值得写：`Store::resolve_conflict` 对 `kept_both` 只做记账，
+/// 文档 §6.1 却写着"保留两份（默认已做）"。在 `UpdateUpdate` 那一路这是诚实的
+/// （采纳前本机那份已经存成副本）；但 **P11 没有采纳这一步**，于是"两份"具体指哪两份、
+/// 以及对面那条删除会怎么样，全都没有被钉住。上一条（CF-16）的形状就是从这里来的：
+/// 按钮只关卡片。这次直接把结果写死成断言。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn keep_both_on_a_p11_card_keeps_both_copies_without_resurrecting_it_on_the_peer() {
+    let dav = Tmp::new("kb-dav");
+    let srv = TestServer::start(Backend::Fs(dav.path().to_path_buf())).await;
+    let url = srv.base_url();
+
+    let a = Device::boot("kb-a", &url);
+    a.app.sync_once().await.expect("A 入伙");
+    let folder = a.app.default_folder_id().unwrap();
+    let created = a
+        .app
+        .create_note(&folder, doc(REMOTE_TEXT))
+        .expect("A 建笔记");
+    let id = notera_core::EntityId::parse(&created.id).expect("id");
+    a.settle(8).await;
+
+    let b = Device::boot("kb-b", &url);
+    b.settle(8).await;
+    let head = b.app.store().get_note(&id).unwrap().expect("B 有这条");
+    a.app.store().delete_note(&id).expect("A 删除");
+    a.settle(8).await;
+    b.app
+        .edit_note(&id, doc(LOCAL_TEXT), head.rev)
+        .expect("B 改（不上行）");
+    b.app.sync_once().await.expect("B 的一轮");
+
+    let cards = b.app.open_conflicts().expect("卡片");
+    let card = cards
+        .iter()
+        .find(|c| c.note_id == id.to_string())
+        .unwrap_or_else(|| panic!("B 该有这条 P11 卡片：{cards:?}"));
+    let copy_id = card
+        .copy_note_id
+        .clone()
+        .unwrap_or_else(|| panic!("P11 的卡片没带副本 —— 那\u{201c}两份\u{201d}就只剩一份"));
+    let copy = notera_core::EntityId::parse(&copy_id).expect("副本 id");
+
+    b.app
+        .resolve_conflict(notera_host::commands::ResolveConflictCmd {
+            id: card.id,
+            action: "keepBoth".into(),
+        })
+        .expect("resolve keepBoth");
+
+    // ① 正文这一份：本机那段修改必须还在（这是"数据安全 > 一切"的那半句）
+    let main_text = b.app.store().get_note(&id).ok().flatten().map(|n| {
+        notera_richtext::extract(&notera_richtext::parse_from_value(&n.doc).unwrap_or_default())
+            .plain_text
+    });
+    assert!(
+        main_text
+            .as_deref()
+            .unwrap_or_default()
+            .contains(LOCAL_TEXT),
+        "按\u{201c}保留两份\u{201d}之后正文丢了：{main_text:?}"
+    );
+    // ② 副本那一份：卡片承诺的另一份也必须在，且是同一内容
+    let copy_text = b.app.store().get_note(&copy).ok().flatten().map(|n| {
+        notera_richtext::extract(&notera_richtext::parse_from_value(&n.doc).unwrap_or_default())
+            .plain_text
+    });
+    assert!(
+        copy_text
+            .as_deref()
+            .unwrap_or_default()
+            .contains(LOCAL_TEXT),
+        "卡片说有副本，可 {copy_id} 读不出本机那一版：{copy_text:?}"
+    );
+    // ③ 这一条最初是我**假设错**的方向：我以为"选了保留内容"就等于不采纳对面那条删除，
+    //    于是本机那个未上行的 head 会在追平后把笔记在 A 那台也带回来。实测恰好相反 ——
+    //    A 那台仍然是已删除。也就是说"保留两份"既没吃 B 的内容，也没替 B 撤销 A 的删除：
+    //    两边各得其所，没有静默覆盖。判据按**真实行为**钉死（而不是按我的预期），
+    //    以后谁改成"复活"或改成"吃掉 B 的内容"，这条都会红。
+    b.settle(8).await;
+    a.settle(8).await;
+    let a_note = a.app.store().get_note(&id).ok().flatten();
+    assert!(
+        a_note.as_ref().map(|n| n.deleted_at.is_some()).unwrap_or(true),
+        "B 选了“保留两份”之后，A 那台的删除状态被改写了（deleted_at={:?}）——          本条钉的是实测行为：保留本机内容不等于替别人撤销删除，谁要改这个语义请连这条一起改",
+        a_note.map(|n| n.deleted_at)
+    );
+    let b_still = b.app.store().get_note(&id).ok().flatten();
+    assert!(
+        b_still.map(|n| n.deleted_at.is_none()).unwrap_or(false),
+        "A 的删除状态被回灌给了 B：B 本机选了保留内容，笔记却在本机消失/被删"
+    );
+}
+
 // ——— 浏览器 lane 的留档现场 ———
 
 fn boot_at(dir: &Path, base_url: &str) -> App {
