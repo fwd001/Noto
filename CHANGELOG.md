@@ -25,7 +25,7 @@
 | 版本单源 | 一致（权威 + 三处派生 + **Cargo.lock**）；三处变异（派生位置偷改、crate 自己写死版本、**lock 慢一个版本**）都能打红 | `node scripts/check-versions.mjs` |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
 | `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | **36/36**（新增一步：设置页里真点一次 `.enex` 导入 —— 报告 2/0/0、说明里点出 `<tag>` 没落地、两条笔记刷新后在列表里看得见。变异自证：把命令名改成 `import_files_MUTATED` 重新起桥 → 该步红，且"零失败请求"那步直接点名 `POST /cmd/import_files → HTTP 400`） |
-| `scripts/verify-blackbox.mjs`（§23 纯黑盒：只用界面，零 `/cmd/*`） | **10/10** —— 曾是**不稳定门禁**（连跑三轮 10/10、4/10、4/10；只修 hydrate 那一版仍四轮 1 绿 3 红）。定位并修好「在飞保存的旧回包」那条竞态之后**连跑十一轮全绿**（每轮独立空库，含冷缓存六轮）
+| `scripts/verify-blackbox.mjs`（§23 纯黑盒：只用界面，零 `/cmd/*`） | **10/10** —— 曾是**不稳定门禁**（连跑三轮 10/10、4/10、4/10；只修 hydrate 那一版仍四轮 1 绿 3 红）。定位并修好「在飞保存的旧回包」那条竞态之后**连跑十一轮全绿**（每轮独立空库，含冷缓存六轮）。本轮改完设置页（导入按钮 + 说明列表）与偏好存储后**复跑仍 10/10**，且新增的浏览器 lane 步骤同库并行无冲突 |
 | `scripts/verify-tauri-window.mjs`（真窗口，走真 `invoke`） | debug **9/9** 且 **release 9/9**（第 3 步是本轮新增：在跑着的壳里读 `platform_caps`，断言托盘与全局快捷键**真的注册上了**；变异自证见 TEST-PLAN PLAT-05） |
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
