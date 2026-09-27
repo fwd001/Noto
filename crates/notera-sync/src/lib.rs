@@ -339,7 +339,15 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 st.requests += 1;
                 st.bytes_down += bytes.len() as u64;
                 match Manifest::parse(&bytes) {
-                    Ok(m) => (Some(m), e),
+                    // 只有**解析通过**的清单才配当缓存（D1/D2：不可信的正文绝不进本地
+                    // 权威状态，缓存也不例外 —— 否则下一轮的 304 就把它当真了）。
+                    // 记下来的是"正文 + etag"这一对，**只拉不推的设备也要记**：以前只有
+                    // 本机提交清单时才写，于是纯拉侧每轮都拿不到 304、每轮整份重下
+                    // index.json（5000 条约 186 KiB / 轮 / 设备，而后台 25 秒一轮）。
+                    Ok(m) => {
+                        let _ = self.local.apply(vec![ApplyOp::StoreManifest { wire: bytes, etag: e.clone(), seq: m.seq }]);
+                        (Some(m), e)
+                    }
                     // D1/D2：清单不可信 → 绝不"以空清单继续"（那等于清空用户库）
                     Err(ManifestError::Protocol { .. }) => {
                         return (

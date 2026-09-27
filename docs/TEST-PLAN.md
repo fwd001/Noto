@@ -352,7 +352,7 @@
 | PERF-02 | 搜索 p50 / p95（≥3 字 CJK，5000 条） | p50 ≤60 µs、p95 ≤2000 µs | L1 直测；实测基线 **p50=32 µs / p95=1404 µs**，FTS 索引 **6.0 MiB**（PROBE:`fts5-search-5000-notes`） | 已实测（阈值含回归容差） |
 | PERF-03 | 1–2 字 CJK 查询延迟 | 暂定 ≤15 ms @5000 条 | L1；实测 content 表 `LIKE` **416/5000 → ~4.1 ms**（FTS 列 `LIKE` 5.8 ms，**因此兜底必须走 content 表**） | 已实测 |
 | PERF-04 | FTS 索引体积（5000 条 CJK，trigram） | ≤6.5 MiB | L1 `PRAGMA`/文件大小；实测 6.0 MiB | 已实测 |
-| PERF-05 | no-change 轮：请求数 / 字节 | ≤2 请求、总传输 ≤2 KiB、manifest 返回 304 | L3 `STATS`；PROBE:`precondition-412-plumbing` 证明 304/412 可作为状态被引擎重规划 | 待建基线（机制已实测） |
+| PERF-05 | no-change 轮：请求数 / 字节 | ≤2 请求、总传输 ≤2 KiB、manifest 返回 304 | L3 `STATS`；PROBE:`precondition-412-plumbing` 证明 304/412 可作为状态被引擎重规划 | 待建基线（机制已实测）  **已实测**（`notera-host/tests/sync_cost.rs`：两台设备互相收敛之后，空轮的断言是上界 —— 请求 ≤2、总传输 ≤2 KiB、`index.json` 必为 304、PROPFIND ≤1；纯拉侧曾因不记 etag 而每轮整份重下，已由 `sync_cost` 与修复一并钉住） |
 | PERF-06 | 单轮变更同步字节（200 条变更窗口） | ≤8 KiB gzip | L3 `STATS`；实测 **16 KiB raw / 7.8 KiB gzip** | 已实测 |
 | PERF-07 | 全量 manifest（5000 条 / 20000 条） | 5000：≤190 KiB gzip；20000：暂定 ≤800 KiB gzip | L3 `STATS`；实测 **89 B/条**、5000 条 **438.7 KiB raw / 186 KiB gzip**、2000 条 seg **175.6 KiB raw / 74.7 KiB gzip**（→ 按 seg 分片外推 20000） | 5000 已实测 / 20000 待建基线 |
 | PERF-08 | 变更在设备间传播（桌面） | ≤30 s（设计周期 25 s） | L3 端到端时间戳；L5 真机复核 | 已定阈值，待实测 |
@@ -361,7 +361,7 @@
 | PERF-11 | 附件不阻塞文本 | 附件在飞时文本轮 ≤25 s 到达对端；`STATS` 证明文本轮不等待 `attachments/**` | L3 + `FAIL(latency,target=attachments/**,ms=…)`；PROBE:`timeout-and-cancel` 证明取消语义真实可用 | 待建基线（机制已实测） |
 | PERF-12 | 自动保存落盘频率 | ≤3 次 / 20 次快速输入；输入到落盘 ≤1500 ms | L1 fake clock；暂定 | 待建基线 |
 | PERF-13 | 列表滚动 / 大数据量渲染 | 20000 条列表滚动无 >50 ms 掉帧（暂定），首屏 ≤1 s | L5 采集（CDP trace） | 待建基线 |
-| PERF-14 | 网络层出站请求数（一轮） | 与 `DUMP` 差分一致：无多余 PROPFIND（每轮 ≤1） | L3 `STATS` | 待建基线 |
+| PERF-14 | 网络层出站请求数（一轮） | 与 `DUMP` 差分一致：无多余 PROPFIND（每轮 ≤1） | L3 `STATS`；**已实测**（`sync_cost` 断言 PROPFIND ≤1/轮，且空轮总请求 ≤2） |
 | PERF-15 | Android 冷启动（arm64-v8a，中端机） | 暂定 ≤2500 ms | L6 + 真机；无法本机测量 | 待建基线（本机 **BLOCKED**，见 Q2） |
 
 ## 兼容性矩阵

@@ -8,11 +8,12 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 483 通过 / 0 失败 / 0 ignored（56 个测试二进制） |
+| `cargo test --workspace` | 484 通过 / 0 失败 / 0 ignored（57 个测试二进制） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
 | L5 崩溃注入 `--test crash_recovery` | 小库矩阵 9 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零 |
 | L5 压实崩溃注入 `--test compaction_crash` | 1/1（240 条大库真死在 `after_segment_write`，索引不引用不存在的分段） |
 | 附件续传 `--test attachment_resume` | 2/2（真杀进程重启接着要；服务器不理 `Range` 时当整份覆盖） |
+| 空轮代价 `--test sync_cost`（PERF-05 / PERF-14） | 1/1（≤2 请求、≤2 KiB、清单必走 304、PROPFIND ≤1） |
 | 清单压实 `--test compaction`（SY-INT-09 的一部分） | 1/1（>200 条变更后分段真的落盘、索引只引用存在的分段、空库靠分段基线追平） |
 | 大库追平 `--test late_device`（SY-INT-12） | 1/1（260 条变更 > 窗口上限，空库设备完整收敛） |
 | 链路抖动 `--test reconnect`（SY-INT-11） | 1/1（六轮各坏一次，恢复后账目归零、两台设备逐条一致） |
@@ -123,6 +124,9 @@
 - `Tauri` 壳配置里 `bundle.targets` 含协议外的取值，构建脚本直接失败
 
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
+
+- **纯拉侧的清单缓存修掉了"每轮整份重下 index.json"**（PERF-05 / PERF-14 由此第一次有了门禁）：清单正文与 etag 过去**只在本机提交时**才记，所以一台"只拉不改"的设备永远拿不到 304 —— 每轮把整份索引重下一遍（5000 条约 186 KiB / 轮 / 设备，而后台调度器 25 秒一轮，两台设备闲置时每小时的浪费是可观的）。现在读到**解析通过**的清单就把"正文 + etag"记进缓存：只拉不改的设备下一轮就是"一次条件请求、零正文"。新门禁 `notera-host/tests/sync_cost.rs` 钉的是上界：空轮 ≤2 请求、总传输 ≤2 KiB、`index.json` 必须 304、PROPFIND 每轮 ≤1
+- 写这条时我自己先犯了一个错，被**既有**的引擎测试抓住：把清单记进缓存的代码放在了 `Manifest::parse` **之前** —— 等于让不可信的正文当真（下一轮 304 会拿它当依据），`corrupt_manifest_never_deletes_local_data` 立刻红。记录点因此移到解析通过之后。这正是 D1/D2 那条规则存在的意义，也是它被验证在起作用的一次
 
 - **5000 条实体的清单结构第一次有了实测数字**（`notera-sync` 的 `index_stays_small_at_five_thousand_entities`）：压实之后索引 **711 B**、分段 **[2000, 2000, 1000]**、`分段 ⊕ 窗口` 折回来的有效条目 **5000** 条一条不少。这条断言挡的是"清单又长回索引里"那类回归（把窗口清空那一步拆掉做变异 → 索引大小断言立刻红）。同一层的尺寸表在 SYNC-PROTOCOL §4.1 已按实测更新；**端到端真跑 5000 条的同步**（多轮请求预算、对端追平耗时）仍然没测过，TEST-PLAN SY-INT-09 那行没改成"已验"
 
