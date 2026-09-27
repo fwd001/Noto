@@ -410,6 +410,10 @@ pub struct RemoteIndexEntry {
     pub seg: Option<String>,
     /// 附件专用：`attachments.sha256`（64hex）。note/folder 一律 `None`。
     pub sha256: Option<String>,
+    /// 远端声明的删除时间（`None` = 未删）。引擎的 `RemoteView` 要它才能还原
+    /// "删除先后 / 删后又改"那类判据；少了它，把视图缓存进 `sync_remote_index`
+    /// 反而是有损的（见 migrations/0007）。
+    pub deleted_at: Option<String>,
 }
 
 /// 写 `sync_conflicts` 的输入（收件箱一条候选）。

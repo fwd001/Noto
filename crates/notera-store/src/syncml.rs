@@ -599,8 +599,8 @@ impl Store {
             }
             tx.execute("DELETE FROM sync_remote_index WHERE account_id = ?1", [account.as_str()])?;
             let mut stmt = tx.prepare(
-                "INSERT INTO sync_remote_index (account_id, kind, entity_id, rev, hash12, size, deleted, purged, seg, updated_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                "INSERT INTO sync_remote_index (account_id, kind, entity_id, rev, hash12, size, deleted, purged, seg, deleted_at, updated_at)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             )?;
             for e in &entries {
                 let key = match e.kind {
@@ -619,6 +619,7 @@ impl Store {
                     e.deleted as i64,
                     e.purged as i64,
                     e.seg,
+                    e.deleted_at,
                     now
                 ])?;
             }
@@ -637,7 +638,7 @@ impl Store {
         let key = key.to_string();
         let conn = self.read()?;
         let mut stmt = conn.prepare(
-            "SELECT kind, entity_id, rev, hash12, size, deleted, purged, seg FROM sync_remote_index
+            "SELECT kind, entity_id, rev, hash12, size, deleted, purged, seg, deleted_at FROM sync_remote_index
               WHERE account_id = ?1 AND kind = ?2 AND entity_id = ?3",
         )?;
         let out = stmt
@@ -655,12 +656,13 @@ impl Store {
                         r.get::<_, i64>(5)?,
                         r.get::<_, i64>(6)?,
                         r.get::<_, Option<String>>(7)?,
+                        r.get::<_, Option<String>>(8)?,
                     ))
                 },
             )?
             .next()
             .transpose()?;
-        let Some((tag, id, rev, hash12, size, deleted, purged, seg)) = out else {
+        let Some((tag, id, rev, hash12, size, deleted, purged, seg, deleted_at)) = out else {
             return Ok(None);
         };
         let kind = rows::kind_from_tag(&tag)?;
@@ -674,7 +676,55 @@ impl Store {
             purged: purged != 0,
             seg,
             sha256: (kind == EntityKind::Attachment).then_some(id),
+            deleted_at,
         }))
+    }
+
+    /// 整表读出某个账户的远端视图。
+    ///
+    /// 这张表的建表注释就写着"清单的本地缓存：让每轮同步免于全量下载"，但此前生产路径
+    /// 上没有读取者也没有写入者 —— 引擎每轮的远端视图只活在进程里，于是落后超过窗口时
+    /// 每一轮都要把整份基线分段重下一遍。有了它（加上 0007 的 `deleted_at`），视图才真的
+    /// 可以持久，`cached_segment_hashes` 那类"跳过下载"的判据也才成立：跳过之前得有个
+    /// 地方把条目读回来，否则省下的下载就是丢的数据。
+    pub fn remote_index_list(&self, account: &str) -> Result<Vec<RemoteIndexEntry>, StoreError> {
+        let account = account.to_string();
+        let conn = self.read()?;
+        let mut stmt = conn.prepare(
+            "SELECT kind, entity_id, rev, hash12, size, deleted, purged, seg, deleted_at
+               FROM sync_remote_index WHERE account_id = ?1 ORDER BY kind, entity_id",
+        )?;
+        let rows = stmt.query_map([account.as_str()], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, Option<i64>>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+                r.get::<_, Option<String>>(7)?,
+                r.get::<_, Option<String>>(8)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (tag, id, rev, hash12, size, deleted, purged, seg, deleted_at) = row?;
+            let kind = rows::kind_from_tag(&tag)?;
+            out.push(RemoteIndexEntry {
+                kind,
+                id: id_or_nil(&id),
+                rev: Rev(rev.max(0) as u64),
+                hash12,
+                size,
+                deleted: deleted != 0,
+                purged: purged != 0,
+                seg,
+                sha256: (kind == EntityKind::Attachment).then_some(id),
+                deleted_at,
+            });
+        }
+        Ok(out)
     }
 
     // ------------------------------------------------------------ 附件态 ---

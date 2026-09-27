@@ -292,6 +292,7 @@ fn set_remote_rev_and_remote_index_replace_roundtrip() {
             purged: false,
             seg: Some("seg-0000".into()),
             sha256: None,
+            deleted_at: None,
         },
         RemoteIndexEntry {
             kind: EntityKind::Folder,
@@ -303,6 +304,7 @@ fn set_remote_rev_and_remote_index_replace_roundtrip() {
             purged: false,
             seg: None,
             sha256: None,
+            deleted_at: None,
         },
     ];
     store
@@ -331,6 +333,38 @@ fn set_remote_rev_and_remote_index_replace_roundtrip() {
         )
         .unwrap()
         .is_none());
+
+    // 0007 之后这张表才真的能当"清单的本地缓存"用：整表读回 + 带删除时间戳。
+    // 没有 `deleted_at` 之前，把远端视图持久化下去是有损的（P8/P11 那类"删除先后、
+    // 删后又改"的判据要读回时间戳），所以先补列，再让引擎往里写。
+    let mut with_del = entries.clone();
+    if let Some(note) = with_del.iter_mut().find(|e| e.kind == EntityKind::Note) {
+        note.deleted = true;
+        note.deleted_at = Some("2026-09-27T00:00:00Z".into());
+    }
+    store
+        .remote_index_replace(notera_store::LOCAL_ACCOUNT_ID, &with_del)
+        .unwrap();
+    let list = store.remote_index_list(notera_store::LOCAL_ACCOUNT_ID).unwrap();
+    assert_eq!(
+        list.len(),
+        with_del.len(),
+        "整表读出的条数必须与写入一致 —— 这是引擎复用视图、跳过基线下载的前提"
+    );
+    let note = list
+        .iter()
+        .find(|e| e.kind == EntityKind::Note)
+        .expect("列表里要有那条笔记");
+    assert_eq!(
+        note.deleted_at.as_deref(),
+        Some("2026-09-27T00:00:00Z"),
+        "删除时间戳必须原样读回，不然持久化视图会丢判据"
+    );
+    assert!(note.deleted, "deleted 标志要与时间戳同步");
+    assert!(
+        store.remote_index_list("不存在的账户").unwrap().is_empty(),
+        "读不能越过账户边界：别的账户一行都不该看到"
+    );
     assert!(matches!(
         store.remote_index_replace("不存在", &entries),
         Err(StoreError::Constraint(_))

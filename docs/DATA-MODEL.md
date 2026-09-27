@@ -290,6 +290,9 @@ CREATE TABLE sync_state (                     -- 每账户一行，同步引擎�
 );
 
 CREATE TABLE sync_remote_index (              -- 清单的本地缓存：让每轮同步免于全量下载
+  -- 0007 补了 deleted_at：引擎的远端视图带删除时间戳，P8/P11 那类"删除先后、删后又改"
+  -- 的判据要读得回来。只有 deleted/purged 两个布尔位时，把视图持久化下去是有损的 ——
+  -- 所以先补列，然后才让引擎真的往里写。
   account_id  TEXT NOT NULL REFERENCES sync_accounts(id) ON DELETE CASCADE,
   kind        TEXT NOT NULL CHECK (kind IN ('note','folder','attachment')),
   entity_id   TEXT NOT NULL,
@@ -299,6 +302,7 @@ CREATE TABLE sync_remote_index (              -- 清单的本地缓存：让每�
   deleted     INTEGER NOT NULL DEFAULT 0,
   purged      INTEGER NOT NULL DEFAULT 0,
   seg         TEXT,                            -- 所属清单分段名
+  deleted_at  TEXT,                            -- 远端声明的删除时间（0007 补；见下）
   updated_at  TEXT NOT NULL,
   PRIMARY KEY (account_id, kind, entity_id)
 ) WITHOUT ROWID;

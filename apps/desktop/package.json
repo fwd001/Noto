@@ -1,7 +1,7 @@
 {
   "name": "notera-desktop",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.0.2",
   "type": "module",
   "description": "Notera 前端（Vue 3 + TypeScript + Vite）：三栏 UI + 富文本编辑器 + 4 态同步徽标",
   "engines": {
