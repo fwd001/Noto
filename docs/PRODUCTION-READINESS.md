@@ -35,7 +35,7 @@
 | 浏览器端到端（真 Rust 核心，非 mock） | **35/35** | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` | L4 |
 | 纯黑盒 UAT（§23：只用界面） | **10/10** —— 修好第 3 节那条竞态之后**连跑十一轮全绿**（每轮独立空库；其中六轮是冷 vite 缓存的稳定性加测） | `node scripts/verify-blackbox.mjs` | L4 |
 | 真窗口（走真 `invoke`） | debug **8/8** 且 release **8/8**（跑前确认 5173/17323 无监听；页面 `http://tauri.localhost/`，真 SQLite、CSP 生效） | `cargo build [--release] -p notera-desktop` + `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223` + `node scripts/verify-tauri-window.mjs` | L4 |
-| `cargo fmt --check` | **BLOCKED** —— 本机工具链没装 `rustfmt` 组件 | 解除：`rustup component add --toolchain stable-x8_64-pc-windows-gnu rustfmt`（要联网、会改本机工具链，未擅自执行） | — |
+| `cargo fmt --all --check` | **退出码 0** —— 代理到位后装了 `rustfmt` 组件（B5 解除）。装上后第一次 `--check` 就报出 **92 个文件**格式漂移，已按纯机械格式化单独提交并复验（tests 487/0、clippy 0/0） | `cargo fmt --all --check` |
 
 复现步骤的单一出处是 `docs/ARCHITECTURE-MAP.md` §8；分领域状态是 `docs/IMPLEMENTATION-STATUS.md`。
 
@@ -65,8 +65,10 @@
 | B2 | 真实公网 WebDAV 服务器矩阵 | 手头只有本机内存/文件系统上的测试服务器（含各类故障注入） | 各家服务器的 Range / MOVE / 条件请求差异未全覆盖 | 用户给一台可写的真实服务器（Nextcloud/SeaTTY/Apache mod_dav 任一），跑 `notera-cli dav-probe` + 端到端 |
 | B3 | 追平过程中基线分段每轮整份重下 | 判据（`hash12`）与表都在，但**远端视图不可持久**：`cached_remote()` 读的 Mutex 从未被写入、`sync_remote_index` 生产路径零调用者且缺 `deleted_at` 列 | 只贵不错：千条库追平实测 5 轮 × 一份基线；空轮仍是 1 请求 / 304 / 0 字节 | 先按 §9/§51 定"远端视图持久化"的迁移（含 `deleted_at`，且只在未被预算截断时整份替换）；补丁与判据在 `patches/` |
 | B4 | ~~编辑器的"空白区点击会先落一条换行"~~ **已修**（提交 `4186a00`） | 占位 `<br>` 被映射成换行 | 曾让第一次 autosave 只存进一条换行、新笔记短暂显示「无标题」 | 已改：`parseEditable` 只在还没吐出任何内容时跳过占位 `<br>`；三条用例先红后绿，端到端 35/35、纯黑盒 10/10 |
-| B5 | `cargo fmt --check` | 工具链缺 `rustfmt` 组件 | 格式漂移只会在 CI 第一次暴露 | 见第 2 节命令（联网 + 改本机工具链，需用户同意） |
+| B5 | ~~`cargo fmt --check` 本机跑不了~~ **已解除** | 缺 `rustfmt` 组件（代理到位后已装） | 曾有：格式漂移无本地证据；第一次真检查就抓到 92 个文件 | 已完成：格式化提交 + CI 里该步转硬门禁 |
 | B6 | PERF-01/09/10/13/12 未建基线；PERF-14/05 已钉 | 需要真机首屏计时与假时钟（autosave 节拍）等前置 | 冷启动/搜索/大列表滚动等没有可回归的数字上界 | 建基线需决定"在什么硬件上测"；假时钟那条可在本机做 |
+
+**CI 已经真跑过一次**（run #1，提交 `a7e8238`）：`check-versions`、`arch-check`（26 条）、`cargo fmt`、`npm ci` 全过，**clippy 失败**、后续步骤被 skip。成因是步骤顺序而非 lint：`cargo clippy --workspace` 会编译桌面壳，其 `build.rs` 要嵌 `frontendDist`，而 CI 上 `npm run build` 排在 clippy 之后 —— 本机永远躺着一份旧 dist，所以这条差异在本地不可能暴露。已把前端构建挪到所有 Rust 步骤之前并把 fmt 转成硬门禁；下一次运行的结论仍要回看日志确认（本机能读 GitHub API，但作业日志需鉴权：HTTP 403、本机无 `gh`）。
 
 另外说明一件诚实性相关的事：纯黑盒 UAT 曾经**不是**稳定门禁（3 轮 2 红）。第 3 节那条竞态修好后连跑五轮 5/5。修后累计**十一轮全绿**（每轮独立空库、含冷缓存六轮），这条 lane 的绿现在是可用证据；再往后的长跑稳定性仍按周期性复跑看，不当成已证明永久稳定。
 

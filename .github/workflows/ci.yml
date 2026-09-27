@@ -49,17 +49,22 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
+      # 首次运行（run #1）就是死在这之后：clippy 会编译桌面壳，而它的 build.rs 要把
+      # `frontendDist` 嵌进二进制 —— 没构建前端就没有可嵌的东西。本机永远有一份旧的
+      # dist，所以这条差异在本地看不见。前端构建因此**挪到所有 Rust 步骤之前**。
+      - name: 前端构建（真窗口与桌面壳内嵌的就是这份产物）
+        working-directory: apps/desktop
+        run: npm run build
+
       - name: 版本单源（CI-CD §版本与单一版本源）
         run: node scripts/check-versions.mjs
 
       - name: 架构适应度 + §26 无障碍 + 扫描台账（26 条）
         run: node scripts/arch-check.mjs
 
-      # 本机跑不了 cargo fmt（工具链没装 rustfmt 组件，§40 记着 BLOCKED），所以这一步
-      # 是**第一次**真正检查格式漂移：红了就是漂移的真实信号，本地 `cargo fmt --all` 后再推。
-      # 先不设为必需，免得把整条 CI 卡在一个本机无从验证的步骤上。
-      - name: 格式检查（本机无法验证，先不阻断）
-        continue-on-error: true
+      # 本机 rustfmt 组件已装上并跑过 `cargo fmt --all`（当时发现 92 个文件有漂移，已单独
+      # 提交格式化），所以这一步现在是**硬门禁**：`--check` 在本机退出码 0。
+      - name: 格式检查（本机已可验证，阻断）
         run: cargo fmt --all --check
 
       - name: Clippy（-D warnings，与本地同一条命令）
@@ -75,10 +80,6 @@ jobs:
       - name: 前端类型检查
         working-directory: apps/desktop
         run: npm run typecheck
-
-      - name: 前端构建（真窗口与桌面壳内嵌的就是这份产物）
-        working-directory: apps/desktop
-        run: npm run build
 
       # 契约图要一个可用的 chromium；脚本里写死的是本机路径，CI 上要么找不到浏览器
       # 要么装到别处 —— 所以这一步也先不阻断，等首次运行看清实际行为再收紧。
