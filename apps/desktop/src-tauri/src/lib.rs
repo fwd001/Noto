@@ -224,10 +224,17 @@ pub fn run() {
             }
         })
         .setup(|handle| {
-            let dir = handle
-                .path()
-                .app_data_dir()
-                .map_err(|e| format!("无法确定数据目录：{e}"))?;
+            // 数据目录的入口与 `notera-cli` 保持一致：`NOTERA_DATA_DIR` 优先，否则用系统
+            // 给本应用的目录。留这个口子不是为了"配置产品"，是为了**可测**：冷启动与大列表
+            // 渲染的性能基线（PERF-01/13）必须在真实 release 壳里量，而那需要预先装着几千
+            // 条笔记的库 —— 把测试库写进用户真实的 app data 目录是不可接受的。
+            let dir = match std::env::var_os("NOTERA_DATA_DIR") {
+                Some(v) if !v.is_empty() => std::path::PathBuf::from(v),
+                _ => handle
+                    .path()
+                    .app_data_dir()
+                    .map_err(|e| format!("无法确定数据目录：{e}"))?,
+            };
             let app = App::boot(&dir).map_err(|e| format!("核心启动失败：{e}"))?;
             let app = Arc::new(app);
             pump_events(&app, handle.app_handle());

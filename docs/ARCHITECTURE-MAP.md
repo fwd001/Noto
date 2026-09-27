@@ -199,6 +199,8 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
 | 浏览器端到端 | 35/35（真 Rust 核心，非 mock；含"设置页存服务器 → 能力块读回"、"库统计五行全是数字"、"删除 → 回收站 → 恢复 → 永久删除"、"勾一个文件夹 → 包就只有那一棵子树"、"侧栏建子文件夹 → '移动到'选得到"五条真实往返） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
 | L5 纯黑盒 UAT | 10/10（只用点击/输入/键盘/文件选择器/刷新，零 `/cmd/*`、零读库；含"插图后屏幕上真的解出像素、刷新后仍在"） | `node scripts/verify-blackbox.mjs` |
+| L4-L5 冲突面板（P11）| 10/10（真浏览器读**两台真设备留在盘上的现场**：右栏渲染的是服务器那一版而不是本机那份的复制；载荷缺失时屏幕上说的是"没能取回那一版"） | `node scripts/verify-p11-panel.mjs`（自己跑留档夹具 + 起桥；需 vite dev 在 5173） |
+| L5 性能基线 | 3/4（真实 release 壳 + 预先灌好的库：冷启动 907/1022 ms、滚动 p95 17 ms、RSS 31.6→46.7 MiB；空库那档超 800 ms 暂定预算 → 红了等 §51 定口径） | `node scripts/verify-perf.mjs`（`NOTES=` 换规模，`REPS=` 换遍数） |
 | 真窗口 | debug 8/8 **且 release 8/8**（开发服务器关闭 → 资源走内嵌 `frontendDist`，页面 `http://tauri.localhost/`；`stats` 键集合 == 契约那 8 个 → 建笔记→落库→列表刷新读回→点开正文→截图，控制台 0 error） | `pnpm build` + `cargo build [--release] -p notera-desktop` + `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223` + `node scripts/verify-tauri-window.mjs` |
 
 **已建立**：12 个 crate + `apps/desktop`（Tauri 壳 + Vue 前端）+ `migrations/0001..0006` + 自建测试 WebDAV 服务器 + 上述四套验证脚本 + `docs/` 全套规格与 ADR-0001…0019。

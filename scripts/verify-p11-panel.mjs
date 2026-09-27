@@ -191,7 +191,9 @@ try {
   });
 } finally {
   if (bridge) {
-    spawnSync('taskkill', ['//PID', String(bridge.pid), '//F'], { encoding: 'utf8' });
+    // 单斜杠：node 起的进程参数不过 MSYS，写成 //PID 时 taskkill 收到 "//PID" 直接失败，
+    // 桥就留在后台占着 17323 和数据目录（下一次 lane 读到的是上个世代的二进制）。
+    spawnSync('taskkill', ['/PID', String(bridge.pid), '/F'], { encoding: 'utf8' });
   }
   await browser.close();
 }
