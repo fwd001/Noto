@@ -77,6 +77,17 @@
 ## 5. 需要人工决定的项（§51：我不动手，等拍板）
 
 1. **安装器**（`.msi`/`.exe`）：需要 `@tauri-apps/cli`，它不在依赖里 —— 动依赖图，走 §9。
+   > **做安装器之前要先知道的一件事（2026-09-27 实测）**：GNU 工具链下
+   > `cargo build -p notera-desktop` 稳定报一条链接器警告 ——
+   > `ld.exe: .rsrc merge failure: multiple non-default manifests`。意思是产物的 Windows
+   > 资源里**有两个非默认 manifest**（Tauri 自己那份 + winlibs/UCRT 工具链的默认那份），
+   > 链接器挑了一个了事。它**不会**让 CI 变红：`cargo clippy` 不做链接，所以这条永远进不了
+   > `-D warnings` 的门禁；`cargo build` 只 warn 不 error。但它直接关系到安装期行为
+   > （DPI 感知、通用控件 v6、UAC 虚拟化都写在 manifest 里），而 §15 的原生观感与安装器
+   > 阶段正是要验这些。**处置**：出安装包时第一件事是 `mt.exe -inputresource:notera.exe;#1
+   > -out:dump.xml` 看最终产物到底带了哪一份，并按需在 `build.rs` 里显式管住资源段；
+   > 在那之前不把"能装能跑"当作已验（本条属于 §40 的"看得见但没验"，原因：本机没有安装包，
+   > 影响：高 DPI 缩放与视觉风格可能与应用声明不一致，解除条件：安装器落地并真机看过）。
 2. **托盘 / 全局快捷键 / OS 钥匙串**（`credential_ref`）：动依赖图与系统集成面，需 §9 评审。
 3. **`.enex` 导入的 XML 依赖**（`quick-xml` 已在 workspace 里，但启用与否是范围决定）。
 4. **CI 工作流的推送通道**（§42 那套门禁要有地方真的跑）。
