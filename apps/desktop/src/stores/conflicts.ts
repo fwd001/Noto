@@ -77,11 +77,13 @@ export const useConflictStore = defineStore('conflicts', () => {
       if (entry.fallback !== undefined && previews.value[previewKey(card, entry.side)] === undefined) {
         previews.value = { ...previews.value, [previewKey(card, entry.side)]: entry.fallback };
       }
+      // 右栏**一律**不许去查 `preview_text(noteId, remoteRev)`：rev 是各设备自己的编号，
+      // 本机历史上同号往往是另一份内容 —— 查回来的会是**本机**那一版，于是
+      // "没能取回来"这一格被填成一段看着像对面版本的本机旧文，用户点"用这一版替换"
+      // 就把笔记覆盖回了本机某一版。服务器那一版只能由卡片自带的 remotePreview 提供
+      // （载荷来自服务器返回的原始信封），没有载荷就留空，由面板说"没取回来"。
+      if (entry.side === 'remote') continue;
       if (!entry.id || typeof entry.rev !== 'number') continue;
-      // 右栏不许去查 `preview_text(noteId, remoteRev)`：rev 是各设备自己的编号，
-      // 本机历史上同号往往是另一份内容 —— 查回来的会是**本机**那一版，两栏变成同一段文字。
-      // 服务器那一版只能由卡片自带的 remotePreview 提供（载荷来自服务器返回的原始信封）。
-      if (entry.side === 'remote' && typeof entry.fallback === 'string' && entry.fallback !== '') continue;
       try {
         const text = await callCommand<string>(Commands.previewText, { id: entry.id, rev: entry.rev });
         if (typeof text === 'string') previews.value = { ...previews.value, [previewKey(card, entry.side)]: text };
@@ -101,7 +103,8 @@ export const useConflictStore = defineStore('conflicts', () => {
     return typeof card.remoteRev === 'number' && previewFor(card, 'remote') === '';
   }
 
-  function previewFor(card: ConflictCard, side: 'local' | 'remote'): string {    return previews.value[previewKey(card, side)] ?? '';
+  function previewFor(card: ConflictCard, side: 'local' | 'remote'): string {
+    return previews.value[previewKey(card, side)] ?? '';
   }
 
   async function resolve(card: ConflictCard, action: ConflictAction): Promise<boolean> {

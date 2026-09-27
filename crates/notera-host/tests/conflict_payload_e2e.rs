@@ -238,3 +238,128 @@ async fn a_conflict_without_a_payload_still_stays_in_the_inbox() {
         "没取回来时卡片不许带任何「对面那一版」，界面才老实说没取到"
     );
 }
+
+// ——— 浏览器 lane 的留档现场 ———
+
+fn boot_at(dir: &Path, base_url: &str) -> App {
+    std::fs::create_dir_all(dir).expect("建数据目录");
+    let app = App::boot(dir).expect("核心启动");
+    std::env::set_var("NOTERA_DEV_WEBDAV_SECRET", SECRET);
+    let draft: AccountDraftCmd = serde_json::from_value(json!({
+        "label": "p11-lane", "baseUrl": base_url, "username": "notera-test",
+    }))
+    .unwrap();
+    app.configure_account(draft).expect("配置账户");
+    app
+}
+
+async fn settle_lane(app: &App, cap: usize) {
+    for _ in 0..cap {
+        app.sync_once().await.expect("一轮同步");
+        let st = app.store().stats().unwrap();
+        if st.dirty_notes == 0 && st.outbox_pending == 0 {
+            return;
+        }
+    }
+}
+
+/// 把上面那条真 P11 现场留在盘上，交给**真浏览器**去读：
+/// `scripts/verify-p11-panel.mjs` 拿 `device-b` 起桥，断言右栏渲染出来的就是
+/// 对面那一版的文字。上面两个测试钉的是"卡片 DTO 里有"，管不到界面有没有真把它
+/// 画出来 —— 那一格只有浏览器能给。
+///
+/// 为什么不在 lane 里现场同步：本机每 25 秒自动推一轮，"本机脏改"和"对面的删除
+/// 公告"谁先到服务器是不确定的（这条边已由上面的真设备测试钉住，不需要重复赌）。
+/// 渲染要的是确定现场，所以现场由这里产出，界面只负责看。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "留档夹具：由 scripts/verify-p11-panel.mjs 调用"]
+async fn leave_a_p11_scene_on_disk_for_the_ui_lane() {
+    let root = std::env::var("NOTERA_P11_SCENE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("D:/code/Notes/.logs/p11-lane"));
+    let _ = std::fs::remove_dir_all(&root);
+    let srv = TestServer::start(Backend::Fs(root.join("dav"))).await;
+    let url = srv.base_url();
+
+    let a = boot_at(&root.join("device-a"), &url);
+    a.sync_once().await.expect("A 入伙");
+    let folder = a.default_folder_id().expect("默认文件夹");
+    let first = a
+        .create_note(&folder, doc(REMOTE_TEXT))
+        .expect("A 建第一条");
+    let second = a
+        .create_note(&folder, doc("第二条：对面那一版本轮没取回来"))
+        .expect("A 建第二条");
+    let id1 = notera_core::EntityId::parse(&first.id).expect("id");
+    let id2 = notera_core::EntityId::parse(&second.id).expect("id");
+    settle_lane(&a, 8).await;
+
+    let b = boot_at(&root.join("device-b"), &url);
+    settle_lane(&b, 8).await;
+    let head1 = b.store().get_note(&id1).unwrap().expect("B 拉到了第一条");
+    let head2 = b.store().get_note(&id2).unwrap().expect("B 拉到了第二条");
+
+    // 第一条：走完整现场 —— 服务器上是删除公告，B 本机是未推送的修改。
+    a.store().delete_note(&id1).expect("A 删第一条");
+    settle_lane(&a, 8).await;
+    b.edit_note(&id1, doc(LOCAL_TEXT), head1.rev)
+        .expect("B 改第一条");
+    b.sync_once().await.expect("B 的一轮");
+
+    // 第二条：同样的处境，但 B 这一轮**没去取那一版**。这里用引擎登记冲突用的同一个
+    // 存储入口（`record_conflict` 写册子、`ConflictPayload` 才往同一行上挂载荷），
+    // 造出"在册但无载荷"这一格 —— 与上面那个测试同一口径。
+    a.store().delete_note(&id2).expect("A 删第二条");
+    settle_lane(&a, 8).await;
+    b.edit_note(&id2, doc("第二条：本机又改了一次"), head2.rev)
+        .expect("B 改第二条");
+    let cur2 = b.store().get_note(&id2).unwrap().expect("B 的第二条还在");
+    b.store()
+        .record_conflict(&notera_store::ConflictRecord {
+            account_id: notera_store::LOCAL_ACCOUNT_ID.into(),
+            kind: notera_core::EntityKind::Note,
+            id: id2.clone(),
+            base_rev: head2.rev,
+            local_rev: cur2.rev,
+            remote_rev: notera_core::Rev(2),
+            local_hash: "lane-local".into(),
+            remote_hash: "lane-remote".into(),
+            auto_merged: false,
+            copy_note_id: None,
+        })
+        .expect("登记第二条的冲突");
+
+    let cards = b.open_conflicts().expect("卡片列表");
+    let c1 = cards
+        .iter()
+        .find(|c| c.note_id == id1.to_string())
+        .unwrap_or_else(|| panic!("第一条该有卡片：{cards:?}"));
+    let c2 = cards
+        .iter()
+        .find(|c| c.note_id == id2.to_string())
+        .unwrap_or_else(|| panic!("第二条该有卡片：{cards:?}"));
+    let remote1 = c1
+        .remote_preview
+        .clone()
+        .unwrap_or_else(|| panic!("夹具自己就没造出带载荷的现场，lane 无从断言"));
+    assert!(
+        remote1.contains(REMOTE_TEXT) && !remote1.contains(LOCAL_TEXT),
+        "夹具造的现场就不对：{remote1}"
+    );
+    assert!(
+        c2.remote_preview.is_none(),
+        "第二条不该带载荷：{:?}",
+        c2.remote_preview
+    );
+
+    let expect = json!({
+        "dirB": root.join("device-b").display().to_string(),
+        "withPayload": {
+            "conflictId": c1.id, "noteId": id1.to_string(),
+            "localText": LOCAL_TEXT, "remoteText": remote1,
+        },
+        "noPayload": { "conflictId": c2.id, "noteId": id2.to_string() },
+    });
+    std::fs::write(root.join("expect.json"), expect.to_string()).expect("写 expect.json");
+    println!("{expect}");
+}

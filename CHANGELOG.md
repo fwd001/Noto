@@ -20,6 +20,7 @@
 | 大库追平 `--test late_device`（SY-INT-12） | 1/1（260 条变更 > 窗口上限，空库设备完整收敛） |
 | 千库规模 `--test big_library`（SY-INT-14 / PERF-05 量级版） | 1/1，12.8 s（1000 条：追平轮数有界、空轮 1 请求 0 字节、默认本全网络只有一条、逐条比对读满） |
 | 链路抖动 `--test reconnect`（SY-INT-11） | 1/1（六轮各坏一次，恢复后账目归零、两台设备逐条一致） |
+| P11 面板 `scripts/verify-p11-panel.mjs` | 10/10（真浏览器读**两台真设备留在盘上的现场**：右栏是服务器那一版、无载荷时说的是"没取回来"；两条截图证据进 `docs/evidence/`） |
 | 前端 | 196 通过（21 文件）；`vue-tsc --noEmit` 无错误；构建 214 KB → gzip 73 KB |
 | `scripts/arch-check.mjs` | 27/27（第 26 条是版本单源，第 27 条是"编译期嵌入的文件要进版本库"） |
 | 版本单源 | 一致（权威 + 三处派生 + **Cargo.lock**）；三处变异（派生位置偷改、crate 自己写死版本、**lock 慢一个版本**）都能打红 | `node scripts/check-versions.mjs` |

@@ -774,6 +774,15 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                             if let Ok(Some(wire)) = self.remote.fetch_record(&l.kind, &l.id).await {
                                 st.requests += 1;
                                 st.bytes_down += wire.len() as u64;
+                                // 同一份字节也登记到冲突行上：采纳过的那一版**同样**由卡片
+                                // 自己带着。前端因此只有一条规则（右栏只读 remotePreview，
+                                // 没有就说"没取回来"），不必去猜"本机历史上那个 rev 是不是
+                                // 服务器那一版" —— 那个猜测正是 P11 右栏冒充本机内容的来源。
+                                let payload = ApplyOp::ConflictPayload {
+                                    kind: l.kind.clone(),
+                                    id: l.id.clone(),
+                                    wire: wire.clone(),
+                                };
                                 let rep = self
                                     .local
                                     .apply(vec![ApplyOp::AdoptConflict {
@@ -782,6 +791,7 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                                         wire,
                                     }])
                                     .unwrap_or_default();
+                                let _ = self.local.apply(vec![payload]);
                                 if rep.applied == 1 {
                                     st.pulled += 1;
                                 }
