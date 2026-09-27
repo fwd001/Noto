@@ -29,7 +29,10 @@ const OUT = 'D:/code/Notes/docs/evidence';
 const NOTES = Number(process.env.NOTES || 5000);
 const REPS = Number(process.env.REPS || 2);
 const BRIDGE_PORT = 17324;
-const BUDGET_EMPTY = Number(process.env.BUDGET_EMPTY || 800);
+// 口径按 2026-09-27 的决定：**"用户双击图标 → 看见内容"**，因此**含** WebView2 启动那一段
+// （它是这段等待的一部分，剔掉就不叫冷启动了）。判据是 REPS 遍里**最好的一遍**，
+// 而每一遍的读数都同时打印出来 —— 最差那遍不能藏（它说明这台机器上会被感知到的抖动有多大）。
+const BUDGET_EMPTY = Number(process.env.BUDGET_EMPTY || 1000);
 const BUDGET_BIG = Number(process.env.BUDGET_BIG || 1500);
 
 const fs = await import('node:fs').then((m) => m.default);
