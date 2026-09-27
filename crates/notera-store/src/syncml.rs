@@ -181,6 +181,33 @@ impl Store {
 
     // ------------------------------------------------------------- 脏集 ---
 
+    /// 已同步头：`rev == sync_rev` 且未删除的实体 → (类型, id, rev, 全哈希)。
+    ///
+    /// `dirty_entities` 只报脏行，**干净的设备在它里面是空的** —— 引擎因此会把整份
+    /// 清单上的每一条都当成"本机没有的新增"重下一遍，每轮的请求预算全花在重复劳动上，
+    /// 真正缺的那几条永远排不到（实测：260 条的库，第二台设备卡在 196/260 且再也不动）。
+    /// 这一份视图就是给引擎跳过"已经有了的那一版"用的。
+    pub fn synced_heads(&self) -> Result<Vec<(EntityKind, EntityId, Rev, String)>, StoreError> {
+        let conn = self.read()?;
+        let mut out = Vec::new();
+        for (kind, sql) in [
+            (EntityKind::Note, "SELECT id, rev, content_hash FROM notes WHERE rev = sync_rev AND deleted_at IS NULL"),
+            (EntityKind::Folder, "SELECT id, rev, content_hash FROM folders WHERE rev = sync_rev AND deleted_at IS NULL"),
+        ] {
+            let mut stmt = conn.prepare(sql)?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))?;
+            for row in rows {
+                let (id, rev, hash) = row?;
+                // id 解析不了说明库里混进了非本系统生成的行：跳过它最坏是"这一条照样重下一次"，
+                // 不能让它把整轮同步顶死。
+                if let Ok(parsed) = EntityId::parse(&id) {
+                    out.push((kind, parsed, Rev(rev as u64), hash));
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// 脏集 = `rev != sync_rev`（DATA-MODEL §4.2），外加"永久删除尚未被远端确认"的墓碑。
     ///
     /// 硬性要求 6：有 `purged=1` 墓碑的记录**不会**被当作新增列入脏集（否则设备 B 会把

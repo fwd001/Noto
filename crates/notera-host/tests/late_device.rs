@@ -116,21 +116,15 @@ async fn a_fresh_device_joining_an_over_window_library_gets_every_note() {
 
     // 第二台设备：一座空库入伙，直接面对"变更比窗口还多"的清单
     let b = Device::boot("late-b", &url);
-    // 先看服务器到底公告成什么样：窗口少了一截，就是**写侧**漏公告，读者再怎么轮也追不平
+    // 服务器侧先排除"写漏"：窗口里就得是 261 条（260 篇 + 1 个文件夹）
     let root = srv.fs_root().expect("fs 后端应有根目录");
-    let index = std::fs::read_to_string(root.join(".notes/manifest/index.json")).expect("清单在盘上");
-    let parsed: serde_json::Value = serde_json::from_str(&index).expect("清单是 JSON");
-    let window = parsed["window"]["entries"].as_array().map(|a| a.len()).unwrap_or(usize::MAX);
-    let segs = parsed["segments"].as_array().map(|a| a.len()).unwrap_or(usize::MAX);
-    let records = std::fs::read_dir(root.join(".notes/records/n"))
-        .map(|rd| rd.filter_map(|e| e.ok()).count())
-        .unwrap_or(usize::MAX);
-    println!(
-        "服务器：seq={} 窗口条目={window} complete={} since_seq={} 分段数={segs} 记录文件={records}",
-        parsed["seq"],
-        parsed["window"]["complete"],
-        parsed["window"]["since_seq"],
-    );
+    let index: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join(".notes/manifest/index.json")).expect("清单在盘上"),
+    )
+    .expect("清单是 JSON");
+    let announced = index["window"]["entries"].as_array().map(|a| a.len()).unwrap_or(0);
+    assert_eq!(announced, NOTES + 1, "清单公告的条目数就不对，后面怎么追都是徒劳");
+
     let btrace = b.settle(12).await;
     let bs = b.app.store().stats().unwrap();
     assert_eq!(bs.notes, NOTES as u32, "干净设备追完之后应有 {NOTES} 条，实际 {}：\n  A {}\n  B {}", bs.notes, trace.join("\n  "), btrace.join("\n  "));

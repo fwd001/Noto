@@ -34,6 +34,14 @@ pub trait LocalPort: Send + Sync {
     /// 已缓存的远端索引（清单的本地投影）
     fn cached_remote(&self) -> Result<Vec<RemoteView>, LocalError>;
     fn cached_segment_hashes(&self) -> BTreeMap<String, String>;
+    /// 本机已经存下、且已经与远端确认过的实体头（`(kind,id)` → `(rev, 全哈希)`）。
+    ///
+    /// 默认空表 = "一条都不跳过"，也就是本方法出现之前的行为。实现方**必须**给出干净行：
+    /// `local_views()` 只报脏行，缺了这一份视图，一台已经追平的设备仍会把清单里每条
+    /// 都当成新增重下一遍，直到把每轮请求预算吃光，真正缺的条目再也轮不上。
+    fn synced_heads(&self) -> BTreeMap<(String, String), (u64, String)> {
+        BTreeMap::new()
+    }
     fn seq_applied(&self) -> u64;
     /// 取某笔记在某 rev 的内容（三方合并的 base，DATA-MODEL §4.4 保证存在）
     fn revision_json(&self, id: &str, rev: u64) -> Result<Option<serde_json::Value>, LocalError>;
@@ -306,15 +314,26 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
         }
 
         // ① 读清单
+        // 本轮是否被请求预算**截断**过：截断意味着还有活没干完（下载的半路上），
+        // 与"条目 404 / 单个请求出错"要分开记 —— 见下面 seq 落账那道的判据。
+        let mut capped = false;
+        // 本轮提交出去的清单序号（纯拉的一侧没有）。收尾记 `seq_applied` 时它优先于读到的
+        // 那个 seq —— 本机自己刚公告了一版，落账要落在新的那一版上。
+        let mut committed_seq: Option<u64> = None;
         let (manifest, mut new_etag) = match self.remote.fetch_manifest(etag).await {
             Ok(None) => {
-                // 304：远端未变。仍有本地脏才继续，否则空轮结束。
+                // 304：远端未变。但**"远端未变"不等于"本机已追平"** —— 上一轮可能被
+                // 请求预算截断在下载的中途，此时账上（脏）是干净的，界还会说"已同步",
+                // 而库里其实少着一批实体。所以这里要用上一轮存下来的清单正文接着算。
+                let cached = self.local.cached_manifest().and_then(|b| Manifest::parse(&b).ok());
+                let backlog = cached.as_ref().is_some_and(|m| self.local.seq_applied() < m.seq);
                 let dirty = self.local.local_views().map(|v| v.iter().any(|l| l.dirty())).unwrap_or(false);
-                if !dirty {
+                if !dirty && !backlog {
                     st.requests += 1;
                     return (st, vec![SyncEvent::Completed(RoundOutcome::NoOp)]);
                 }
-                (None, etag.map(str::to_string))
+                st.requests += 1;
+                (cached, etag.map(str::to_string))
             }
             Ok(Some((bytes, e))) => {
                 st.requests += 1;
@@ -353,6 +372,7 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 if !window_covers {
                     for name in m.segments_needed_for(&self.local.cached_segment_hashes()) {
                         if st.requests >= self.cfg.round_request_cap {
+                            capped = true;
                             break;
                         }
                         match self.remote.fetch_segment(&name).await {
@@ -427,6 +447,7 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             locals.iter().map(|l| (l.key(), l)).collect();
         for d in plan.pushes() {
             if st.requests >= self.cfg.round_request_cap {
+                capped = true;
                 st.outcome = RoundOutcome::Partial;
                 break;
             }
@@ -467,13 +488,24 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
 
         // ④ pull 远端变更
         notera_core::crash_point("after_records_push");
+        // 已经有了的那一版，就别再花请求去要了（见 `LocalPort::synced_heads`）。
+        let held = self.local.synced_heads();
+        let rmap: BTreeMap<(String, String), &RemoteView> = remotes.iter().map(|r| (r.key(), r)).collect();
         notera_core::crash_point("before_apply");
         for d in plan.pulls() {
             if st.requests >= self.cfg.round_request_cap {
+                capped = true;
                 st.outcome = RoundOutcome::Partial;
                 break;
             }
             let (kind, id) = d.key.clone();
+            if let (Some((rev, hash)), Some(r)) = (held.get(&d.key), rmap.get(&d.key)) {
+                let same_rev = *rev == r.rev;
+                let same_hash = r.hash.as_deref().is_some_and(|h| notera_core::same_content_hash(h, hash));
+                if same_rev && same_hash {
+                    continue;
+                }
+            }
             match self.remote.fetch_record(&kind, &id).await {
                 Ok(Some(wire)) => {
                     st.requests += 1;
@@ -614,6 +646,7 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                                     hash12: e.unwrap_or_default(),
                                 },
                             ]);
+                            committed_seq = Some(next.seq);
                             st.cas_retries = tries;
                             break;
                         }
@@ -641,13 +674,23 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             }
         }
 
-        if let Some(m) = manifest.as_ref() {
-            let _ = self.local.apply(vec![ApplyOp::SetRemote {
-                kind: "seq".into(),
-                id: "applied".into(),
-                rev: m.seq,
-                hash12: String::new(),
-            }]);
+        // 只在**本轮没有被请求预算截断**时才把 seq 记成"已应用"。
+        //
+        // 早先这里是无条件写的，于是 >窗口 的库会卡死：本轮被 `round_request_cap` 截断
+        // （下载停在半路）→ seq 却已落账 → 下一轮读清单拿到 304 就直接判"无事可做"，
+        // 那些还没落到本机的实体**永远没人管**，而账上干干净净、界面说"已同步"。
+        // 实测：260 条笔记的库，第二台设备停在 196 条。见 `notera-host/tests/late_device.rs`。
+        // 注意判据是 `capped` 而不是 `outcome != Partial`：条目 404 也会给 Partial，
+        // 那种"远端说有、记录却没有"的实体不该让整轮永远追不平（§10 走 missing 修复）。
+        if let Some(seq) = committed_seq.or_else(|| manifest.as_ref().map(|m| m.seq)) {
+            if !capped {
+                let _ = self.local.apply(vec![ApplyOp::SetRemote {
+                    kind: "seq".into(),
+                    id: "applied".into(),
+                    rev: seq,
+                    hash12: String::new(),
+                }]);
+            }
         }
 
         if st.outcome == RoundOutcome::NoOp {

@@ -1773,6 +1773,17 @@ impl LocalPort for HostLocalPort {
     fn cached_segment_hashes(&self) -> BTreeMap<String, String> {
         BTreeMap::new()
     }
+    /// 干净行也要给：只报脏行的话，一台追平了的设备每轮都会把整份清单重下一遍
+    /// （见 `Store::synced_heads` 的注释里那条实测 196/260 的卡死）。
+    fn synced_heads(&self) -> BTreeMap<(String, String), (u64, String)> {
+        self.0
+            .store()
+            .synced_heads()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(kind, id, rev, hash)| ((kind_tag(kind).into(), id.to_string()), (rev.get(), hash)))
+            .collect()
+    }
     fn seq_applied(&self) -> u64 {
         self.0.inner.seq_applied.load(Ordering::SeqCst)
     }
@@ -1816,6 +1827,13 @@ impl LocalPort for HostLocalPort {
                     }
                 }
                 ApplyOp::SetRemote { kind, id, rev, hash12 } => {
+                    // 引擎的"这一版清单我已经 reconcile 到这儿了"标记。它是进程内的账，
+                    // 304 快路径靠它把"远端没变"和"本机已追平"分开 —— 搞混过一次就会
+                    // 出现"账上干净、库里少 63 条、徽标说已同步"那种谎报。
+                    // 重启后归零是**偏保守**的方向：宁可多算一轮全量计划，不可少算。
+                    if kind == "seq" && id == "applied" {
+                        self.0.set_seq_applied(rev);
+                    }
                     if let (Some(k), Ok(i)) = (EntityKind::from_tag(&kind), EntityId::parse(&id)) {
                         mapped.push(StoreApplyOp::SetRemote { kind: k, id: i, rev: Rev(rev), hash12 });
                     }
@@ -1835,11 +1853,14 @@ impl LocalPort for HostLocalPort {
                         mapped.push(StoreApplyOp::Purge { kind: k, id: i });
                     }
                 }
-                ApplyOp::StoreManifest { wire, etag, seq } => {
+                ApplyOp::StoreManifest { wire, etag, seq: _ } => {
                     self.0.set_manifest_cache(wire);
                     self.0.set_manifest_etag(etag);
-                    // 本轮提交后的清单序号 = 本地已看到的远端头部（窗口覆盖判定用它，§6.2）
-                    self.0.set_seq_applied(seq);
+                    // 这里**不**记 `seq_applied`。那个标记的语义是"本机已经把这个清单
+                    //  reconcile 完了"，而只有引擎知道本轮有没有被请求预算截断在下载中途。
+                    // 以前在这里顺手写掉，代价是：260 条的库里第二台设备拉了 197 条就被截断，
+                    // seq 却已落账 → 下一轮拿到 304 判"无事可做" → 剩下 63 条永远不来。
+                    // 判据移到 `notera-sync` 的收尾（见 late_device 测试）。
                 }
             }
         }

@@ -8,10 +8,11 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 475 通过 / 0 失败 / 0 ignored（53 个测试二进制） |
+| `cargo test --workspace` | 476 通过 / 0 失败 / 0 ignored（54 个测试二进制） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
 | L5 崩溃注入 `--test crash_recovery` | 9 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零 |
 | 附件续传 `--test attachment_resume` | 2/2（真杀进程重启接着要；服务器不理 `Range` 时当整份覆盖） |
+| 大库追平 `--test late_device`（SY-INT-12） | 1/1（260 条变更 > 窗口上限，空库设备完整收敛） |
 | 链路抖动 `--test reconnect`（SY-INT-11） | 1/1（六轮各坏一次，恢复后账目归零、两台设备逐条一致） |
 | 前端 | 171 通过（18 文件）；`vue-tsc --noEmit` 无错误；构建 213 KB → gzip 73 KB |
 | `scripts/arch-check.mjs` | 24/24 |
@@ -119,14 +120,7 @@
 
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
 
-- **【P1】新设备追一个大库追不平，而界面会说"已同步" → 未修，已定位到两处判据**
-  - 复现（`docs/evidence/late-device-repro.rs.txt`，尚未接入 `cargo test`，因为它现在会红）：设备 A 连写 **260** 条笔记（超过清单窗口上限 `WINDOW_MAX = 200`）并同步到收敛；空库设备 B 入伙。B 第一轮 `Partial pushed=1 pulled=197`（被每轮请求预算 `round_request_cap = 200` 截断），**第二轮起 `NoOp pulled=0`**，本机停在 196 条，而 `dirty_notes=0`、`outbox_pending=0` —— 也就是账上干净、徽标说已同步，剩下 63 条永远不会来。服务器侧核对过：`index.json` 的窗口有 **261** 条条目、`complete=true`、`segments=0`，记录文件齐全 —— **不是写侧漏公告**，是读侧把"截断的一轮"当成了"追平的一轮"
-  - 已定位的判据缺口：① 引擎收尾把清单序号无条件记成 `seq_applied`（`crates/notera-sync/src/lib.rs` 尾部），被预算截断的下载轮次也照记；② `ApplyOp::StoreManifest` 在 host 侧**顺手**又记了一次序号（`crates/notera-host/src/lib.rs`），于是同一个标记有两个写点；③ 304 快路径（`fetch_manifest` 返回 `Ok(None)`）只看"本机有没有脏"，没有"有没有未完成的下载 backlog"这一问，所以直接 `NoOp` 早退
-  - 已试过并**放弃**的改法：把 ①② 的落账改为"本轮未被截断才落"、并给 304 分支加 backlog 判定 —— 补丁留在 `docs/evidence/late-device-defect.patch`。它确实消掉了谎报（第二轮不再 NoOp），但 B 仍停在 197/260：后续轮次反复 `Partial` 而 `pulled=0`，说明还有第四个原因没找到（怀疑在 `seq_applied` 的读回：它是**进程内 atomic**，`SetRemote{kind:"seq"}` 写的是库，同进程下一轮读到的还是旧值 —— 那么 `window_covers` 与 backlog 判定都建立在错值上）。**没有把半成品提交**：这条改动会挪动同步核心的落账时机，而当时剩余的验证预算不足以证明它不引入新的谎报路径
-  - 影响：任何**变更数超过 200 的库**换设备/重装后拿不全数据，且界面无提示 —— 属于"未解释的同步一致性问题"，按 §47 单独这一条就足以把整体判定压成 NOT READY
-  - 解除条件：给上面的 atomic 加"读回落库值"的正确实现（或把 `seq_applied` 统一改成从 `sync_remote_index` 读），把"本轮是否被预算截断"作为唯一落账判据集中到引擎一处，然后让 `late_device` 以完整 260 条收敛进入 `cargo test --workspace` 并被变异验证（把预算调大或把落账改回无条件，测试必须红）
-
-- **`cargo fmt --check` 本机跑不了 → BLOCKED**：原因 = `stable-x86_64-pc-windows-gnu` 工具链没装 `rustfmt` 组件（`error: 'cargo-fmt.exe' is not installed`）；影响 = CI-CD 的 `format` 那一环没有本地等价证据，格式漂移只会在 CI 上第一次暴露；解除条件 = `rustup component add --toolchain stable-x86_64-pc-windows-gnu rustfmt`（要联网，且会改本机工具链，所以没有擅自动手）
+- **【已修 · 原为 P1】新设备追一个大库追不平，而界面说"已同步"** —— 现象：A 连写 260 条（超过清单窗口上限 `WINDOW_MAX = 200`）并同步收敛，空库 B 入伙后第一轮只落 197 条，**第二轮起引擎报 `NoOp`、`dirty_notes` 与 `outbox_pending` 都是 0**，本机永远停在 196/260，徽标却显示已同步。服务器侧先排除了写漏（清单窗口 261 条、`complete=true`、记录文件齐全）。真正的原因不在清单也不在预算，而在端口的一行注释之外：**`LocalPort::local_views()` 走的是 `dirty_entities()`，只报脏行** —— 一台已经追平的设备在引擎眼里是"本地 0 条"，于是 261 条远端条目每轮都被判成 P2「远端新增」重下一遍，每轮 200 次请求的预算全花在重复劳动上，真正缺的那 63 条永远排不到号。修法是给端口补一份**干净行的视图**：`Store::synced_heads()`（`rev == sync_rev` 且未删除的 `id/rev/content_hash`）→ `LocalPort::synced_heads()`（带默认空实现，测试桩不受影响）→ 引擎在拉之前先问"这一版本机是不是已经有了"，rev 与哈希都对得上就跳过这一次请求。附带把落账时机收成一个写点：`seq_applied` 不再由 host 的 `StoreManifest` 顺手落，而是引擎收尾时"本轮没被预算截断"才落，304 快路径于是能区分"远端没变"和"本机已追平"（此前它只问本机脏不脏）。门禁 `notera-host/tests/late_device.rs` 要求 260 条完整收敛 + 标题与内容哈希逐条一致 + 追平后再写一条仍能双向传播；变异验证：把那个跳过条件拆掉 → 停在 197/260 立刻红。**排查过程中被证伪、因而没有写进结论的两个猜测也留在这里**：① "分段基线没回头取"（服务器根本还没有分段，`segments=0`）；② "窗口被写侧截断"（清单里 261 条一条不少）
 - **黑盒 UAT 有两道，用途不同，都得跑**：`verify-blackbox.mjs` 是 §23 要的纯黑盒（只用界面，只断言屏幕上看得见的文字）；`verify-app.mjs` 会用本地桥复核**库里的真实状态**，因此**不算**黑盒 —— 但它证明的是"界面说的"与"库里有的"一致，这一条黑盒给不了。两道互补，不能用一道替代另一道
 
 - **文件夹树在界面上截断到 64 个**：`flattenTree(roots, limit = 64)` 是侧栏"移动到"和导出选择器共用的上限，超过 64 个文件夹的库会**静默少列**后面的（不报错、不提示）。深层子树现在能正常出现了，这个上限才第一次真正生效，因此必须记下来：要么去掉上限并改为虚拟列表，要么在界面上明说"只显示前 64 个"。属于交互取舍，按 §9 走人工评审，不在本轮自行改
