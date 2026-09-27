@@ -239,6 +239,81 @@ async fn a_conflict_without_a_payload_still_stays_in_the_inbox() {
     );
 }
 
+/// §5.2「远端永久删除 vs 本机从未上传过的编辑」的两台真设备断言。
+///
+/// 协议确实选了"永久删除传播优先"（`plan.rs` 的 P12/P13），但那句话**只有在
+/// 本机那一版先被留住的前提下**才成立。留不住的话，一台设备误按"彻底删除"就能
+/// 吃掉另一台从未上传的编辑 —— 那是数据安全那一档的事，比同步正确性还靠前。
+///
+/// 判据照 §5.2 原文的三条：① 进收件箱（有一条未裁决冲突）；② 本机内容**先完整保留**；
+/// ③ 传播不能覆盖未同步的本地写入（没留住又不报冲突 = 静默丢失）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_remote_purge_never_eats_an_edit_that_never_left_the_device() {
+    const PURGE_LOCAL: &str = "B 这台改了、一次都没上传过的那一版";
+    let dav = Tmp::new("purge-dav");
+    let srv = TestServer::start(Backend::Fs(dav.path().to_path_buf())).await;
+    let url = srv.base_url();
+
+    let a = Device::boot("purge-a", &url);
+    a.app.sync_once().await.expect("A 入伙");
+    let folder = a.app.default_folder_id().unwrap();
+    let created = a
+        .app
+        .create_note(&folder, doc("A 建的、后来被彻底删除的那条"))
+        .expect("A 建笔记");
+    let id = notera_core::EntityId::parse(&created.id).expect("id");
+    a.settle(8).await;
+
+    let b = Device::boot("purge-b", &url);
+    b.settle(8).await;
+    let head = b.app.store().get_note(&id).unwrap().expect("B 拉到了这条");
+
+    // B 改了但**一轮都不跑**（服务器上完全不知道有这一版）
+    b.app
+        .edit_note(&id, doc(PURGE_LOCAL), head.rev)
+        .expect("B 编辑");
+
+    // A 那边彻底删除（purge）并公告
+    a.app.store().purge_note(&id).expect("A 永久删除");
+    a.settle(8).await;
+
+    // B 这一轮才撞上远端的 purged 墓碑
+    b.app.sync_once().await.expect("B 的一轮");
+
+    let text_of = |app: &App, ent: &notera_core::EntityId| -> String {
+        match app.store().get_note(ent).ok().flatten() {
+            Some(n) => {
+                notera_richtext::extract(
+                    &notera_richtext::parse_from_value(&n.doc).unwrap_or_default(),
+                )
+                .plain_text
+            }
+            None => String::new(),
+        }
+    };
+
+    let cards = b.app.open_conflicts().expect("卡片列表");
+    let card = cards.iter().find(|c| c.note_id == id.to_string());
+    // ② 本机那一版还在不在：正文本身，或冲突卡片带来的那份副本
+    let kept_live = text_of(&b.app, &id).contains(PURGE_LOCAL);
+    let kept_copy = card
+        .and_then(|c| c.copy_note_id.as_ref())
+        .and_then(|s| notera_core::EntityId::parse(s).ok())
+        .map(|cid| text_of(&b.app, &cid).contains(PURGE_LOCAL))
+        .unwrap_or(false);
+
+    assert!(
+        card.is_some(),
+        "①§5.2 要求这种处境进收件箱，B 的未裁决冲突里却没有它（卡片：{cards:?}）"
+    );
+    assert!(
+        kept_live || kept_copy,
+        "③静默丢失：远端的 purged 墓碑把 B 从未上传的那一版吃掉了 —— 正文没了，\
+         卡片也没带副本（卡片 {:?}）。永久删除的传播不许覆盖未同步的本地写入。",
+        card
+    );
+}
+
 // ——— 浏览器 lane 的留档现场 ———
 
 fn boot_at(dir: &Path, base_url: &str) -> App {
