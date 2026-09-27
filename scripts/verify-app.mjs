@@ -643,6 +643,54 @@ await step('控制台零 error', async () => {
   return 'clean';
 });
 
+// IMP-08：`.enex` 的**界面路径** —— 之前只有 Rust 侧的命令测试与 vue-tsc，没人真点过。
+// 这一步只认屏幕事实：点设置 → 填路径 → 点导入 → 报告与逐条说明出现在页面上，
+// 并且导入回来的两条笔记**在列表里看得见**（不是内存态）。
+await step('设置页导入 .enex：报告、说明、以及列表里真的出现这两条', async () => {
+  const dir = 'D:/code/Notes/.logs/enex-lane';
+  fs.mkdirSync(dir, { recursive: true });
+  const file = `${dir}/lane-notes.enex`;
+  const stamp = Date.now();
+  const t1 = `恩ex 甲 ${stamp}`;
+  const t2 = `恩ex 乙 ${stamp}`;
+  fs.writeFileSync(
+    file,
+    `<?xml version="1.0" encoding="UTF-8"?>\n<en-export version="6.5.1">\n` +
+      `<note><title>${t1}</title><content><![CDATA[<en-note><div>第一段正文</div></en-note>]]></content><tag>财务</tag></note>\n` +
+      `<note><title>${t2}</title><content><![CDATA[<en-note><div>第二段正文</div></en-note>]]></content></note>\n` +
+      `</en-export>`,
+    'utf8',
+  );
+  // 前面有一步把视口调成了手机宽度（侧栏在那个布局下根本不渲染）。先恢复桌面视口，
+  // 再重新加载从"用户刚打开应用"的状态出发 —— 测的是导入这条路，不是上一步的残留。
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
+  await page.locator('[data-testid="nav-settings"]').scrollIntoViewIfNeeded();
+  await page.click('[data-testid="nav-settings"]', { timeout: 8000 });
+  const pathBox = page.locator('[data-testid="data-path"]');
+  await pathBox.waitFor({ state: 'visible', timeout: 5000 });
+  await pathBox.fill(file);
+  await page.click('[data-testid="import-files"]', { timeout: 5000 });
+  const report = page.locator('[data-testid="import-files-report"]');
+  await report.waitFor({ state: 'visible', timeout: 8000 });
+  const line = (await report.innerText()).replace(/\s+/g, ' ');
+  // 报告那行是「新增 / 重复 / 失败：N / N / N」，判据读的是屏幕上的数，不是命令返回值
+  if (!/[:：]\s*2\s*\/\s*0\s*\/\s*0/.test(line)) {
+    throw new Error(`导入报告该是 2 / 0 / 0，实际读到「${line}」`);
+  }
+  const notices = (await page.locator('[data-testid="import-files-notices"]').first().innerText()).replace(/\s+/g, ' ');
+  // §39：本库表达不了的（Evernote 的 <tag>）必须点名，不许悄悄消失
+  if (!/tag/.test(notices)) throw new Error(`说明里没点出 <tag> 没落地：「${notices}」`);
+  // 回到列表，用界面的眼睛确认两条笔记真在那儿
+  await page.click('[data-testid="nav-list"], [data-testid="banner-link"]', { timeout: 5000 }).catch(() => {});
+  await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
+  const body = await page.locator('body').innerText();
+  for (const title of [t1, t2]) {
+    if (!body.includes(title)) throw new Error(`导入的「${title}」没出现在列表里`);
+  }
+  return `列表两条都在；说明：${notices.slice(0, 60)}`;
+});
+
 await step('网络请求零失败', async () => {
   if (failedRequests.length > 0) throw new Error(`${failedRequests.length} 条：${failedRequests.slice(0, 5).join('; ')}`);
   return '0 failed';

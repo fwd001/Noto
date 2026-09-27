@@ -566,4 +566,4 @@ BB-02 抓到过一个只有黑盒才能抓到的缺陷（详见 CHANGELOG）：*
 | IMP-05 | 幂等：同一份 `.enex` 再导一次一条都不新建；重复数按条目报 | `notera-importer/tests/importer.rs` + `enex_import.rs`（重放断言 `created == 0 && duplicates == 2`） | L3 | P0 | **已实现并通过** |
 | IMP-06 | 新格式不许绕开任何一道入口闸门（8 MiB 体积上限对 `.enex` 同样生效） | `enex_goes_through_the_same_size_gate_as_other_sources` | L3 | P1 | **已实现并通过**。⚠️ 代价：真实带图导出可能超限 → 表现为一条看得见的失败（不是静默截断）；要支持大文件得改成按 `<note>` 流式读盘，动 `ImportSource` 形状 → §9 |
 | IMP-07 | 从**命令面**进来（`import_files`）而不是只有库内 API；空路径列表要报错而不是"成功导入 0 条" | `notera-host/tests/enex_import.rs::import_files_command_...` | L3 | P1 | **已实现并通过** |
-| IMP-08 | 浏览器里点得到、看得见 notices | 未做端到端 lane 步骤 | L4 | P2 | **BLOCKED**：本轮预算内没跑浏览器 lane；设置页那条 UI 只经过 `vue-tsc` 与构建，**没有真点击证据** |
+| IMP-08 | 浏览器里点得到、看得见 notices | `scripts/verify-app.mjs` 第 35 步（重载到桌面视口 → 点侧栏「设置」→ 填 `.enex` 路径 → 点「导入这个文件」→ 读屏幕上的报告与逐条说明 → 回列表确认两条笔记真在） | L4 | P1 | **已实现并通过**（36/36）。变异自证：把 dispatch 里的命令名改成 `import_files_MUTATED` 重新起桥 → 这一步红，并且"零失败请求"那步点名 `POST /cmd/import_files → HTTP 400`。**踩到的坑记一笔**：清空数据目录后必须等桥 `{"ok":true}` 再跑，用固定 `sleep 8` 会出现 4 条与改动无关的红（"刷新后笔记消失"那种），差点被误判成产品回归 |
