@@ -1,0 +1,222 @@
+diff --git a/crates/notera-host/src/lib.rs b/crates/notera-host/src/lib.rs
+index 1d3320f..901ed95 100644
+--- a/crates/notera-host/src/lib.rs
++++ b/crates/notera-host/src/lib.rs
+@@ -1778,8 +1778,16 @@ impl LocalPort for HostLocalPort {
+     fn cached_remote(&self) -> Result<Vec<RemoteView>, LocalError> {
+         Ok(self.0.inner.cached_remote.lock().unwrap().clone())
+     }
++    /// 分段缓存读的是**库里存的那一份**，不是进程内存：调度器每 25 秒一轮，而重启之后
++    /// 第一次追平照样要面对整份基线 —— 只活在内存里等于每次开机都重下一遍。
+     fn cached_segment_hashes(&self) -> BTreeMap<String, String> {
+-        BTreeMap::new()
++        let acct = self.account_id();
++        self.0.store().segment_hashes(&acct).unwrap_or_default()
++    }
++    fn set_cached_segment_hashes(&self, map: BTreeMap<String, String>) {
++        let acct = self.account_id();
++        // 写失败只让下一轮多下一次分段，不该把这一轮顶死（引擎已经拿到内容并落库了）
++        let _ = self.0.store().set_segment_hashes(&acct, &map);
+     }
+     /// 干净行也要给：只报脏行的话，一台追平了的设备每轮都会把整份清单重下一遍
+     /// （见 `Store::synced_heads` 的注释里那条实测 196/260 的卡死）。
+diff --git a/crates/notera-host/tests/big_library.rs b/crates/notera-host/tests/big_library.rs
+index 717d246..5eeeb71 100644
+--- a/crates/notera-host/tests/big_library.rs
++++ b/crates/notera-host/tests/big_library.rs
+@@ -12,6 +12,7 @@
+ //! 逐条 (标题, 内容哈希) 一致 —— 不是"某个函数被调用过"。
+ //!
+ //! 跑法：`cargo test -p notera-host --test big_library`
++use std::collections::BTreeMap;
+ use std::path::{Path, PathBuf};
+ use std::sync::atomic::{AtomicUsize, Ordering};
+ use std::time::Instant;
+@@ -19,9 +20,9 @@ use std::time::Instant;
+ use notera_host::commands::AccountDraftCmd;
+ use notera_host::App;
+ use notera_store::NoteQuery;
+-use notera_sync::manifest::{WINDOW_MAX, SEGMENT_TARGET};
++use notera_sync::manifest::{SEGMENT_TARGET, WINDOW_MAX};
+ use notera_sync::RoundOutcome;
+-use notera_test_webdav::{Backend, TestServer};
++use notera_test_webdav::{Backend, LoggedRequest, TestServer};
+ use serde_json::json;
+ 
+ const SECRET: &str = "sup3r-s3cr3t";
+@@ -128,6 +129,20 @@ fn announced_entries(index: &serde_json::Value, dir: &Path) -> usize {
+     n
+ }
+ 
++/// 一段日志里"整份下载某个基线分段"的次数，按分段名分开数。
++/// 只看 `GET seg-*.json` 且 200；404 / 304 都不算拿到内容。
++fn segment_downloads(log: &[LoggedRequest]) -> Vec<(String, usize)> {
++    let mut m: BTreeMap<String, usize> = BTreeMap::new();
++    for r in log {
++        if r.method == "GET" && r.status == 200 {
++            if let Some(rest) = r.path.split("/manifest/seg-").nth(1) {
++                *m.entry(format!("seg-{rest}")).or_default() += 1;
++            }
++        }
++    }
++    m.into_iter().collect()
++}
++
+ #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+ async fn a_thousand_note_library_catches_up_within_a_bounded_number_of_rounds() {
+     let started = Instant::now();
+@@ -182,6 +197,7 @@ async fn a_thousand_note_library_catches_up_within_a_bounded_number_of_rounds()
+ 
+     // ── 读侧：空库入伙，轮数有界、徽标说实话、逐条一致 ─────────────────
+     let b = Device::boot("big-b", &url);
++    let b_log_start = srv.request_log().len();
+     let first = b.app.sync_once().await.expect("B 的第一轮");
+     assert_eq!(first.outcome, RoundOutcome::Partial, "夹具要改：千条的第一轮该被预算截断：{first:?}");
+     assert_eq!(
+@@ -194,6 +210,14 @@ async fn a_thousand_note_library_catches_up_within_a_bounded_number_of_rounds()
+     assert!(caught_up <= CATCH_UP_ROUND_CAP, "{NOTES} 条追平用了 {caught_up} 轮，超过上界 {CATCH_UP_ROUND_CAP}：\n  A {}\n  B {}", atrace.join("\n  "), btrace.join("\n  "));
+ 
+     let bst = b.app.store().stats().unwrap();
++    // 基线分段每轮重下是这一档最容易漏的浪费：索引走 304 看着很省，分段却每次都整份搬。
++    // 追平期间 A 是闲着的 —— 分段内容一次都没变，所以每个分段最多下载一次。
++    // （`LocalPort::cached_segment_hashes` 曾经恒返回空表，于是这里实测每轮一次。）
++    let segs = segment_downloads(&srv.request_log()[b_log_start..]);
++    for (name, count) in &segs {
++        assert_eq!(*count, 1, "追平 {NOTES} 条时分段 {name} 被整份下载了 {count} 次（应为 1 次）—— 分段内容哈希缓存没接上");
++    }
++    assert!(!segs.is_empty(), "追平过程一个分段都没下 —— 夹具没走到「基线回退」那条码路");
+     assert_eq!(bst.notes, NOTES as u32, "干净设备追完之后应有 {NOTES} 条，实际 {}：\n  B {}", bst.notes, btrace.join("\n  "));
+     assert_eq!(bst.fts_rows, bst.notes, "搜索索引没跟着笔记到位（{} vs {}）", bst.fts_rows, bst.notes);
+     assert_eq!(
+diff --git a/crates/notera-store/src/syncml.rs b/crates/notera-store/src/syncml.rs
+index a352629..f4ae4ef 100644
+--- a/crates/notera-store/src/syncml.rs
++++ b/crates/notera-store/src/syncml.rs
+@@ -19,6 +19,12 @@ fn nil_id() -> EntityId {
+     EntityId::parse(NIL_ID).unwrap_or_else(|_| EntityId::parse(NIL_ID).expect("nil UUID 必须可解析"))
+ }
+ 
++/// 分段缓存按账户分开存：换服务器之后同名分段（`seg-0000`）是**另一份内容**，
++/// 混用就会让新账户跳过一份本机其实没有的基线。
++fn segment_hashes_key(account: &str) -> String {
++    format!("segment_hashes:{account}")
++}
++
+ /// 只在 `entity_key` 确实是 UUID 时填充 `id_`。
+ fn id_or_nil(s: &str) -> EntityId {
+     EntityId::parse(s).unwrap_or_else(|_| nil_id())
+@@ -208,6 +214,26 @@ impl Store {
+         Ok(out)
+     }
+ 
++    /// 分段内容哈希缓存（按账户存：`{分段名 → hash12}`）。
++    ///
++    /// 引擎据此决定"这一段的基线还要不要再下一遍"（`LocalPort::cached_segment_hashes`）。
++    /// 只有**核对过**的内容才会被写进来 —— 写方是引擎，这里只负责跨进程留住它。
++    /// 读不进来一律当"没有缓存"：代价是多下一次分段，绝不能把整轮同步顶死。
++    pub fn segment_hashes(&self, account: &str) -> Result<std::collections::BTreeMap<String, String>, StoreError> {
++        let conn = self.read()?;
++        let raw = match rows::meta_get(&conn, &segment_hashes_key(account))? {
++            Some(v) => v,
++            None => return Ok(std::collections::BTreeMap::new()),
++        };
++        Ok(serde_json::from_str(&raw).unwrap_or_default())
++    }
++
++    pub fn set_segment_hashes(&self, account: &str, map: &std::collections::BTreeMap<String, String>) -> Result<(), StoreError> {
++        let account = account.to_string();
++        let json = serde_json::to_string(map).map_err(|e| StoreError::Constraint(format!("分段哈希缓存写不出去: {e}")))?;
++        self.write_tx(|tx, _now| rows::meta_set(tx, &segment_hashes_key(&account), &json))
++    }
++
+     /// 脏集 = `rev != sync_rev`（DATA-MODEL §4.2），外加"永久删除尚未被远端确认"的墓碑。
+     ///
+     /// 硬性要求 6：有 `purged=1` 墓碑的记录**不会**被当作新增列入脏集（否则设备 B 会把
+diff --git a/crates/notera-sync/src/lib.rs b/crates/notera-sync/src/lib.rs
+index 07526b6..17ed7c6 100644
+--- a/crates/notera-sync/src/lib.rs
++++ b/crates/notera-sync/src/lib.rs
+@@ -34,6 +34,12 @@ pub trait LocalPort: Send + Sync {
+     /// 已缓存的远端索引（清单的本地投影）
+     fn cached_remote(&self) -> Result<Vec<RemoteView>, LocalError>;
+     fn cached_segment_hashes(&self) -> BTreeMap<String, String>;
++    /// 记下"本机现在有这些分段，且内容与清单声明的 `hash12` 核对过"。
++    ///
++    /// 与 `cached_segment_hashes` 是一对：只读不写等于缓存永远为空 —— 落后超过窗口的
++    /// 设备每一轮都要重下整份基线分段（实测千条库每轮 17~42 KiB、5000 条 186 KiB）。
++    /// 允许空实现（不丢数据，只是贵），但产品实现必须接上。
++    fn set_cached_segment_hashes(&self, _map: BTreeMap<String, String>) {}
+     /// 本机已经存下、且已经与远端确认过的实体头（`(kind,id)` → `(rev, 全哈希)`）。
+     ///
+     /// 默认空表 = "一条都不跳过"，也就是本方法出现之前的行为。实现方**必须**给出干净行：
+@@ -378,14 +384,26 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
+                 let window_covers = m.window.complete
+                     && self.local.seq_applied() >= m.window.since_seq;
+                 if !window_covers {
+-                    for name in m.segments_needed_for(&self.local.cached_segment_hashes()) {
++                    let mut held = self.local.cached_segment_hashes();
++                    let before = held.clone();
++                    for name in m.segments_needed_for(&held) {
+                         if st.requests >= self.cfg.round_request_cap {
+                             capped = true;
+                             break;
+                         }
++                        let want = m.segments.iter().find(|s| s.n == name).map(|s| s.hash12.clone());
+                         match self.remote.fetch_segment(&name).await {
+                             Ok(entries) => {
+                                 st.requests += 1;
++                                // 核对过才缓存：重算出来的 hash12 与清单声明的同一个，才算
++                                // "本机这一段就是清单所指的那版"。对端刚重写过分段时二者会
++                                // 不一致 —— 那一段照旧要用（内容自己带 rev/哈希，判据在 P 规则
++                                // 里），只是别把它当成缓存，否则下一轮会跳过一份读不到的基线。
++                                if let Some(w) = want.clone() {
++                                    if crate::manifest::segment_hash12(&entries) == w {
++                                        held.insert(name.clone(), w);
++                                    }
++                                }
+                                 out.retain(|r| !entries.iter().any(|e| e.key() == (r.kind.clone(), r.id.clone())));
+                                 for e in entries {
+                                     out.push(RemoteView {
+@@ -401,6 +419,12 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
+                             Err(_) => st.outcome = RoundOutcome::Partial,
+                         }
+                     }
++                    // 压实之后旧名字再也不会被引用；留着就是无界长大
++                    let live: Vec<String> = m.segments.iter().map(|s| s.n.clone()).collect();
++                    held.retain(|k, _| live.contains(k));
++                    if held != before {
++                        self.local.set_cached_segment_hashes(held);
++                    }
+                 }
+                 if window_covers || manifest.is_some() {
+                     for e in &m.window.entries {
+diff --git a/crates/notera-sync/src/manifest.rs b/crates/notera-sync/src/manifest.rs
+index 084cd5b..bdf191f 100644
+--- a/crates/notera-sync/src/manifest.rs
++++ b/crates/notera-sync/src/manifest.rs
+@@ -343,7 +343,7 @@ impl Manifest {
+                 bytes: 0,
+             });
+             r.count = entries.len();
+-            r.hash12 = short(&sha256_hex(&wire));
++            r.hash12 = segment_hash12(entries);
+             r.bytes = wire.len() as u64;
+             r.cover = entries
+                 .first()
+@@ -383,6 +383,16 @@ pub fn segment_wire(entries: &[EntryRef]) -> Vec<u8> {
+     notera_core::canonical_json(&serde_json::to_value(entries).unwrap_or_default()).into_bytes()
+ }
+ 
++/// `SegmentRef.hash12` 的算法：`segment_wire` 那串字节的 sha256 前 12 位。
++///
++/// 写侧（`compact`）与读侧（引擎核对刚拿到的分段）**必须走这一个函数**：两各写一份
++/// 就会漂移，而漂移的代价是要么缓存永不命中（每轮重下基线），要么把不相干的字节
++/// 当成"清单引用的那一段"缓存下来。读侧还用它做一致性检查 —— 拿到的条目重算出来
++/// 与清单声明的不一致，说明服务器那一段不是清单所指的那版，绝不缓存。
++pub fn segment_hash12(entries: &[EntryRef]) -> ShortHash {
++    short(&sha256_hex(&segment_wire(entries)))
++}
++
+ fn sha256_hex(bytes: &[u8]) -> String {
+     notera_core::ContentHash::of(bytes).as_str()["sha256:".len()..].to_string()
+ }
