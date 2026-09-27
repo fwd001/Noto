@@ -22,7 +22,7 @@
 | Rust 全量测试 | **487 通过 / 0 失败 / 0 ignored（58 个测试二进制）** | `cargo test --workspace` | L0–L4 |
 | Clippy（CI 原样命令） | 0 error / 0 warning | `cargo clippy --workspace --all-targets -- -D warnings` | L0 |
 | 架构适应度 | **25/25**（含最后一条"扫描台账"：任何源码门禁扫到 0 个文件即判失败） | `node scripts/arch-check.mjs` | 静态 |
-| 前端 | **186 通过（20 文件）**；`vue-tsc --noEmit` 0 错；构建 213 KB → gzip 73 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` | L0/L1 |
+| 前端 | **189 通过（20 文件）**；`vue-tsc --noEmit` 0 错；构建 213 KB → gzip 73 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` | L0/L1 |
 | §26 无障碍 | 静态门禁 + 3 条专项测试（见 TEST-PLAN A11Y-01…04） | `arch-check` / `npm test` | L1 |
 | 崩溃注入（小库 9 点 + 大库压实 1 点） | 逐个**真把子进程杀死**（退出码 77）后重启，两台设备逐条一致、待办归零 | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery --test compaction_crash` | L5 |
 | 附件下载续传 | 2/2（真杀进程重启接着要；服务器**不理** `Range` 时当整份覆盖） | `cargo test -p notera-host --test attachment_resume` | L3/L5 |
@@ -64,7 +64,7 @@
 | B1 | macOS / Android / iOS 构建与真机 | 本机只有 Windows + GNU 工具链，无 Xcode/Android SDK/真机 | 跨平台"原生感"与移动端交互只有浏览器视口证据，平台产物未验 | 需要的机器/设备与权限由用户提供（§49）；CI 上跑对应 job |
 | B2 | 真实公网 WebDAV 服务器矩阵 | 手头只有本机内存/文件系统上的测试服务器（含各类故障注入） | 各家服务器的 Range / MOVE / 条件请求差异未全覆盖 | 用户给一台可写的真实服务器（Nextcloud/SeaTTY/Apache mod_dav 任一），跑 `notera-cli dav-probe` + 端到端 |
 | B3 | 追平过程中基线分段每轮整份重下 | 判据（`hash12`）与表都在，但**远端视图不可持久**：`cached_remote()` 读的 Mutex 从未被写入、`sync_remote_index` 生产路径零调用者且缺 `deleted_at` 列 | 只贵不错：千条库追平实测 5 轮 × 一份基线；空轮仍是 1 请求 / 304 / 0 字节 | 先按 §9/§51 定"远端视图持久化"的迁移（含 `deleted_at`，且只在未被预算截断时整份替换）；补丁与判据在 `patches/` |
-| B4 | 编辑器的"空白区点击会先落一条换行" | 未查清为何 `parseEditable` 对空块产出 `[{"text":"\n"}]` | 不丢数据；可能让新笔记首行标题派生拿到空行（短暂显示"无标题"） | 查 `onBlankClick`/`focusBlock` 与空块的 `<br>` 表示，并把"空白处点击不应写入内容"钉成测试 |
+| B4 | ~~编辑器的"空白区点击会先落一条换行"~~ **已修**（提交 `4186a00`） | 占位 `<br>` 被映射成换行 | 曾让第一次 autosave 只存进一条换行、新笔记短暂显示「无标题」 | 已改：`parseEditable` 只在还没吐出任何内容时跳过占位 `<br>`；三条用例先红后绿，端到端 35/35、纯黑盒 10/10 |
 | B5 | `cargo fmt --check` | 工具链缺 `rustfmt` 组件 | 格式漂移只会在 CI 第一次暴露 | 见第 2 节命令（联网 + 改本机工具链，需用户同意） |
 | B6 | PERF-01/09/10/13/12 未建基线；PERF-14/05 已钉 | 需要真机首屏计时与假时钟（autosave 节拍）等前置 | 冷启动/搜索/大列表滚动等没有可回归的数字上界 | 建基线需决定"在什么硬件上测"；假时钟那条可在本机做 |
 
