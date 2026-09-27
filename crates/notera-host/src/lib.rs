@@ -628,6 +628,17 @@ impl App {
         let bytes = std::fs::read(&path).map_err(|_| {
             CmdError::of("attachment_missing", false).with(serde_json::json!({ "sha256": sha256 }))
         })?;
+        // 读侧也算一次哈希：**sha256 是身份** 这条规则要一路管到给界面那条路。
+        // 不验的后果不是"少一次校验"，而是"错字节会被画出来"：磁盘体检只判"在不在 + 长度对不对"，
+        // 同长度被改坏的那一份它不动（见 DATA-MODEL §8 那条边界），于是界面按 sha 拿到一段
+        // 并不属于这个 sha 的内容、并缓存整个会话 —— 屏幕上没有任何地方说它坏了。
+        // 验了之后：坏了就报 `attachment_corrupt`，界面留占位（附件不阻塞正文，INV 已有），
+        // 附件轮/磁盘体检再把它换回来。代价是一次哈希，而同一次读本来就要 base64 + 过 IPC。
+        if notera_crypto::sha256_hex(&bytes) != sha256 {
+            tracing::warn!(sha = %sha256, bytes = bytes.len(), "本机 blob 内容与 sha 不符，拒绝交给界面");
+            return Err(CmdError::of("attachment_corrupt", false)
+                .with(serde_json::json!({ "sha256": sha256 })));
+        }
         if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
             return Err(CmdError::of("too_large", false)
                 .with(serde_json::json!({ "bytes": bytes.len(), "limit": MAX_ATTACHMENT_BYTES })));
@@ -1707,11 +1718,19 @@ impl App {
     ///
     /// 判据只有一条：**sha256 才是身份**。所以尺寸对不上时先复算一次哈希，不让一次
     /// 登记误差把一份好文件重下 —— 那会每轮循环一次（降级→重下→`ingest_blob` 见
-    /// 目标已存在而不覆盖→尺寸还是对不上→再降级）。哈希确实不符才删文件：留着它，
-    /// 重下也只会保留坏字节。删不掉就不降级，否则下一轮读到的还是同一份坏文件。
+    /// 目标已存在而不覆盖→尺寸还是对不上→再降级）。
+    ///
+    /// **哈希不符时不删，只挪开**（`<sha>.corrupt`）—— 数据安全优先。直接删的代价是：
+    /// 万一 `remote_state='present'` 本身是假的（旧版本那个 412 分支就记出过悬空 present），
+    /// 这台机器上最后一份字节就没了。挪开同样达成目的：正式位置空出来，`ingest_blob`
+    /// 就会写新的那份；等重下并校验通过，下载那条分支再清掉 `.corrupt`
+    /// （那时销毁它才有凭据 —— 手上已有一份哈希对得上的替代）。挪不动就不降级，
+    /// 否则下一轮读到的还是同一份坏文件。
     ///
     /// 成本：每条候选一次 `stat`（哈希只在尺寸对不上时才算）。这比"少一次下载"值钱 ——
     /// 不体检的代价是那张图**永久**打不开，而且系统以为自己已经修好了。
+    /// 这里**不**写 `verified_at`：那一列的语义是"整份内容哈希核对通过的时刻"，
+    /// 体检对大多数行只做了一次 `stat`，写它等于谎报"这份核对过了"。
     fn demote_lost_local_blobs(&self) {
         let mut lost = 0usize;
         for (sha, size) in self
@@ -1750,8 +1769,8 @@ impl App {
                 tracing::debug!(%sha, on_disk, ledger = size, "尺寸与登记不符但哈希相符：以哈希为准");
                 continue;
             }
-            tracing::warn!(%sha, on_disk, ledger = size, "本机附件内容坏了，删掉重下");
-            if std::fs::remove_file(&path).is_err() {
+            tracing::warn!(%sha, on_disk, ledger = size, "本机附件内容坏了，挪开重下");
+            if self.park_corrupt_blob(&path).is_err() {
                 continue;
             }
             lost += 1;
@@ -1764,6 +1783,42 @@ impl App {
             tracing::warn!(lost, "本机附件与账不符，降级重下（§27 本地附件缺失）");
             // 离线时本轮补不回来：界面要先看到占位，而不是继续画一张打得开的图
             self.emit(BusEvent::NotesChanged { ids: vec![] });
+        }
+    }
+
+    /// 把一份哈希不符的坏文件挪到 `<原文件>.corrupt`，腾出正式位置给重下。
+    /// 那里已经有文件时带上毫秒戳 —— 同一 sha 更早的一份坏现场不该被覆盖掉。
+    fn park_corrupt_blob(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(".corrupt");
+        let parked = std::path::PathBuf::from(&name);
+        if !parked.exists() {
+            return std::fs::rename(path, &parked);
+        }
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let mut alt = path.as_os_str().to_os_string();
+        alt.push(format!(".corrupt-{stamp}"));
+        std::fs::rename(path, std::path::PathBuf::from(alt))
+    }
+
+    /// 重下并校验通过之后清掉那份坏拷贝 —— 现在销毁它有凭据：手上已经有一份哈希
+    /// 对得上的替代了。清不掉不影响正确性（它不在正式位置，谁都读不到它）。
+    fn drop_parked_corrupt_blobs(&self, sha: &str) {
+        let path = self.inner.store.blob_path(sha);
+        let Some(dir) = path.parent() else {
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with(sha) && name.contains(".corrupt") {
+                let _ = std::fs::remove_file(e.path());
+            }
         }
     }
 
@@ -1910,12 +1965,26 @@ impl App {
                     if notera_crypto::sha256_hex(&bytes) != sha {
                         tracing::warn!(%sha, "续传拼出来的附件哈希不符，丢弃半截文件");
                         let _ = std::fs::remove_file(&part);
+                        // 服务器给的内容与这个 sha 不符 —— 那**不是**"这次没下好"，而是
+                        // "对面那份东西就是错的"。留 in-queue 会让它每 20 s 重下一遍、
+                        // 每遍都注定丢在同一个哈希判上（带宽与日志都被它吃干，而状态页永远
+                        // 显示"还在同步"）。所以记 `remote_state='error'`：两个队列都不再挑它
+                        // （下载要 present/unknown，上传要本地 available/partial/error），
+                        // 重新武装靠的是这条记录被再次应用或用户重新插一次图 —— 那是**意图**，
+                        // 不是后台循环的猜测。
+
+                        let _ = self
+                            .inner
+                            .store
+                            .set_attachment_states(sha, None, Some("error"));
                         let _ = self.inner.store.finish_attachment_ops(sha, false);
                         failed += 1;
                         continue;
                     }
                     if self.inner.store.ingest_blob(sha, &bytes).is_ok() {
                         let _ = std::fs::remove_file(&part);
+                        // 体检那份坏拷贝现在有哈希对得上的替代了，才允许销毁
+                        self.drop_parked_corrupt_blobs(sha);
                         let _ = self.inner.store.finish_attachment_ops(sha, true);
                         down += 1;
                     } else {

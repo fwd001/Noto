@@ -245,6 +245,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'error.sync_failed': '这一轮同步没完成，会自动重试。',
   'error.corrupt_record': '发现一条无法识别的记录，已跳过以保护其他数据。',
   'error.attachment_missing': '附件暂时不可用，正文不受影响。',
+  'error.attachment_corrupt': '本机这份附件的内容和它的校验和不一致，已拒绝显示；正文不受影响，同步会尝试把它换回来。',
   'error.too_large': '这个文件超过单个附件 32 MiB 的上限，没有添加。正文与其它附件都没被改动。',
   'error.read_failed': '本地文件没能读出来，未改动任何数据。',
   'error.no_default_folder': '这台设备上找不到默认笔记本，已停止这一步 —— 免得把笔记放进一个说不清的位置。',

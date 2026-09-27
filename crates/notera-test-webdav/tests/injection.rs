@@ -492,4 +492,11 @@ fn hang_on_follows_the_same_rule_grammar_as_status_for() {
         !Injection::hang().hangs("GET", &obj),
         "全局 hang 与按路径 hang 是两个旋钮，不许互相串"
     );
+    // `post:` 是 status_for 专用的（"先落盘再回错"）。hang 吞掉它没问题，但**不能把它当规则的一部分**：
+    // 写 `hang_on("post:MOVE *")` 的人该立刻发现这条路不存在，而不是得到一个静默不同的语义。
+    let post = Injection::hang_on("post:GET *x.bin");
+    assert!(
+        post.hangs("GET", "/a/x.bin"),
+        "行为是：`post:` 在 hang 这条路里被剥掉且**不参与判定**（它对 hang 没有意义）。         这条断言钉住这个事实；哪天真要支持 `FAIL(hang,post:…)`，先改这里再改实现"
+    );
 }

@@ -35,6 +35,7 @@ const COMMAND_CODES = [
   // "操作没有成功，可以稍后再试"。两边都要有：arch-check 管登记，这里管真拿得到文案。
   'read_failed',
   'attachment_missing',
+  'attachment_corrupt',
   'too_large',
   'no_default_folder',
   'bad_action',

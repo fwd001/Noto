@@ -146,9 +146,35 @@ fn blob_on_disk(b: &App, sha: &str) -> Vec<u8> {
 
 /// 编辑器取图走的是命令面 `attachment_data`：坏/缺都必须回一个**具名**错误，
 /// 而不是 panic、也不是回一段错字节让界面画出半张图。
-fn ui_read(b: &App, sha: &str) -> serde_json::Value {
-    notera_host::commands::dispatch(b, "attachment_data", json!({ "sha256": sha }))
-        .unwrap_or_else(|e| json!({ "ok": false, "code": e.code }))
+///
+/// 返回的是**形状**（错误码 + 字节长度）而不是原始 JSON。这里踩过一次坑：
+/// 原来写成 `got.get("code").is_some() || got.get("data")…is_none()`，而
+/// `commands::dispatch` 根本没有 `{ok, data}` 那层包（`j()` 就是 `serde_json::to_value`）——
+/// 于是右半边对任何成功响应恒为真、左半边对任何错误恒为真，整条断言**数学上不可能失败**，
+/// 却一度被算进"§27 有几条实证"。判据要打在真 dispatch 的输出上，也不许用 `||` 兜自己。
+struct UiShape {
+    code: Option<String>,
+    bytes_len: Option<usize>,
+}
+
+impl UiShape {
+    /// 只打错误码与字节长度：一次失败把 12 KB 的 base64 刷进 CI 日志是噪音不是证据。
+    fn describe(&self) -> String {
+        format!("code={:?} bytes_len={:?}", self.code, self.bytes_len)
+    }
+}
+
+fn ui_read(b: &App, sha: &str) -> UiShape {
+    match notera_host::commands::dispatch(b, "attachment_data", json!({ "sha256": sha })) {
+        Ok(v) => UiShape {
+            code: v.get("code").and_then(|x| x.as_str()).map(str::to_string),
+            bytes_len: v.get("bytesBase64").and_then(|x| x.as_str()).map(str::len),
+        },
+        Err(e) => UiShape {
+            code: Some(e.code),
+            bytes_len: None,
+        },
+    }
 }
 
 // ———————————————————————————————————————————————— 本地附件缺失
@@ -177,9 +203,16 @@ async fn a_lost_local_blob_is_repaired_and_never_strands_the_note() {
     assert_body_still_usable(&b, &sha);
     // ② 编辑器读图必须拿到一个**具名**失败，而不是一段能画出来的错字节。
     let got = ui_read(&b, &sha);
+    assert_eq!(
+        got.code.as_deref(),
+        Some("attachment_missing"),
+        "本机已经没有这个文件，命令面却没报具名的缺失：{}",
+        got.describe()
+    );
     assert!(
-        got.get("code").is_some() || got.get("data").and_then(|v| v.as_str()).is_none(),
-        "本机已经没有这个文件，命令面却还是回了内容：{got}"
+        got.bytes_len.is_none(),
+        "报缺失的同时还把字节发出去了：{}",
+        got.describe()
     );
     // ③ 下一轮同步要把它认成"缺失"并重下回来 —— 否则账上永远是 available，
     //    用户看到的是一张永远打不开的图，而且系统以为自己已经修好了。
@@ -196,11 +229,10 @@ async fn a_lost_local_blob_is_repaired_and_never_strands_the_note() {
         blob,
         "重新下回来的字节必须一字不差（哈希就是唯一的身份）"
     );
-    let (local, _r) = b2.store().attachment_for_state(&sha);
     assert_eq!(
-        local.as_str(),
-        "available",
-        "补回来之后账上才允许重新说 available"
+        b2.store().attachment_for_state(&sha),
+        ("available".into(), "present".into()),
+        "补回来之后账上才允许重新说 available（远端态也不许被顺手改掉）"
     );
     srv.stop().await;
 }
@@ -243,9 +275,158 @@ async fn a_truncated_local_blob_is_replaced_not_reused() {
         !b2.store().blob_part_path(&sha).exists(),
         "补齐之后不该留下半截文件"
     );
-    let (local, _r) = b2.store().attachment_for_state(&sha);
-    assert_eq!(local.as_str(), "available");
+    // 坏拷贝的清理边：只有"手上已有一份哈希对得上的替代"时才允许它消失。
+    assert!(
+        parked_copies(&b2, &sha).is_empty(),
+        "补齐之后那份坏拷贝还留着 —— 清理那一半没人验过"
+    );
+    // 修好之后不能每轮重来一遍：体检的"哈希相符就不动"那一条判据就是为此而在。
+    // （它不在体检队列里"消失"是设计如此 —— 每条 available ∧ present 的都是每轮的候选，
+    //   真正的判据是：被 stat 过之后状态不许再被降级。）
+    let remote2 = b2.remote_for_sync().await.unwrap().expect("有适配器");
+    let again = b2.run_attachment_round(&remote2).await;
+    assert_eq!(
+        again,
+        (0, 0, 0),
+        "修好的附件每轮又被重下一次 —— 体检把正常文件当成了坏文件"
+    );
+    assert_eq!(
+        b2.store().attachment_for_state(&sha).0.as_str(),
+        "available",
+        "再跑一轮之后状态被打回去了"
+    );
+    assert_eq!(
+        b2.store().attachment_for_state(&sha),
+        ("available".into(), "present".into()),
+        "补齐之后两半状态都要落对"
+    );
     srv.stop().await;
+}
+
+// ———————————————————————————— 读侧不许把错字节画出来
+
+/// 磁盘体检有一道明确的边界：它不会每轮把整库重哈希，所以"**长度分毫不差、内容被改坏**"
+/// 这一种它看不见。读侧必须补上这一格 —— 否则用户看到的是一张**画得出来的错图**：
+/// `attachment_data` 按 sha 查文件，把内容对不上号的字节当正文交给界面，而界面又按 sha
+/// 缓存整个会话。那条 sha 明明不是那份字节，屏幕上却没有任何地方说它坏了。
+///
+/// 现在的判据：读的时候算一次哈希，对不上就报 `attachment_corrupt`，界面留占位。
+/// 附件不阻塞正文（INV 已有），而这一条把"错得看不见"变成"缺得看得见"。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_same_length_local_corruption_is_refused_by_the_reader_not_drawn() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..9000).map(|i| (i % 199) as u8).collect();
+    let a_dir = Tmp::new("readhash-a");
+    let sha = seed_source(a_dir.path(), &url, &blob).await;
+    let b_dir = Tmp::new("readhash-b");
+    let b = drain_target(b_dir.path(), &url, &blob, &sha).await;
+    let healthy = ui_read(&b, &sha);
+    assert!(
+        healthy.bytes_len.is_some() && healthy.code.is_none(),
+        "前置不成立：好字节本来就读不出来，那后面那条断言就没有意义：{}",
+        healthy.describe()
+    );
+
+    // 同长度原地改坏：stat 看不出来，体检因此也不会降级它。
+    let path = b.store().blob_path(&sha);
+    let mut bad = blob.clone();
+    for (i, byte) in bad.iter_mut().take(2048).step_by(64).enumerate() {
+        *byte = byte.wrapping_add((7 + i) as u8);
+    }
+    assert_eq!(bad.len(), blob.len(), "要坏得只有哈希能发现");
+    assert_ne!(bad, blob);
+    std::fs::write(&path, &bad).expect("原地改坏本机 blob");
+
+    let got = ui_read(&b, &sha);
+    assert_eq!(
+        got.code.as_deref(),
+        Some("attachment_corrupt"),
+        "内容对不上这个 sha，界面却拿到了能画出来的字节：{}",
+        got.describe()
+    );
+    assert!(
+        got.bytes_len.is_none(),
+        "报错的同时还把字节带出去了：{}",
+        got.describe()
+    );
+    assert_body_still_usable(&b, &sha);
+    srv.stop().await;
+}
+
+// ————————————————————————————— 坏字节在没有替代时不许被销毁
+
+/// 体检发现本机字节坏了要重下 —— 但**服务器也可能给不出替代**（那份对象被人在网页端删了）。
+/// 那时候正确做法不是删掉本机这份然后两手空空，而是把它挪开留着：
+/// 它虽然哈希不符（不是正文引用的那份），却是这台机器上最后一份现场，
+/// 用户或恢复工具还可能从里面捞出可用内容。数据安全在这一格上的含义就是"不销毁无可替代之物"。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn corrupt_local_bytes_are_parked_not_destroyed_when_the_server_has_nothing() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..9000).map(|i| (i % 211) as u8).collect();
+    let a_dir = Tmp::new("park-a");
+    let sha = seed_source(a_dir.path(), &url, &blob).await;
+    let b_dir = Tmp::new("park-b");
+    let b = drain_target(b_dir.path(), &url, &blob, &sha).await;
+
+    // 本机这份被截断（长度与账不符，体检因此才会去复算哈希）。
+    let path = b.store().blob_path(&sha);
+    let mangled: Vec<u8> = blob[..4500].to_vec();
+    std::fs::write(&path, &mangled).expect("截断本机 blob");
+    drop(b);
+
+    // 服务器上那份已经没有了：重下注定拿不到替代。
+    srv.inject(Injection::status(format!("GET *{sha}"), 404))
+        .await;
+    let b2 = boot(b_dir.path(), &url);
+    b2.sync_once().await.expect("B 拉到正文");
+    let remote = b2.remote_for_sync().await.unwrap().expect("有适配器");
+    let round = b2.run_attachment_round(&remote).await;
+    assert_eq!(round.1, 0, "服务器没有这份，不该报下载成功：{round:?}");
+
+    // ① 正式位置要腾出来（否则 ingest_blob 见"已存在"就不写新的）
+    assert!(!path.exists(), "坏文件还占着正式位置，重下永远写不进去");
+    // ② 但那份字节必须还在盘上，一个字节都不许被改动
+    let survivors = parked_copies(&b2, &sha);
+    assert_eq!(
+        survivors.len(),
+        1,
+        "没有替代的时候，体检把本机最后一份坏字节销毁了"
+    );
+    assert_eq!(
+        survivors[0], mangled,
+        "留下的那份被改过了 —— 挪开可以，动内容不行"
+    );
+    // ③ 账要说实话：本机没有、服务器也没有（不是"available"那种谎）
+    let (local, remote_state) = b2.store().attachment_for_state(&sha);
+    assert_eq!(
+        (local.as_str(), remote_state.as_str()),
+        ("missing", "absent"),
+        "状态位没跟上这次挪开+404"
+    );
+    // ④ 正文照旧可用（§8 收尾句）
+    assert_body_still_usable(&b2, &sha);
+    srv.stop().await;
+}
+
+/// 磁盘上为某个 sha 留着的坏拷贝（`<sha>.corrupt*`）。正式位置不在其中。
+fn parked_copies(app: &App, sha: &str) -> Vec<Vec<u8>> {
+    let path = app.store().blob_path(sha);
+    let Some(dir) = path.parent() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().to_string();
+            n.starts_with(sha) && n.contains(".corrupt")
+        })
+        .filter_map(|e| std::fs::read(e.path()).ok())
+        .collect()
 }
 
 // ———————————————————————————————————————————————— 远端文件损坏
@@ -299,6 +480,18 @@ fn served_blobs(srv: &TestServer, sha: &str) -> Vec<serde_json::Value> {
                     .and_then(|p| p.as_str())
                     .is_some_and(|p| p.contains(sha))
         })
+        .collect()
+}
+
+/// 这一轮里服务器收到过几条 MOVE。412 那两条测试的规则打在 `MOVE *` 上，
+/// 而 MOVE 的请求路径其实是 tmp 名（不含 sha），所以只能靠"这一轮就一条 MOVE"来保证
+/// 那个状态码确实落在我们想拒的那次搬运上 —— 否则将来附件轮里多出别的 MOVE，
+/// 这两条会静默地拒错对象还照样绿。
+fn move_requests(srv: &TestServer) -> Vec<String> {
+    srv.request_log()
+        .iter()
+        .filter(|r| r.method == "MOVE")
+        .map(|r| format!("#{} {} -> {}", r.seq, r.path, r.status))
         .collect()
 }
 
@@ -371,12 +564,40 @@ async fn a_corrupted_remote_blob_is_refused_and_the_note_stays_readable() {
         "available",
         "坏字节被收下了：账上不该说这份附件可用"
     );
-    // ② 正文继续可用；③ 界面读到的是具名失败而不是那张坏图。
+    // ②' 服务器给的就是坏字节 —— 那不该变成每 20 s 重下一遍的悬案。
+    //     判据：第二轮针对这个 sha **零请求**，且状态停在诚实的那对上（本机没有 + 远端报错）。
+    srv.clear_log().await;
+    let second = b.run_attachment_round(&remote).await;
+    let again: Vec<String> = srv
+        .request_log()
+        .iter()
+        .filter(|q| q.path.contains(&sha))
+        .map(|q| format!("{} {} -> {}", q.seq, q.method, q.status))
+        .collect();
+    assert!(
+        again.is_empty(),
+        "为一个已经证明内容不符的对象每轮重下：{again:?}（第二轮 {second:?}）"
+    );
+    assert_eq!(
+        b.store().attachment_for_state(&sha),
+        ("missing".into(), "error".into()),
+        "坏远端的状态位没落对：内容不符是**结论**，不是待办"
+    );
+    // ③ 正文继续可用；④ 界面读到的是具名失败而不是那张坏图。
     assert_body_still_usable(&b, &sha);
     let got = ui_read(&b, &sha);
+    // 坏字节被拦在门外之后本机就没有这个文件；界面那条读路径必须报**具名**失败，
+    // 而不是给出一段能画出来的字节（那等于把坏图当正常图缓存整个会话）。
+    assert_eq!(
+        got.code.as_deref(),
+        Some("attachment_missing"),
+        "坏附件竟然能被界面读出来：{}",
+        got.describe()
+    );
     assert!(
-        got.get("code").is_some() || got.get("data").and_then(|v| v.as_str()).is_none(),
-        "坏附件竟然能被界面读出来：{got}"
+        got.bytes_len.is_none(),
+        "拒绝坏附件的同时还回了字节：{}",
+        got.describe()
     );
     srv.stop().await;
 }
@@ -408,11 +629,12 @@ async fn a_dropped_connection_mid_download_promotes_nothing() {
         blob_on_disk(&b, &sha).is_empty(),
         "连接被掐却往正式 blob 位置落了字节：中途结果被当成了完整文件"
     );
-    let (local, _r) = b.store().attachment_for_state(&sha);
-    assert_ne!(
-        local.as_str(),
-        "available",
-        "断线的一轮之后账上不许说这份附件可用"
+    // 精确状态对而不是 `assert_ne!`：`attachment_for_state` 对**根本不存在的行**也返回
+    // ("absent","absent")，只判"不等于 available"的话，"整行被弄没了"这种回归也能蒙混过关。
+    assert_eq!(
+        b.store().attachment_for_state(&sha),
+        ("missing".into(), "unknown".into()),
+        "断线的一轮之后账上不许说这份附件可用，也不许顺手改掉远端态"
     );
     assert_body_still_usable(&b, &sha);
 
@@ -518,7 +740,10 @@ async fn a_hanging_attachment_endpoint_never_blocks_the_text_round() {
         .expect("本机写入");
     a.sync_once().await.expect("A 推正文");
 
-    let text_budget = budget / 4; // 文本轮本来只要几百毫秒，四分之一预算已经是极宽松的上界
+    let text_budget = (budget / 4).max(std::time::Duration::from_secs(10));
+    // 两轮的耗时都从**同一个起点**量，这样"文本轮先跑完、附件轮还在里面"才是可证的并发，
+    // 而不是"两个数字看起来都不大"。
+    let t0 = std::time::Instant::now();
     let (round, text) = tokio::join!(b.run_attachment_round(&remote), async {
         // 先确认真有一个请求挂在那儿（不然测的是"什么都没发生"）
         let mut stuck = false;
@@ -537,10 +762,23 @@ async fn a_hanging_attachment_endpoint_never_blocks_the_text_round() {
         let stats = tokio::time::timeout(text_budget * 3, b.sync_once())
             .await
             .expect("附件端点挂死把文本同步一起拖住了（§13 的队列隔离破了）");
-        (started.elapsed(), stats)
+        (started.elapsed(), t0.elapsed(), stats)
     });
-    let (text_took, text) = text;
+    let att_done = t0.elapsed();
+    let (text_took, text_done, text) = text;
 
+    // 附件轮必须在**产品自己的请求预算**内放手：不是被外层 timeout 救下来的。
+    // 实测落点 45.0 s ≈ `Timeouts::per_request`；这里只要求它落在 [预算/2, 预算×2] 之内，
+    // 这样把预算调小/调大都不用改测试，而"永不放手"（旧疑点）会直接红。
+    assert!(
+        att_done >= budget / 2 && att_done <= budget * 2,
+        "挂死的附件请求没有在自己的 per_request（{budget:?}）之内收场：实测 {att_done:?}；         要么超时预算形同虚设，要么这一轮压根没被挂住"
+    );
+    // 并发凭据：文本轮结束的那一刻，附件轮还没返回（两者共用同一个起点 t0）。
+    assert!(
+        text_done < att_done,
+        "文本轮结束时附件轮也已经结束 —— 两轮其实是先后跑的，§13 的隔离没被证明         （text_done={text_done:?} att_done={att_done:?}）"
+    );
     assert!(
         text.is_ok(),
         "文本轮本身报了错（附件挂死不许外溢成文本轮的失败）：{text:?}"
@@ -676,9 +914,16 @@ async fn a_refused_move_that_really_landed_counts_as_a_success() {
     let remote = a.remote_for_sync().await.unwrap().expect("有适配器");
 
     // `post:` = 副作用先做完再回这个状态 —— 这就是"对面那个设备先落成了盘，我们这次 MOVE 被拒"。
+    srv.clear_log().await;
     srv.inject(Injection::partial_write("MOVE *", 412)).await;
     let round = a.run_attachment_round(&remote).await;
     srv.inject(Injection::none()).await;
+    assert_eq!(
+        move_requests(&srv).len(),
+        1,
+        "这一轮只该搬运那一个附件对象，否则 412 未必落在我们想指的那次 MOVE 上：{:?}",
+        move_requests(&srv)
+    );
 
     assert_eq!(
         round.0, 1,
@@ -717,9 +962,16 @@ async fn a_refused_move_that_landed_nothing_is_not_a_success() {
     let remote = a.remote_for_sync().await.unwrap().expect("有适配器");
 
     // 裸 412：拒绝，而且**什么都没落成**（网关凭空造一个前置失败就是这形态）。
+    srv.clear_log().await;
     srv.inject(Injection::status("MOVE *", 412)).await;
     let round = a.run_attachment_round(&remote).await;
     srv.inject(Injection::none()).await;
+    assert_eq!(
+        move_requests(&srv).len(),
+        1,
+        "这一轮只该搬运那一个附件对象，否则 412 未必落在我们想指的那次 MOVE 上：{:?}",
+        move_requests(&srv)
+    );
 
     assert_eq!(
         round.0, 0,

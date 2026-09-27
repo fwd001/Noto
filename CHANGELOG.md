@@ -10,7 +10,7 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 530 通过 / 0 失败 / 0 ignored（63 个测试二进制） |
+| `cargo test --workspace` | 534 通过 / 0 失败 / 0 ignored（64 个测试二进制） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
 | L5 崩溃注入 `--test crash_recovery` | 小库矩阵 9 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零 |
 | L5 压实崩溃注入 `--test compaction_crash` | 1/1（240 条大库真死在 `after_segment_write`，索引不引用不存在的分段） |
@@ -23,7 +23,7 @@
 | P11 面板 `scripts/verify-p11-panel.mjs` | 11/11（真浏览器读**两台真设备留在盘上的现场**：右栏是服务器那一版、无载荷时说的是"没取回来"、冲突笔记留在正常列表且 ⚠ 只落在冲突行上；截图证据进 `docs/evidence/`） |
 | 性能基线 `scripts/verify-perf.mjs`（PERF-01/10/13） | 4/4（**空库预算口径已按用户决定定为 ≤1000 ms 含 WebView2**）：重编 release 壳后实测 空库最好 866 ms（首遍 1528）、5000 条 984 ms、滚动 434 帧 p95 17 ms、RSS 31.9/46.6→47.2 MiB；20000 条那一档 1322 ms。未采：100 附件规模、30 min 泄漏趋势、Android/macOS |
 | Windows 安装器 `pnpm tauri build --target x86_64-pc-windows-gnu --bundles nsis` | **`.exe` 产出 4.46 MiB**（`Notera_0.0.13_x64-setup.exe`）。出货产物侧另验通一件事：拿包内那个 `release/notera-desktop.exe` 起来后 `17323/health` **连不上** —— "dev 桥只关在 debug 构建里"在真正的 release 二进制上成立（不是只看 feature 门）。`--bundles msi` 仍 BLOCKED（WiX `LGHT0102` 的 loc 变量 + 我把自己 shell 的 cwd 留在了临时目录里造成文件锁），装移动作与代码签名未验。两个只露在真跑里的坑：`tauri build` 默认走 MSVC（被 Git Bash 的 coreutils `link` 顶掉），以及 JS/Rust 的 tauri 次版本错配会直接拒绝打包 —— 两侧已对到 2.12.0 |
-| §27 附件故障注入 `--test attachment_faults` | 9/9（本机 blob 丢了自愈、截断换整份、服务器同长度坏字节被拒、下载被掐不 promote、半上传不落正式对象、远端 404 收手不空转、**只有附件端点超时**时文本轮并发验穿且附件轮在 45 s 预算内自己放手、**MOVE 被 412 拒的两端都咬住**）—— 九条各配变异自证 M1..M8b，见下面三条 commit 级的说明 |
+| §27 附件故障注入 `--test attachment_faults` | 11/11（本机 blob 丢了自愈、截断换整份、服务器同长度坏字节被拒、下载被掐不 promote、半上传不落正式对象、远端 404 收手不空转、**只有附件端点超时**时文本轮并发验穿且附件轮在 45 s 预算内自己放手、**MOVE 被 412 拒的两端都咬住**、坏字节**只挪开不销毁**、同长度位腐在**读侧**被拒而不会被画进界面）—— 十一条各配变异自证 M1..M12，见下面四条 commit 级的说明 |
 | 前端 | **200 通过（21 文件）+ `vue-tsc --noEmit` 0 错**（2026-09-27 与 §27 那批同批重跑；本轮没动前端，跑它是为了确认"没受影响"这句话也是量出来的）。`run build` 的产物体积那一档**本轮未重测**，仍挂着上一批的 216.65 KB → gzip 74.22 KB |
 | `scripts/arch-check.mjs` | 27/27（第 26 条是版本单源，第 27 条是"编译期嵌入的文件要进版本库"） |
 | 版本单源 | 一致（权威 + 三处派生 + **Cargo.lock**）；三处变异（派生位置偷改、crate 自己写死版本、**lock 慢一个版本**）都能打红 | `node scripts/check-versions.mjs` |
@@ -40,7 +40,7 @@
   - **变异自证 M9**：把 `configure()` 里那条 `b.proxy(p)` 换成 `b.no_proxy()`（就是历史上那类"配了代理等于没配"）→ 两条测试同时红，报的分别是 `配了 HTTP 代理却被服务器拒掉：403` 与 `指向死代理的请求居然成功了`。所以这条门禁不是"跑过了就算数"。
   - **顺手修掉一处测试自身的错判**：第三腿原来写的是"bypass 命中一条就把别的 target 也放行了"—— 那是我把两个 target 都指到同一个 host:port，而 bypass 匹配的是 host，产品行为本来是对的。改成对照组（列表里放一条**不相干**的主机名 → 必须仍然失败），否则这条测试会把正确行为判成缺陷。
   - **仍缺四条按 §40 逐条记着**（详见 TEST-PLAN「§28 十二条 —— 实证账」）：SOCKS5 端到端、`407` 错误密码、真 TLS 握手失败、取消的端到端断言。根因是同一个：**工装的"代理"是源站自己扮的**（它认识 CONNECT 与绝对形式，不认识 SOCKS 握手），而且没有 TLS。要一次解掉前三条需要一个新的 harness 组件（客户端 → 真转发代理 → 独立源站），不是补几条用例。
-  - 复验：`cargo test --workspace` **530 通过 / 0 失败 / 0 ignored**（63 个测试二进制）、`fmt --check` 干净、`clippy --workspace --all-targets -- -D warnings` 0/0、`arch-check` 27/27。这批只加测试与文档，不改产品行为，**不升版本**。
+  - **审查补的那条边（同日）**：`crates/notera-host/tests/proxy_account.rs` —— 前面那三条是**手搓 `HttpClient`**，从"设置里填了代理"到"那个出口客户端被建出来"中间那一截（`configure_account → ProxyProfile → net_proxy()`）没人调用过，正是本项目踩过两次的"实现齐全、单测全绿、没人调用"形状。现在两条：配 HTTP 代理的账户必须真能同步（并在服务器上落成记录）、把代理撤掉必须失败且本机照写照读。变异自证 M15：让 `net_proxy()` 见到 host 就返回 `direct()` → 两条同时红。  - 复验：`cargo test --workspace` **534 通过 / 0 失败 / 0 ignored**（64 个测试二进制）、`fmt --check` 干净、`clippy --workspace --all-targets -- -D warnings` 0/0、`arch-check` 27/27。这批只加测试与文档，不改产品行为，**不升版本**。
 - **注入器补上"按路径挂起"（`Injection::hang_for` / `hang_on("GET *<path>")`），并把它换来的那条门禁跑上**：§27 的「网络超时」此前做不出来，不是因为产品缺超时，而是因为工装只有**全局** `timeout_all` —— 一挂就把清单、探测、文本轮一起挂住，测到的是"网络不通"而不是"只有附件端点不答应"。新规则与 `status_for` **共用同一个解析函数**（`rule_hit`），因为两套各写一遍的文法早晚会漂成两种语法；文法本身也补了一条单测（`injection.rs::hang_on_follows_the_same_rule_grammar_as_status_for`：方法限定不许失效、不许挂到别的对象上、全局 hang 与按路径 hang 是两个旋钮）。
   - 换来的这条是 FT-ATT-17（`attachment_faults.rs::a_hanging_attachment_endpoint_never_blocks_the_text_round`）：只有那一个附件对象的 GET 不答应，三件事分开证 —— **文本轮在附件还挂着的时候照常跑完**（用 join 并发跑，不是先后跑；这条兜住 §13 的队列隔离与 §28 的「网络问题永远不会让本地数据不可用」）、**附件轮自己会放手**（实测 45.01 s，正好等于 `notera_net::Timeouts::per_request`；期间不落正式 blob、不留 `.part`、账上不 `available`、`failed` +1）、**端点恢复后这一条补得回来**。
   - 一条自纠：这条测试第一版把"多久必须放手"写成我拍的 30 s，跑出来 45.01 s 直接红 —— 红的是我的判据，不是产品。现在上限从**产品自己的常量**推导（`Timeouts::default().per_request`），不再凭感觉写数字。变异自证 M7：把 `hangs()` 写死成 `false` → 前置断言当场红（报"注入没打中"而不是"产品通过"）。
@@ -161,6 +161,14 @@
 - **导出选择器"列表非空"被当成"列表最新"**：`toggleScoped` 原来只在 `folders.flat.length === 0` 时才重拉，于是本次会话里新建/同步带回的文件夹永远补不进来。改成每次打开开关都重拉
 
 ### 修复（都是会静默丢数据或静默错的那些，不是整理）
+
+- **一次独立代码审查改掉的三处（都在今天那批附件自愈代码上）**。审查报的 Critical 说"体检会把独家字节降级成待下载、然后被 404 吸干" —— 那一条**机制不成立**（`attach_blob` 与 `restore_blob` 写的都是 `remote_state='unknown'`，而体检只扫 `present`；它引作证据的那处测试两行之前刚显式把远端设成 `present`），已按事实驳回。但它顺带指到的三处是真的：
+  - **哈希不符时不该删，该挪开**。原来是 `remove_file` 之后降级重下：万一 `remote_state='present'` 本身是假的（旧版本那个 412 分支就记出过悬空 present，见上一条 commit），这台机器上最后一份现场就跟着没了。现在改名成 `<sha>.corrupt`（那里已有文件就带毫秒戳）留在原地，正式位置腾出来让 `ingest_blob` 写得进新的；等重下拿到**哈希对得上**的替代，下载那条分支才把它清掉 —— **销毁要有凭据**。挪不动就不降级（否则下一轮读到同一份坏文件白转）。新增 FT-ATT-12c 钉这条，变异自证 M10 把它换回 `remove_file` → 红在"体检把本机最后一份坏字节销毁了"。
+  - **读侧原来不验哈希，错字节会被画出来**。`attachment_data` 直接把盘上字节 base64 给界面，而界面那张 URL 表按 sha 缓存整个会话 —— 磁盘体检的边界（"长度分毫不差的静默位腐"不每轮重哈希）正好从这儿漏出去：屏幕上是一张画得出来的错图，没有任何地方说它坏了。现在每次读盘复算一次 sha256，对不上报 `attachment_corrupt`、不带字节，界面留占位（附件不阻塞正文）。代价是一次哈希，而同一次读本来就要 base64 + 过 IPC，不是新增瓶颈。新增 FT-ATT-12b，变异自证 M12 拆掉那次判定 → 红（真的拿到了一整串错字节的 base64）。文案登记走 `i18n.ts` + `i18n.spec.ts`，arch-check 那条"Rust 错误码必须有文案"的门禁连带盯住（前端 201 通过 / 21 文件）。
+  - **两处注释与实现不符**（就是 §45 那类）：`attachment_repair_candidates` 的注释说"`error` 行上传队列看得见"—— 实际那条队列的本地态**含 `error`**，看得见的是它、只是会一直失败；体检的正当性也不在那儿，而在"`available` 不进下载队列、`present` 不进上传队列，这一格没有任何代码看它"。另外 `verified_at` 的更新说明也改了：体检**不**写那一列，它大多数行只做了一次 `stat`，写了等于谎报"这份核对过了"。
+  - 三条测试边界的加固（审查指出"注入规则打在 `MOVE *` 上，而 MOVE 的请求路径其实是 tmp 名、不含 sha"）：412 那两条各加一条"这一轮恰好一条 MOVE"的前提断言；FT-ATT-12 补清理边与**不循环边**（修好后再跑一轮必须 `(0,0,0)` 且状态仍 `available`）。
+  - 审查里另一条"文档没跟上代码"的指控（CI-CD / ARCHITECTURE-MAP 还写着 517、台账还写 1/10）**没有复现** —— 那些数字这几轮已经跟着改过，逐处 grep 为空；记在这里免得下次又按它返工。
+  - 复验：`cargo test --workspace` **532 通过 / 0 失败 / 0 ignored**（63 个测试二进制）、`cargo fmt --all --check` 干净、`clippy --workspace --all-targets -- -D warnings` 0/0（它先拦了一处 `doc_lazy_continuation`，是这次改注释引入的）、`arch-check` 27/27、前端 201 通过 + `vue-tsc` 0 错。版本 0.0.16 → **0.0.17**（改了产品行为：读侧多一道校验、坏文件不再被销毁）。
 
 - **MOVE 被 412 拒掉，却把这次上传当成功 ——「present 是一个主张，不是一次收据」**。§27 那条"服务器返回 412"一直没打在附件路径上；今天打上去就红了：`round=(1, 0, 0)`。
   - **根因**：`put_attachment` 在 MOVE 返回 405/412 的那条臂上直接 `return Ok(())`，而**紧跟在它后面的那次复读校验被整段跳过**。这句"并发下别人先传了同一份内容"只是一种解释，内容寻址之外的网关与代理同样会凭空造一个前置失败出来 —— 那时服务器上什么都没有，我们却在账上记了一个 `remote_state=present`。用户侧的表现：第二台设备那张图永远转圈，而两端的状态页都说"服务器上有"。
