@@ -137,11 +137,17 @@ async fn a_fresh_device_joining_an_over_window_library_gets_every_note() {
     }
     assert_eq!(announced, NOTES + 1, "清单（窗口 + 分段）公告的条目数不对，后面怎么追都是徒劳");
 
+    // 追平之前那一轮必然被每轮请求预算截断（清单上 261 条）。这时界面读的
+    // `sync_status.badge` 不许是 "synced" —— 库里还差着几十条，说已同步就是谎报。
+    let first = b.app.sync_once().await.expect("B 的第一轮");
+    assert_eq!(first.outcome, notera_sync::RoundOutcome::Partial, "夹具要改：第一轮该被预算截断才测得到东西：{first:?}");
+    assert_eq!(b.app.sync_status().unwrap().badge, "syncing", "被截断的一轮之后，界面读到的仍是「已同步」");
     let btrace = b.settle(12).await;
     let bs = b.app.store().stats().unwrap();
     assert_eq!(bs.notes, NOTES as u32, "干净设备追完之后应有 {NOTES} 条，实际 {}：\n  A {}\n  B {}", bs.notes, trace.join("\n  "), btrace.join("\n  "));
     assert_eq!(b.fingerprints(), a.fingerprints(), "两台设备的标题/内容哈希不一致（漏了或变了）：\n  B {btrace:?}");
     assert_eq!(bs.fts_rows, bs.notes, "搜索索引没跟着笔记一起到位（{} vs {}）", bs.fts_rows, bs.notes);
+    assert_eq!(b.app.sync_status().unwrap().badge, "synced", "追平之后徽标没回到「已同步」");
 
     // 追平之后再来一条：不能因为已经踩过"全量回退"就再也推不动
     let extra = "追平之后又写的一条";

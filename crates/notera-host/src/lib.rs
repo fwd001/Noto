@@ -1510,6 +1510,14 @@ impl App {
                 notera_sync::RoundOutcome::Failed => {
                     v.badge = Badge::Failed;
                 }
+                notera_sync::RoundOutcome::Partial => {
+                    // 本轮被请求预算截断 = **活还没干完**。以前它顺着 `_` 落进"已同步"，
+                    // 于是一台正在追大库的设备（实测 5000 条要 26 轮）连着十几分钟显示
+                    // "✓已同步"，而库里还差几千条 —— 队列侧的"待同步"计数帮不上忙：
+                    // 纯拉的那一侧本来就没有待推的东西。徽标必须说实话。
+                    v.badge = Badge::Syncing;
+                    v.in_flight = true;
+                }
                 _ if yielded => {
                     // §11.4：本轮让路了。徽标留在"离线/待重试"，别报成已同步 ——
                     // 那会让用户以为改动已经公告出去，而它其实还在队列里。
@@ -2058,6 +2066,10 @@ impl<R: notera_sync::RemotePort + 'static> Scheduler<R> {
     }
 
     /// 在后台任务里跑。空轮 = 1 请求 0 字节，因此 25s 轮询不构成负担。
+    ///
+    /// 但 `Partial`（本轮被请求预算截断，活没干完）**不能**跟着 25 秒的节拍走：
+    /// 实测 5000 条库要 26 轮才追平，25 秒一轮就是 11 分钟的"看起来已同步、其实还在下"。
+    /// 所以截断就立刻续跑，只留 1 秒喘息（避免错误型 Partial 在此热转圈）。
     pub async fn run(self) {
         let app = self.app.clone();
         let remote = self.remote.clone();
@@ -2072,7 +2084,17 @@ impl<R: notera_sync::RemotePort + 'static> Scheduler<R> {
             if stop.load(Ordering::SeqCst) {
                 break;
             }
-            app.run_round(&remote).await;
+            let mut more = matches!(app.run_round(&remote).await, Some(st) if st.outcome == notera_sync::RoundOutcome::Partial);
+            while more {
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                    _ = stop_signal(&stop) => return,
+                }
+                if stop.load(Ordering::SeqCst) {
+                    return;
+                }
+                more = matches!(app.run_round(&remote).await, Some(st) if st.outcome == notera_sync::RoundOutcome::Partial);
+            }
         }
     }
 }
