@@ -345,6 +345,7 @@ export const Commands = {
   account: 'account',
   exportData: 'export_data',
   importData: 'import_data',
+  importFiles: 'import_files',
   backupDb: 'backup_db',
   listBackups: 'list_backups',
   restoreDb: 'restore_db',

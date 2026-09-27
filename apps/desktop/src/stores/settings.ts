@@ -20,6 +20,15 @@ import { useToastStore } from './toasts';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 
+/** `import_files` 的回报。`notices` 是"没坏但用户该知道"的那部分，必须显示出来。 */
+export interface ImportFilesReport {
+  folderName: string;
+  created: { label: string; title: string; id: string }[];
+  duplicates: number;
+  failed: { label: string; why: string }[];
+  notices: string[];
+}
+
 const STORAGE_KEY = 'notera.ui.v1';
 export const FONT_SCALE_MIN = 0.85;
 export const FONT_SCALE_MAX = 1.6;
@@ -237,6 +246,23 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  /** 导入散文件（`.enex` / Markdown / 纯文本）到默认本。与"整库还原"不是一回事。 */
+  async function importFiles(paths: string[]): Promise<ImportFilesReport | null> {
+    dataBusy.value = true;
+    lastReport.value = null;
+    try {
+      const report = await callCommand<ImportFilesReport>(Commands.importFiles, { paths });
+      return report ?? null;
+    } catch (error) {
+      const bridge = asBridgeError(error);
+      accountErrorKey.value = bridge.messageKey;
+      toasts.push(bridge.messageKey, 'error');
+      return null;
+    } finally {
+      dataBusy.value = false;
+    }
+  }
+
   /** 备份：产出一致快照并回报自证信息。失败要能看清是哪一步。 */
   async function backupDb(path?: string): Promise<BackupInfo | null> {
     dataBusy.value = true;
@@ -322,6 +348,7 @@ export const useSettingsStore = defineStore('settings', () => {
     loadStats,
     exportData,
     importData,
+    importFiles,
     backupDb,
     restoreDb,
     describeReport,

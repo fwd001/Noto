@@ -902,3 +902,106 @@ fn idempotence_survives_a_reopen() {
         1
     );
 }
+
+// ------------------------------------------------ .enex（Evernote 导入）---
+
+/// 真 .enex 的形状：正文是**一整段 CDATA 包起来的 ENML**，附件 base64 内嵌在
+/// `<resource>` 里，编码写在 `<data encoding="base64">` 的**属性**上。
+fn enex_fixture() -> String {
+    use base64::Engine as _;
+    let png = base64::engine::general_purpose::STANDARD.encode([0x89u8, b'P', b'N', b'G', 7, 7]);
+    let enml = "<en-note><div>甲</div><h2>小节</h2><en-media hash=\"AA11\" type=\"image/png\" />\
+<table><tbody><tr><td>左</td><td>右</td></tr></tbody></table></en-note>";
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<en-export version=\"6.5.1\">\n\
+<note><title>报销单</title><content><![CDATA[{enml}]]></content>\
+<created>20230102T030405Z</created><tag>财务</tag>\
+<resource><data encoding=\"base64\">{png}</data><mime>image/png</mime>\
+<resource-attributes><file-name>shot.png</file-name></resource-attributes>\
+<md5>AA11</md5></resource></note>\n\
+<note><title>第二条</title><content><![CDATA[<en-note><div>只有正文</div></en-note>]]></content></note>\n\
+</en-export>"
+    )
+}
+
+#[test]
+fn an_enex_imports_as_several_notes_with_attachments_into_a_real_store() {
+    let fix = Fix::open();
+    let enex = enex_fixture();
+    let src = source_from_str("我的笔记.enex", &enex);
+    assert_eq!(src.kind, SourceKind::Enex, "扩展名要把它路由到 enex 那条路");
+
+    let p = plan(&[src]);
+    assert!(
+        p.failures.is_empty(),
+        "不该有失败条目：{:?}",
+        p.failures
+            .iter()
+            .map(|f| f.error.to_string())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(p.items.len(), 2, "一份文件两条笔记");
+    assert!(!p.items[0].blobs.is_empty(), "附件字节要跟着条目走");
+
+    let r = apply(&fix.store, &fix.folder(), &p).expect("apply");
+    assert_eq!(
+        r.created.len(),
+        2,
+        "{:?}",
+        r.created.iter().map(|c| &c.label).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        r.created[0].stored_title, "报销单",
+        "notes.title 是派生列：Evernote 的标题必须真的落进去，不然列表里看到的是正文第一行"
+    );
+
+    // 附件那条边：字节写盘 + 行登记成可用 + 被这条笔记引用（计数 0 的 blob 会被 GC 删）
+    let sha = &p.items[0].blobs[0].0;
+    let (state, _media) = fix.store.attachment_for_state(sha);
+    assert_eq!(
+        state, "available",
+        "导入的附件该是可用的，不是占位：{state}"
+    );
+    assert!(
+        fix.store.attachment_refs(sha).expect("refs") >= 1,
+        "doc 里的 image 块必须被存储层认出来并建引用"
+    );
+
+    // 本库表达不了的字段：点名给用户，不静默吞
+    assert!(
+        r.notices.iter().any(|s| s.contains("tag")),
+        "Evernote 的 <tag> 没落地必须报出来：{:?}",
+        r.notices
+    );
+    assert!(
+        r.notices.iter().any(|s| s.contains("table")),
+        "表格未映射要点名：{:?}",
+        r.notices
+    );
+
+    // 幂等：同一份文件再导一次，一条都不新建
+    let again = source_from_str("我的笔记.enex", &enex);
+    let r2 = apply(&fix.store, &fix.folder(), &plan(&[again])).expect("replay apply");
+    assert!(r2.created.is_empty(), "重放不该新建：{:?}", r2.created);
+    assert_eq!(r2.duplicates.len(), 2, "两条都该被判成重复");
+    assert_eq!(fix.note_count(), 2, "库里总数不变");
+}
+
+#[test]
+fn enex_goes_through_the_same_size_gate_as_other_sources() {
+    // 这条钉的是"闸门不因新格式而绕行"：.enex 一样受 MAX_SOURCE_BYTES 约束。
+    // 真实 Evernote 导出很容易超过它 —— 那必须是一条看得见的失败，不是截断后静静导入。
+    let big = "x".repeat(MAX_SOURCE_BYTES as usize + 1024);
+    let src = ImportSource::from_bytes(Some(Path::new("大导出.enex")), big.as_bytes());
+    // 两种都可接受：读盘阶段就拒，或计划阶段留下一条失败。唯独不接受"截断后继续导"。
+    if let Ok(s) = src {
+        let p = plan(&[s]);
+        assert_eq!(
+            p.failures.len(),
+            1,
+            "超限必须留下一条失败，而不是悄悄导一半：items={}",
+            p.items.len()
+        );
+        assert!(p.items.is_empty(), "超限的文件不该产出任何笔记");
+    }
+}

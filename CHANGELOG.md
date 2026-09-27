@@ -10,7 +10,7 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 491 通过 / 0 失败 / 0 ignored（58 个测试二进制） |
+| `cargo test --workspace` | 507 通过 / 0 失败 / 0 ignored（59 个测试二进制） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
 | L5 崩溃注入 `--test crash_recovery` | 小库矩阵 9 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零 |
 | L5 压实崩溃注入 `--test compaction_crash` | 1/1（240 条大库真死在 `after_segment_write`，索引不引用不存在的分段） |
@@ -32,6 +32,14 @@
 
 ### 新增
 
+- **`.enex`（Evernote 导出）结构化导入，并补上"从文件导入"这个入口**。用户批准的第三项依赖（XML 解析）落在这里：`quick-xml` + `base64`，两个都已在 workspace 单一版本源里。
+  - **两遍解析**是格式决定的，不是洁癖：`.enex` 的 `<content>` 里装的是**一整段 CDATA 包起来的 ENML**，第一遍读信封（title / 那段 CDATA / 字段 / `<resource>` 的 base64 字节），第二遍把 CDATA 当 XML 读。第一版写的是一遍 —— 编译得过、`Ok(0)` 也"绿"，但 8 条测试直接指出"正文里还留着 `<div>` 字样"：`Event::CData` 被我原来的 `Ok(_) => {}` 静静吞掉了。**这一条正是"新写的第一遍就抓到自己空转"的例子**：如果只跑一条"能出 2 条笔记"的断言，它当时也是过的（笔记数来自 `<note>` 标签，不依赖正文）。
+  - **附件走 sha256，不走 Evernote 的 MD5**：`<en-media hash>` 是 MD5（历史包袱），本库按 sha256 内容寻址 —— 自己算 sha256、用 md5 只做"正文引用 ↔ resource"的配对，`md5` 原值留在块 attrs 里。内嵌的落成 `image` 块，"只挂不嵌"的（Evernote 允许）追加在文末，**一个都不许丢**；配对不上的引用进 `dangling_media_hashes` 点名。
+  - 中途发现并修掉一条**不是 .enex 也受益**的缺陷：`create_note` **不**从 doc 派生附件链接（那条路只在同步接收侧，见 `apply.rs`），所以导入路径必须显式 `attach_blob` 才能建 `note_attachments`。第一版用了 `restore_blob`（只 upsert `attachments` 行、不建链接）—— 命令面那条测试直接把它抓红了（`attachment_refs == 0`），而 importer 自己那 25 条集成测试全绿。判据现在写在 `apply` 的注释里：**引用计数为 0 的 blob 是 GC 的删除对象**，只登记不链接等于把用户的附件交给回收器。
+  - **静默降级这条路不存在**：`<tag>`、`created`/`updated`/`author`（本库没有标签列、时间戳由 Store 盖）、表格（按 Markdown 侧同一判据：字面进正文，`左 | 右`）统统进 `notices`，一路从 `plan` → `apply` → 命令回报 → **设置页那张列表**显示，不是只写日志。
+  - **入口**：新增命令 `import_files`（与"整库还原"的 `import_data` 是两条语义：这里只是往里加内容，不携带任何删除事实，所以不走 intoEmpty 那套闸门）。设置页"数据"块里加了按钮 + 结果与 notices 的展示；`document_for` 对 `.enex` 明确报错（"一份文件 N 条笔记，没有单文档入口"），`markdown::to_document` 对 `Enex` 走 `unreachable!` —— 宁可炸也不悄悄产出一条没有结构的笔记。
+  - 门禁：`notera-importer` 13 条 enex 单测 + 2 条集成（真 Store、真落盘、幂等重放、超限闸门不绕行）+ `notera-host/tests/enex_import.rs` 1 条**命令面**端到端（2 条笔记、派生标题=报销单、附件字节真在数据目录里、notices 带 tag、重放 0 新建、空路径列表报错而不是谎报成功）。arch-check 那两条老门禁各抓了一次真问题：`folder_missing` 没有 `error.*` 文案（红 → 补文案）、以及新增依赖后 `include-paths-tracked` 仍 27/27。
+  - **明确的限制（不当作已完成）**：`.enex` 一样受 `MAX_SOURCE_BYTES = 8 MiB` 这道闸门约束，而真实的 Evernote 导出（带图片）很容易超 —— 表现是一条**看得见的失败**而不是截断后静默导入。解除条件：把 .enex 改成流式读盘（按 `<note>` 增量），那会动 `ImportSource` 的形状，按 §9 走评审。
 - **托盘与全局快捷键真的接上了（用户点名的两项平台能力，依赖图按批准动了）**：`tauri` 开 `tray-icon` 特性 + 新增 `tauri-plugin-global-shortcut`。
   - **托盘**：桌面端启动时挂上图标，左键 = 显示/隐藏窗口，右键 = 托盘菜单（显示/隐藏、新建笔记、立即同步、退出）。托盘菜单里那两项**复用应用菜单的同一批 id**，仍走 `notera://menu` 一条路进前端 —— 一条 `tray_items_other_than_the_trays_own_reuse_the_menu_routes` 钉住"除托盘独有两条外，托盘项必须是菜单项之一"（变异自证：加一个 `tray.backup` → 红）。"退出"是先收图标再 `app.exit(0)`。
   - **关窗收进托盘 = 设置页那个开关说了算，默认关**（PLATFORM.md 的取向，P6 未拍板所以不替用户决定常驻）。判据下沉成纯函数 `shouldHideOnClose(caps, prefs)`：**开关为真 且 托盘真的挂上**才隐藏。两个条件各挡一种真出过的坏事 —— 只看开关会得到"关不掉也找不回"的进程（快捷键可能同时没注册上，没有任何入口唤回窗口）；只看托盘则违背默认关的语义。这条偏好住在 WebView 的 localStorage，壳读不到，所以判断写在 `TitleBar.vue` 的关闭按钮上（关窗动作本来就是我们的按钮发的）；4 条前端用例覆盖。

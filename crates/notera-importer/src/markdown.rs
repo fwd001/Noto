@@ -76,6 +76,10 @@ pub fn to_document(
     let mut drafts = match kind {
         SourceKind::PlainText => plain_blocks(text),
         SourceKind::Markdown => markdown_blocks(text),
+        // `.enex` 不进这条路径：一份 .enex 里是 N 条笔记，没有"这一份的文档"可言，
+        // 由 `plan::plan_enex` 处理，而 `document_for` 也明确拒绝 Enex。真走到这里
+        // 说明上面某条路由错了 —— 宁可炸出来，也不悄悄产出一条没有结构的笔记。
+        SourceKind::Enex => unreachable!(".enex 不该进 Markdown 解析路径（走 plan_enex）"),
     };
     if let Some(t) = title_heading {
         drafts.insert(

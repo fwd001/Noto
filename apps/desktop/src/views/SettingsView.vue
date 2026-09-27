@@ -12,7 +12,7 @@ import { useShellStore } from '../stores/shell';
 import { shortcutsFor, type PlatformCaps } from '../platform/caps';
 import { t, messageFor } from '../i18n';
 import { formatBytes, formatNumber, formatWhen } from '../util/format';
-import { FONT_SCALE_MAX, FONT_SCALE_MIN, type ThemeMode } from '../stores/settings';
+import { FONT_SCALE_MAX, FONT_SCALE_MIN, type ImportFilesReport, type ThemeMode } from '../stores/settings';
 import { capChips, capsState } from '../sync/serverCaps';
 
 const settings = useSettingsStore();
@@ -125,8 +125,23 @@ async function doExport(): Promise<void> {
   await settings.loadStats();
 }
 
-async function doImport(): Promise<void> {
-  await settings.importData({
+/** 导入散文件（Evernote 的 `.enex`、Markdown、纯文本）。与上面那个"整库还原"是两条路。 */
+const filesHint = ref('');
+const filesReport = ref<ImportFilesReport | null>(null);
+
+async function doImportFiles(): Promise<void> {
+  const path = dataPath.value.trim();
+  if (!path) {
+    filesHint.value = t('settings.importFilesNeedsPath');
+    return;
+  }
+  filesHint.value = '';
+  filesReport.value = await settings.importFiles([path]);
+  await settings.loadStats();
+  await notes.load();
+}
+
+async function doImport(): Promise<void> {  await settings.importData({
     mode: importMode.value,
     ...(dataPath.value.trim() ? { path: dataPath.value.trim() } : {}),
   });
@@ -386,6 +401,17 @@ function keyHint(): string {
           <div class="row">
             <button type="button" class="btn" :disabled="settings.dataBusy" data-testid="export-data" @click="doExport">{{ t('settings.export') }}</button>
             <button type="button" class="btn" :disabled="settings.dataBusy" data-testid="import-data" @click="doImport">{{ t('settings.import') }}</button>
+            <button type="button" class="btn btn--quiet" :disabled="settings.dataBusy" data-testid="import-files" @click="doImportFiles">{{ t('settings.importFiles') }}</button>
+            <p v-if="filesHint" class="field-hint" data-testid="import-files-hint">{{ filesHint }}</p>
+            <p v-else class="field-hint">{{ t('settings.importFilesHint') }}</p>
+            <div v-if="filesReport" class="field-hint" data-testid="import-files-report">
+              <p>{{ t('settings.importFilesResult') }}：{{ filesReport.created.length }} / {{ filesReport.duplicates }} / {{ filesReport.failed.length }}</p>
+              <!-- 没坏但用户该知道的事：Evernote 里没落地的字段、按字面保留的表格结构……
+                   §39 不许静默降级，所以这些一路从导入器带到这儿显示，而不是只进日志。 -->
+              <ul v-if="filesReport.notices.length" data-testid="import-files-notices">
+                <li v-for="(n, i) in filesReport.notices" :key="i">{{ n }}</li>
+              </ul>
+            </div>
             <button type="button" class="btn" :disabled="settings.dataBusy" data-testid="backup-db" @click="doBackup">{{ t('settings.backup') }}</button>
             <button type="button" class="btn btn--danger" :disabled="settings.dataBusy" data-testid="restore-db" @click="doRestore">{{ t('settings.restore') }}</button>
           </div>

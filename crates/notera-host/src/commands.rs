@@ -603,6 +603,16 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
                 serde_json::from_value(body).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.export_data(c)?)
         }
+        "import_files" => {
+            let body = args.get("req").cloned().unwrap_or(args);
+            let paths: Vec<String> = serde_json::from_value(
+                body.get("paths")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
+            )
+            .map_err(|_| CmdError::of("bad_args", false))?;
+            j(app.import_files(&paths)?)
+        }
         "import_data" => {
             let body = args.get("req").cloned().unwrap_or(args);
             let c: ImportCmd =

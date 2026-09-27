@@ -27,10 +27,10 @@
 //!   3. 字面序号与标题井号（`1.`、`#`）搬到 `attrs.number` / `attrs.level`。
 //!
 //! ## 这一块不该长什么
-//! 备份 ZIP 导出、`.enex`（Evernote ENML）结构化解析：见交付报告的 BLOCKED 清单。
-//! 今天 `.enex` 会被当作"看不懂的文本"整篇进正文（可读、无损，但不是结构化笔记）。
+//! 备份 ZIP 导出、跨设备搬运：见交付报告的 BLOCKED 清单。
 
 mod bundle;
+mod enex;
 mod error;
 mod frontmatter;
 mod markdown;
@@ -38,6 +38,7 @@ mod plan;
 mod source;
 
 pub use bundle::{read_bundle, write_bundle, Bundle, Manifest, BUNDLE_FORMAT, MAX_PROTOCOL};
+pub use enex::{parse_enex, EnexFile, EnexNote, EnexResource};
 pub use error::ImportError;
 pub use frontmatter::FrontMatter;
 pub use markdown::{id_prefix, MAX_INLINE_PARSE_CHARS};

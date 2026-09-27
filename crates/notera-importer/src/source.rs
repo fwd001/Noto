@@ -22,6 +22,8 @@ pub enum SourceKind {
     Markdown,
     /// 纯文本（只按空行分块，不做任何行内解释，`*` 就是 `*`）。
     PlainText,
+    /// Evernote 的 `.enex`：一个文件里就是**多条**笔记，走 `enex` 那条结构化路径。
+    Enex,
 }
 
 impl SourceKind {
@@ -29,6 +31,7 @@ impl SourceKind {
         match self {
             SourceKind::Markdown => "markdown",
             SourceKind::PlainText => "text",
+            SourceKind::Enex => "enex",
         }
     }
 }
@@ -217,6 +220,10 @@ fn detect(path: Option<&Path>, text: &str) -> (SourceKind, KindSource) {
         .unwrap_or_default();
     if MARKDOWN_EXTS.contains(&ext.as_str()) {
         return (SourceKind::Markdown, KindSource::Extension);
+    }
+    // `.enex` 由扩展名决定：它里面是 XML，"像不像 Markdown"那套嗅探判据对它没有意义
+    if ext == "enex" {
+        return (SourceKind::Enex, KindSource::Extension);
     }
     (sniff(text), KindSource::Sniffed)
 }

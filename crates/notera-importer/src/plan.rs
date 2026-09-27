@@ -51,6 +51,12 @@ pub struct ImportItem {
     pub content_hash: ContentHash,
     /// 源字节的哈希（区分"同一文件两次"与"两个内容相同的文件"）。
     pub source_hash: ContentHash,
+    /// 这条笔记的 doc 引用了的附件字节（sha256 → 字节）。`.enex` 才有；Markdown 侧
+    /// 的图片只是 URL，本机没有字节。`apply` 在**建笔记之前**把它们写盘。
+    pub blobs: Vec<(String, Vec<u8>)>,
+    /// 这一条上"用户该知道但没坏"的事：没映射进来的字段、按字面保留的结构、悬空引用。
+    /// 报告里看得见，不是日志里翻。
+    pub notices: Vec<String>,
 }
 
 impl ImportItem {
@@ -151,13 +157,106 @@ fn push_source(plan: &mut ImportPlan, src: &ImportSource) {
         });
         return;
     }
-    match plan_one(src) {
-        Ok(item) => plan.items.push(item),
+    // `.enex` 一个文件就是 N 条笔记，走另一条产出路径；其余是"一源一条"。
+    let built = if src.kind == SourceKind::Enex {
+        plan_enex(src)
+    } else {
+        plan_one(src).map(|item| vec![item])
+    };
+    match built {
+        Ok(items) => plan.items.extend(items),
         Err(error) => plan.failures.push(FailedSource {
             label: src.label.clone(),
             error,
         }),
     }
+}
+
+/// `.enex` 的唯一入口：一份文件 → 多条计划条目，附件字节挂在条目上。
+///
+/// 为什么字节跟着条目走而不是单独一批：附件必须与"哪条笔记引用它"绑在一起，
+/// 否则一条失败回滚时，另一条笔记的引用就成了指向不存在 blob 的空洞。
+fn plan_enex(src: &ImportSource) -> Result<Vec<ImportItem>, ImportError> {
+    let id_prefix = markdown::id_prefix(&src.source_hash.short());
+    let file = crate::enex::parse_enex(&src.text, &id_prefix)?;
+    if file.notes.is_empty() {
+        return Err(ImportError::InvalidDoc(format!(
+            "{}：.enex 里一条 <note> 都没有（不是 Evernote 导出，或被截断）",
+            src.label
+        )));
+    }
+    let mut items = Vec::with_capacity(file.notes.len());
+    for (i, n) in file.notes.iter().enumerate() {
+        // Evernote 的标题与正文是两件事，而 `notes.title` 是从 doc 派生的（I5）：
+        // 正文首块不是这个标题时补一个一级标题，否则列表里看到的是正文第一行。
+        let mut doc = n.doc.clone();
+        let title = n.title.trim();
+        if !title.is_empty() && first_heading_text(&doc).as_deref() != Some(title) {
+            let mut attrs = std::collections::BTreeMap::new();
+            attrs.insert("level".into(), serde_json::Value::Number(1.into()));
+            doc.content.insert(
+                0,
+                notera_richtext::Block {
+                    id: format!("{id_prefix}n{i:03}ffffffff"),
+                    type_: notera_richtext::BlockType::Heading,
+                    attrs,
+                    content: vec![notera_richtext::Inline {
+                        text: title.to_string(),
+                        marks: Vec::new(),
+                    }],
+                },
+            );
+        }
+        let value =
+            serde_json::to_value(&doc).map_err(|e| ImportError::InvalidDoc(e.to_string()))?;
+        // 验收闸门与 Markdown 侧同一条：过不了 richtext 的文档绝不进计划
+        let doc = parse_from_value(&value)
+            .map_err(|e| ImportError::InvalidDoc(format!("{}: {e}", src.label)))?;
+        let content_hash = ContentHash::of(notera_richtext::canonical(&doc).as_bytes());
+        let mut notices: Vec<String> = Vec::new();
+        for f in &n.unknown_fields {
+            notices.push(format!("字段 <{f}> 没有落地（本库没有这个概念）"));
+        }
+        for t in &n.unknown_enml_tags {
+            notices.push(format!("<{t}> 按字面保留在正文里，没映射成结构"));
+        }
+        for h in &n.dangling_media_hashes {
+            notices.push(format!("正文引用了文件里不存在的附件（hash {h}）"));
+        }
+        for u in &n.undecodable_resources {
+            notices.push(format!("附件没导进来：{u}"));
+        }
+        items.push(ImportItem {
+            label: if title.is_empty() {
+                format!("{} #{}", src.label, i + 1)
+            } else {
+                format!("{} · {title}", src.label)
+            },
+            source_path: src.path.clone(),
+            kind: SourceKind::Enex,
+            title: if title.is_empty() {
+                src.file_stem()
+            } else {
+                title.to_string()
+            },
+            title_source: if title.is_empty() {
+                TitleSource::Filename
+            } else {
+                TitleSource::FrontMatter
+            },
+            front_matter: FrontMatter::default(),
+            doc,
+            content_hash,
+            source_hash: src.source_hash.clone(),
+            blobs: n
+                .resources
+                .iter()
+                .map(|r| (r.sha256.clone(), r.data.clone()))
+                .collect(),
+            notices,
+        });
+    }
+    Ok(items)
 }
 
 fn plan_one(src: &ImportSource) -> Result<ImportItem, ImportError> {
@@ -199,6 +298,8 @@ fn plan_one(src: &ImportSource) -> Result<ImportItem, ImportError> {
         doc,
         content_hash,
         source_hash: src.source_hash.clone(),
+        blobs: Vec::new(),
+        notices: Vec::new(),
     })
 }
 
@@ -279,6 +380,9 @@ pub struct ApplyReport {
     pub plan_skipped: usize,
     /// 计划阶段就失败的源数（超限 / 二进制 / 编码）。
     pub plan_failures: usize,
+    /// "没坏但用户该知道"的事：`.enex` 里没落地的字段、按字面保留的结构、悬空附件引用。
+    /// 判据是 §39：不许静默降级，所以这些必须一路带到界面，而不是只写日志。
+    pub notices: Vec<String>,
 }
 
 impl ApplyReport {
@@ -342,20 +446,59 @@ pub fn apply(
                 continue;
             }
         };
-        match store.create_note(&target, value) {
-            Ok(note) => {
-                made_this_run.insert(hash);
-                report.created.push(CreatedNote {
+        // 附件：先建笔记，再把字节挂上去。
+        //
+        // 为什么不是 `restore_blob` 一步搞定：那个只 upsert `attachments` 行，**不建
+        // `note_attachments` 链接**（链接是"谁在用这块字节"的唯一依据，计数 0 的 blob
+        // 会被 GC 删掉）。本地写入路径上建链接的是 `attach_blob`，它要求给出块 id ——
+        // 而块 id 就躺在 doc 里，所以从 doc 反查，不在计划里再抄一份（抄一份就是第二处真相）。
+        let created = match store.create_note(&target, value) {
+            Ok(note) => Some(note),
+            Err(error) => {
+                report.failed.push(FailedWrite {
                     label: item.label.clone(),
-                    note_id: note.id,
-                    stored_title: note.title,
-                    content_hash: note.content_hash,
+                    error: ImportError::Store(error),
+                });
+                None
+            }
+        };
+        if let Some(note) = created {
+            let mut bind_err: Option<ImportError> = None;
+            for att in notera_richtext::attachments(&item.doc) {
+                let Some((_, bytes)) = item.blobs.iter().find(|(sha, _)| *sha == att.sha256) else {
+                    continue; // 远程 URL 之类的引用：没有本机字节，本来就不该挂
+                };
+                let media = att
+                    .media_type
+                    .unwrap_or_else(|| "application/octet-stream".into());
+                if let Err(e) = store.attach_blob(
+                    &note.id,
+                    bytes,
+                    &media,
+                    att.filename.as_deref(),
+                    &att.block_id,
+                ) {
+                    bind_err = Some(ImportError::Store(e));
+                    break;
+                }
+            }
+            if let Some(error) = bind_err {
+                // 笔记已经在库里了，这里必须说清楚：不能让它静默变成"引用了不存在的附件"
+                report.failed.push(FailedWrite {
+                    label: format!("{}（附件）", item.label),
+                    error,
                 });
             }
-            Err(error) => report.failed.push(FailedWrite {
+            made_this_run.insert(hash);
+            for n in &item.notices {
+                report.notices.push(format!("{}：{n}", item.label));
+            }
+            report.created.push(CreatedNote {
                 label: item.label.clone(),
-                error: ImportError::Store(error),
-            }),
+                note_id: note.id,
+                stored_title: note.title,
+                content_hash: note.content_hash,
+            });
         }
     }
     Ok(report)
@@ -436,6 +579,14 @@ pub fn import_paths(
 
 /// 由源构造文档（导出侧/测试用的最小入口）。
 pub fn document_for(src: &ImportSource) -> Result<Document, ImportError> {
+    // 一份 .enex 是 N 条笔记，"这一份的文档"没有定义。宁可报错让调用方改走 plan()，
+    // 也不能返回"第一条"或"整篇拼起来"那种看着能用、实际误导人的东西。
+    if src.kind == SourceKind::Enex {
+        return Err(ImportError::InvalidDoc(format!(
+            "{}：.enex 一个文件含多条笔记，请用 plan()/apply()，没有单文档入口",
+            src.label
+        )));
+    }
     Ok(plan_one(src)?.doc)
 }
 

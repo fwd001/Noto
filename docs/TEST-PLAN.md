@@ -554,3 +554,16 @@ BB-02 抓到过一个只有黑盒才能抓到的缺陷（详见 CHANGELOG）：*
 | PLAT-04 | 「关窗收进托盘」需要**开关为真且托盘真的挂上**两个条件；默认关 | `apps/desktop/src/platform/caps.spec.ts`（4 条） | L1 | P2 | **已实现并通过** |
 | PLAT-05 | 能力声明由**注册结果**写：`tray` / `globalShortcuts` 只有在壳真挂上之后才为 true | `scripts/verify-tauri-window.mjs` 第 3 步（真壳里经真 `invoke` 读 `platform_caps`） | L4（真窗口运行期） | P1 | **已实现并通过**（变异：摘掉 `report_native_cap(Tray, …)` 重新构建真壳 → 8/9 并点名 `tray 不是 true`） |
 | PLAT-06 | 托盘/快捷键注册失败要**可见**：Toast `platform.caps_degraded`，且设置页那几行随之消失 | 判据在 PLAT-05 的同一处（能力为 false → `shortcutsFor` 过滤掉）；界面侧**未做真机失败注入** | — | P2 | **BLOCKED**：要让托盘注册失败得先把系统托盘弄坏（`explorer` 重启 / 键位被占），本机没有可重复的注入手段 → 记为待人工确认，不当作已验 |
+
+## 导入：`.enex`（Evernote，2026-09-27 落地）
+
+| ID | 判据 | 落在哪 | 层级 | 优先级 | 状态 |
+|---|---|---|---|---|---|
+| IMP-01 | 一份 `.enex` 出 N 条笔记；CDATA 里的 ENML 必须被当 XML 解析（正文不许留 `<div>` 字样） | `notera-importer::enex::tests`（`one_enex_file_...`、`cdata_payload_is_parsed_as_xml_...`） | L1 | P1 | **已实现并通过**（这条抓到了第一版把 `Event::CData` 静静吞掉的实现 —— 只测"笔记条数"是过不了的：笔记数来自 `<note>`，与正文无关） |
+| IMP-02 | 附件按 **sha256** 内容寻址；`<en-media hash>`（MD5）只用于配对；"只挂不嵌"的资源也要有块 | `resources_become_blocks_the_storage_layer_can_read` | L1 | P1 | **已实现并通过** |
+| IMP-03 | 导入造的块，存储层必须真读得出附件（字段名一漂，用户看到的就是一辈子停在占位的图片） | 同上（断言打在 `notera_richtext::attachments(&doc)` 上）+ `notera-host/tests/enex_import.rs` 断言字节真的落在数据目录 | L1+L3 | P0 | **已实现并通过** |
+| IMP-04 | 本库表达不了的（`<tag>` / 时间戳 / 表格结构 / 悬空引用 / 非 base64 资源）必须**点名**，一路到命令回报与界面 | `what_the_schema_cannot_hold_is_named_not_dropped`、`non_base64_resource_is_named_...`、`a_media_reference_with_no_resource_is_reported`、`import_files` 的 `notices` | L1+L3 | P1 | **已实现并通过** |
+| IMP-05 | 幂等：同一份 `.enex` 再导一次一条都不新建；重复数按条目报 | `notera-importer/tests/importer.rs` + `enex_import.rs`（重放断言 `created == 0 && duplicates == 2`） | L3 | P0 | **已实现并通过** |
+| IMP-06 | 新格式不许绕开任何一道入口闸门（8 MiB 体积上限对 `.enex` 同样生效） | `enex_goes_through_the_same_size_gate_as_other_sources` | L3 | P1 | **已实现并通过**。⚠️ 代价：真实带图导出可能超限 → 表现为一条看得见的失败（不是静默截断）；要支持大文件得改成按 `<note>` 流式读盘，动 `ImportSource` 形状 → §9 |
+| IMP-07 | 从**命令面**进来（`import_files`）而不是只有库内 API；空路径列表要报错而不是"成功导入 0 条" | `notera-host/tests/enex_import.rs::import_files_command_...` | L3 | P1 | **已实现并通过** |
+| IMP-08 | 浏览器里点得到、看得见 notices | 未做端到端 lane 步骤 | L4 | P2 | **BLOCKED**：本轮预算内没跑浏览器 lane；设置页那条 UI 只经过 `vue-tsc` 与构建，**没有真点击证据** |

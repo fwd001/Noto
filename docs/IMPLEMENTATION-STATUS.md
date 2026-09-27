@@ -53,7 +53,7 @@
 | 发布构建与安装包（`.msi` / `.exe`） | ✅ | ⬜ | ✅ | ✅ | ⬜ | ⬜ | ✅ | **IMPLEMENTING** | **release 产物本身已验通**（`cargo build --release` + 关掉 vite 跑 `verify-tauri-window` 8/8，页面 `http://tauri.localhost/`）；修掉的是"缺 `[features] custom-protocol` → 正式构建开空白窗"这条 P0。**仍未产出安装器**：`@tauri-apps/cli` 不在依赖里 → 跑不了 `pnpm tauri build`（`.msi`/`.exe` 打包、图标嵌入、Updater 骨架都在它身上）。解除条件 = 许可装 `@tauri-apps/cli`（动依赖图，需 §9 点头）或改由 CI 的 Windows lane 出包 |
 | 黑盒 UAT（§23：只许点击/输入/键盘/拖放） | ✅ | ✅ | ⬜ | ⬜ | ✅ | ⬜ | ✅ | **VERIFIED** | `scripts/verify-blackbox.mjs` 10/10：零 `/cmd/*` 调用、断言只看屏幕可见文字（含"插图后 `<img>` 真解出像素、刷新后仍在"）；已做反空转（废掉"恢复"按钮即 6/9）。与 `verify-app.mjs`（复核库内状态，非黑盒）并存。这一层抓到过一条白盒抓不到的：点在最后一行下面的空白会把焦点丢给 `body`，接着敲的字直接消失 |
 | CI/CD 工作流落地 | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **BLOCKED** | 仓库里没有 workflow 文件；推送通道未定（ARCHITECTURE-REVIEW §14 D1–D10）。无 Actions 运行证据时不得声称 CI 已过 |
-| `.enex` 结构化导入 | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **PLANNED** | 需要 XML 依赖，属"要动依赖图"→ §9 人工评审 |
+| `.enex` 结构化导入 | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **VERIFIED**（Windows，带一条限制） | 依赖已批准（`quick-xml` + `base64`，都在 workspace 单一版本源里）。两遍解析（信封 + CDATA 里的 ENML）；一条 `.enex` → N 条笔记；附件按 **sha256** 内容寻址（Evernote 的 `<en-media hash>` 是 MD5，只用来配对），`image`/`attachment` 块 + `attach_blob` 建 `note_attachments` 链接；`<tag>`/时间戳/表格这类本库表达不了的进 `notices` 并在设置页显示，不静默丢。入口：新命令 `import_files` + 设置页按钮（与"整库还原"的 `import_data` 两条语义）。**限制**：仍受 `MAX_SOURCE_BYTES = 8 MiB` 闸门约束（真实带图导出可能超，表现是一条看得见的失败而非静默截断）→ 流式读盘要动 `ImportSource` 形状，按 §9 走评审。证据：13 单测 + 2 集成 + 1 命令面端到端（真 Store、附件字节真落盘、重放 0 新建） |
 | 文档 = 代码 = 协议 = 数据模型 = 测试 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | **VERIFIED** | 本轮同步了 CHANGELOG / ARCHITECTURE-MAP / DATA-MODEL / TEST-PLAN（含新增崩溃注入矩阵）；`arch-check` 会盯漂移 |
 
 ## 距离 §47「READY FOR PRODUCTION」还缺什么

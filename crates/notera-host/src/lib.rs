@@ -930,6 +930,71 @@ impl App {
 
     /// 导入一个 bundle。`intoEmpty` 只在库真的为空时放行；`merge` 走同步的
     /// 三方判定，绝不静默覆盖（§15 / I3）。
+    /// 导入**散文件**（Evernote 的 `.enex`、Markdown、纯文本）到默认本。
+    ///
+    /// 与 `import_data` 的区别不是"格式不同"而是"语义不同"：那个是把自己导出的 ZIP
+    /// 整库还原（含删除公告，所以有空库闸门），这里只是往里加内容，一条删除事实都
+    /// 不携带 —— 所以它不碰 intoEmpty 那套判定，也绝不该被拿去"恢复备份"。
+    ///
+    /// 幂等靠导入器的内容哈希（同一份文件导两次，第二次一条都不新建），去重范围是
+    /// 目标文件夹。`notices` 是"没坏但用户该知道"的部分：`.enex` 里没落地的字段、
+    /// 按字面保留的结构、没解出来的附件 —— §39 不许静默降级，所以它们一路带到界面。
+    pub fn import_files(&self, paths: &[String]) -> Result<serde_json::Value, CmdError> {
+        use notera_importer::{apply, plan, FolderTarget, ImportSource};
+        if paths.is_empty() {
+            return Err(CmdError::of("bad_args", false));
+        }
+        let default_folder = self
+            .inner
+            .store
+            .list_folders()
+            .map_err(|e| {
+                CmdError::of("save_failed", false)
+                    .with(serde_json::json!({ "detail": e.to_string() }))
+            })?
+            .into_iter()
+            .find(|f| f.system_kind.as_deref() == Some("default"))
+            .ok_or_else(|| CmdError::of("folder_missing", false))?;
+        let mut sources = Vec::new();
+        let mut unreadable: Vec<serde_json::Value> = Vec::new();
+        for p in paths {
+            match ImportSource::read(std::path::Path::new(p)) {
+                Ok(src) => sources.push(src),
+                Err(e) => unreadable.push(serde_json::json!({
+                    "path": p,
+                    "why": e.to_string(),
+                })),
+            }
+        }
+        let plan = plan(&sources);
+        let report = apply(
+            &self.inner.store,
+            &FolderTarget::Existing(default_folder.id.clone()),
+            &plan,
+        )
+        .map_err(|e| {
+            CmdError::of("save_failed", false).with(serde_json::json!({ "detail": e.to_string() }))
+        })?;
+        let mut notices: Vec<String> = report.notices.clone();
+        for f in &plan.failures {
+            notices.push(format!("{}：{}", f.label, f.error));
+        }
+        for u in &unreadable {
+            notices.push(format!("读不了 {}：{}", u["path"], u["why"]));
+        }
+        Ok(serde_json::json!({
+            "folderName": report.folder_name,
+            "created": report.created.iter().map(|c| serde_json::json!({
+                "label": c.label, "title": c.stored_title, "id": c.note_id.as_str(),
+            })).collect::<Vec<_>>(),
+            "duplicates": report.duplicates.len(),
+            "failed": report.failed.iter().map(|f| serde_json::json!({
+                "label": f.label, "why": f.error.to_string(),
+            })).collect::<Vec<_>>(),
+            "notices": notices,
+        }))
+    }
+
     pub fn import_data(&self, c: ImportCmd) -> Result<serde_json::Value, CmdError> {
         let path = std::path::PathBuf::from(c.path.ok_or_else(|| CmdError::of("bad_args", false))?);
         let bundle = notera_importer::read_bundle(&path).map_err(|e| {
