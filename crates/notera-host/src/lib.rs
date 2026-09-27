@@ -82,6 +82,14 @@ pub struct Progress {
     pub bytes: u64,
 }
 
+/// 只有这两项是"构建期不确定、运行期才知道成没成"的：托盘要系统接受图标，
+/// 全局快捷键要和别的应用抢键位（可能被占）。其余能力在编译期就定死了。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeCap {
+    Tray,
+    GlobalShortcuts,
+}
+
 /// 平台能力声明。UI 按能力渲染，**禁止**按机型分支（ADR-0011）。
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,13 +113,14 @@ impl PlatformCaps {
     /// 于是设置页摆出"关闭窗口时留在系统托盘"，而壳里一行托盘代码都没有 ——
     /// 用户勾完得到一个存了却没人读的偏好，比看不到这个选项更糟。
     ///
-    /// as-built 现状（2026-09-26）：**原生菜单与系统通知已经真的接上**
-    /// （`src-tauri/src/platform.rs` + `attach_menu` + 事件泵里的 `notice_for`），
-    /// 所以桌面三端都报 true。仍然报 false 的两类各欠一件事：
-    /// 托盘要开 `tauri` 的 `tray-icon` 特性并让关窗行为读那个偏好；
-    /// 全局快捷键要 `tauri-plugin-global-shortcut`（此前 macOS/Linux 报的是 true，
-    /// 而壳里一个注册都没有 —— 设置页于是摆出一组按了没反应的组合键）；
-    /// 钥匙串要 `credential_ref` 落地（Phase 5）。这几项都会动依赖图，按 §9 走评审。
+    /// as-built 现状（2026-09-27）：**原生菜单、系统通知、托盘、全局快捷键都已真的接上**
+    /// （`src-tauri/src/lib.rs` 的 `attach_menu` / `attach_tray` /
+    /// `register_global_shortcuts` + 事件泵里的 `notice_for`），但**后面两项不在这里报
+    /// true**：托盘与全局快捷键是运行时才知道成没成的（系统不让挂、键位被别的应用占了），
+    /// 由壳在注册成功之后经 `report_native_cap` 写回。这里若按平台直接报 true，就又是
+    /// 那次"设置页摆出一组按了没反应的组合键"的假声明。
+    /// 仍然报 false 的两类各欠一件事：钥匙串要 `credential_ref` 落地（Phase 5）；
+    /// 移动端后台任务要各平台的后台执行权限。这两项都会动依赖图，按 §9 走评审。
     pub fn for_current_target() -> Self {
         if cfg!(target_os = "windows") {
             Self {
@@ -215,7 +224,7 @@ struct Inner {
     data_dir: PathBuf,
     config_repo: ConfigRepository,
     config: Mutex<AppConfig>,
-    caps: PlatformCaps,
+    caps: Mutex<PlatformCaps>,
     bus: Mutex<Vec<BusEvent>>,
     subs: Mutex<Vec<std::sync::mpsc::Sender<BusEvent>>>,
     sync_view: Mutex<SyncView>,
@@ -255,7 +264,7 @@ impl App {
                 data_dir: data_dir.to_path_buf(),
                 config_repo: repo,
                 config: Mutex::new(config),
-                caps: PlatformCaps::for_current_target(),
+                caps: Mutex::new(PlatformCaps::for_current_target()),
                 bus: Mutex::new(Vec::new()),
                 subs: Mutex::new(Vec::new()),
                 sync_view: Mutex::new(SyncView::initial()),
@@ -284,7 +293,21 @@ impl App {
         &self.inner.data_dir
     }
     pub fn platform_caps(&self) -> PlatformCaps {
-        self.inner.caps.clone()
+        self.inner.caps.lock().unwrap().clone()
+    }
+
+    /// 壳**真的**把某项原生能力挂上了，才允许这里改口。
+    ///
+    /// 为什么不直接让 `for_current_target()` 报 true：那正是此前两次假声明的形状 ——
+    /// 平台原则上能做到 ≠ 这个构建做到了（macOS/Linux 曾报 `global_shortcuts: true`
+    /// 而壳里一个注册都没有，设置页于是摆出一组按了没反应的键）。注册成功与否是
+    /// 运行时事实，就由运行时写；失败时留在 false，界面自动退回"这台设备不支持"。
+    pub fn report_native_cap(&self, cap: NativeCap, ok: bool) {
+        let mut c = self.inner.caps.lock().unwrap();
+        match cap {
+            NativeCap::Tray => c.tray = ok,
+            NativeCap::GlobalShortcuts => c.global_shortcuts = ok,
+        }
     }
     pub fn config(&self) -> AppConfig {
         self.inner.config.lock().unwrap().clone()

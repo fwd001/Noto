@@ -345,7 +345,9 @@ fn set_remote_rev_and_remote_index_replace_roundtrip() {
     store
         .remote_index_replace(notera_store::LOCAL_ACCOUNT_ID, &with_del)
         .unwrap();
-    let list = store.remote_index_list(notera_store::LOCAL_ACCOUNT_ID).unwrap();
+    let list = store
+        .remote_index_list(notera_store::LOCAL_ACCOUNT_ID)
+        .unwrap();
     assert_eq!(
         list.len(),
         with_del.len(),

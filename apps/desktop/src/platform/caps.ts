@@ -97,6 +97,19 @@ export function normalizeCaps(raw: unknown): PlatformCaps {
   };
 }
 
+/**
+ * 点「关闭」是收进托盘还是真退出。
+ *
+ * 两个条件缺一不可，各自挡掉一种真出过的坏结果：
+ *  - 只看开关：托盘没挂上（系统不让挂、构建缺图标）时窗口被隐藏，用户面对一个
+ *    "关不掉也找不回"的进程 —— 全局快捷键也可能同时没注册上，没有任何入口能唤回它。
+ *  - 只看托盘：违背那个开关默认关闭的语义（PLATFORM.md §7：笔记软件常驻对多数用户
+ *    是噪音，P6 的默认取向就是"关"），等于替用户做了一个他没做的决定。
+ */
+export function shouldHideOnClose(caps: Pick<PlatformCaps, 'tray'>, prefs: { trayHint: boolean }): boolean {
+  return prefs.trayHint === true && caps.tray === true;
+}
+
 export async function loadCaps(fetcher?: (name: string, args?: Record<string, unknown>) => Promise<unknown>): Promise<PlatformCaps> {
   if (!fetcher) return localCaps();
   try {
@@ -134,4 +147,10 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { id: 'sync', keys: ['F5'], macKeys: ['⌘', 'R'], labelKey: 'sync.syncNow' },
   { id: 'conflicts', keys: ['Ctrl', 'Shift', 'C'], macKeys: ['⌘', '⇧', 'C'], labelKey: 'conflict.title' },
   { id: 'tray', keys: ['—'], macKeys: ['—'], labelKey: 'settings.trayHint', requires: 'tray' },
+  // 下面两行**不是**应用内快捷键，是系统级的（窗口收在托盘里、甚至焦点在别的应用上也生效）。
+  // id 与组合键必须和 Rust 侧 `notera_host::platform::global_shortcut_plan()` 一字不差 ——
+  // 那条跨语言测试（the_settings_page_shows_exactly_the_registered_global_shortcuts）就是钉这个的：
+  // 多一行就是界面上摆一个按了没反应的键，少一行就是注册了却没人知道。
+  { id: 'global.quick-note', keys: ['Ctrl', 'Alt', 'N'], macKeys: ['⌘', '⌥', 'N'], labelKey: 'settings.gsQuickNote', requires: 'globalShortcuts' },
+  { id: 'global.toggle-window', keys: ['Ctrl', 'Alt', 'I'], macKeys: ['⌘', '⌥', 'I'], labelKey: 'settings.gsToggleWindow', requires: 'globalShortcuts' },
 ];

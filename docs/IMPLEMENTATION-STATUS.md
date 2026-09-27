@@ -45,8 +45,8 @@
 | UI：无障碍（可识别名、label、焦点、44pt、Esc/Enter） | ✅ | ✅ | ✅ | ⬜ | ✅ | ⬜ | ✅ | **VERIFIED** | 触摸目标与对比度有契约测试；本轮修掉"删除按钮念成删除文件夹"。**屏幕阅读器真机 = BLOCKED**（需 NVDA / VoiceOver 人工） |
 | 平台能力：原生菜单 | ✅ | ✅ | ✅ | ✅ | ⬜ | ✅ | ✅ | **VERIFIED** | 三级菜单（笔记 / 同步 / 前往）在窗口显示前挂上，点击 → `notera://menu` → 前端路由；id 集合由一条 **Rust 读前端路由表**的契约测试守双向漂移（已做变异验证：改一个 id 即红并打出两侧集合）。release 产物 8/8 说明挂载在真壳上成功 |
 | 平台能力：系统通知 | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ✅ | **VERIFIED**（判定） | 判定是纯函数 `notice_for`：只有"一条冲突"与"带原因的同步失败"会响，进度/Toast/notes-changed 一律安静（有测试）。**真机上是否弹出受系统权限影响 → 用户侧验** |
-| 平台能力：托盘 | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **PLANNED** | 仍需要 `tauri` 的 `tray-icon` 特性 + 关窗行为读那条偏好；动了依赖图 → §9 人工评审。能力因此如实报 `tray: false`，设置页不再摆"关闭窗口时留在托盘" |
-| 平台能力：全局快捷键 | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **PLANNED** | 需要 `tauri-plugin-global-shortcut`（新依赖）。顺带修了一条假声明：此前 macOS/Linux 报 `global_shortcuts: true` 而壳里没有任何注册 |
+| 平台能力：托盘 | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **IMPLEMENTING**（Windows 侧 VERIFIED） | 已开 `tauri` 的 `tray-icon` 特性并真挂上：左键显示/隐藏、右键托盘菜单（显示/隐藏、新建笔记、立即同步、退出）。**关窗是否收进托盘仍由设置页那条偏好决定，默认关**（判据 `shouldHideOnClose`：偏好为真 **且** 托盘真的挂上，两条缺一不可）。能力声明改口：`tray` 只在 `attach_tray` 成功后由 `report_native_cap` 翻 true。运行期证据 = 真窗口 lane 第 3 步（已做变异验证：摘掉那行上报 → 8/9 并点名 `tray 不是 true`）。代码路径桌面三端共用（`cfg!(any(...))`），但**只有 Windows 真机验过** → macOS/Linux 保持 ⬜（B1） |
+| 平台能力：全局快捷键 | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **IMPLEMENTING**（Windows 侧 VERIFIED） | 加了 `tauri-plugin-global-shortcut`（用户 2026-09-27 批准动依赖图）。两条：`Ctrl+Alt+N` 新建、`Ctrl+Alt+I` 显示/隐藏（mac `⌘⌥…`），唯一来源 `global_shortcut_plan()`；**刻意不复用应用菜单 accel**（把 `Ctrl+S`/`Ctrl+F` 注册成系统级 = 劫持别的应用）。只从 Rust 侧注册，前端不碰该插件 IPC，因此无需 capability。设置页那两行与真实注册的组合键由一条 Rust 读 TS 的契约测试对账（变异验证：把 `Alt` 改成 `Shift` → 红）。此前 macOS/Linux 报 `global_shortcuts: true` 而壳里没有任何注册 —— 那条假声明已随 as-built 改口修掉 |
 | 平台能力：OS 钥匙存放凭据（`credential_ref`） | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **BLOCKED** | 今天凭据只认 debug 环境变量；口令与 `credential_ref` 明确不下发界面。需要 §9 评审 + 各平台真机验证 |
 | 移动端（Android） | ✅ | ⬜ | ✅ | ⬜ | ⬜ | ⬜ | ✅ | **BLOCKED** | 前端 390×844 视口与 44pt 已验；APK 构建/真机 = 本机无 NDK/JDK 与设备。原因/影响/解除条件见 CI-CD §L6 |
 | 移动端（iOS / iPadOS） | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | **BLOCKED** | 无 macOS/Xcode 与真机（本机 Windows）。总指令 §46 明确这种情况要写 BLOCKED 而非伪装已验 |

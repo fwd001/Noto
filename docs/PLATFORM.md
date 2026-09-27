@@ -145,6 +145,8 @@ trait SystemTheme    { fn current(&self) -> Theme; fn changes(&self) -> Stream<T
 * **标题栏**：自绘 + 原生拖拽/贴靠（Tauri `decorations` + 自定义 `data-tauri-drag-region`），保留系统贴靠布局与 Snap Assist。
 * **观感**：Mica/Acrylic 仅在系统支持（Win11）时启用，Win10 回退纯色；**必须**同时提供"关闭透明效果"开关（性能与无障碍）。
 * **托盘**：最小化到托盘可选，默认关闭（笔记软件常驻托盘对多数用户是噪音）；关闭按钮行为可选"最小化/退出"。
+  *as-built（2026-09-27）*：托盘图标在桌面三端启动时挂上（左键 = 显示/隐藏窗口，右键 = 托盘菜单：显示/隐藏、新建笔记、立即同步、退出）；**关窗是否收进托盘由设置页那个开关决定，默认关**（开关 = `UiPrefs.trayHint`，判据是 `platform/caps.ts::shouldHideOnClose`，要"开关为真 **且** 托盘真的挂上"两个条件同时成立 —— 只判断前者会得到一个关不掉也找不回的进程）。托盘菜单里的"新建笔记/立即同步"与原生菜单、快捷键共用同一批 id，经 `notera://menu` 一条路进前端。
+* **全局快捷键**：*as-built（2026-09-27）* 两条，`Ctrl+Alt+N`（任何应用里新建笔记）与 `Ctrl+Alt+I`（显示/隐藏窗口），mac 为 `⌘⌥N` / `⌘⌥I`；定义在 `notera_host::platform::global_shortcut_plan()`（唯一来源）。**刻意不复用应用菜单上的 accel**（`Ctrl+S`、`Ctrl+F` 那批）：把它们注册成系统级快捷键就是劫持别的应用的按键。注册只发生在 Rust 侧，前端不碰这个插件的 IPC，因此不需要给前端开 capability；成没成经 `report_native_cap` 写回能力声明，设置页里那两行快捷键（`requires: 'globalShortcuts'`）随之出现或消失，实际注册的组合键与界面上显示的字面由 `the_settings_page_shows_exactly_the_registered_global_shortcuts` 对账。**P6（托盘/后台常驻的默认取向）仍未拍板**，所以"常驻"这条路按默认关实现。
 * **WebView2**：Tauri 在 Windows 的硬依赖。开发机实测**WebView2 运行时已装（150.0.4078.105）**（无 `Edge\Application` 也无 `EdgeCore`）→ 安装包必须内置离线安装器引导，且启动时检测缺失要给出可操作提示，而不是白屏。
 * **凭据**：Windows Credential Manager（`keyring` crate）。
 * **文件**：`IFileOpenDialog`（经 Tauri dialog 插件），拖拽入窗支持图片/文件。

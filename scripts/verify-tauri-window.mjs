@@ -62,6 +62,19 @@ await step('invoke 走真命令通道：stats 的键就是契约那 8 个', asyn
   for (const k of want) if (typeof v[k] !== 'number') throw new Error(`${k} 不是数字，界面会显示占位符：${JSON.stringify(v[k])}`);
   return `notes=${v.notes} 回收站=${v.notesInTrash} 附件=${v.attachments} 待发=${v.inflightOps} 占用=${v.dbBytes}B`;
 });
+await step('托盘与全局快捷键**真的注册上了**（能力由注册结果写，不是平台猜的）', async () => {
+  // 这条断言看的是运行期事实：`report_native_cap` 只在 attach_tray / 注册快捷键
+  // 成功之后才把它翻成 true。所以"编译得过但系统没让挂"这种情形会在这里红，
+  // 而不是等到用户去设置页找那个不存在的开关。
+  const v = await page.evaluate(async () => {
+    const core = window.__TAURI_INTERNALS__;
+    return await core.invoke('notera_command', { name: 'platform_caps', args: {} });
+  });
+  for (const k of ['tray', 'globalShortcuts', 'nativeMenu', 'notifications']) {
+    if (v[k] !== true) throw new Error(`${k} 不是 true（拿到 ${JSON.stringify(v[k])}）—— 这项原生能力没挂上，设置页必须显示为不支持`);
+  }
+  return 'tray / globalShortcuts / nativeMenu / notifications 全部为 true';
+});
 const stamp = Date.now();
 const title = `真窗口笔记 ${stamp}`;
 await step('invoke 新建笔记 → 落进真实 SQLite', async () => {

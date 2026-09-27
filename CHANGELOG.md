@@ -10,7 +10,7 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 487 通过 / 0 失败 / 0 ignored（58 个测试二进制） |
+| `cargo test --workspace` | 491 通过 / 0 失败 / 0 ignored（58 个测试二进制） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
 | L5 崩溃注入 `--test crash_recovery` | 小库矩阵 9 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零 |
 | L5 压实崩溃注入 `--test compaction_crash` | 1/1（240 条大库真死在 `after_segment_write`，索引不引用不存在的分段） |
@@ -20,18 +20,26 @@
 | 大库追平 `--test late_device`（SY-INT-12） | 1/1（260 条变更 > 窗口上限，空库设备完整收敛） |
 | 千库规模 `--test big_library`（SY-INT-14 / PERF-05 量级版） | 1/1，12.8 s（1000 条：追平轮数有界、空轮 1 请求 0 字节、默认本全网络只有一条、逐条比对读满） |
 | 链路抖动 `--test reconnect`（SY-INT-11） | 1/1（六轮各坏一次，恢复后账目归零、两台设备逐条一致） |
-| 前端 | 190 通过（20 文件）；`vue-tsc --noEmit` 无错误；构建 213 KB → gzip 73 KB |
+| 前端 | 196 通过（21 文件）；`vue-tsc --noEmit` 无错误；构建 214 KB → gzip 73 KB |
 | `scripts/arch-check.mjs` | 27/27（第 26 条是版本单源，第 27 条是"编译期嵌入的文件要进版本库"） |
 | 版本单源 | 一致（权威 + 三处派生 + **Cargo.lock**）；三处变异（派生位置偷改、crate 自己写死版本、**lock 慢一个版本**）都能打红 | `node scripts/check-versions.mjs` |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
 | `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | 35/35 |
 | `scripts/verify-blackbox.mjs`（§23 纯黑盒：只用界面，零 `/cmd/*`） | **10/10** —— 曾是**不稳定门禁**（连跑三轮 10/10、4/10、4/10；只修 hydrate 那一版仍四轮 1 绿 3 红）。定位并修好「在飞保存的旧回包」那条竞态之后**连跑十一轮全绿**（每轮独立空库，含冷缓存六轮）
-| `scripts/verify-tauri-window.mjs`（真窗口，走真 `invoke`） | debug 8/8 **且 release 8/8**（开发服务器关闭、资源走内嵌 `frontendDist`） |
+| `scripts/verify-tauri-window.mjs`（真窗口，走真 `invoke`） | debug **9/9**（新增一步：在跑着的壳里读 `platform_caps`，断言托盘与全局快捷键**真的注册上了**；release 侧 8/8 是这条断言加入前的版本，改完托盘接线后需复跑 release） |
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
 ### 新增
 
+- **托盘与全局快捷键真的接上了（用户点名的两项平台能力，依赖图按批准动了）**：`tauri` 开 `tray-icon` 特性 + 新增 `tauri-plugin-global-shortcut`。
+  - **托盘**：桌面端启动时挂上图标，左键 = 显示/隐藏窗口，右键 = 托盘菜单（显示/隐藏、新建笔记、立即同步、退出）。托盘菜单里那两项**复用应用菜单的同一批 id**，仍走 `notera://menu` 一条路进前端 —— 一条 `tray_items_other_than_the_trays_own_reuse_the_menu_routes` 钉住"除托盘独有两条外，托盘项必须是菜单项之一"（变异自证：加一个 `tray.backup` → 红）。"退出"是先收图标再 `app.exit(0)`。
+  - **关窗收进托盘 = 设置页那个开关说了算，默认关**（PLATFORM.md 的取向，P6 未拍板所以不替用户决定常驻）。判据下沉成纯函数 `shouldHideOnClose(caps, prefs)`：**开关为真 且 托盘真的挂上**才隐藏。两个条件各挡一种真出过的坏事 —— 只看开关会得到"关不掉也找不回"的进程（快捷键可能同时没注册上，没有任何入口唤回窗口）；只看托盘则违背默认关的语义。这条偏好住在 WebView 的 localStorage，壳读不到，所以判断写在 `TitleBar.vue` 的关闭按钮上（关窗动作本来就是我们的按钮发的）；4 条前端用例覆盖。
+  - **全局快捷键**：`Ctrl+Alt+N`（任何应用里新建笔记）与 `Ctrl+Alt+I`（显示/隐藏），mac 为 `⌘⌥…`，唯一来源 `notera_host::platform::global_shortcut_plan()`。**刻意不从 `menu_plan` 派生**：菜单上的 `Ctrl+S` / `Ctrl+F` 是应用内快捷键，注册成系统级就是在别的应用里劫持按键 —— 一条断言直接钉"全局快捷键不得复用任何一条菜单 accel，且必须带两个修饰键"。只从 Rust 侧注册，前端不碰这个插件的 IPC，因此**不需要给前端开 capability**（能力面更小）。
+  - **能力声明改成"注册结果说了算"**：`PlatformCaps` 改成 `Mutex`，新增 `App::report_native_cap(NativeCap, ok)`；`for_current_target()` 对 `tray` / `global_shortcuts` **仍报 false**，只有 `attach_tray` / 注册返回成功之后才翻 true。这正是此前两次假声明（macOS/Linux 报 `global_shortcuts: true` 而壳里一个注册都没有）的反面。注册失败要吵一声（Toast `platform.caps_degraded`），设置页那两行快捷键与托盘开关随之消失。
+  - **跨语言对账**：设置页 `SHORTCUTS` 里带 `requires: 'globalShortcuts'` 的行，其 id 与**界面上写出来的组合键字面**必须与真正注册的那批一模一样（`the_settings_page_shows_exactly_the_registered_global_shortcuts`，Rust 读 TS）。变异自证：把 `keys` 里的 `Alt` 偷改成 `Shift` → 立刻红并打出那一行原文。
+  - **运行期证据（不是编译得过就算）**：真窗口 lane 加第 3 步，在**跑着的壳里**经真 `invoke` 读 `platform_caps`，断言 `tray / globalShortcuts / nativeMenu / notifications` 全为 true —— 能力由注册结果写，所以这一步红就等于"系统没让挂上"。**变异自证**：摘掉 `report_native_cap(Tray, …)` 重新构建真壳 → 8/9 且点名 `tray 不是 true（拿到 false）`；改回来重新构建 → 9/9。
+  - 复验：`cargo test --workspace` **491 通过 / 0 失败**（58 二进制，+4 条新判据）、clippy `--all-targets -D warnings` 0/0、`cargo fmt --check` 干净、前端 **196 通过 / 21 文件**（+6）且 `vue-tsc` 0 错（它当场拦下了我第一版夹具里少写 11 个字段的 `PlatformCaps`）、arch-check 27/27、真窗口 9/9。macOS/Linux 一侧代码路径共用但**没有真机验过** → IMPLEMENTATION-STATUS 里那两列保持 ⬜，B1 未解除。
 - **#33 第一步：`sync_remote_index` 补上 `deleted_at`（迁移 0007）并加整表读出**（这一步不改行为，只是让"把远端视图持久化"变得可能）。此前这张表的建表注释写着"清单的本地缓存：让每轮同步免于全量下载"，但生产路径上**既没有写入者也没有读取者**；缺的不是接线，是列 —— 引擎的远端视图带 `deleted_at`，而表里只有 `deleted`/`purged` 两个标志位，直接把视图存进去会把"删除先后 / 删后又改"这类判据丢掉。现在：迁移 0007 + `RemoteIndexEntry.deleted_at` + `remote_index_replace` 写入 + 新增 `remote_index_list(account)`。测试钉三件事：整表读出的条数与写入一致、删除时间戳原样读回、**读不能越过账户边界**。`SUPPORTED_SCHEMA_VERSION` 是从迁移条数派生的（不是硬编码常量，已核实），所以自动到 7。第一版未发布：按用户决定不写历史兼容层
 
 - **CI 第一次真跑就抓到一条本机永远看不见的差异**（GitHub Actions run #1，`a7e8238`）：`check-versions`、`arch-check`（26 条）、`cargo fmt`、`npm ci` 都过，**clippy 失败**，后面的 Rust 全量与前端步骤全被 skip。原因不是 lint 漂移而是**步骤顺序**：`cargo clippy --workspace` 会编译桌面壳，而它的 `build.rs` 要把 `frontendDist` 嵌进二进制 —— CI 上 `npm run build` 排在 clippy **之后**，所以那一刻根本没有可嵌的产物；本机永远躺着一份旧的 `apps/desktop/dist`，这条差异在本地不可能被发现。已把前端构建挪到所有 Rust 步骤之前（并把 fmt 转成硬门禁）。另外：CI 日志接口未鉴权取不到（HTTP 403、本机无 `gh`），这一步的结论是**从步骤级成功/失败 + 仓库内事实推出来的**，等下一次运行用日志证实

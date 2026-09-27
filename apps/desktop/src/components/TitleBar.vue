@@ -7,6 +7,7 @@
  */
 import { computed } from 'vue';
 import { inTauri } from '../api/bridge';
+import { shouldHideOnClose } from '../platform/caps';
 import { useSettingsStore } from '../stores/settings';
 import { useShellStore } from '../stores/shell';
 import { t } from '../i18n';
@@ -25,6 +26,7 @@ async function windowAction(action: 'minimize' | 'maximize' | 'close'): Promise<
     const win = api.getCurrentWindow();
     if (action === 'minimize') await win.minimize();
     else if (action === 'maximize') await win.toggleMaximize();
+    else if (shouldHideOnClose(settings.caps, settings.prefs)) await win.hide();
     else await win.close();
   } catch {
     // 壳层未就绪时什么都不做，绝不让界面报错

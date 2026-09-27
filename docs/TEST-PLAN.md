@@ -543,3 +543,14 @@ BB-02 抓到过一个只有黑盒才能抓到的缺陷（详见 CHANGELOG）：*
 反空转证据：把回收站"恢复"按钮的 `v-if` 改成 `false`，9/9 立刻掉到 6/9。
 这条门禁第一遍也抓到过自己的假绿 —— 收起状态的 `<select>` 上点 `option` 元素不触发
 `change`，必须 `selectOption`（当时那一步"过了"，实际什么都没移动）。
+
+## 平台能力（§15 · 托盘与全局快捷键，2026-09-27 落地）
+
+| ID | 判据 | 落在哪 | 层级 | 优先级 | 状态 |
+|---|---|---|---|---|---|
+| PLAT-01 | 托盘菜单除"显示/隐藏""退出"两条独有项之外，每一项都必须是应用菜单里已有的 id（不许长出第二条实现） | `notera-host::platform::tests::tray_items_other_than_the_trays_own_reuse_the_menu_routes` | L1 | P2 | **已实现并通过**（变异：塞一个 `tray.backup` → 红） |
+| PLAT-02 | 系统级快捷键**不得**复用任何一条应用菜单 accel，且必须带两个修饰键（否则就是在别的应用里劫持 `Ctrl+S`/`Ctrl+F`） | `global_shortcuts_never_reuse_a_bare_app_menu_accelerator` | L1 | P1 | **已实现并通过** |
+| PLAT-03 | 设置页显示的全局快捷键（行 + 组合键字面）与实际注册的那批一模一样 | `the_settings_page_shows_exactly_the_registered_global_shortcuts`（Rust 读 `platform/caps.ts`） | L1（跨语言契约） | P1 | **已实现并通过**（变异：`Alt` 偷改成 `Shift` → 红并打出该行原文） |
+| PLAT-04 | 「关窗收进托盘」需要**开关为真且托盘真的挂上**两个条件；默认关 | `apps/desktop/src/platform/caps.spec.ts`（4 条） | L1 | P2 | **已实现并通过** |
+| PLAT-05 | 能力声明由**注册结果**写：`tray` / `globalShortcuts` 只有在壳真挂上之后才为 true | `scripts/verify-tauri-window.mjs` 第 3 步（真壳里经真 `invoke` 读 `platform_caps`） | L4（真窗口运行期） | P1 | **已实现并通过**（变异：摘掉 `report_native_cap(Tray, …)` 重新构建真壳 → 8/9 并点名 `tray 不是 true`） |
+| PLAT-06 | 托盘/快捷键注册失败要**可见**：Toast `platform.caps_degraded`，且设置页那几行随之消失 | 判据在 PLAT-05 的同一处（能力为 false → `shortcutsFor` 过滤掉）；界面侧**未做真机失败注入** | — | P2 | **BLOCKED**：要让托盘注册失败得先把系统托盘弄坏（`explorer` 重启 / 键位被占），本机没有可重复的注入手段 → 记为待人工确认，不当作已验 |
