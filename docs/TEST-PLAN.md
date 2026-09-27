@@ -548,7 +548,7 @@ BB-02 抓到过一个只有黑盒才能抓到的缺陷（详见 CHANGELOG）：*
 
 | ID | 判据 | 落在哪 | 层级 | 优先级 | 状态 |
 |---|---|---|---|---|---|
-| CF-13 | P11（删除 vs 修改）：冲突卡片要读得出**对面那一版**的正文，而不是只给一串哈希 | `notera-store/tests/conflict_payload.rs`（5 条：只挂最新未裁决行 / rev 不对必须 None / 已裁决行不暴露不接受补写 / 账户不串 / 没取回来=None 且冲突照旧在册） | L3 | P0 | **部分已实现**：存储与 `preview_text` 回退两侧绿（变异自证：摘掉读侧 `remote_rev` 条件 → 5 条全红）。**还缺一条两台真设备的断言**（A 删、B 在删后又改 → B 卡片右栏读出 A 那版的文字）—— 引擎 `ConflictPayload` → 宿主登记 那条边目前只有编译与两个 `LocalPort` 实现的分支覆盖，不当作已验 |
+| CF-13 | P11（删除 vs 修改）：冲突卡片要读得出**对面那一版**的正文，而不是只给一串哈希 | 存储侧 `notera-store/tests/conflict_payload.rs`（5 条：只挂到面板真正显示的那条未裁决行 / 同笔记多条登记时挂最新 / 已收卡既不暴露也不接受补写 / 账户之间不串 / 没取回来时载荷为 None 且冲突照旧在册）；端到端 `notera-host/tests/conflict_payload_e2e.rs`（两台真设备 + 真 WebDAV：A 删、B 在删后又改 → B 卡片 `remote_preview` 含 A 那版文字、不含 B 本机文字，且引擎没替用户改本机正文） | L3+L4 | P0 | **已实现并通过**。这条门禁的自证不是造反例，是**它第一次跑就抓红了我自己刚写错的设计**：第一版把读回接在 `preview_text(id, remoteRev)` 的回落上，而 rev 是各设备自己的编号 → 右栏读回来的是本机那一版，测试当场红（断言两条：必须含对面文字、必须不含本机文字）。修法是让载荷只由卡片带（`ConflictDto.remote_preview`），并按 §6.1 在面板里禁掉右栏那次按号查本机历史 |
 | PLAT-01 | 托盘菜单除"显示/隐藏""退出"两条独有项之外，每一项都必须是应用菜单里已有的 id（不许长出第二条实现） | `notera-host::platform::tests::tray_items_other_than_the_trays_own_reuse_the_menu_routes` | L1 | P2 | **已实现并通过**（变异：塞一个 `tray.backup` → 红） |
 | PLAT-02 | 系统级快捷键**不得**复用任何一条应用菜单 accel，且必须带两个修饰键（否则就是在别的应用里劫持 `Ctrl+S`/`Ctrl+F`） | `global_shortcuts_never_reuse_a_bare_app_menu_accelerator` | L1 | P1 | **已实现并通过** |
 | PLAT-03 | 设置页显示的全局快捷键（行 + 组合键字面）与实际注册的那批一模一样 | `the_settings_page_shows_exactly_the_registered_global_shortcuts`（Rust 读 `platform/caps.ts`） | L1（跨语言契约） | P1 | **已实现并通过**（变异：`Alt` 偷改成 `Shift` → 红并打出该行原文） |

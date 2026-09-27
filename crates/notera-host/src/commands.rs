@@ -87,6 +87,13 @@ pub struct ConflictDto {
     /// 采纳远端正文之后，`noteId` 的那个 rev 已经是**服务器那一版**了，
     /// 拿它当"本地那一版"会把左右两栏显示成同一份内容。
     pub copy_rev: Option<u64>,
+    /// **服务器那一版**的正文预览（`None` = 这一轮没把那一版取回来）。
+    ///
+    /// 为什么由卡片带着走而不是让面板去查 `preview_text(noteId, remoteRev)`：
+    /// `rev` 是**各设备自己的编号**，本机历史上同一个号往往是另一份内容 —— 那样
+    /// 左右两栏会显示同一段文字，用户据此做的决定就没有依据（前端
+    /// `stores/conflicts.ts` 的注释早就写明这点）。载荷来自迁移 0008 的 `remote_wire`。
+    pub remote_preview: Option<String>,
     pub created_at: String,
 }
 

@@ -10,7 +10,7 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 512 通过 / 0 失败 / 0 ignored（60 个测试二进制） |
+| `cargo test --workspace` | 514 通过 / 0 失败 / 0 ignored（61 个测试二进制） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
 | L5 崩溃注入 `--test crash_recovery` | 小库矩阵 9 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零 |
 | L5 压实崩溃注入 `--test compaction_crash` | 1/1（240 条大库真死在 `after_segment_write`，索引不引用不存在的分段） |
@@ -147,6 +147,8 @@
 - **导出选择器"列表非空"被当成"列表最新"**：`toggleScoped` 原来只在 `folders.flat.length === 0` 时才重拉，于是本次会话里新建/同步带回的文件夹永远补不进来。改成每次打开开关都重拉
 
 ### 修复（都是会静默丢数据或静默错的那些，不是整理）
+
+- **接上一条 P11：读回的接口位置写错了一次，被两台真设备的测试当场抓红 —— 那条测试的价值就在这里**。第一版把"读对面那一版"接在 `preview_text(id, remoteRev)` 的回落上，听着顺理成章，其实 `rev` 是**各设备自己的编号**：本机历史上同一个号常常是另一份内容，于是右栏显示回来的是**本机这一版**（正是 §6.1 早已写明要避免的"左右两栏同一段文字"）。`notera-host/tests/conflict_payload_e2e.rs` 第一次跑就红在这里。修法：载荷只由卡片带（`ConflictDto.remote_preview`，取自冲突行的 `remote_wire`），面板右栏**不许**再按 `(noteId, remoteRev)` 去查本机历史；顺手把 `Store::conflict_remote_wire()` 删掉 —— 一个只有测试会调的读法，等于留着一条会假装自己被验过的 API。新增的另一个门禁位：`notera-store/tests/conflict_payload.rs` 里"同一条笔记多次登记时，载荷只能挂到面板真正显示的那条最新未裁决行"（挂到旧行等于没挂，因为那张卡已经不显示）。
 
 - **冲突卡片在要求你二选一，却不给你看另一版 ——「看不见的选择」补上了**。§5.1 早就写明 P11（删除 vs 修改）由用户裁决"仍要删除 / 保留修改"，引擎也**刻意**不自动采纳（自动采纳等于替用户决定要不要复活一条笔记）。但它同时**从没把对面那一版取回来**：面板调的 `preview_text(id, rev)` 只读本机修订历史，而那一版从没进过本机历史 —— 于是右栏永远退回兜底文字，用户面对的是"一串哈希 vs 一份看得见的正文"。现在：
   - **引擎**（`notera-sync`）：判成 `UpdateDelete` / `DeleteUpdate` 的笔记，在请求预算内 `fetch_record` 一次，发一条新的 **`ApplyOp::ConflictPayload`** —— 与 `AdoptConflict` 严格分开，**只登记、一个字节都不改本机笔记**（该选哪边仍然是用户的事）。取不到（预算用尽 / 记录 404 / 网络断）就照旧留哈希卡片，冲突绝不因为取料失败而消失或伪造内容。

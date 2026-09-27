@@ -1,9 +1,14 @@
-//! 冲突卡片要显示"服务器那一版"的正文（CONFLICT-RESOLUTION §5.1.1，迁移 0008）。
+//! 冲突卡片要能显示"服务器那一版"的正文（CONFLICT-RESOLUTION §5.1.1，迁移 0008）。
 //!
-//! 这里钉的是三条容易做错、又都不会报错的地方：
-//! 1. 载荷只挂到**最新一条未裁决**冲突上（往已裁决的行上写会造出"处理完却被改动"）；
-//! 2. 读的时候 **rev 必须对得上**（对面那一版是 rev=N，挂着的却是别的 rev 就是给错内容）；
-//! 3. 读不越账户边界（同一条笔记在两个账户下各有一行时不能串）。
+//! 这里钉的是存储侧三条容易做错、又都不会报错的地方：
+//! 1. 载荷只挂到**最新一条未裁决**冲突上（往已裁决的行上写会造出"处理完却被改动"，
+//!    而且面板上根本没有那张卡了）；
+//! 2. 读回来必须走 `open_conflicts` —— 也就是**界面真正用的那条路**，
+//!    不是另开一个只有测试会调的 getter（那种 API 会假装自己被验过）；
+//! 3. 账户之间不许串。
+//!
+//! 端到端那一半（引擎取料 → 宿主登记 → 卡片可读）在
+//! `notera-host/tests/conflict_payload_e2e.rs`，两台真设备。
 
 use notera_core::{DeviceId, EntityId, EntityKind, Rev};
 use notera_store::{ConflictRecord, Store};
@@ -29,7 +34,6 @@ fn default_folder(store: &Store) -> EntityId {
         .id
 }
 
-/// 造一条真笔记（冲突行指的是它，`remote_wire` 才有地方挂）。
 fn note(store: &Store) -> EntityId {
     let doc = serde_json::json!({
         "v": 1,
@@ -70,54 +74,78 @@ fn envelope(rev: u64, text: &str) -> Vec<u8> {
     .unwrap()
 }
 
+fn wire_of(store: &Store, id: &EntityId) -> Option<String> {
+    store
+        .open_conflicts()
+        .expect("open_conflicts")
+        .into_iter()
+        .find(|r| &r.id == id)
+        .and_then(|r| r.remote_wire)
+}
+
 #[test]
-fn the_payload_lands_on_the_newest_open_conflict_and_reads_back() {
+fn the_payload_lands_on_the_conflict_the_panel_actually_shows() {
     let store = store_in("happy");
     let id = note(&store);
     record(&store, notera_store::LOCAL_ACCOUNT_ID, &id, 9);
-    let wire = envelope(9, "对面那一版");
-
     let hit = store
-        .conflict_attach_payload(notera_store::LOCAL_ACCOUNT_ID, EntityKind::Note, &id, &wire)
+        .conflict_attach_payload(
+            notera_store::LOCAL_ACCOUNT_ID,
+            EntityKind::Note,
+            &id,
+            &envelope(9, "对面那一版"),
+        )
         .expect("挂载荷");
     assert_eq!(hit, 1, "该正好命中那一条未裁决冲突");
-
-    let got = store
-        .conflict_remote_wire(&id, 9)
-        .expect("读载荷")
-        .expect("rev 对得上，该读得回来");
+    let got = wire_of(&store, &id).expect("面板那条卡片该带得上载荷");
     assert!(
         got.contains("对面那一版"),
         "读回来的必须是被删那一版的原文：{got}"
     );
-    // 卡片拿这份原文之后自己算摘要（复用 preview_text 那条路），这里只保证字节没被改过形状
     assert!(got.contains("\"deleted_at\""), "要留得住删除事实：{got}");
 }
 
 #[test]
-fn a_rev_that_is_not_the_one_on_the_row_reads_as_none() {
-    // 对面那一版是 rev=9。若界面问 rev=3，宁可返回 None 让它照实说"没取回来"，
-    // 也不能把 rev=9 的内容当成 rev=3 的答案递过去 —— 那是给用户看一份错的东西。
-    let store = store_in("rev");
+fn the_newest_open_row_is_the_one_that_gets_the_payload() {
+    // 同一条笔记可能被登记过不止一次；卡片列表按时间倒序展示，用户看到的是最新那条。
+    // 载荷挂到旧行上 = 挂到一张已经不显示的卡片上，等于没挂。
+    let store = store_in("newest");
     let id = note(&store);
+    record(&store, notera_store::LOCAL_ACCOUNT_ID, &id, 5);
     record(&store, notera_store::LOCAL_ACCOUNT_ID, &id, 9);
     store
         .conflict_attach_payload(
             notera_store::LOCAL_ACCOUNT_ID,
             EntityKind::Note,
             &id,
-            &envelope(9, "甲"),
+            &envelope(9, "最新那一版"),
         )
         .expect("挂载荷");
-    assert_eq!(store.conflict_remote_wire(&id, 3).expect("读"), None);
-    assert!(store.conflict_remote_wire(&id, 9).expect("读").is_some());
+    let rows = store.open_conflicts().expect("open_conflicts");
+    let with_payload: Vec<_> = rows
+        .iter()
+        .filter(|r| r.remote_wire.is_some())
+        .map(|r| r.remote_rev.get())
+        .collect();
+    assert_eq!(
+        with_payload,
+        vec![9],
+        "只该挂到 remote_rev=9 那条最新的行上：{rows:?}"
+    );
 }
 
 #[test]
-fn resolved_conflicts_never_receive_or_expose_a_payload() {
-    let store = store_in("resolved");
+fn dismissed_conflicts_never_receive_or_expose_a_payload() {
+    let store = store_in("dismissed");
     let id = note(&store);
-    let cid = record_id(&store, &id);
+    record(&store, notera_store::LOCAL_ACCOUNT_ID, &id, 9);
+    let cid = store
+        .open_conflicts()
+        .expect("open")
+        .into_iter()
+        .next()
+        .expect("刚登记的那条")
+        .conflict_id;
     store
         .conflict_attach_payload(
             notera_store::LOCAL_ACCOUNT_ID,
@@ -127,8 +155,7 @@ fn resolved_conflicts_never_receive_or_expose_a_payload() {
         )
         .expect("挂载荷");
     store.dismiss_conflict(cid).expect("收卡");
-    // 裁决之后：既读不到（面板上已经没有这张卡片），也不许再被挂上（0 行）
-    assert_eq!(store.conflict_remote_wire(&id, 9).expect("读"), None);
+    assert_eq!(wire_of(&store, &id), None, "收掉的卡片不该还往外递载荷");
     let again = store
         .conflict_attach_payload(
             notera_store::LOCAL_ACCOUNT_ID,
@@ -148,35 +175,31 @@ fn payloads_do_not_leak_across_accounts() {
     store
         .conflict_attach_payload("acct-A", EntityKind::Note, &id, &envelope(9, "A 的那一版"))
         .expect("挂载荷");
-    // 换账户查同一条笔记：没有它的未裁决冲突，就该什么都读不到
     let none = store
         .conflict_attach_payload("acct-B", EntityKind::Note, &id, &envelope(9, "B 的那一版"))
         .expect("B 挂载荷");
     assert_eq!(none, 0, "账户之间不许串");
-    assert!(
-        store.conflict_remote_wire(&id, 9).expect("读").is_some(),
-        "A 的那一版该读得回来 —— 账户之间不许串"
-    );
+    let got = store
+        .open_conflicts()
+        .expect("open")
+        .into_iter()
+        .find(|r| r.account_id == "acct-A")
+        .and_then(|r| r.remote_wire)
+        .expect("A 的那一版该读得回来");
+    assert!(got.contains("A 的那一版"), "{got}");
 }
 
 #[test]
 fn no_payload_just_means_not_fetched_yet() {
     // 取料会失败（请求预算用尽、记录 404、网络断了）。这时卡片仍必须在，只是右栏
-    // 退回哈希并说明没取到 —— 所以这里读出来是 None，而不是"冲突消失了"。
+    // 退回说明"这一版没取回来" —— 所以载荷是 None 而冲突照旧在册。
     let store = store_in("none");
     let id = note(&store);
     record(&store, notera_store::LOCAL_ACCOUNT_ID, &id, 9);
-    assert_eq!(store.conflict_remote_wire(&id, 9).expect("读"), None);
-    assert_eq!(store.open_conflicts().expect("未裁决冲突还在册").len(), 1);
-}
-
-fn record_id(store: &Store, id: &EntityId) -> i64 {
-    record(store, notera_store::LOCAL_ACCOUNT_ID, id, 9);
-    store
-        .open_conflicts()
-        .expect("open_conflicts")
-        .into_iter()
-        .next()
-        .expect("刚登记的那条")
-        .conflict_id
+    assert_eq!(wire_of(&store, &id), None);
+    assert_eq!(
+        store.open_conflicts().expect("未裁决冲突还在册").len(),
+        1,
+        "没取回来绝不能等于冲突消失"
+    );
 }

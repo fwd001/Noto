@@ -706,6 +706,14 @@ impl App {
             remote_rev: r.remote_rev.get(),
             copy_note_id: r.copy_note_id.as_ref().map(|i| i.to_string()),
             copy_rev,
+            // 服务器那一版：从冲突行上挂着的原始信封里取正文（P11 引擎只登记不采纳，
+            // 所以这份内容在本机修订历史里根本没有）。取不到就是 None，面板退回说明。
+            remote_preview: r.remote_wire.as_deref().and_then(|w| {
+                let env: serde_json::Value = serde_json::from_str(w).ok()?;
+                let payload = env.get("payload").or_else(|| env.get("doc"))?.clone();
+                let doc = notera_richtext::parse_from_value(&payload).ok()?;
+                Some(notera_richtext::extract(&doc).plain_text)
+            }),
             created_at: r.created_at,
         })
     }
@@ -1077,23 +1085,17 @@ impl App {
     pub fn preview_text(&self, id: &str, rev: u64) -> Result<String, CmdError> {
         let id = EntityId::parse(id).map_err(|_| CmdError::of("bad_id", false))?;
         let doc = match self.inner.store.revision_doc(&id, Rev(rev))? {
-            Some(d) => Some(d),
-            // 本机修订历史里没有这一版，而冲突面板问的正是"对面那一版"：
-            // P11（删除 vs 修改）里那一版从没进过本机历史 —— 引擎对它是**只登记不采纳**
-            // （该保留哪一边必须由用户决定）。所以这里退回冲突行上挂着的服务器信封正文，
-            // 用户才真的看得见自己在挑哪两份（CONFLICT-RESOLUTION §5.1.1）。
-            // 拿不到就照旧 not_found：界面会退回哈希并说明没取回来，绝不拿本机内容冒充对面。
-            None => self
-                .inner
-                .store
-                .conflict_remote_wire(&id, rev)?
-                .and_then(|w| serde_json::from_str::<serde_json::Value>(&w).ok())
-                .and_then(|env| env.get("payload").or_else(|| env.get("doc")).cloned()),
-        }
-        .ok_or_else(|| {
-            CmdError::of("not_found", false)
-                .with(serde_json::json!({ "kind": "note", "id": id.to_string(), "rev": rev }))
-        })?;
+            Some(d) => d,
+            // 注意：这里**不**退回冲突行上的服务器信封。`rev` 是各设备自己的编号，
+            // 本机历史上同一个号往往是另一份内容 —— 第一版这么退过，两台真设备的
+            // 测试立刻抓到：右栏显示的是本机那一版，正是 §6.1 要避免的那种假象。
+            // 对面那一版走卡片的 `remote_preview`（载荷来自迁移 0008）。
+            None => {
+                return Err(CmdError::of("not_found", false).with(serde_json::json!(
+                    { "kind": "note", "id": id.to_string(), "rev": rev }
+                )))
+            }
+        };
         let parsed = notera_richtext::parse_from_value(&doc).map_err(|e| {
             CmdError::of("corrupt_record", false).with(serde_json::json!({ "why": e.to_string() }))
         })?;

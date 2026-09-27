@@ -78,6 +78,10 @@ export const useConflictStore = defineStore('conflicts', () => {
         previews.value = { ...previews.value, [previewKey(card, entry.side)]: entry.fallback };
       }
       if (!entry.id || typeof entry.rev !== 'number') continue;
+      // 右栏不许去查 `preview_text(noteId, remoteRev)`：rev 是各设备自己的编号，
+      // 本机历史上同号往往是另一份内容 —— 查回来的会是**本机**那一版，两栏变成同一段文字。
+      // 服务器那一版只能由卡片自带的 remotePreview 提供（载荷来自服务器返回的原始信封）。
+      if (entry.side === 'remote' && typeof entry.fallback === 'string' && entry.fallback !== '') continue;
       try {
         const text = await callCommand<string>(Commands.previewText, { id: entry.id, rev: entry.rev });
         if (typeof text === 'string') previews.value = { ...previews.value, [previewKey(card, entry.side)]: text };
