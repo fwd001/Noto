@@ -7,6 +7,16 @@
 
 ## 0. 标记约定与证据基线
 
+> **一条与"提交粒度"有关的硬规则（2026-09-27 由 CI 亲自教我的）**：pnpm 的
+> `minimumReleaseAgeExclude`（在 `apps/desktop/pnpm-workspace.yaml`）与 `package.json` /
+> `pnpm-lock.yaml` **必须在同一个 commit 里**。我把"把 `@tauri-apps/*` 对到 2.12.0"和
+> "pnpm 顺手补进白名单的那几行"拆成两次提交，结果中间那个 commit 在 runner 上
+> `pnpm install --frozen-lockfile` 直接失败（run #7 红在第 6 步，一条构建都没开始），
+> 而本机一切正常 —— 因为本机早就带着那份文件。规则的含义不是"少提交"，而是：
+> **包管理器代写的配置属于这次依赖变更的一部分**，把它单独留在工作树里就等于推出一个装不出来的 commit。
+> 本机检查方法（不依赖 CI）：改完依赖后 `git status --short` 里出现任何 `pnpm-*` / lock 旁的文件，
+> 就必须与 `package.json`、`pnpm-lock.yaml` 一起进同一次 `git add`。
+
 | 标记 | 含义 |
 | --- | --- |
 | `[实测]` | 来自开发者本机探针输出，见 `docs/evidence/probe-windows-gnu.txt`、`tools/feasibility-probe/`。仅证明本机 GNU 工具链行为，**不证明 CI、不证明 MSVC 路径、不证明 Tauri** |
