@@ -2084,7 +2084,7 @@ impl<R: notera_sync::RemotePort + 'static> Scheduler<R> {
             if stop.load(Ordering::SeqCst) {
                 break;
             }
-            let mut more = matches!(app.run_round(&remote).await, Some(st) if st.outcome == notera_sync::RoundOutcome::Partial);
+            let mut more = should_drain(app.run_round(&remote).await.as_ref());
             while more {
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {}
@@ -2093,7 +2093,7 @@ impl<R: notera_sync::RemotePort + 'static> Scheduler<R> {
                 if stop.load(Ordering::SeqCst) {
                     return;
                 }
-                more = matches!(app.run_round(&remote).await, Some(st) if st.outcome == notera_sync::RoundOutcome::Partial);
+                more = should_drain(app.run_round(&remote).await.as_ref());
             }
         }
     }
@@ -2103,6 +2103,17 @@ impl App {
     fn set_sync_public(&self, b: Badge) {
         self.set_sync(|v| v.badge = b);
     }
+}
+
+/// 被预算截断的一轮要不要**立刻**续跑，而不是等 25 秒下一拍。
+///
+/// 判据是"这一轮有没有真的推进"，不是"结果是不是 `Partial`"：`Partial` 也会由
+/// 清单条目 404、单次请求出错这类情况产生，那种时候 1 秒一轮就是无界热转圈 ——
+/// 手机上就是耗电耗流量。所以有进展就连跑（实测 5000 条库的追平因此从 ~11 分钟
+/// 降到 ~96 秒），没进展就退回常规节拍，交给退避与徽标去说话。
+fn should_drain(stats: Option<&notera_sync::RoundStats>) -> bool {
+    let Some(st) = stats else { return false };
+    st.outcome == notera_sync::RoundOutcome::Partial && st.pushed + st.pulled > 0
 }
 
 async fn wait_dirty(app: &App) {
@@ -2128,6 +2139,31 @@ async fn stop_signal(stop: &Arc<AtomicBool>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn drain_only_follows_real_progress() {
+        let st = |outcome, pushed, pulled| notera_sync::RoundStats {
+            requests: 200,
+            bytes_up: 4096,
+            bytes_down: 4096,
+            pushed,
+            pulled,
+            conflicts: 0,
+            cas_retries: 0,
+            outcome,
+        };
+        use notera_sync::RoundOutcome as O;
+        // 被截断但确有推进：立刻续跑（5000 条库的追平靠的就是这个）
+        assert!(should_drain(Some(&st(O::Partial, 0, 197))), "追平中的截断轮次被当成了不用续跑");
+        assert!(should_drain(Some(&st(O::Partial, 100, 0))), "推送中的截断轮次被当成了不用续跑");
+        // 没推进的 Partial（404、请求出错）：退回常规节拍，不许 1 秒一轮热转圈
+        assert!(!should_drain(Some(&st(O::Partial, 0, 0))), "没有进展的 Partial 会引发无界续跑");
+        assert!(!should_drain(Some(&st(O::Converged, 3, 3))), "干完的一轮不该再续");
+        assert!(!should_drain(Some(&st(O::NoOp, 0, 0))), "空轮不该再续");
+        assert!(!should_drain(Some(&st(O::Failed, 0, 0))), "失败的一轮交给退避，不该立刻续");
+        // 并发里另一条轮次占着时 run_round 返回 None：同样不许续
+        assert!(!should_drain(None), "本轮没跑成不该续跑");
+    }
+
     use super::*;
     use notera_core::next_rev;
     use notera_sync::plan::{Action, ConflictKind};
