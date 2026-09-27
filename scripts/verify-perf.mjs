@@ -98,8 +98,9 @@ function rmrf(dir) {
       fs.rmSync(dir, { recursive: true, force: true });
       return;
     } catch {
-      // 上一批桥进程可能还在收尾（Windows 上目录被占就是 EPERM）
-      spawnSync('taskkill', ['/FI', `WINDOWTITLE eq ${dir}`, '/F'], { stdio: 'ignore' });
+      // 上一批桥进程可能还在收尾（Windows 上目录被占就是 EPERM）：占着这个目录的
+      // 就是灌库用的那座桥，直接收掉它。
+      spawnSync('taskkill', ['/IM', 'notera-cli.exe', '/F'], { stdio: 'ignore' });
       sleep(500);
     }
   }
@@ -251,7 +252,16 @@ try {
   spawnSync('taskkill', ['/IM', 'notera-desktop.exe', '/F'], { stdio: 'ignore' });
   for (let w = 0; w < 40 && desktopRunning(); w += 1) await sleep(250);
 
-  await step(`灌库：${NOTES} 条走产品写入路径（debug 桥 create_note）`, () => seed(BIG_DIR, NOTES));
+  await step(`灌库：${NOTES} 条走产品写入路径（debug 桥 create_note）`, async () => {
+    // SKIP_SEED=1：沿用上一轮灌好的库（换滚深、换口径时不必再花几分钟灌库）。
+    // 但必须验它真的是那个规模 —— 沿用了一个空目录就等于量了个空库。
+    if (process.env.SKIP_SEED === '1') {
+      const info = fs.statSync(`${BIG_DIR}/notera.sqlite`, { throwIfNoEntry: false });
+      if (!info?.isFile()) throw new Error(`SKIP_SEED 但 ${BIG_DIR} 里没有库，先灌一遍再说`);
+      return `SKIP_SEED：沿用 ${BIG_DIR}`;
+    }
+    return await seed(BIG_DIR, NOTES);
+  });
 
   await step('PERF-01 冷启动（空库）：进程创建 → 列表区可见', async () => {
     const { best, runs } = await coldStartBest(EMPTY_DIR, '[data-testid="list-empty"], [data-testid="empty-state"], [data-testid^="note-row-"]', 'empty');
@@ -297,9 +307,20 @@ try {
     });
     const x = box.x + box.width / 2;
     const y = box.y + Math.min(box.height / 2, 300);
-    for (let i = 0; i < 40; i += 1) {
+    // 列表是虚拟化的（DOM 里只留可视 + overscan 那几十行），滚得不够深就等于没量到分页。
+    // 所以滚完之后把"到底滚到哪、DOM 里出现过多少行、滚动条总高"一起报出来 ——
+    // 覆盖范围是这条基线的一部分，不是可以省掉的脚注。
+    const notches = Number(process.env.WHEEL || 120);
+    const rowsSeen = new Set();
+    for (let i = 0; i < notches; i += 1) {
       await page.mouse.move(x, y);
       await page.mouse.wheel(0, 420);
+      if (i % 6 === 0) {
+        for (const id of await page.locator('[data-testid^="note-row-"]').evaluateAll((els) =>
+          els.map((e) => e.getAttribute('data-testid')),
+        ))
+          rowsSeen.add(id);
+      }
       await sleep(25);
     }
     const frames = await page.evaluate(() => {
@@ -312,17 +333,30 @@ try {
     const p95 = Math.round(sorted[Math.floor(sorted.length * 0.95)]);
     const worst = Math.round(sorted[sorted.length - 1]);
     const visible = await page.locator('[data-testid^="note-row-"]').count();
+    const depth = await page
+      .locator('.list-viewport')
+      .first()
+      .evaluate((el) => ({ top: Math.round(el.scrollTop), high: Math.round(el.scrollHeight), box: Math.round(el.clientHeight) }))
+      .catch(() => ({ top: 0, high: 0, box: 0 }));
     const rss = workingSetMiB(h.shell.pid);
     fs.mkdirSync(OUT, { recursive: true });
     await page.screenshot({ path: `${OUT}/perf-big-list.png` });
     numbers.scrollP95Ms = p95;
     numbers.scrollWorstMs = worst;
+    numbers.scrollNotches = notches;
+    numbers.scrollRowsEverInDom = rowsSeen.size;
+    numbers.scrollDepthPx = `${depth.top}/${depth.high}（视口 ${depth.box}）`;
     numbers.scrollVisibleRows = visible;
     numbers.rssAfterScrollMiB = rss;
+    if (rowsSeen.size < 300) {
+      throw new Error(
+        `只滚到 ${rowsSeen.size} 行（DOM 常驻 ${visible}），没跨过一页 200 条 —— 这次滚动不算量到分页，加深 WHEEL=`,
+      );
+    }
     // 预算是"无 >50 ms 掉帧"：判据看 p95，最坏那一帧照样打出来给人看
     // （首屏那一下 300 ms 也是信息，不是可以藏起来的东西）。
     if (p95 > 50) throw new Error(`滚动 p95 帧间隔 ${p95} ms（预算 ≤50 ms），最坏 ${worst} ms，可见行 ${visible}，RSS ${rss} MiB`);
-    return `${frames.length} 帧，p95 ${p95} ms（预算 ≤50），最坏 ${worst} ms；可见行 ${visible}；RSS 滚动后 ${rss} MiB`;
+    return `${frames.length} 帧，p95 ${p95} ms（预算 ≤50），最坏 ${worst} ms；${notches} 次滚轮跨过 ${rowsSeen.size} 行、深度 ${depth.top}/${depth.high}；RSS 滚动后 ${rss} MiB`;
   });
 } finally {
   for (const k of Object.keys(held)) closeWindow(k);

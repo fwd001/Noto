@@ -21,7 +21,7 @@
 | 千库规模 `--test big_library`（SY-INT-14 / PERF-05 量级版） | 1/1，13.8 s（1000 条：追平轮数有界、空轮 1 请求 0 字节、默认本全网络只有一条、逐条比对读满、**追平期间每个基线分段最多整份下载一次**） |
 | 链路抖动 `--test reconnect`（SY-INT-11） | 1/1（六轮各坏一次，恢复后账目归零、两台设备逐条一致） |
 | P11 面板 `scripts/verify-p11-panel.mjs` | 10/10（真浏览器读**两台真设备留在盘上的现场**：右栏是服务器那一版、无载荷时说的是"没取回来"；两条截图证据进 `docs/evidence/`） |
-| 性能基线 `scripts/verify-perf.mjs`（PERF-01/10/13） | 3/4 —— 真实 release 壳：空库 907 ms（其中 WebView2 起来占 616 ms，纯应用侧 291 ms）、5000 条 1022 ms ✓、滚动 p95 17 ms ✓、RSS 31.6/46.2 MiB ✓；**空库那一档在含 WebView2 的口径下超 800 ms 暂定预算，这一条现在是红的**，等 §51 定口径（详见 TEST-PLAN PERF-01） |
+| 性能基线 `scripts/verify-perf.mjs`（PERF-01/10/13） | 3/4 —— 真实 release 壳：冷启动 空库 907/935/1002 ms、5000 条 1022 ms、**20000 条 1322 ms** ✓（其中 WebView2 起进程占 ~650 ms，纯应用侧 240~690 ms）；20000 条滚动 1120 帧 **p95 17 ms** ✓、RSS 69.1→70.1 MiB ✓；**空库那一档超 800 ms 暂定预算，这一条现在是红的**，等 §51 定口径（详见 TEST-PLAN PERF-01/10/13） |
 | 前端 | 196 通过（21 文件）；`vue-tsc --noEmit` 无错误；构建 214 KB → gzip 73 KB |
 | `scripts/arch-check.mjs` | 27/27（第 26 条是版本单源，第 27 条是"编译期嵌入的文件要进版本库"） |
 | 版本单源 | 一致（权威 + 三处派生 + **Cargo.lock**）；三处变异（派生位置偷改、crate 自己写死版本、**lock 慢一个版本**）都能打红 | `node scripts/check-versions.mjs` |
