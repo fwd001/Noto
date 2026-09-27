@@ -277,6 +277,39 @@ impl Manifest {
         for bucket in new_segments.values_mut() {
             bucket.sort_by_key(|a| a.key());
         }
+        // 容量这一层以前没有：2500 条会被折进同一条 `seg-0000`，于是"基线分段"退化成
+        // "把整份清单换个文件名" —— 新设备照样要下全量，而 §4.1 的尺寸实测（2000 条
+        // ≈ 159 KB）就是为了不这么干。超过 `SEGMENT_TARGET` 就按 id 序切出新的分段，
+        // 名字取现有编号之后，保证不与已存在的分段撞名。
+        let mut created: Vec<String> = Vec::new();
+        let mut idx = next_segment_index(&new_segments);
+        while let Some(name) = new_segments
+            .iter()
+            .find(|(_, v)| v.len() > SEGMENT_TARGET)
+            .map(|(k, _)| k.clone())
+        {
+            let rest = {
+                let bucket = new_segments.get_mut(&name).expect("刚查过存在");
+                if bucket.len() <= SEGMENT_TARGET {
+                    continue;
+                }
+                bucket.split_off(SEGMENT_TARGET)
+            };
+            let mut rest = rest;
+            while !rest.is_empty() {
+                let take = rest.len().min(SEGMENT_TARGET);
+                let chunk: Vec<EntryRef> = rest.drain(..take).collect();
+                let new_name = format!("seg-{idx:04}");
+                idx += 1;
+                created.push(new_name.clone());
+                new_segments.insert(new_name, chunk);
+            }
+        }
+        for name in created {
+            if !touched.contains(&name) {
+                touched.push(name);
+            }
+        }
         let mut next = self.clone();
         next.seq = self.seq + 1;
         next.generated_at = at.into();
@@ -319,6 +352,15 @@ impl Manifest {
             .map(|s| s.n.clone())
             .collect()
     }
+}
+
+/// 新分段该用的编号：现有名字里最大的 +1（`seg-0000` 这种命名是固定的四位）。
+fn next_segment_index(segs: &BTreeMap<String, Vec<EntryRef>>) -> u32 {
+    segs.keys()
+        .filter_map(|k| k.rsplit('-').next()?.parse::<u32>().ok())
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(0)
 }
 
 /// 分段文件的字节形态：条目数组的 canonical JSON。
@@ -453,6 +495,32 @@ mod tests {
     /// 这一支以前是坏的 —— `compact()` 只遍历已有的 `self.segments`，于是新桶进不了索引、
     /// 而窗口又已被清空，压实产物读起来等于"库里一条记录都没有"。写侧一旦真的接上压实，
     /// 每个 >200 条变更的库都会撞上它，所以这条测试钉的是"条目一个都不能消失"。
+    /// `SEGMENT_TARGET`(2000) 不是摆设：压实出来的单条分段不得超容量。
+    ///
+    /// 分段的意义是"读者只下载与自己相关的那一段"。如果 2500 条全塞进一个 `seg-0000`，
+    /// 那"两段式清单"就退化成"把整份清单改个文件名"：每个新设备仍要下全量基线，
+    /// §4.1 的尺寸实测（2000 条 ≈ 159 KB）正是为了避开这件事。
+    #[test]
+    fn compaction_respects_the_segment_target() {
+        let mut m = Manifest::initial("", "dev-1", "2026-09-25T00:00:00.000Z", "notera");
+        m.window.entries = (0..2500)
+            .map(|i| entry(&format!("{:026}", i), 1, &format!("h{i:06}")))
+            .collect();
+        let (next, touched, newsegs) = m.compact(&BTreeMap::new(), "dev-1", "2026-09-25T00:00:03.000Z");
+        assert!(next.segments.len() > 1, "2500 条条目压成一条分段（{:#?}）—— SEGMENT_TARGET 没被用上", next.segments.len());
+        for r in &next.segments {
+            assert!(r.count <= SEGMENT_TARGET, "分段 {} 有 {} 条，超过容量上限 {SEGMENT_TARGET}", r.n, r.count);
+            assert_eq!(r.count, newsegs.get(&r.n).map(|v| v.len()).unwrap_or(usize::MAX), "分段 {} 的 count 与内容不符", r.n);
+        }
+        let total: usize = next.segments.iter().map(|r| r.count).sum();
+        assert_eq!(total, 2500, "分段容量拆完不能丢条目");
+        // 引擎只写 `touched` 里那些分段。新切出来的分段必须在里面 —— 不然索引引用了它，
+        // 服务器上却没有这个文件（INV-09 破了，读者 404）。
+        for name in newsegs.keys() {
+            assert!(touched.contains(name), "分段 {name} 没被列进 touched，引擎不会把它写上去");
+        }
+    }
+
     #[test]
     fn first_compaction_creates_the_segment_that_carries_the_window() {
         let mut m = sample();
