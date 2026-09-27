@@ -146,7 +146,14 @@ export const useEditorStore = defineStore('editor', () => {
 
   /** 单个块就地更新（保留其它块的 DOM 与 id）。 */
   function updateBlock(block: EditorBlock): void {
-    if (writeBlocked.value) return;
+    if (writeBlocked.value) {
+      // 挡下写入可以（笔记还没就绪、只读上下文），但**绝不静默**：静默的失败形态是
+      // "屏幕上明明有字、库里是空正文，而右下角写着已保存"。主干上这是偶发的
+      // （纯黑盒 UAT 三轮里红两轮，见 CHANGELOG 已知限制），所以先把谎报堵住。
+      saveState.value = 'error';
+      saveErrorKey.value = 'save_dropped';
+      return;
+    }
     blocks.value = blocks.value.map((item) => (item.id === block.id ? { ...block } : item));
     dirty.value = true;
     saveState.value = 'pending';

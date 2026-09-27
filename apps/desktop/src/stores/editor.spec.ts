@@ -4,7 +4,7 @@ import type { Note } from '../api/types';
 import { noteFixture, stubLocalService } from '../testing/http';
 import { useEditorStore } from './editor';
 import { useNoteStore } from './notes';
-import { inlineText } from '../editor/model';
+import { inlineText, textBlock } from '../editor/model';
 
 function asNote(value: Record<string, unknown>): Note {
   return value as unknown as Note;
@@ -187,5 +187,39 @@ describe('插入附件与自动保存的先后', () => {
     const before = editor.blocks.length;
     await expect(editor.attachFile('inline', new File([new Uint8Array([1])], 'x.png', { type: 'image/png' }))).resolves.toBeNull();
     expect(editor.blocks).toHaveLength(before);
+  });
+});
+
+describe('写被挡下时不许静默', () => {
+  /**
+   * 钉的是一条真实踩过的形态：笔记还没就绪时用户已经开始打字，输入被丢掉，
+   * 而右下角仍然显示"已保存"。纯黑盒 UAT 三轮里红两轮就是这么来的。
+   * 挡下是允许的，谎报不是。
+   */
+  it('noteId 还不存在时 updateBlock 丢掉输入，就把状态改成明确的错误', async () => {
+    const service = stubLocalService({});
+    const editor = useEditorStore();
+    // 故意不 hydrate：noteId === null → writeBlocked
+    const dropped = textBlock('paragraph', [{ text: '刚敲却没落库的字' }]);
+
+    editor.updateBlock(dropped);
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(editor.dirty).toBe(false);
+    expect(editor.saveState).toBe('error');
+    expect(editor.saveLabel).toContain('没有被接受');
+    expect(service.callsOf('edit_note')).toHaveLength(0);
+  });
+
+  it('就绪之后同样的写入照常落库（错误态不是常态化的挡路）', async () => {
+    const service = stubLocalService({ edit_note: () => noteFixture({ rev: 2 }) });
+    const editor = useEditorStore();
+    editor.hydrate(asNote(noteFixture()));
+    const block = editor.blocks[0];
+    if (!block) return;
+    editor.updateBlock({ ...block, content: [{ text: '正常输入' }] });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(service.callsOf('edit_note')).toHaveLength(1);
+    expect(editor.saveState).toBe('saved');
   });
 });

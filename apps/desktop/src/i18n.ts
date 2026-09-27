@@ -248,6 +248,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'error.transport_unreachable': '未连接到本地服务。',
   'error.stale_edit': '这条笔记在别处被改动了。',
   'error.not_found': '这条内容已经不在了。',
+  'error.save_dropped': '这条笔记当时还没准备好，刚才的输入没有被接受（内容没写进去）。请重新输入；如果反复出现，请先关掉这条笔记再打开。',
   'error.invalid_input': '输入的内容无法保存，请检查后重试。',
   'error.permission_denied': '系统拒绝了这次操作。',
   'error.no_account': '还没有配置同步服务器。不配置也能继续记笔记。',
