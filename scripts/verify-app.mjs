@@ -4,7 +4,7 @@
  *
  * 前置（脚本不管，由调用方起）：
  *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
- *   npm --prefix apps/desktop run dev                      # 5173
+ *   pnpm --dir apps/desktop dev                      # 5173
  *
  *   node scripts/verify-app.mjs
  */

@@ -68,7 +68,7 @@
 | `integration` | 依赖 `pr` 成功（`needs: pr`） | **L1** 组件（core↔store↔richtext 组装）；**L2** 契约回归；**L3** 多客户端 E2E：起 `notera-test-webdav`，≥2 个 `notera-host` 实例经 127.0.0.1 真实 HTTP 收敛 | ≤ 12 min | 是 |
 | `crash` | `needs: pr`，且在 `crates/notera-{store,sync,crypto}/**`、`migrations/**` 有变更时必跑（其余 PR 也跑，但允许 `continue-on-error: false`） | **L4** 写入中途 `kill -9` / `taskkill /F` / `abort()`，重启后校验 WAL 恢复、FTS 索引与 `user_version` 一致 | ≤ 10 min | 是 |
 | `e2e-desktop` | 仅 `windows-2022`（预装 WebView2 `[上游/假设]`）+ `pull_request`，`workflow_dispatch` 可手动 | **L5** 黑盒 UAT：Playwright 驱动 Tauri WebView（经 `devtools`/远程调试端口，接线方式 Phase 1 spike）。**本地等价已落地**：`node scripts/verify-app.mjs` 驱动同一份前端 + 同一份 Rust 核心（`notera-cli serve` 的 dev 桥，真实 SQLite，非 mock），14 步含"刷新后仍在"与"控制台零 error" | ≤ 15 min | 是（release 必过；PR 若 runner 无 WebView2 必须显式 fail，不允许 skip） |
-| `audit` | `pull_request` + `schedule` 每日 + tag | `cargo-audit`（RustSEC）、`cargo-deny`（licenses/advisories/bans/duplicates）、`npm audit --audit-level=high`、`gitleaks detect` | ≤ 5 min | 是（高危项；`audit` 的 advisory 允许带到期日的 `waiver` 列表，见 §10） |
+| `audit` | `pull_request` + `schedule` 每日 + tag | `cargo-audit`（RustSEC）、`cargo-deny`（licenses/advisories/bans/duplicates）、`pnpm audit --audit-level=high`（**本机 BLOCKED**：registry 指向 registry.npmmirror.com，其 `/bulk` advisories 端点不存在，pnpm 直接报错；同一 registry 下 `npm audit` 也一样不可用 —— 也就是说这条门禁**从来没在这台机器上验过**，不是收敛到 pnpm 才坏的）、`gitleaks detect` | ≤ 5 min | 是（高危项；`audit` 的 advisory 允许带到期日的 `waiver` 列表，见 §10） |
 | `build-windows` | `pull_request`（标签 `build:win` 或改 `apps/desktop/**`）+ tag | `cargo build --release --target x86_64-pc-windows-msvc` + `pnpm tauri build --bundles msi`（`nsis` 是否同时出：待决策 §13） | ≤ 25 min | 是（release 前置） |
 | `build-macos-android` | 同上（矩阵两个 job） | macOS：`macos-14` + `tauri build --target aarch64-apple-darwin` → `.dmg` + `.app.zip`；Android：`ubuntu-22.04` + JDK17 + SDK/NDK → `arm64-v8a` APK | ≤ 30 min | 是（release 前置） |
 | `release` | **仅** `push` tag `v*` | `needs: [pr, integration, crash, e2e-desktop, audit, build-windows, build-macos-android]` → 汇总产物、生成 `checksums.txt` 与 CHANGELOG、`gh release create` | ≤ 10 min | 自身即终态 |
@@ -116,7 +116,7 @@
 | --- | --- | --- | --- |
 | crates registry | `~/.cargo/registry`、`~/.cargo/.crates2.json` | `cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}` | **跨 job、跨 target 共享**（下载产物与工具链无关）；restore-keys 允许前缀命中 |
 | `target/` | workspace 各 `target/` | `${{ runner.os }}-${{ matrix.rust_target }}-${{ matrix.toolspace }}-cargo-${{ hashFiles('**/Cargo.lock') }}` | **按 job/按 toolspace 隔离**：`msvc` 与 `gnu` 的对象文件绝不混用（混用是静默错乱的温床）；`toolspace` 显式取自 `rustc -vV` 的 host |
-| pnpm store | `$(pnpm store path)` | `pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}` | 只缓存 store，不缓存 `node_modules`（store→`pnpm install --offline` 重建） |
+| pnpm store | `$(pnpm store path)` | `pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}` | 只缓存 store，不缓存 `node_modules`（store→`ppnpm install --offline` 重建） |
 | Gradle / Android | `~/.gradle/caches`、`~/.gradle/wrapper` | `gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts','**/gradle-wrapper.properties','**/libs.versions.toml') }}` | 与 SDK/NDK 版本解耦；SDK 变更不使此缓存失效（可能反而导致陈旧构建，故 Android job 每周清理一次：`nightly` 里加 `--refresh-dependencies`） |
 | Playwright | `~/.cache/ms-playwright` | `pw-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}` | 版本与 `pnpm-lock` 绑定 |
 | **永不缓存** | keystore、`.p12`、`~/.cache/keyring`、Apple 专用密钥、`.env` | — | 见 §10 密钥规则；`docs/evidence/` 不入缓存 |
@@ -435,7 +435,7 @@ jobs:
 | 工具链 pin | 根 `rust-toolchain.toml`：`channel = "1.98.1"`（精确到 patch，`[实测]` 本机即该版本）+ `components = [rustfmt, clippy]` + `targets = [...]`（按平台列 msvc / aarch64-apple-darwin / aarch64-linux-android）+ `profile = "minimal"` | `docs`（校验文件存在且 channel 与 CI 实际 `rustc -vV` 一致） |
 | 许可证/告警 | `deny.toml`：`licenses.allow` 白名单（MIT/Apache-2.0/Unicode-DFS/BSD-3/OpenSSL 等，`aws-lc-rs`、`ring`、`sqlite3` 绑定需单独确认）、`yank = deny`、`unknown-registry = deny`、`bans`（重复 crate 版本上限，`[实测]` 探针已引入 `cmake`/`cpufeatures` 等，需 `duplicates.allow` 精确列出） | `audit` |
 | 安全告警 | `cargo audit --deny warnings`；`cargo update` 单独 PR（不允许与功能混提）；豁免必须写 `audit.toml` + `expires` + 理由 + issue 链接，**无到期日的豁免 = fail** | `audit` |
-| 前端依赖 | `npm audit --audit-level=high`（`[实测]` npm 11.13.0 / pnpm 12.5.1）；`packageManager` 字段锁定 pnpm 版本；postinstall 脚本需 allowlist（`pnpm.onlyBuiltDependencies`） | `audit` |
+| 前端依赖 | `pnpm audit --audit-level=high`（**本机 BLOCKED**：registry 指向 registry.npmmirror.com，其 `/bulk` advisories 端点不存在，pnpm 直接报错；同一 registry 下 `npm audit` 也一样不可用 —— 也就是说这条门禁**从来没在这台机器上验过**，不是收敛到 pnpm 才坏的）（`[实测]` npm 11.13.0 / pnpm 12.5.1）；`packageManager` 字段锁定 pnpm 版本；postinstall 脚本需 allowlist（`pnpm.onlyBuiltDependencies`） | `audit` |
 | SBOM | `cargo sbom`（CycloneDX）或 `syft dir:. -o cyclonedx-json`，作为 release 资产 `Notera-<v>-sbom.cdx.json`；两条路径哪条为准 Phase 1 试一次 `[假设]` | `release` |
 | 二进制供应链 | 禁止 `curl \| sh`、禁止从非 crates.io/npmjs 源拉构建脚本；所有第三方 Action 用 **commit SHA 或精确 tag**（禁 `@main`/`@latest`） | `audit`（grep `uses:` 行） |
 | CI 自审（防门禁被悄悄拆） | grep 全仓 `.github/`：`--no-verify`、`continue-on-error: true`（在 gate job 上）、`--cap-lints`、`allow(warnings)` 扩散、`-D warnings` 被移除、`needs:` 被缩短、`if: false` 新增 | `audit` |

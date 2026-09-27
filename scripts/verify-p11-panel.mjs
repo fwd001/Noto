@@ -10,7 +10,7 @@
  * （两台真设备 + 真 TCP WebDAV），本脚本只负责起桥 + 点界面，不改数据。
  *
  * 前置（脚本不管，与 verify-app.mjs 同一约定）：
- *   npm --prefix apps/desktop run dev            # 5173
+ *   pnpm --dir apps/desktop dev            # 5173
  *
  *   node scripts/verify-p11-panel.mjs
  */

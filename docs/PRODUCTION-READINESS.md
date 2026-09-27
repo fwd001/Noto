@@ -22,8 +22,8 @@
 | Rust 全量测试 | **517 通过 / 0 失败 / 0 ignored（61 个测试二进制）** | `cargo test --workspace` | L0–L4 |
 | Clippy（CI 原样命令） | 0 error / 0 warning | `cargo clippy --workspace --all-targets -- -D warnings` | L0 |
 | 架构适应度 | **27/27**（含最后一条"扫描台账"：任何源码门禁扫到 0 个文件即判失败） | `node scripts/arch-check.mjs` | 静态 |
-| 前端 | **200 通过（21 文件）**；`vue-tsc --noEmit` 0 错；构建 216.65 KB → gzip 74.22 KB | | `npm --prefix apps/desktop test` / `run typecheck` / `run build` | L0/L1 |
-| §26 无障碍 | 静态门禁 + 3 条专项测试（见 TEST-PLAN A11Y-01…04） | `arch-check` / `npm test` | L1 |
+| 前端 | **200 通过（21 文件）**；`vue-tsc --noEmit` 0 错；构建 216.65 KB → gzip 74.22 KB | | `pnpm --dir apps/desktop test` / `run typecheck` / `run build` | L0/L1 |
+| §26 无障碍 | 静态门禁 + 3 条专项测试（见 TEST-PLAN A11Y-01…04） | `arch-check` / `pnpm test` | L1 |
 | 崩溃注入（小库 9 点 + 大库压实 1 点） | 逐个**真把子进程杀死**（退出码 77）后重启，两台设备逐条一致、待办归零 | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery --test compaction_crash` | L5 |
 | 附件下载续传 | 2/2（真杀进程重启接着要；服务器**不理** `Range` 时当整份覆盖） | `cargo test -p notera-host --test attachment_resume` | L3/L5 |
 | 清单压实 + 分段读回 | 1/1（>200 条变更后分段落盘、索引不引用不存在的分段、空库靠分段基线追平） | `cargo test -p notera-host --test compaction` | L3 |
@@ -32,7 +32,7 @@
 | 链路抖动收敛（§53 主循环） | 1/1（六轮各坏一次：停监听 / 建连就掐 / 读清单 500） | `cargo test -p notera-host --test reconnect` | L3 |
 | 空轮代价（PERF-05/14） | 1/1（≤2 请求、≤2 KiB、清单必走 304、PROPFIND ≤1） | `cargo test -p notera-host --test sync_cost` | L3 |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` | L2 |
-| 浏览器端到端（真 Rust 核心，非 mock） | **35/35** | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` | L4 |
+| 浏览器端到端（真 Rust 核心，非 mock） | **35/35** | `notera-cli serve` + `pnpm dev` + `node scripts/verify-app.mjs` | L4 |
 | 纯黑盒 UAT（§23：只用界面） | **10/10** —— 修好第 3 节那条竞态之后**连跑十一轮全绿**（每轮独立空库；其中六轮是冷 vite 缓存的稳定性加测） | `node scripts/verify-blackbox.mjs` | L4 |
 | 真窗口（走真 `invoke`） | debug **9/9** 且 release **9/9**（第 3 步为 2026-09-27 新增：在跑着的壳里读 `platform_caps`，断言托盘 / 全局快捷键 / 原生菜单 / 通知四项**真的注册上了**；能力由注册结果写，摘掉上报那行重新构建真壳 → 8/9 并点名 `tray 不是 true`。跑前确认 5173/17323 无监听；页面 `http://tauri.localhost/`，真 SQLite、CSP 生效） | `cargo build [--release] -p notera-desktop` + `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223` + `node scripts/verify-tauri-window.mjs` | L4 |
 | `cargo fmt --all --check` | **退出码 0** —— 代理到位后装了 `rustfmt` 组件（B5 解除）。装上后第一次 `--check` 就报出 **92 个文件**格式漂移，已按纯机械格式化单独提交并复验（tests 487/0、clippy 0/0） | `cargo fmt --all --check` |
@@ -68,7 +68,7 @@
 | B5 | ~~`cargo fmt --check` 本机跑不了~~ **已解除** | 缺 `rustfmt` 组件（代理到位后已装） | 曾有：格式漂移无本地证据；第一次真检查就抓到 92 个文件 | 已完成：格式化提交 + CI 里该步转硬门禁 |
 | B6 | PERF-01/09/10/13/12 未建基线；PERF-14/05 已钉 | 需要真机首屏计时与假时钟（autosave 节拍）等前置 | 冷启动/搜索/大列表滚动等没有可回归的数字上界 | 建基线需决定"在什么硬件上测"；假时钟那条可在本机做 |
 
-**CI 已经真跑过一次**（run #1，提交 `a7e8238`）：`check-versions`、`arch-check`（26 条）、`cargo fmt`、`npm ci` 全过，**clippy 失败**、后续步骤被 skip。成因是步骤顺序而非 lint：`cargo clippy --workspace` 会编译桌面壳，其 `build.rs` 要嵌 `frontendDist`，而 CI 上 `npm run build` 排在 clippy 之后 —— 本机永远躺着一份旧 dist，所以这条差异在本地不可能暴露。已把前端构建挪到所有 Rust 步骤之前并把 fmt 转成硬门禁；下一次运行的结论仍要回看日志确认（本机能读 GitHub API，但作业日志需鉴权：HTTP 403、本机无 `gh`）。
+**CI 已经真跑过一次**（run #1，提交 `a7e8238`）：`check-versions`、`arch-check`（26 条）、`cargo fmt`、`ppnpm install --frozen-lockfile` 全过，**clippy 失败**、后续步骤被 skip。成因是步骤顺序而非 lint：`cargo clippy --workspace` 会编译桌面壳，其 `build.rs` 要嵌 `frontendDist`，而 CI 上 `pnpm build` 排在 clippy 之后 —— 本机永远躺着一份旧 dist，所以这条差异在本地不可能暴露。已把前端构建挪到所有 Rust 步骤之前并把 fmt 转成硬门禁；下一次运行的结论仍要回看日志确认（本机能读 GitHub API，但作业日志需鉴权：HTTP 403、本机无 `gh`）。
 
 另外说明一件诚实性相关的事：纯黑盒 UAT 曾经**不是**稳定门禁（3 轮 2 红）。第 3 节那条竞态修好后连跑五轮 5/5。修后累计**十一轮全绿**（每轮独立空库、含冷缓存六轮），这条 lane 的绿现在是可用证据；再往后的长跑稳定性仍按周期性复跑看，不当成已证明永久稳定。
 
@@ -168,5 +168,7 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
 ---
 
 ## 7. 明确没覆盖的（不当作已完成）
+
+- **前端依赖漏洞审计（新记，2026-09-27 收敛到 pnpm 时发现）**：本机 registry 是 `registry.npmmirror.com`，没有 `audit` 端点，`pnpm audit --audit-level=high` 报 `advisories/bulk doesn't exist`（原文见 `.logs/pnpm-audit.log`）。影响：前端依赖的已知漏洞扫描在本机**未执行过**，也就不能算已通过；CI 那边要跑得换到公网 registry。解除条件：能访问带 audit 端点的注册表（或集团 Nexus 转发该数据）后跑一次并回贴结果。
 
 三个平台产物、真实服务器矩阵、发布安装包与签名、后台同步的功耗与网络代价量化、大列表/搜索的性能上界、附件分片上传、以及第 4 节表格里每一项。这些在它们被实测之前，状态一律是 BLOCKED 或 PLANNED，不写"理论通过"。

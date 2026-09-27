@@ -510,7 +510,7 @@
 | ID | 场景 | 注入 | 操作 | 预期 + 不变式 | 层 | 阶段 |
 |---|---|---|---|---|---|---|
 | A11Y-01 | 每个交互控件都念得出名字 | 静态扫 `apps/desktop/src/**/*.vue` 模板（含 `div role="button"` 这类自定义控件；先抹掉注释 / `<script>` / `<style>` 免得把注释里的 `<input type=file>` 当控件） | `node scripts/arch-check.mjs` | 每个 `button/input/select/textarea/a` 与带交互 role 的元素，必须有 aria-label / aria-labelledby / title / `<label for>` / 包裹式 `<label>` / 可见文字之一。**已实现并通过**（第 25 条门禁）。第一次跑抓到编辑区文本块 `role="textbox"` 只有 `data-placeholder`（那不是名字来源）→ 现在由 `v-editable` 写 `aria-label`。变异自证：摘掉块把手的 `aria-label`+`title` → 红；摘掉文本块的名字 → 红 | L1（静态） | P5 |
-| A11Y-02 | 块型文案键真的登记过 | `editor/labels.spec.ts` 逐种块型核对 `t(key) !== key` | `npm --prefix apps/desktop test` | 未知块型返回原始类型名而不是假装"正文"。**已实现并通过**。存在的理由：`t()` 查不到键时**原样返回键名**，拼错的键一声不响 —— 这张表原来用模板串拼键时 7 种里 5 种显示成 `editor.blockCodeBlock` | L0 | P5 |
+| A11Y-02 | 块型文案键真的登记过 | `editor/labels.spec.ts` 逐种块型核对 `t(key) !== key` | `pnpm --dir apps/desktop test` | 未知块型返回原始类型名而不是假装"正文"。**已实现并通过**。存在的理由：`t()` 查不到键时**原样返回键名**，拼错的键一声不响 —— 这张表原来用模板串拼键时 7 种里 5 种显示成 `editor.blockCodeBlock` | L0 | P5 |
 | A11Y-03 | 读屏名字跟着块型走 | `editableDirective.spec.ts` 在 `mounted`/`updated` 上断言 | 同上 | 正文→「正文」、代码→「代码」、标题带层级；**切换块型而文本没变时名字也要更新**（`updated` 会因签名相同跳过覆写 DOM，名字必须在短路之前就写好 —— 这条测试第一次跑就抓到我这么写漏了） | L0 | P5 |
 | A11Y-04 | 键盘可达 + 触摸目标 ≥44pt | 真浏览器 | `verify-blackbox.mjs` 第 9 步 / `verify-app.mjs` 移动端视口步 | Esc 与 Tab 不失控、焦点始终在界面里；3 个移动入口全部 ≥44px。**已实现并通过**（沿用），对比度仍只有设计期 token 证据 | L4 | P5 |
 

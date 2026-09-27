@@ -188,7 +188,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | 门禁 | 结果 | 怎么复现 |
 |---|---|---|
 | Rust 测试 | 487 通过 / 0 失败 / 0 ignored（58 个测试二进制） | `cargo test --workspace` |
-| 前端 | 189 通过（20 文件）、`vue-tsc` 无错误、构建 213 KB→gzip 73 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
+| 前端 | 189 通过（20 文件）、`vue-tsc` 无错误、构建 213 KB→gzip 73 KB | `pnpm --dir apps/desktop test` / `run typecheck` / `run build` |
 | 架构适应度 | 26/26（含 §CI-CD 的版本单源）（含 §26 那条"每个交互控件都要有可读名字"的静态扫描；最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |
 | L5 崩溃注入 | 小库矩阵 9 点 + 大库压实 1 点，逐个杀死真子进程 + 重启收敛（`crash_recovery` 2 条 + `compaction_crash` 1 条，名单由 `CRASH_POINTS_NEED_LARGE_LIBRARY` 减法拼回全表） | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery --test compaction_crash` |
 | 附件续传 + Range 兼容 | 2/2（一条真杀进程重启接着要、一条让服务器**不理** Range 头看它当不当整份覆盖） | `cargo test -p notera-host --test attachment_resume` |
@@ -197,7 +197,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | **千库规模**（SY-INT-14，12.8 s） | 1/1（1000 条：公告/追平轮数有界、索引只装引用 ≤8 KiB、逐条比对**读满**、空轮 1 请求 + 304 + 0 字节、默认本全网络只有一条） | `cargo test -p notera-host --test big_library` |
 | 链路抖动收敛（§53 主循环） | 1/1（六轮各坏一次：停监听 / 建连就掐 / 读清单 500；恢复后本机账目归零，两台设备标题+内容哈希逐条一致） | `cargo test -p notera-host --test reconnect` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
-| 浏览器端到端 | 35/35（真 Rust 核心，非 mock；含"设置页存服务器 → 能力块读回"、"库统计五行全是数字"、"删除 → 回收站 → 恢复 → 永久删除"、"勾一个文件夹 → 包就只有那一棵子树"、"侧栏建子文件夹 → '移动到'选得到"五条真实往返） | `notera-cli serve` + `npm run dev` + `node scripts/verify-app.mjs` |
+| 浏览器端到端 | 35/35（真 Rust 核心，非 mock；含"设置页存服务器 → 能力块读回"、"库统计五行全是数字"、"删除 → 回收站 → 恢复 → 永久删除"、"勾一个文件夹 → 包就只有那一棵子树"、"侧栏建子文件夹 → '移动到'选得到"五条真实往返） | `notera-cli serve` + `pnpm dev` + `node scripts/verify-app.mjs` |
 | L5 纯黑盒 UAT | 10/10（只用点击/输入/键盘/文件选择器/刷新，零 `/cmd/*`、零读库；含"插图后屏幕上真的解出像素、刷新后仍在"） | `node scripts/verify-blackbox.mjs` |
 | L4-L5 冲突面板（P11）| 10/10（真浏览器读**两台真设备留在盘上的现场**：右栏渲染的是服务器那一版而不是本机那份的复制；载荷缺失时屏幕上说的是"没能取回那一版"） | `node scripts/verify-p11-panel.mjs`（自己跑留档夹具 + 起桥；需 vite dev 在 5173） |
 | L5 性能基线 | 3/4（真实 release 壳 + 预先灌好的库：冷启动 907/1022 ms、滚动 p95 17 ms、RSS 31.6→46.7 MiB；空库那档超 800 ms 暂定预算 → 红了等 §51 定口径） | `node scripts/verify-perf.mjs`（`NOTES=` 换规模，`REPS=` 换遍数） |

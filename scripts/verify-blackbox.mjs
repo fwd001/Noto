@@ -13,7 +13,7 @@
  *
  * 前置（与 verify-app 相同）：
  *   notera-cli --data-dir <空目录> serve --port 17323
- *   npm --prefix apps/desktop run dev
+ *   pnpm --dir apps/desktop dev
  *
  *   node scripts/verify-blackbox.mjs
  */

@@ -4,7 +4,7 @@
  * 并让 WebView 自己截图（屏幕抓取抓不到 GPU 合成的 surface，CDP 抓得到）。
  *
  * 前置：
- *   npm --prefix apps/desktop run build          # 资源是**编译期内嵌**的，dist 必须先是新的
+ *   pnpm --dir apps/desktop build          # 资源是**编译期内嵌**的，dist 必须先是新的
  *   cargo build [--release] -p notera-desktop
  *   WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223 notera-desktop.exe
  *   node scripts/verify-tauri-window.mjs

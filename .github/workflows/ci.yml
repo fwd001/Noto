@@ -38,28 +38,39 @@ jobs:
           rustc -Vv
           cargo -V
 
+      # 包管理器已按 2026-09-27 的决定收敛到 **pnpm**：仓库里只留 `apps/desktop/pnpm-lock.yaml`，
+      # `package-lock.json` 同时删除 —— 两份锁的害处不是"难看"，是 CI 装的依赖与本机验过的
+      # 依赖可能不是同一套，而这类差异最后表现为"CI 红/本地绿"或反过来，且没人知道信谁。
+      # 版本由 apps/desktop/package.json 的 `packageManager` 字段钉住；这一步要排在 setup-node
+      # 之前，否则 pnpm 的依赖缓存拿不到 lockfile 就命中不了。
+      - name: 准备 pnpm（版本取自 packageManager）
+        uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
 
-      # 仓库里现在有**两份**锁文件（package-lock.json 与 pnpm-lock.yaml）。本机所有门禁结论
-      # 都是在 npm + package-lock 上跑出来的，所以 CI 先跟本机一致用 npm ci；收敛到单一包
-      # 管理器是另一件事，不在这一步偷偷改（否则 CI 装的依赖与本地验过的就不是同一套）。
-      - name: 依赖安装（npm ci，与本机验证所用的一致）
+      # 本机实测（pnpm 12.5.1）：`pnpm install --frozen-lockfile` 726 ms 通过、锁与
+      # package.json 一致、供应链策略校验通过；随后 test/typecheck/build 三条结论与
+      # 之前 npm 那套**一字不差**（200/200、0 类型错、产物 index-CLVRbH5e.js 216.65 kB
+      # → gzip 74.22 kB）。也就是说这次收敛换的是工具，不是依赖内容。
+      - name: 依赖安装（frozen lockfile，装的就是本机验过的那套）
         working-directory: apps/desktop
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       # 首次运行（run #1）就是死在这之后：clippy 会编译桌面壳，而它的 build.rs 要把
       # `frontendDist` 嵌进二进制 —— 没构建前端就没有可嵌的东西。本机永远有一份旧的
       # dist，所以这条差异在本地看不见。前端构建因此**挪到所有 Rust 步骤之前**。
       - name: 前端构建（真窗口与桌面壳内嵌的就是这份产物）
         working-directory: apps/desktop
-        run: npm run build
+        run: pnpm build
 
       - name: 版本单源（CI-CD §版本与单一版本源）
         run: node scripts/check-versions.mjs
 
-      - name: 架构适应度 + §26 无障碍 + 扫描台账（26 条）
+      - name: 架构适应度 + §26 无障碍 + 扫描台账（本机基线 27/27）
         run: node scripts/arch-check.mjs
 
       # 本机 rustfmt 组件已装上并跑过 `cargo fmt --all`（当时发现 92 个文件有漂移，已单独
@@ -70,16 +81,16 @@ jobs:
       - name: Clippy（-D warnings，与本地同一条命令）
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Rust 全量（本机基线 487 通过 / 58 个测试二进制）
+      - name: Rust 全量（本机基线 517 通过 / 61 个测试二进制）
         run: cargo test --workspace
 
-      - name: 前端单测（本机基线 190 通过 / 20 文件）
+      - name: 前端单测（本机基线 200 通过 / 21 文件）
         working-directory: apps/desktop
-        run: npm test
+        run: pnpm test
 
       - name: 前端类型检查
         working-directory: apps/desktop
-        run: npm run typecheck
+        run: pnpm typecheck
 
       # 契约图要一个可用的 chromium；脚本里写死的是本机路径，CI 上要么找不到浏览器
       # 要么装到别处 —— 所以这一步也先不阻断，等首次运行看清实际行为再收紧。
@@ -92,9 +103,12 @@ jobs:
         timeout-minutes: 60
 
   # 显式**不在这里跑**的（跑不了就是跑不了，不写成通过）：
-  #   · scripts/verify-app.mjs、scripts/verify-blackbox.mjs —— 要 headed/可用的 WebView2 +
-  #     本地 dev 桥；CI 镜像里没有 WebView2 运行时，装出来也是无头 Chromium，
-  #     拿它当"真窗口验过"就是自欺。这两条留在本机跑（本机实测：35/35、纯黑盒 11 连绿）。
+  #   · scripts/verify-app.mjs、scripts/verify-blackbox.mjs、scripts/verify-p11-panel.mjs ——
+  #     要 headed/可用的 WebView2 + 本地 dev 桥；CI 镜像里没有 WebView2 运行时，装出来也是
+  #     无头 Chromium，拿它当"真窗口验过"就是自欺。这三条留在本机跑（本机最新实测：
+  #     36/36、10/10（独立空库）、11/11）。
+  #   · scripts/verify-perf.mjs —— 要真实 release 壳 + 预先灌好的几千条库，且读数是**这台机器**
+  #     的绝对值，换 runner 就没可比性；它是基线采集器，不是放行门。
   #   · scripts/verify-tauri-window.mjs —— 同上，且要 CDP 9223 attach 到真壳。
   #   · macOS / Android / iOS 三产物 —— 需要对应 runner 与证书，按 §40 仍是 BLOCKED。
   #   · 真实公网 WebDAV 矩阵 —— 需要用户提供端点，CI 里只碰 notera-test-webdav。
