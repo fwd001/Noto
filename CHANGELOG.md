@@ -119,6 +119,13 @@
 
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
 
+- **【P1】新设备追一个大库追不平，而界面会说"已同步" → 未修，已定位到两处判据**
+  - 复现（`docs/evidence/late-device-repro.rs.txt`，尚未接入 `cargo test`，因为它现在会红）：设备 A 连写 **260** 条笔记（超过清单窗口上限 `WINDOW_MAX = 200`）并同步到收敛；空库设备 B 入伙。B 第一轮 `Partial pushed=1 pulled=197`（被每轮请求预算 `round_request_cap = 200` 截断），**第二轮起 `NoOp pulled=0`**，本机停在 196 条，而 `dirty_notes=0`、`outbox_pending=0` —— 也就是账上干净、徽标说已同步，剩下 63 条永远不会来。服务器侧核对过：`index.json` 的窗口有 **261** 条条目、`complete=true`、`segments=0`，记录文件齐全 —— **不是写侧漏公告**，是读侧把"截断的一轮"当成了"追平的一轮"
+  - 已定位的判据缺口：① 引擎收尾把清单序号无条件记成 `seq_applied`（`crates/notera-sync/src/lib.rs` 尾部），被预算截断的下载轮次也照记；② `ApplyOp::StoreManifest` 在 host 侧**顺手**又记了一次序号（`crates/notera-host/src/lib.rs`），于是同一个标记有两个写点；③ 304 快路径（`fetch_manifest` 返回 `Ok(None)`）只看"本机有没有脏"，没有"有没有未完成的下载 backlog"这一问，所以直接 `NoOp` 早退
+  - 已试过并**放弃**的改法：把 ①② 的落账改为"本轮未被截断才落"、并给 304 分支加 backlog 判定 —— 补丁留在 `docs/evidence/late-device-defect.patch`。它确实消掉了谎报（第二轮不再 NoOp），但 B 仍停在 197/260：后续轮次反复 `Partial` 而 `pulled=0`，说明还有第四个原因没找到（怀疑在 `seq_applied` 的读回：它是**进程内 atomic**，`SetRemote{kind:"seq"}` 写的是库，同进程下一轮读到的还是旧值 —— 那么 `window_covers` 与 backlog 判定都建立在错值上）。**没有把半成品提交**：这条改动会挪动同步核心的落账时机，而当时剩余的验证预算不足以证明它不引入新的谎报路径
+  - 影响：任何**变更数超过 200 的库**换设备/重装后拿不全数据，且界面无提示 —— 属于"未解释的同步一致性问题"，按 §47 单独这一条就足以把整体判定压成 NOT READY
+  - 解除条件：给上面的 atomic 加"读回落库值"的正确实现（或把 `seq_applied` 统一改成从 `sync_remote_index` 读），把"本轮是否被预算截断"作为唯一落账判据集中到引擎一处，然后让 `late_device` 以完整 260 条收敛进入 `cargo test --workspace` 并被变异验证（把预算调大或把落账改回无条件，测试必须红）
+
 - **`cargo fmt --check` 本机跑不了 → BLOCKED**：原因 = `stable-x86_64-pc-windows-gnu` 工具链没装 `rustfmt` 组件（`error: 'cargo-fmt.exe' is not installed`）；影响 = CI-CD 的 `format` 那一环没有本地等价证据，格式漂移只会在 CI 上第一次暴露；解除条件 = `rustup component add --toolchain stable-x86_64-pc-windows-gnu rustfmt`（要联网，且会改本机工具链，所以没有擅自动手）
 - **黑盒 UAT 有两道，用途不同，都得跑**：`verify-blackbox.mjs` 是 §23 要的纯黑盒（只用界面，只断言屏幕上看得见的文字）；`verify-app.mjs` 会用本地桥复核**库里的真实状态**，因此**不算**黑盒 —— 但它证明的是"界面说的"与"库里有的"一致，这一条黑盒给不了。两道互补，不能用一道替代另一道
 
