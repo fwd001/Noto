@@ -187,10 +187,10 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 
 | 门禁 | 结果 | 怎么复现 |
 |---|---|---|
-| Rust 测试 | 478 通过 / 0 失败 / 0 ignored（55 个测试二进制） | `cargo test --workspace` |
+| Rust 测试 | 481 通过 / 0 失败 / 0 ignored（56 个测试二进制） | `cargo test --workspace` |
 | 前端 | 171 通过（18 文件）、`vue-tsc` 无错误、构建 213 KB→gzip 73 KB | `npm --prefix apps/desktop test` / `run typecheck` / `run build` |
 | 架构适应度 | 24/24（最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |
-| L5 崩溃注入 | 9 个提交点逐个杀死真子进程 + 重启收敛（`crash_recovery`，2 条测试） | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery` |
+| L5 崩溃注入 | 小库矩阵 9 点 + 大库压实 1 点，逐个杀死真子进程 + 重启收敛（`crash_recovery` 2 条 + `compaction_crash` 1 条，名单由 `CRASH_POINTS_NEED_LARGE_LIBRARY` 减法拼回全表） | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery --test compaction_crash` |
 | 附件续传 + Range 兼容 | 2/2（一条真杀进程重启接着要、一条让服务器**不理** Range 头看它当不当整份覆盖） | `cargo test -p notera-host --test attachment_resume` |
 | 清单压实 + 分段读回 | 1/1（>200 条变更：分段落盘、索引不引用不存在的分段、空库设备追平 260 条） | `cargo test -p notera-host --test compaction` |
 | 大库换设备追平 | 1/1（260 条变更 > 窗口上限：空库设备完整收敛、标题+内容哈希逐条一致） | `cargo test -p notera-host --test late_device` |

@@ -729,6 +729,9 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 return next;
             }
         }
+        // 崩在这里 = 分段已经在服务器上、索引还没换版。这一刀的后果必须是可恢复的：
+        // 索引仍指旧分段（旧分段还在），孤儿新分段没有任何索引引用它。
+        notera_core::crash_point("after_segment_write");
         compacted
     }
 

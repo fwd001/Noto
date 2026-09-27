@@ -420,7 +420,16 @@ pub const CRASH_POINTS: &[&str] = &[
     "after_apply",
     "before_manifest_commit",
     "after_manifest_commit",
+    "after_segment_write",
 ];
+
+/// 需要**大库夹具**才走得到的注入点：窗口超过 `WINDOW_MAX`(200) 才会触发清单压实，
+/// 而 9 点崩溃矩阵的子进程夹具只写 1 条笔记，永远碰不到这一步。
+///
+/// 这条名单存在的理由是"别把没跑到的点算成跑过了"：崩溃矩阵按 `CRASH_POINTS` 减去这份
+/// 名单遍历，`compaction_crash` 按这份名单遍历，两边各自断言进程真的死在点上。将来新增
+/// 注入点又没归进任何一边，下面的 `crash_point_lists_partition_registry` 就会红。
+pub const CRASH_POINTS_NEED_LARGE_LIBRARY: &[&str] = &["after_segment_write"];
 
 /// 被注入杀死时进程用的退出码：刻意避开 `notera-cli` 的 0/1/2，
 /// 这样"崩溃注入"和"断言失败"在日志里不会混成一回事。
@@ -454,6 +463,17 @@ pub fn crash_point(_name: &str) {}
 #[cfg(test)]
 mod crash_tests {
     use super::*;
+
+    /// 崩溃注入名单不能各自漂移：大库专属的那几个必须是全表的子集，且全表非空。
+    /// 这条断言是给"加了新点却忘了归进任何一个夹具"准备的。
+    #[test]
+    fn crash_point_lists_partition_registry() {
+        for extra in CRASH_POINTS_NEED_LARGE_LIBRARY {
+            assert!(CRASH_POINTS.contains(extra), "{extra} 未登记在 CRASH_POINTS");
+        }
+        assert_eq!(CRASH_POINTS_NEED_LARGE_LIBRARY.len(), 1, "大库专属点应当逐个有据可查");
+        assert!(CRASH_POINTS.len() > CRASH_POINTS_NEED_LARGE_LIBRARY.len());
+    }
 
     #[test]
     fn crash_point_names_are_unique_and_non_empty() {

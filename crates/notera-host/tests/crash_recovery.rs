@@ -74,6 +74,20 @@ fn boot(dir: &Path, base_url: &str) -> App {
 ///
 /// 附件必须真的带上：`sync_once` 只跑正文轮，附件走 `run_attachment_round`，
 /// 队列为空时那两个注入点根本不会被经过（实测就是这样露出"点没接上"的）。
+/// 崩溃矩阵负责的注入点 = 全表减去"要大库夹具才走得到"的那几个。
+/// 那几个由 `tests/compaction_crash.rs` 覆盖；这里做减法而不是各写一份名单，
+/// 是为了让"新加了注入点却没人覆盖"变成编译期/断言期就炸，而不是静静少测一格。
+fn matrix_points() -> Vec<&'static str> {
+    for extra in notera_core::CRASH_POINTS_NEED_LARGE_LIBRARY {
+        assert!(notera_core::CRASH_POINTS.contains(extra), "大库名单里的 {extra} 不在 CRASH_POINTS 里");
+    }
+    notera_core::CRASH_POINTS
+        .iter()
+        .filter(|p| !notera_core::CRASH_POINTS_NEED_LARGE_LIBRARY.contains(p))
+        .copied()
+        .collect()
+}
+
 #[test]
 fn child_writes_and_syncs() {
     let Ok(spec) = std::env::var(CHILD) else {
@@ -196,7 +210,7 @@ async fn every_crash_point_is_on_the_real_path_and_the_library_recovers() {
     }
 
     let mut reached: Vec<String> = Vec::new();
-    for point in notera_core::CRASH_POINTS {
+    for point in matrix_points() {
         spawn_crashed(point, a_dir.path(), &url);
         reached.push((*point).to_string());
 
@@ -216,7 +230,7 @@ async fn every_crash_point_is_on_the_real_path_and_the_library_recovers() {
             );
         }
     }
-    assert_eq!(reached.len(), notera_core::CRASH_POINTS.len(), "有注入点没被跑到");
+    assert_eq!(reached.len(), matrix_points().len(), "有注入点没被跑到");
 
     // 收敛：正文轮 + 附件轮都要跑 —— 产品调度器就是这么排的，
     // 只跑正文轮就断言"结清了"是把附件那条腿当垃圾丢掉。
@@ -234,7 +248,7 @@ async fn every_crash_point_is_on_the_real_path_and_the_library_recovers() {
         .map(|r| r.title)
         .collect();
     assert!(a_titles.iter().any(|t| t.contains("对面那台")), "别人的笔记没能拉下来：{a_titles:?}");
-    for point in notera_core::CRASH_POINTS {
+    for point in matrix_points() {
         let mine = a_titles.iter().filter(|t| t.ends_with(point)).count();
         assert_eq!(
             mine, 1,
@@ -255,7 +269,7 @@ async fn every_crash_point_is_on_the_real_path_and_the_library_recovers() {
     assert_eq!(st.outbox_pending, 0, "outbox 没结清，改动会永远悬着：{st:?}");
     assert_eq!(
         st.attachments as usize,
-        notera_core::CRASH_POINTS.len() - 1,
+        matrix_points().len() - 1,
         "每个注入点各一份唯一字节，只有崩在「写本地」那一轮还没走到附件：{st:?}"
     );
     srv.stop().await;
