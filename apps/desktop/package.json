@@ -1,7 +1,7 @@
 {
   "name": "notera-desktop",
   "private": true,
-  "version": "0.0.13",
+  "version": "0.0.14",
   "type": "module",
   "packageManager": "pnpm@12.5.1",
   "description": "Notera 前端（Vue 3 + TypeScript + Vite）：三栏 UI + 富文本编辑器 + 4 态同步徽标",
@@ -18,11 +18,12 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/api": "^2.12.0",
     "pinia": "^3.0.4",
     "vue": "^3.5.43"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.0",
     "@typescript-eslint/eslint-plugin": "^8.70.1",
     "@typescript-eslint/parser": "^8.70.1",
     "@vitejs/plugin-vue": "^6.0.9",

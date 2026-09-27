@@ -76,7 +76,32 @@
 
 ## 5. 需要人工决定的项（§51：我不动手，等拍板）
 
-1. **安装器**（`.msi`/`.exe`）：需要 `@tauri-apps/cli`，它不在依赖里 —— 动依赖图，走 §9。
+1. **安装器**（`.msi`/`.exe`）—— **`.exe` 已产出并验通**（2026-09-27，pnpm 收敛后解锁：`@tauri-apps/cli` 2.12.0 已作为 devDependency 装上）。
+   命令与产物：`RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu pnpm --dir apps/desktop exec tauri build --target x86_64-pc-windows-gnu --bundles nsis`
+   → `target/x86_64-pc-windows-gnu/release/bundle/nsis/Notera_0.0.13_x64-setup.exe`（**4.46 MiB**）。
+   > **两个只有真跑才会露出来的坑（都记下了）**：
+   > ① `tauri build` **默认走 MSVC**，而本仓库只能编 GNU —— 失败信息是
+   > `link: extra operand …`，那是 **Git Bash 的 coreutils `link`** 顶替了 MSVC 的 `link.exe`
+   > （本机已知问题，CI 之外的人也会被绊一次）。必须显式 `--target x86_64-pc-windows-gnu`
+   > 且带 `RUSTUP_TOOLCHAIN=…-gnu`。
+   > ② `tauri info`/`build` 会因 **JS `@tauri-apps/api` 与 Rust `tauri` crate 次版本不一致**直接拒绝打包
+   > （此前是 2.11.1 对 2.12.0 —— 所有 lane 却都在这个组合下绿着，所以它是个"能跑但工具链不许出货"的错配）。
+   > 已把两侧都对到 2.12.0，之后 200/200 前端测试与类型检查仍全绿。
+   > **MSI 这条路还没通**：`--bundles msi` 先报 `LGHT0102 !(loc.TauriCodepage) is unknown`
+   > （tauri 生成的 `main.wxs` 引用本地化变量却没把 `.wxl` 交给 `light`；已用
+   > `bundle.windows.wix.language: ["en-US"]` 试修），随后卡在 `os error 32 另一个程序正在使用此文件`
+   > —— WiX 临时目录 `target/…/release/wix/x64` 被某个进程握着句柄（`rm` 都报 Device or resource busy），
+   > 而我在这台机器上没有可靠手段查是谁握的。**根因后来查到了：是我自己的 shell 工作目录停在了那个
+   > `wix/x64` 里面**（为了取 `light.exe` 的错误而 `cd` 进去过），于是 tauri 每次想重建/删除它都撞锁 ——
+   > 也就是说这条**不是产品也不是 WiX 的问题，是复现方式的问题**。下次跑 MSI 前只要保证
+   > **shell 的当前目录不在 `target/**` 里面**（新开一个 shell 最稳），再判 `LGHT0102` 是否已被
+   > `wix.language` 解决。**这一条按 §40 记 BLOCKED**：原因（上一条 lock + loc 变量待复验）、
+   > 影响（只影响 `.msi` 这种"给企业域推送用"的格式，`.exe` 安装器已可用）、
+   > 解除条件（重启或换机器清掉句柄后再跑一次 `--bundles msi`，看语言参数是否已解决 LGHT0102）。
+   > **安装包内容本身已验的一件事**：拿真正进包的 `release/notera-desktop.exe`（不是 debug 产物）
+   > 起过一次 —— 进程活着、数据目录被真实创建，而 `127.0.0.1:17323/health` 连不上，
+   > 也就是 §9 那条"dev 桥只关在 debug 构建里"**在出货产物上成立**（不是只看代码里的 feature 门）。
+   > 仍未验：真正的**安装动作**（我不在你机器上静默装软件）、代码签名、以及下面那条 manifest 警告。
    > **做安装器之前要先知道的一件事（2026-09-27 实测）**：GNU 工具链下
    > `cargo build -p notera-desktop` 稳定报一条链接器警告 ——
    > `ld.exe: .rsrc merge failure: multiple non-default manifests`。意思是产物的 Windows
