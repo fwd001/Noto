@@ -2048,22 +2048,23 @@ impl App {
         marked
     }
 
-    /// 把正式位置的那份 blob 挪进隔离区（同 sha 已在隔离区时先腾位置）。
+    /// 把正式位置的那份 blob 挪进隔离区。
     ///
     /// 同名文件可以覆盖的理由是内容寻址本身：`sha256` 就是文件名，两侧那份**按定义**是同一
-    /// 份内容，留旧删新都只是在同一份字节上绕圈子。真做不到（跨卷、被占用）就原样抛给调用方，
-    /// 让它"本轮不收这一条"而不是"就地销毁"。
+    /// 份内容，留旧删新都只是在同一份字节上绕圈子。所以这里**只让 `rename` 自己去替换目标**，
+    /// 绝不在前面补一刀 `remove_file`：目标可能正是对手（另一个进程，或 GC 与「重试取回」在
+    /// 同一份字节上交错）刚刚搬进去的**唯一一份**，把它当"腾位置"删掉之后自己的 rename 又因为
+    /// 源已经没了而失败 —— 两个位置同时空着，字节就没了（判据 FT-ATT-39；修前实测 4/5 轮命中，
+    /// 单轮最多 14 份）。真挪不动（跨卷、被占用、源已不在）就原样抛给调用方，让它"本轮不收
+    /// 这一条"而不是"就地销毁"。
     fn quarantine_move(&self, sha: &str) -> std::io::Result<()> {
         let from = self.inner.store.blob_path(sha);
         let to = self.inner.store.quarantine_path(sha);
         if let Some(dir) = to.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        if to.exists() {
-            std::fs::remove_file(&to)?;
-        }
         std::fs::rename(&from, &to).map_err(|e| {
-            tracing::warn!(%e, sha = %sha, "挪进隔离区失败：这条本轮不收，字节留在正式位置");
+            tracing::warn!(%e, sha = %sha, "挪进隔离区失败：这条本轮不收，字节留在原地");
             e
         })
     }

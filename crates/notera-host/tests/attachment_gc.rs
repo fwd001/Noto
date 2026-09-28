@@ -1179,3 +1179,356 @@ async fn two_stores_on_one_data_dir_never_move_or_destroy_the_same_bytes_twice()
         "隔离区不能留下第二份"
     );
 }
+
+// ===========================================================================
+// 真两进程（FT-ATT-39）：把"跨进程竞争"从推理换成现场
+// ===========================================================================
+
+const GC_RACE_CHILD: &str = "NOTERA_GC_RACE_CHILD";
+
+/// 等一个栅栏文件出现。**不是时间判据** —— 它只用来把两边对齐到同一瞬，量的是"有没有发生"，
+/// 到点就写一条 `*_timeout` 然后收摊（父进程那侧的红会带上这个原因）。
+/// 看到 `stop` 也算到点：父进程一旦 panic 就不会再放行，子进程不能留在那儿把测试二进制
+/// 占着（下一轮构建会被自己的链接步骤挡掉，"Permission denied"，看着像门禁红了）。
+fn race_wait(flags: &Path, name: &str) -> bool {
+    let stop = flags.join("stop");
+    let wanted = flags.join(name);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    while std::time::Instant::now() < deadline {
+        if wanted.exists() {
+            return true;
+        }
+        if stop.exists() {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    false
+}
+
+/// 父进程用的栅栏：没等到就先把 `stop` 立起来再收摊，保证两边一起退场。
+fn race_barrier(flags: &Path, name: &str) -> bool {
+    let ok = race_wait(flags, name);
+    if !ok {
+        let _ = std::fs::write(flags.join("stop"), name);
+    }
+    ok
+}
+
+fn race_read(flags: &Path, name: &str) -> String {
+    std::fs::read_to_string(flags.join(name))
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn race_count(flags: &Path, name: &str) -> usize {
+    // 读不到就把数打成"多到一定违反等式"的那个值：这条门禁的红必须是"抢了两次"那一形，
+    // 不能因为栅栏没落而假绿。
+    race_read(flags, name).parse().unwrap_or(usize::MAX)
+}
+
+/// 子进程模式：`NOTERA_GC_RACE_CHILD=<数据目录>|<webdav url>|<sha>|<栅栏目录>`。
+///
+/// 两边都**先把手里的清单取出来**，再等一个文件出现才动手 —— 于是"两边都握着同一份还没被
+/// 认领的清单"这一格是被造出来的，不是靠运气撞上的。
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn gc_race_child_process() {
+    let Ok(spec) = std::env::var(GC_RACE_CHILD) else {
+        return; // 不是子进程模式：这条什么都不做（父进程靠 spawn 显式启用）
+    };
+    let parts: Vec<&str> = spec.split('|').collect();
+    if parts.len() != 4 {
+        return;
+    }
+    let dir = Path::new(parts[0]);
+    let url = parts[1];
+    let sha = parts[2].to_string();
+    let flags = Path::new(parts[3]);
+    let app = boot(dir, url);
+
+    // ① 认领：取清单 → 栅栏 → 回收
+    let candidates = app.store().gc_quarantine_candidates(50).unwrap_or_default();
+    let listed = candidates.contains(&sha);
+    let _ = std::fs::write(flags.join("child_listed"), if listed { "1" } else { "0" });
+    if !race_barrier(flags, "go1") {
+        let _ = std::fs::write(flags.join("child_timeout"), "go1");
+        return;
+    }
+    let claimed = app.reclaim_unreferenced_blobs(50);
+    let _ = std::fs::write(flags.join("child_claimed"), claimed.to_string());
+    // 等父进程也跑完认领那一步，再去做销毁前的复查。这一格不是可有可无的：认领只有一家住账，
+    // 而**这一行是另一家写的** —— 抢在它提交之前读"到期清单"会读到空，于是这个子进程拿不到
+    // 清单，销毁那一步的现场根本没造出来（实测就是这样红过：`账上可准入/服务器确认在 = 1/0`，
+    // 而同一瞬直接再问一次服务器答 `Ok(true)`，说明字节与账都没错，错的是我读的时机）。
+    if !race_barrier(flags, "both1") {
+        let _ = std::fs::write(flags.join("child_timeout"), "both1");
+        return;
+    }
+
+    // ② 销毁：拿到"服务器说还在"的那份清单 → 栅栏 → 动手
+    let remote = match app.remote_for_sync().await {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            let _ = std::fs::write(flags.join("child_error"), "没有适配器");
+            return;
+        }
+        Err(e) => {
+            let _ = std::fs::write(flags.join("child_error"), format!("{e:?}"));
+            return;
+        }
+    };
+    let verified = app.confirm_still_remote(&remote, ALL_PAST, 50).await;
+    // 诊断用的两个数分开落盘：`ready` 是"账上认为到期且可准入"的份数，`verified` 是
+    // "服务器真的确认还在"的份数。只落一个数的话，红的时候分不清是账还是服务器。
+    let ready = app
+        .store()
+        .gc_ready_to_purge(ALL_PAST, 50)
+        .unwrap_or_default()
+        .len();
+    let confirmed = verified.len();
+    let _ = std::fs::write(flags.join("child_ready"), format!("{ready}/{confirmed}"));
+    if verified.is_empty() {
+        // 探针：这一问服务器到底答了什么。`Ok(false)` 是"它说没有"（产品侧据此记 `absent`），
+        // `Err` 是"这一问根本没问成"（产品侧据此**不下结论**）。两者的门禁含义不一样，
+        // 红的时候必须分得开，不然会拿着夹具的账去改产品的判据。
+        let probe = remote.has_attachment(&sha).await;
+        let _ = std::fs::write(flags.join("child_probe"), format!("{probe:?}"));
+    }
+    let _ = std::fs::write(flags.join("child_verified"), confirmed.to_string());
+    if !race_barrier(flags, "go2") {
+        let _ = std::fs::write(flags.join("child_timeout"), "go2");
+        return;
+    }
+    let destroyed = app.purge_verified_blobs(&verified);
+    let _ = std::fs::write(flags.join("child_destroyed"), destroyed.to_string());
+
+    // ③ 父进程也动完手之后，子进程再读一次账：两边各自读同一份 SQLite，结论必须一样
+    if race_barrier(flags, "go3") {
+        let state = app.store().attachment_for_state(&sha);
+        let _ = std::fs::write(
+            flags.join("child_state"),
+            format!("{}|{}", state.0, state.1),
+        );
+    }
+}
+
+/// GC 是本仓唯一一段"两个东西可以同时销毁用户字节"的代码，而之前那条门禁（FT-ATT-37）测的是
+/// **同一个进程里**的两个 store —— 它们共享地址空间，抢的只是数据库连接与磁盘。
+///
+/// 这一条换成真的两个 OS 进程，因为"第二个进程会被锁挡住"那个前提在这批被推翻了：这个项目
+/// **没有单实例锁**（`store/pool.rs` 只有 `PRAGMA busy_timeout`），"用户把应用开了两次"在桌面上
+/// 是一个能发生的形状，不是假想敌。形状与 FT-ATT-37 一样是两步，但每一步都在两个进程里各跑一遍：
+/// * 认领只能数到一次，且隔离区里恰好一份、内容一字不差（两个进程同时 `rename` 同一份字节，
+///   输的那一边必须"本轮不收这一条"，而不是把别人的现场再搬一次）；
+/// * 拿着同一份到期清单动手，销毁也只能数到一次；
+/// * 事后两边各读各的账，都得到"这一行没了"。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_os_processes_on_one_data_dir_claim_and_destroy_the_bytes_exactly_once() {
+    use std::process::{Command, Stdio};
+
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..5_400).map(|i| (i % 71) as u8).collect();
+    let dir = Tmp::new("39-xproc");
+    let (a, sha) = seed_uploaded(dir.path(), &url, &blob).await;
+    let nid = a
+        .store()
+        .list_notes(&notera_store::NoteQuery {
+            folder: None,
+            trash: false,
+            limit: 50,
+            offset: 0,
+        })
+        .unwrap()
+        .into_iter()
+        .find(|n| n.title.contains("GC 目标笔记"))
+        .map(|n| n.id.clone())
+        .expect("前置：那条带图笔记还在");
+    a.store().purge_note(&nid).expect("永久删除，让引用归零");
+
+    // 再补 24 份"零引用而服务器已有副本"的字节：只用公开接口造（`attach_blob` 真往盘上写 →
+    // 标 `present` → 永久删掉那条笔记），一次网络都不发。
+    // 为什么是 25 份而不是 1 份：这个窗口要靠两边在**同一批 sha 上反复重叠**才抓得住 ——
+    // 单份的形状是运气（修前实测 8 次红 2 次），二十几份是每次都撞。
+    let folder = notera_core::EntityId::parse(notera_store::DEFAULT_FOLDER_ID).unwrap();
+    let mut samples: Vec<(String, Vec<u8>)> = Vec::new();
+    for i in 0..24 {
+        let note = a
+            .store()
+            .create_note(&folder, doc(&format!("GC 重叠样本 {i}")))
+            .unwrap();
+        // 每份内容都不同 ⇒ 不同的 sha（按 7 步进地旋转 0..250 这一段：251 是质数，
+        // 位移 7·i 在 i<24 内互不相同，所以没有两份样本会撞进同一个 sha）。
+        let bytes: Vec<u8> = (0..1_024).map(|k| ((k + i * 7) % 251) as u8).collect();
+        let sha = a
+            .store()
+            .attach_blob(&note.id, &bytes, "image/png", Some("s.png"), "blk000002")
+            .unwrap()
+            .sha256;
+        a.store()
+            .set_attachment_states(&sha, None, Some("present"))
+            .unwrap();
+        a.store().purge_note(&note.id).unwrap();
+        samples.push((sha, bytes));
+    }
+    let unique: std::collections::HashSet<&String> = samples.iter().map(|(s, _)| s).collect();
+    assert_eq!(
+        unique.len(),
+        samples.len(),
+        "前置：{} 份样本必须有 {} 个不同的 sha，否则下面那句「认领总数 == 份数」根本不成立",
+        samples.len(),
+        samples.len()
+    );
+    let mut all_samples = samples;
+    all_samples.push((sha.clone(), blob.clone()));
+    let total = all_samples.len();
+
+    let flags = dir.path().join("race-flags");
+    std::fs::create_dir_all(&flags).unwrap();
+    // 父进程不管从哪一步退场（包括 panic）都要把 `stop` 立起来：否则子进程会堵在栅栏上直到超时，
+    // 那段时间它**正占着测试二进制**，下一次构建就报 `Permission denied` —— 看着像门禁红，其实是夹具。
+    struct StopOnDrop(PathBuf);
+    impl Drop for StopOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::write(self.0.join("stop"), "parent-exited");
+        }
+    }
+    let _stop = StopOnDrop(flags.clone());
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "gc_race_child_process",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(
+            GC_RACE_CHILD,
+            format!(
+                "{}|{}|{}|{}",
+                dir.path().display(),
+                url,
+                sha,
+                flags.display()
+            ),
+        )
+        .env("NOTERA_DEV_WEBDAV_SECRET", SECRET)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("起第二个 OS 进程：这条门禁要的就是真跨进程");
+
+    // ① 认领：两边都先握着同一份未认领的清单，再被同一个文件放行
+    assert!(
+        race_barrier(&flags, "child_listed"),
+        "子进程没把候选清单写回来（启动或前置失败），原因写着：{}",
+        race_read(&flags, "child_error")
+    );
+    assert_eq!(
+        race_read(&flags, "child_listed"),
+        "1",
+        "前置：子进程那一侧的清单里必须有这一条，否则两边抢的根本不是同一批字节"
+    );
+    assert!(
+        a.store()
+            .gc_quarantine_candidates(50)
+            .unwrap()
+            .contains(&sha),
+        "前置：父进程这一侧也还看到同一条（两边要在同一瞬各握一份）"
+    );
+    std::fs::write(flags.join("go1"), "1").unwrap();
+    let claimed_here = a.reclaim_unreferenced_blobs(50);
+    assert!(
+        race_barrier(&flags, "child_claimed"),
+        "子进程没跑完认领那一步，卡在：{}",
+        race_read(&flags, "child_timeout")
+    );
+    let claimed_child = race_count(&flags, "child_claimed");
+    // 两边的认领都跑完了（账上那一次写入无论出自谁家，此刻都已提交）—— 放行子进程去做销毁前的复查
+    std::fs::write(flags.join("both1"), "1").unwrap();
+    assert_eq!(
+        claimed_here + claimed_child,
+        total,
+        "认领的总数必须正好等于候选的份数：多了就是同一行被两家各认领一次（父 {claimed_here} / 子 {claimed_child}，候选 {total} 份）"
+    );
+    // 两种相反的形状要分开数：还压在正式位置（两家都没搬走）与 两处都没有（**那份内容没了**）。
+    let mut still_official: Vec<String> = Vec::new();
+    let mut lost_bytes: Vec<String> = Vec::new();
+    for (s, bytes) in &all_samples {
+        if official_bytes(&a, s) != Vec::<u8>::new() {
+            still_official.push(s.clone());
+        }
+        if quarantine_bytes(&a, s) != *bytes {
+            lost_bytes.push(s.clone());
+        }
+    }
+    assert!(
+        still_official.is_empty(),
+        "这些份还压在正式位置（两家都没把它们认领走）：{still_official:?}"
+    );
+    assert!(
+        lost_bytes.is_empty(),
+        "这些 sha 的字节既不在正式位置也不在隔离区 = 那份内容被搬走之后又被腾掉了：{lost_bytes:?}"
+    );
+
+    // ② 销毁：两边各自问到"服务器还在"，拿到同一份清单后同时动手
+    let remote = a.remote_for_sync().await.unwrap().expect("父进程有适配器");
+    let verified_here = a.confirm_still_remote(&remote, ALL_PAST, 50).await;
+    assert_eq!(
+        verified_here,
+        vec![sha.clone()],
+        "前置：父进程这一侧问到了「服务器还在」"
+    );
+    // 现场记一笔：父进程拿到清单之后，再问一次服务器对同一个 sha 的答复。子进程那侧若拿到过
+    // `Ok(false)`，这一行就能分清"对象真的不在了"与"那一次问答错了"。
+    let parent_probe = remote.has_attachment(&sha).await;
+    assert!(
+        race_barrier(&flags, "child_verified"),
+        "子进程没跑完销毁前的复查，卡在：{}",
+        race_read(&flags, "child_timeout")
+    );
+    assert_eq!(
+        race_read(&flags, "child_verified"),
+        "1",
+        "前置：子进程也拿到了同一份销毁清单（它那边看到的「账上可准入/服务器确认在」= {}；它那一问的直接答复 = {}；父进程此刻再问一次 = {parent_probe:?}）",
+        race_read(&flags, "child_ready"),
+        race_read(&flags, "child_probe")
+    );
+    std::fs::write(flags.join("go2"), "1").unwrap();
+    let destroyed_here = a.purge_verified_blobs(&verified_here);
+
+    // ③ 放行子进程读账，然后收尸
+    std::fs::write(flags.join("go3"), "1").unwrap();
+    assert!(
+        race_barrier(&flags, "child_state"),
+        "子进程没读回账上的状态，卡在：{}",
+        race_read(&flags, "child_timeout")
+    );
+    let out = child.wait_with_output().expect("等子进程收摊");
+    assert!(
+        out.status.success(),
+        "子进程没活着走到最后：{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let destroyed_child = race_count(&flags, "child_destroyed");
+    assert_eq!(
+        destroyed_here + destroyed_child,
+        1,
+        "同一行被销毁两次 = 第二步在跨进程时也没有互斥（父 {destroyed_here} / 子 {destroyed_child}）"
+    );
+    assert_eq!(
+        a.store().attachment_for_state(&sha),
+        ("absent".to_string(), "absent".to_string()),
+        "父进程这一侧：账上没这一行了"
+    );
+    assert_eq!(
+        race_read(&flags, "child_state"),
+        "absent|absent",
+        "子进程那一侧读同一份账也必须没有这一行（两个进程各一份地址空间，结论要一样）"
+    );
+    assert_eq!(
+        quarantine_bytes(&a, &sha),
+        Vec::<u8>::new(),
+        "隔离区不许留下第二份或残骸"
+    );
+}
