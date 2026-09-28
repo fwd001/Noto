@@ -1926,15 +1926,22 @@ impl App {
     /// 每轮工作量的上界是 `cap`（生产调用传 `run_attachment_round` 里那个 `SWEEP_CAP`），
     /// 而降级是**一次写事务**（`set_attachments_locally_missing`）而不是逐行提交：整个
     /// `attachments/` 目录被删时一轮能攒出成百上千条，逐行提交就是那么多次提交排队占住写锁，
-    /// 而用户那次保存正排在后面（§48 缺口 G4）。返回这一轮实际降级的条数。
+    /// 而用户那次保存正排在后面（§48 缺口 G4）。尺寸回填走的是同一条批量路
+    /// （`set_attachment_sizes`，FT-ATT-40）—— 那半 G4 当时漏下了，2026-09-28 量出来它不是
+    /// 理论账：一轮慢路 ~320 ms 里提交是大头，哈希不是。返回这一轮实际降级的条数。
     pub fn sweep_lost_local_blobs(&self, cap: usize) -> usize {
         let mut lost: Vec<String> = Vec::new();
-        for (sha, size) in self
-            .inner
-            .store
-            .attachment_repair_candidates(cap)
-            .unwrap_or_default()
-        {
+        let mut backfill: Vec<(String, i64)> = Vec::new();
+        let candidates = match self.inner.store.attachment_repair_candidates(cap) {
+            Ok(rows) => rows,
+            Err(e) => {
+                // 查询没成**不等于**"没有东西要体检"：安静返回 0 会让这一轮看起来又便宜又干净，
+                // 而那张"账上说有、盘上没有"的图压根没被看过一眼。记一笔再退出，下一轮还会来。
+                tracing::warn!(%e, cap, "体检候选查询没成：本轮一条都不看");
+                return 0;
+            }
+        };
+        for (sha, size) in candidates {
             let path = self.inner.store.blob_path(&sha);
             let on_disk = match std::fs::metadata(&path) {
                 Ok(m) => m.len(),
@@ -1957,11 +1964,11 @@ impl App {
                 // 哈希相符 ⇒ 盘上这份**就是**那一份，它的长度是实测真值。回填登记尺寸，
                 // 否则这一行在此后每一轮都要走一遍"整份读 + 复算哈希"的慢路：登记那条路
                 // 的规则是 `MAX(旧, 新)`（0 不许冲掉已知值），偏大的声明值它纠不掉。
-                // 只改那一列，字节一个都不碰。
+                // 只改那一列，字节一个都不碰。**攒着一次写事务**：一轮可以攒满 cap 条，
+                // 逐行提交就是 cap 次排队占住写锁（2026-09-28 量过：那一轮 ~320 ms 里
+                // 提交是大头，哈希不是）。
                 tracing::debug!(%sha, on_disk, ledger = size, "尺寸与登记不符但哈希相符：按盘上实测长度回填登记");
-                if let Err(e) = self.inner.store.set_attachment_size(&sha, on_disk as i64) {
-                    tracing::warn!(%sha, %e, "回填登记尺寸没成功：下一轮还会整份复算一次哈希");
-                }
+                backfill.push((sha, on_disk as i64));
                 continue;
             }
             tracing::warn!(%sha, on_disk, ledger = size, "本机附件内容坏了，挪开重下");
@@ -1974,6 +1981,26 @@ impl App {
             // 轮拿回好字节 → 那时才有凭据销毁 `.corrupt`（"没有替代就不销毁"那条序）。
             notera_core::crash_point("after_corrupt_park");
             lost.push(sha);
+        }
+        // 回填先落账，**哪怕这一轮一条都没降级也要落**（不然那些行下一轮还得整份复算一次哈希，
+        // 而"没有降级"是健康库最常见的形状）。它独立于降级那一次写事务：两件事各自一次提交，
+        // 回填失败不该把已经核对过的那批降级一起吞掉。
+        if !backfill.is_empty() {
+            match self.inner.store.set_attachment_sizes(&backfill) {
+                Ok(n) if n == backfill.len() => {
+                    tracing::debug!(n, "登记尺寸已按实测长度回填（一次写事务）");
+                }
+                Ok(n) => tracing::warn!(
+                    n,
+                    attempted = backfill.len(),
+                    "回填有条没落成（行已不在账上）：那几条下一轮还会整份复算一次哈希"
+                ),
+                Err(e) => tracing::warn!(
+                    %e,
+                    attempted = backfill.len(),
+                    "回填登记尺寸没写成：这些行下一轮还会整份复算一次哈希"
+                ),
+            }
         }
         if lost.is_empty() {
             return 0;

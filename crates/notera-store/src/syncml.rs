@@ -809,25 +809,38 @@ impl Store {
         })
     }
 
-    /// 回填**实测**尺寸：磁盘体检已经把整份字节读完并复算过 sha256，哈希相符就意味着
-    /// "盘上这个长度"就是这份 blob 的真实尺寸。
+    /// 批量回填磁盘体检的**实测**尺寸，**一次写事务做完**（与
+    /// [`Store::set_attachments_locally_missing`] 同一个形状）。体检已经把整份字节读完并复算过
+    /// sha256，哈希相符就意味着"盘上这个长度"就是这份 blob 的真实尺寸。
     ///
     /// 这是唯一允许把 `size` **往小**改的一路，而且是必需的：`upsert_attachment_row` 的
     /// 冲突规则是 `MAX(attachments.size, excluded.size)` —— 一个"不知道"（0）不许冲掉已知值，
     /// 于是正文里偏大的声明值永远纠不掉。不纠的代价不是显示错一个数，而是那一行在此后的
     /// **每一轮**附件轮里都被整份读进内存再哈希一遍（单条上界 32 MiB），偏大的尺寸还会
     /// 继续排进上传预算（`attachment_jobs` 按 `size` 排序）。
-    pub fn set_attachment_size(&self, sha256: &str, size: i64) -> Result<(), StoreError> {
-        let sha = sha256.to_string();
+    ///
+    /// 为什么是批量而不是逐行：G4 把体检的**降级**批量了，尺寸回填当时漏下 —— 它还是每条
+    /// 一次提交。2026-09-28 量出来这不是理论账：`attachment_gc_scale` 那一格里，一轮慢路读
+    /// 1 KiB×200 与读 64 KiB×100（IO 差 30 倍）耗时都是 ~320 ms，而夹具里同样条数的
+    /// **写提交**成本是 100 次 106 ms / 1000 次 1151 ms（≈1.1 ms/次）—— 那一轮的钱主要
+    /// 花在提交上，不在哈希上。刚导入 / 刚升级过的库可以有成百上千条声明尺寸是偏的，
+    /// 逐行提交就是成百上千次排队占住写锁，而用户那次保存正排在这把锁后面。
+    ///
+    /// 只改 `size` 那一列：回填只证明"盘上实测长度是这个数"，状态、远端态、`deleted_at`
+    /// 一个字都不动。返回**实际写成**的条数（库里没这条的不计入），调用方靠
+    /// "返回数 < 传入数"吵一声，这里不静默替它吞掉。
+    pub fn set_attachment_sizes(&self, sizes: &[(String, i64)]) -> Result<usize, StoreError> {
+        if sizes.is_empty() {
+            return Ok(0);
+        }
+        let sizes = sizes.to_vec();
         self.write_tx(|tx, _now| {
-            let n = tx.execute(
-                "UPDATE attachments SET size = ?2 WHERE sha256 = ?1",
-                params![sha, size],
-            )?;
-            if n == 0 {
-                return Err(StoreError::Constraint(format!("附件不存在: {sha}")));
+            let mut stmt = tx.prepare("UPDATE attachments SET size = ?2 WHERE sha256 = ?1")?;
+            let mut done = 0usize;
+            for (sha, size) in &sizes {
+                done += stmt.execute(params![sha, size])?;
             }
-            Ok(())
+            Ok(done)
         })
     }
 

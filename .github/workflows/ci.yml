@@ -103,6 +103,15 @@ jobs:
         working-directory: apps/desktop
         run: pnpm typecheck
 
+      # 依赖漏洞审计。本机跑不通是因为 registry 是 npmmirror（它没有 audit 端点），
+      # 所以这一步显式指向公共 registry —— 这也是台账里 G12 那条的解除条件。
+      # 本机 2026-09-28 实测：我们的 lockfile 275 个依赖 0 条已知漏洞；
+      # 判据不是空转 —— 同一命令拿 axios@0.21.0 + minimist@1.2.5 的临时工程跑，
+      # 报 26 条并以退出码 1 结束（`--audit-level=high` 那档也一样红）。
+      - name: 前端依赖漏洞审计（high 及以上阻断）
+        working-directory: apps/desktop
+        run: pnpm audit --audit-level=high --registry=https://registry.npmjs.org
+
       # 契约图要一个可用的 chromium；脚本里写死的是本机路径，CI 上要么找不到浏览器
       # 要么装到别处 —— 所以这一步也先不阻断，等首次运行看清实际行为再收紧。
       - name: 契约图（本机基线 59/59；CI 里浏览器路径未验证，先不阻断）

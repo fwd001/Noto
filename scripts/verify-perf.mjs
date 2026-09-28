@@ -27,6 +27,9 @@ const SHELL = process.env.SHELL_EXE || 'D:/code/Notes/target/release/notera-desk
 const CLI = process.env.CLI_EXE || 'D:/code/Notes/target/debug/notera-cli.exe';
 const OUT = 'D:/code/Notes/docs/evidence';
 const NOTES = Number(process.env.NOTES || 5000);
+// PERF-10 那一档的形状是"20000 条 + 100 份附件索引"，所以附件要能一起灌进来。
+// 默认 0：只想要笔记那一档时不必多花这一步。
+const ATTACH = Number(process.env.ATTACH || 0);
 const REPS = Number(process.env.REPS || 2);
 const BRIDGE_PORT = 17324;
 // 口径按 2026-09-27 的决定：**"用户双击图标 → 看见内容"**，因此**含** WebView2 启动那一段
@@ -187,6 +190,75 @@ async function seed(dir, n) {
   return `${n} 条用了 ${((Date.now() - t0) / 1000).toFixed(1)} s`;
 }
 
+/**
+ * 灌附件：走产品那条 `attach_file`（debug 桥），不是手写 SQL —— PERF-10 那一档要的是
+ * "20000 条 + 100 份附件索引"那个组合下的 RSS，而**索引只有经核心登记才算存在**。
+ *
+ * 两个坑：
+ * * 每份字节必须互不相同 —— 内容寻址下 100 份一模一样的图只会落**一个** sha，
+ *   于是"100 份附件的索引"实际是 1 行，量出来的数是好听的空数。这里按序号改前 4 个字节。
+ * * 收尾必须用 `stats` 核对条数：夹具悄悄一份都没挂上，这一档就退化成"只有笔记"。
+ */
+async function seedAttachments(dir, count) {
+  const bridge = await startBridge(dir);
+  try {
+    const post = (cmd, body) =>
+      fetch(`http://127.0.0.1:${BRIDGE_PORT}/cmd/${cmd}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:5173' },
+        body: JSON.stringify(body),
+      });
+    const notes = await (await post('list_notes', { limit: count })).json();
+    const got = Array.isArray(notes) ? notes.length : 0;
+    if (got < count) throw new Error(`列表里只有 ${got} 条笔记，挂不了 ${count} 份附件`);
+    const base = Buffer.alloc(200 * 1024);
+    for (let i = 0; i < base.length; i += 1) base[i] = (i * 31 + 7) % 251;
+    const t0 = Date.now();
+    for (let i = 0; i < count; i += 1) {
+      const bytes = Buffer.from(base);
+      bytes.writeUInt32LE(i, 0);
+      const r = await post('attach_file', {
+        noteId: notes[i].id,
+        blockId: `perfblk${i}`,
+        role: 'inline',
+        bytesBase64: bytes.toString('base64'),
+        mediaType: 'image/png',
+        filename: `perf-${i}.png`,
+      });
+      if (!r.ok) {
+        const body = await r.text().catch(() => '');
+        throw new Error(`第 ${i} 份附件挂不上：HTTP ${r.status} ${body.slice(0, 200)}`);
+      }
+    }
+    const st = await (await post('stats', {})).json();
+    if (st.attachments !== count) {
+      throw new Error(`附件登记核对失败：要 ${count} 份，账上是 ${st.attachments}（夹具没真造起来，RSS 数不作数）`);
+    }
+    return `${count} 份 × 200 KiB 用了 ${((Date.now() - t0) / 1000).toFixed(1)} s（账上 attachments=${st.attachments}）`;
+  } finally {
+    if (bridge) kill(bridge.pid);
+  }
+}
+
+async function assertAttachments(dir, count) {
+  const bridge = await startBridge(dir);
+  try {
+    const st = await (
+      await fetch(`http://127.0.0.1:${BRIDGE_PORT}/cmd/stats`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:5173' },
+        body: '{}',
+      })
+    ).json();
+    if (st.attachments !== count) {
+      throw new Error(`沿用的库里附件是 ${st.attachments} 份，不是 ${count} 份：这一档的形状对不上`);
+    }
+    return `核对：账上 attachments=${st.attachments}`;
+  } finally {
+    kill(bridge.pid);
+  }
+}
+
 /** 起一次真实 release 壳，返回"进程创建→CDP 可接"与"进程创建→列表首帧"。 */
 async function oneColdStart(dir, marker) {
   if (desktopRunning()) throw new Error('还有 notera-desktop 在跑：9223 会接到错的窗口，读数就是假的');
@@ -255,15 +327,18 @@ try {
   spawnSync('taskkill', ['/IM', 'notera-desktop.exe', '/F'], { stdio: 'ignore' });
   for (let w = 0; w < 40 && desktopRunning(); w += 1) await sleep(250);
 
-  await step(`灌库：${NOTES} 条走产品写入路径（debug 桥 create_note）`, async () => {
+  await step(`灌库：${NOTES} 条走产品写入路径（debug 桥 create_note）${ATTACH ? ` + ${ATTACH} 份附件（attach_file）` : ''}`, async () => {
     // SKIP_SEED=1：沿用上一轮灌好的库（换滚深、换口径时不必再花几分钟灌库）。
     // 但必须验它真的是那个规模 —— 沿用了一个空目录就等于量了个空库。
     if (process.env.SKIP_SEED === '1') {
       const info = fs.statSync(`${BIG_DIR}/notera.sqlite`, { throwIfNoEntry: false });
       if (!info?.isFile()) throw new Error(`SKIP_SEED 但 ${BIG_DIR} 里没有库，先灌一遍再说`);
+      if (ATTACH > 0) return `SKIP_SEED：沿用 ${BIG_DIR}；${await assertAttachments(BIG_DIR, ATTACH)}`;
       return `SKIP_SEED：沿用 ${BIG_DIR}`;
     }
-    return await seed(BIG_DIR, NOTES);
+    const seeded = await seed(BIG_DIR, NOTES);
+    if (ATTACH === 0) return seeded;
+    return `${seeded}；附件 ${await seedAttachments(BIG_DIR, ATTACH)}`;
   });
 
   await step('PERF-01 冷启动（空库）：进程创建 → 列表区可见', async () => {
@@ -276,12 +351,13 @@ try {
     return info;
   });
 
-  await step(`PERF-01 冷启动（${NOTES} 条）：进程创建 → 第一行列表可见`, async () => {
+  await step(`PERF-01 冷启动（${NOTES} 条${ATTACH ? ` + ${ATTACH} 份附件` : ''}）：进程创建 → 第一行列表可见`, async () => {
     const { best, runs } = await coldStartBest(BIG_DIR, '[data-testid^="note-row-"]', 'big', true);
     numbers.coldBigMs = best.ms;
     numbers.coldBigCdpMs = best.cdpMs;
     numbers.rssBigMiB = best.rss;
-    const info = `${best.ms} ms（CDP 可接 ${best.cdpMs} ms），RSS 起步 ${best.rss} MiB，${REPS} 遍各 ${runs.join(' ms, ')}（ms/cdp）· 预算 ≤${BUDGET_BIG}`;
+    if (ATTACH > 0) numbers.rssBigWithAttachMiB = best.rss;
+    const info = `${best.ms} ms（CDP 可接 ${best.cdpMs} ms），RSS 起步 ${best.rss} MiB${ATTACH ? `（这一档含 ${ATTACH} 份附件索引）` : ''}，${REPS} 遍各 ${runs.join(' ms, ')}（ms/cdp）· 预算 ≤${BUDGET_BIG}`;
     if (best.ms > BUDGET_BIG) {
       // 超预算也要把窗口留在手里给下一步滚：判据已经红了，不必为了省一步再重开一次
       numbers.coldBigOverBudget = true;

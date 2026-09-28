@@ -222,6 +222,84 @@ fn a_batched_demotion_moves_exactly_the_listed_rows() {
     );
 }
 
+/// 磁盘体检的**尺寸回填**也必须走批量那一条（`Store::set_attachment_sizes`）。
+///
+/// 这一格是 G4 的另一半：当年只把"降级"批量了，回填登记尺寸还是每条一次写事务。
+/// 2026-09-28 量出来这不是理论账 —— 一轮慢路 ~320 ms，其中读 1 KiB×200 与读 64 KiB×100
+/// （IO 差 30 倍）耗时一样，而夹具里同样条数的写提交是 100 次 106 ms / 1000 次 1151 ms
+/// （≈1.1 ms/次）：那一轮的钱花在提交上，不在哈希上。刚导入 / 刚升级过的库可以有成百
+/// 上千条声明尺寸是偏的，逐行提交就是成百上千次排队占住写锁。
+///
+/// 盯的是批量回填最容易悄悄做错的几件事：
+/// * 点名的行**全部**改成给定的长度，没点名的那行一个字不动（语句漏掉 `WHERE sha256` 就是全表）；
+/// * `size` 允许**往小**改 —— 这是唯一能纠掉"偏大的声明值"的一路（登记那条规则是 `MAX(旧,新)`，
+///   只许涨不许落），写成 `MAX` 就白回填了，那一行此后每轮都要整份重读重哈希；
+/// * 只改 `size` 那一列：两半状态与 `deleted_at` 不许被带跑（回填只证明"实测长度是这个数"，
+///   不证明本机有没有、远端有没有）；
+/// * 库里没有的那条**不计入成功数**，host 体检就靠这个差值吵一声；空输入是 `Ok(0)` 而不是错。
+#[test]
+fn a_batched_size_backfill_moves_exactly_the_listed_rows() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    let a = attach(&store, &folder, &[7u8; 9000], "blk000001");
+    let b = attach(&store, &folder, &[9u8; 4000], "blk000002");
+    let kept = attach(&store, &folder, &[3u8; 5000], "blk000003");
+    for sha in [&a, &b, &kept] {
+        store
+            .set_attachment_states(sha, Some("available"), Some("present"))
+            .unwrap();
+    }
+    // 前置：把两条的登记尺寸写成"偏大"，模拟正文里客户端各自声明的那个值
+    store
+        .set_attachment_sizes(&[(a.clone(), 32_000), (b.clone(), 32_000)])
+        .expect("造现场");
+    let size_of = |sha: &str| -> i64 {
+        store
+            .attachment_repair_candidates(50)
+            .unwrap()
+            .into_iter()
+            .find(|(s, _)| s == sha)
+            .map(|(_, sz)| sz)
+            .expect("这一行该在体检候选里")
+    };
+    assert_eq!(
+        size_of(&a),
+        32_000,
+        "前置：现场没造出来（登记尺寸没被写成偏大）"
+    );
+
+    let ghost = notera_core::ContentHash::of("库里没有这一行".as_bytes())
+        .as_str()
+        .replace("sha256:", "");
+    let done = store
+        .set_attachment_sizes(&[(a.clone(), 9000), (b.clone(), 4000), (ghost.clone(), 1234)])
+        .expect("批量回填");
+    assert_eq!(done, 2, "库里没有的那条不许算成已回填：{done}");
+    assert_eq!(
+        size_of(&a),
+        9000,
+        "偏大的登记尺寸没被纠掉：那一行此后每轮都要整份重读重哈希"
+    );
+    assert_eq!(size_of(&b), 4000, "偏大的登记尺寸没被纠掉");
+    assert_eq!(
+        size_of(&kept),
+        5000,
+        "没点名的那行被批量语句顺手动到了（漏掉 WHERE sha256 就是这个形状）"
+    );
+
+    // 只改 size：状态与远端态一个字都不动
+    for sha in [&a, &b, &kept] {
+        assert_eq!(
+            store.attachment_for_state(sha),
+            ("available".into(), "present".into()),
+            "回填尺寸把两半状态之一带跑了：{sha}"
+        );
+    }
+    // 空输入是"无事可做"，不是错（host 每轮都可能攒出零条）
+    assert_eq!(store.set_attachment_sizes(&[]).expect("空批量"), 0);
+}
+
 #[test]
 fn finishing_ops_closes_the_outbox_rows_for_that_blob() {
     let fx = Fix::new();
