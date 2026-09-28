@@ -71,6 +71,55 @@ describe('自动保存', () => {
   });
 });
 
+describe('正在飞的保存与重新打开', () => {
+  it('加粗那一支保存还没落地时重新打开这条笔记，不许把加粗读没了，也不许把没加粗的那一版写回库', async () => {
+    // 一个**会反映已落地的写**的最小核心：`get_note` 永远返回最近一次已应用的那版。
+    // 不是"返回一份固定的旧数据" —— 那样测的就成了我自己搭的假象（实测这一批就是靠这句区分开的）。
+    let coreRev = 3;
+    let coreDoc: Record<string, unknown> = {
+      v: 1,
+      content: [{ id: 'abcd1234', type: 'paragraph', content: [{ text: '原始内容' }] }],
+    };
+    let releaseEdit: () => void = () => {};
+    const service = stubLocalService({
+      edit_note: (args) =>
+        new Promise((resolve) => {
+          releaseEdit = () => {
+            coreRev += 1;
+            coreDoc = args.doc as Record<string, unknown>;
+            resolve(noteFixture({ rev: coreRev, doc: coreDoc }));
+          };
+        }),
+      get_note: () => noteFixture({ rev: coreRev, doc: coreDoc }),
+    });
+    const editor = useEditorStore();
+    editor.hydrate(asNote(noteFixture()));
+    const block = editor.blocks[0];
+    expect(block).toBeDefined();
+    if (!block) return;
+
+    editor.updateBlock({ ...block, content: [{ text: '原始内容', marks: [{ kind: 'bold' }] }] });
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(service.callsOf('edit_note')).toHaveLength(1);
+
+    // 就在这一支还在飞的时候，用户点了"全部"再点回这条笔记（界面上是两次点击，
+    // 中间没有任何等待 —— 浏览器端到端那条 lane 就是这个形状，约每四轮撞一次）。
+    const reopening = editor.open(null).then(() => editor.open('note-1'));
+    await vi.advanceTimersByTimeAsync(0);
+    releaseEdit();
+    await reopening;
+    await vi.advanceTimersByTimeAsync(3000);
+
+    // ① 屏幕上那个标记还在
+    expect(JSON.stringify(editor.blocks)).toContain('bold');
+    // ② 打在调用边上：这一轮**只许**发出带标记的那一支写；任何"把没标记的那一版写回去"都是丢数据
+    const markFreeWrites = service
+      .callsOf('edit_note')
+      .filter((call) => !JSON.stringify(call.args.doc).includes('bold'));
+    expect(markFreeWrites).toHaveLength(0);
+  });
+});
+
 describe('分歧保护（stale_edit）', () => {
   it('重载对方版本但保留本机版本，且绝不静默覆盖', async () => {
     const remote = noteFixture({

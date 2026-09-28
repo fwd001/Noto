@@ -19,7 +19,7 @@
 
 | 门禁 | 结果 | 命令 | 层级 |
 |---|---|---|---|
-| Rust 全量测试 | **557 通过 / 0 失败 / 2 ignored**（53 个单元/集成测试二进制 + 13 个 doc-test；2026-09-28 在 0.0.22 那棵树上实测。两条 `#[ignore]` 都是刻意的显式 lane：P11 面板的留档夹具 `conflict_payload_e2e.rs:519`（由 `scripts/verify-p11-panel.mjs` 跑）与 GC/体检的规模基准 `attachment_gc_scale.rs`（由 `-- --ignored` 跑，数字进 PERF-10）；此前这里写的"0 ignored"与实测不符，2026-09-28 更正） | `cargo test --workspace` | L0–L4 |
+| Rust 全量测试 | **557 通过 / 0 失败 / 2 ignored**（53 个单元/集成测试二进制 + 13 个 doc-test；2026-09-28 在 0.0.23 那棵树上独占机器实测。两条 `#[ignore]` 都是刻意的显式 lane：P11 面板的留档夹具 `conflict_payload_e2e.rs:519`（由 `scripts/verify-p11-panel.mjs` 跑）与 GC/体检的规模基准 `attachment_gc_scale.rs`（由 `-- --ignored` 跑，数字进 PERF-10）；此前这里写的"0 ignored"与实测不符，2026-09-28 更正） | `cargo test --workspace` | L0–L4 |
 | Clippy（CI 原样命令） | 0 error / 0 warning | `cargo clippy --workspace --all-targets -- -D warnings` | L0 |
 | 架构适应度 | **28/28**（含"扫描台账"：任何源码门禁扫到 0 个文件即判失败；第 28 条是本轮新增：测试里的「或」断言必须就地写理由，含空转保护，并用一条恒真断言反注验过） | `node scripts/arch-check.mjs` | 静态 |
 | 前端 | **209 通过（22 文件）**；`vue-tsc --noEmit` 0 错（两条都是 2026-09-28 与"两颗自救按钮"那批同批实测；此前写过的 201/21 与 200/21 都是更早的数）；构建 216.65 KB → gzip 74.22 KB 那一档本轮未重测 | | `pnpm --dir apps/desktop test` / `run typecheck` / `run build` | L0/L1 |
@@ -35,7 +35,7 @@
 | 链路抖动收敛（§53 主循环） | 1/1（六轮各坏一次：停监听 / 建连就掐 / 读清单 500） | `cargo test -p notera-host --test reconnect` | L3 |
 | 空轮代价（PERF-05/14） | 1/1（≤2 请求、≤2 KiB、清单必走 304、PROPFIND ≤1） | `cargo test -p notera-host --test sync_cost` | L3 |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` | L2 |
-| 浏览器端到端（真 Rust 核心，非 mock） | **36/37 ~ 37/37**（同一步偶发红：「重排落到库里了」—— 块顺序落了库而**加粗没落**。2026-09-28 十二轮全新数据目录实测：带 0.0.22 的修复 **2/7 红**，把修复撤掉回 HEAD 仍 **1/5 红** ⇒ **既有缺陷，不是本批引入**（那处修复对没有附件的笔记是空转）；与台账里挂着的"偶发 `stale_edit` / 新建后立刻打字丢失"同族，**待定位**，不写成 37/37。另有 1 轮整条假红（33/37：刷新后笔记消失 / 搜索无命中 / 顺序没持久化）—— 起桥后没等够就开跑，多等 3 秒后连跑两轮 37/37。本表此处此前写 **35/35** 是没跟着"两颗自救按钮"那一步改的旧数） | `notera-cli serve` + `pnpm dev` + `node scripts/verify-app.mjs` | L4 |
+| 浏览器端到端（真 Rust 核心，非 mock） | **37/37**（2026-09-28 修掉那条竞态之后连跑**六轮**全新数据目录全绿）。**这条曾经只写"35/35 / 37/37"而没人数过复现率**：同一个 0.0.22 树七轮里两轮红在「重排落到库里了 —— 加粗没落库」，把那批 GC 修复撤掉回 HEAD 仍五轮里一轮红在**同一步** ⇒ 既有缺陷、非那批引入（那处修复对没有附件的笔记是空转）。红法是同一篇笔记连着两支写：`rev=N bold=1 → 200`，25 ms 后 `rev=N+1 bold=0 → 200` —— **吃掉的是已提交的用户编辑**。根因：`open()` 是"先 `flush()` 再回读"，而 `flush()` 原来只等"待发的那支 debounce"、放过"已经在飞的那支"，回读于是拿到"这次写之前"的快照盖掉本地（`dirty` 那时是 false，既有的本地优先守卫管不到），那支在飞的写落地时按设计发现"正文又变了"，就照被盖掉的版本再写一次。修法一句 `await saveChain`；判据 FT-SAVE-04；变异自证 **M47**（改回修之前的行为 → 红在"标记还在"）。另见过一次整条 33/37 的假红（lane 自己的 readiness：健康检查一返回就开跑；起桥后等满 3 秒未再复现） | `notera-cli serve` + `pnpm dev` + `node scripts/verify-app.mjs` | L4 |
 | 纯黑盒 UAT（§23：只用界面） | **10/10** —— 修好第 3 节那条竞态之后**连跑十一轮全绿**（每轮独立空库；其中六轮是冷 vite 缓存的稳定性加测） | `node scripts/verify-blackbox.mjs` | L4 |
 | 真窗口（走真 `invoke`） | debug **9/9 —— 2026-09-28 在当前 HEAD（`d5cf2ef`）上重跑**（真 `invoke`、内嵌资源 `http://tauri.localhost/`、第 3 步读 `platform_caps` 断言托盘 / 全局快捷键 / 原生菜单 / 通知四项**真的注册上了**、建笔记真落 SQLite 且列表读回、截图 + 控制台零 error）。**release 那 9/9 沿用上一批**，本批没重编 release 壳。<br>踩到一次**假红并记在这里**：第一次跑 6 步红在"`__TAURI_INTERNALS__` 不存在"，根因是**上一次启动残留的 notera-desktop/WebView2 进程还占着调试端口**，lane 连到的是那份残留（`about:blank`）而不是新起的壳；清掉残留 + 换端口后同一条命令 9/9。lane 的第 2 步正是为这种情况准备的，它起作用了 | `cargo build -p notera-desktop` + `NOTERA_DATA_DIR=<空目录>` + `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=…` + `node scripts/verify-tauri-window.mjs` | L4 |
 | `cargo fmt --all --check` | **退出码 0** —— 代理到位后装了 `rustfmt` 组件（B5 解除）。装上后第一次 `--check` 就报出 **92 个文件**格式漂移，已按纯机械格式化单独提交并复验（tests 487/0、clippy 0/0） | `cargo fmt --all --check` |

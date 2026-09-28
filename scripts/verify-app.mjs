@@ -82,6 +82,35 @@ page.on('response', (r) => {
     .catch(() => failedRequests.push(`${r.request().method()} ${r.url()} → HTTP ${r.status()} [步骤：${currentStepName}]`));
 });
 
+const saveLog = [];
+// 「重排落了库而加粗没落」这类红，光看结果分不出是**没发出去**、**发出去被拒**、还是
+// **发出去了但被一支更旧的回包盖掉**。把每一支写正文的请求按序记下来（带当时屏幕上有几个
+// strong），红的时候直接打进消息里 —— 没有这行日志时这条缺陷只能靠猜。
+page.on('request', (r) => {
+  const cmd = r.url().split('/cmd/')[1]?.split('?')[0] ?? '';
+  if (cmd !== 'edit_note' && cmd !== 'create_note') return;
+  let body = null;
+  try {
+    body = JSON.parse(r.postData() ?? 'null');
+  } catch {
+    /* 非 JSON 载荷也照样记一行形状 */
+  }
+  const raw = r.postData() ?? '';
+  // 只记尺寸看不出"这一版到底是哪一个快照"，所以把块的 id·型与 strong 数一起记下来：
+  // 红的时候能直接说出"发出去的那一版里根本没有 bold 的那块，而且它等于第 N 步的状态"。
+  const shape = (body?.doc?.content ?? [])
+    .map((b) => `${String(b.id).slice(-2)}:${b.type}${b.type === 'paragraph' || b.type === 'heading' ? '' : ''}`)
+    .join(',');
+  saveLog.push(
+    `t=${Date.now()} ${cmd} id=…${String(body?.id ?? body?.noteId ?? '?').slice(-4)} rev=${body?.expectedRev ?? body?.expected_rev ?? '-'} blocks=${(body?.doc?.content ?? []).length} bold=${(raw.match(/"bold"|strong/g) ?? []).length} shape=[${shape}]`,
+  );
+});
+page.on('response', async (r) => {
+  const cmd = r.url().split('/cmd/')[1]?.split('?')[0] ?? '';
+  if (cmd !== 'edit_note' && cmd !== 'create_note') return;
+  saveLog.push(`t=${Date.now()}   → HTTP ${r.status()}`);
+});
+
 const rows = [];
 // 失败请求要能归位到"哪一步在做" —— 偶发的 4xx 只报 URL 与状态码，下次复现时仍然无从下手。
 let currentStepName = '(未进入任何步骤)';
@@ -91,12 +120,15 @@ function record(step, ok, detail) {
 }
 async function step(name, fn) {
   currentStepName = name;
+  saveLog.push(`t=${Date.now()} ―――― 步骤 ${name}`);
   try {
     const detail = await fn();
     record(name, true, detail ?? '');
   } catch (e) {
     const text = String(e).replace(/\n/g, '\n      ');
-    record(name, false, text.slice(0, 600));
+    // 600 个字符会把"写序列"这种多行诊断切掉（这批就是这样：打到 rev=6 就断了，而最要紧的
+    // 是它后面那两行）。失败消息本来就只为诊断服务，放宽到能装下整条序列。
+    record(name, false, text.slice(0, 2400));
   }
 }
 
@@ -349,9 +381,11 @@ await step('重排落到库里了：刷新重开后块顺序与刷新前一致',
     throw new Error(`顺序没持久化：\n      前 ${JSON.stringify(orderBeforeReload)}\n      后 ${JSON.stringify(after)}`);
   }
   if ((await page.locator('[data-testid="editor-doc"] strong').count()) === 0) {
-    throw new Error('加粗没落库：刷新后 strong 不见了');
+    throw new Error(
+      `加粗没落库：刷新后 strong 不见了\n      写到核心那一侧的序列：\n      ${saveLog.slice(-14).join('\n      ')}`,
+    );
   }
-  return `${after.length} 块同序，加粗仍在`;
+  return `${after.length} 块同序，加粗仍在 ｜ 写入序列：${saveLog.slice(-4).join(' / ')}`;
 });
 
 await step('插入图片：真选一个文件 → 显示出来，而正文里只留内容键', async () => {
@@ -805,6 +839,12 @@ await step('网络请求零失败', async () => {
 });
 
 const failed = rows.filter((r) => !r.ok).length;
+// 红一次就把"写到核心那一侧的完整序列"打在最后，而不是只塞进那一步的失败消息里（消息长度有限，
+// 序列被切掉就等于没插桩）。绿的时候不打，免得把这条 lane 的正常输出变成噪音。
+if (failed > 0) {
+  console.log(`\n—— 写正文的请求序列（${saveLog.length} 行）——`);
+  for (const line of saveLog) console.log(`  ${line}`);
+}
 console.log(`\nverify-app: ${rows.length - failed}/${rows.length} 步通过`);
 await browser.close();
 process.exit(failed === 0 ? 0 : 1);

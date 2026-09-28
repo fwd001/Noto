@@ -195,9 +195,14 @@ export const useEditorStore = defineStore('editor', () => {
 
   /** 失焦 / 切换笔记 / 关闭前：立即提交未保存改动。 */
   async function flush(): Promise<void> {
-    if (!debouncedSave.pending()) return;
+    const queued = debouncedSave.pending();
     debouncedSave.cancel();
-    await save();
+    if (queued) await save();
+    // 还要等掉**已经在飞**的那一支（原来的 `if (!pending) return` 就是漏在这里）：
+    // `open()` 先 flush 再读回这条笔记，如果读发生在写落地之前，拿到的就是"这次写之前"的快照，
+    // 于是刚保存的内容（实测是一次加粗）被当成旧数据盖掉；而那支保存的回包发现"正文又变了"，
+    // 会照着被盖掉的版本再存一次 —— 用户的编辑就此消失。表现是"屏幕上明明有粗体，刷新后没了"。
+    await saveChain;
   }
 
   async function save(): Promise<void> {
