@@ -248,6 +248,93 @@ fn finishing_ops_closes_the_outbox_rows_for_that_blob() {
     );
 }
 
+/// GC 结掉的附件待办**必须也含 `failed`**（独立审查抓出来的第 4 条）。
+///
+/// 为什么 `failed` 是一格的洞：`outbox_pending` 的口径是 `('pending','inflight','failed')`
+/// （`Store::stats` 与 §18 那一处都这么写），而被隔离的行已经离开两个队列的取活范围 ——
+/// 那一行既不在下载也不在上传的候选里，于是这条 `failed` 永远不会有人再碰它：界面写着
+/// "还有 N 项待发"，而核心里一行可做活的都没有。§18 要的是这个数**诚实**，不是"差不多"。
+/// 方向也要守住：只结掉本轮真被隔离的那些 sha 的待办，仍被引用的行那条 `failed` 归退避逻辑管，
+/// 一条都不许顺手动（否则 GC 就成了吞掉同步失败的那只手）。
+#[test]
+fn the_quarantine_settles_failed_attachment_ops_too() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    let note = store
+        .create_note(&folder, doc_text("马上永久删除的那条"))
+        .unwrap();
+    let sha = store
+        .attach_blob(
+            &note.id,
+            b"orphan-bytes",
+            "image/png",
+            Some("o.png"),
+            "blk0000c1",
+        )
+        .unwrap()
+        .sha256;
+    store
+        .set_attachment_states(&sha, Some("available"), Some("present"))
+        .unwrap();
+    store.purge_note(&note.id).unwrap();
+    // 另一条仍然有人引用的行，也给它一支 failed 待办 —— 它是"不许顺手动别人"的那半边判据
+    let kept = attach(&store, &folder, b"kept-bytes", "blk0000c2");
+    store
+        .set_attachment_states(&kept, Some("available"), Some("present"))
+        .unwrap();
+
+    // 两支都标成 failed。**只取一次**：`outbox_take` 会把取到的行写成 inflight，
+    // 分两次取的话第二次什么都取不到（第一版就这么假红过一次，报的是"前置缺待办"）。
+    let taken = store
+        .outbox_take(notera_store::LOCAL_ACCOUNT_ID, 50)
+        .expect("取待办");
+    for sha in [&sha, &kept] {
+        let op = taken
+            .iter()
+            .find(|o| o.kind == notera_core::EntityKind::Attachment && o.entity_key == *sha)
+            .unwrap_or_else(|| panic!("前置：{sha} 这一支该有一条附件待办"));
+        store
+            .outbox_state(op.id, notera_store::OpState::Failed, Some("上传失败"), None)
+            .expect("标成 failed");
+    }
+    assert_eq!(
+        store
+            .outbox_len(
+                notera_store::LOCAL_ACCOUNT_ID,
+                &[notera_store::OpState::Failed]
+            )
+            .unwrap(),
+        2,
+        "前置：两行各自挂着一支 failed"
+    );
+
+    let changed = store
+        .mark_attachments_quarantined(std::slice::from_ref(&sha))
+        .expect("隔离");
+    assert_eq!(changed, 1, "只该认领零引用的那一条");
+
+    let left = store
+        .outbox_len(
+            notera_store::LOCAL_ACCOUNT_ID,
+            &[notera_store::OpState::Failed],
+        )
+        .unwrap();
+    assert_eq!(
+        left, 1,
+        "被隔离那行的 failed 待办必须一起结掉，否则「待发操作」永久虚高：还剩 {left} 条"
+    );
+    // 结掉的是这一条 sha，不是别人的：仍被引用的行那条 failed 要原样留着等退避重试
+    let who: Vec<String> = store
+        .outbox_take(notera_store::LOCAL_ACCOUNT_ID, 50)
+        .unwrap()
+        .into_iter()
+        .filter(|o| o.kind == notera_core::EntityKind::Attachment)
+        .map(|o| o.entity_key)
+        .collect();
+    assert_eq!(who, vec![kept], "只许动本轮真被隔离的那些 sha 的待办");
+}
+
 /// GC 的账上那一步（§8）：**一次写事务**里同时做完三件事 —— 只认领"仍然零引用"的行、
 /// 把它们写成 `missing ∧ deleted_at`、关掉它们还挂着的附件待办。
 ///

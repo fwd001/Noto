@@ -473,6 +473,11 @@ len(query) <= 2   → content 表 LIKE + COLLATE NOCASE（慢一个数量级但�
        而隔离会把它同时从**上传队列**里摘掉（那条队列也带 `deleted_at IS NULL`），于是"省磁盘"就变成
        "判死一份独家副本"。数据安全排在性能前面：这类行今天不收，它照常走上传队列，传成功了才变成候选。
      * `local_state='available'` —— 只有"账上说本机有"的行才谈得上回收字节。
+     认领下来之后，这一行剩余的附件待办在**同一个写事务**里一起结掉，状态含 `failed`（0.0.24，判据
+     FT-ATT-35）：`outbox_pending` 的口径本来就数 `('pending','inflight','failed')`，而这一行已经离开
+     两个队列的取活范围 —— 留下一条没人再会消费的 `failed`，界面上就是"还有 1 项待发"永远不掉。
+     范围只卡在本轮真被隔离的那些 sha：仍被引用的行那条 `failed` 一字不动，GC 不是替用户
+     吞掉同步失败的那只手（这一点与引擎的 `outbox_settle` 相反，那条**不许**动 `failed`）。
   2. **真删**（`App::purge_released_blobs(cutoff, cap)`，同一套上界）：`deleted_at` 早于宽限期界
      （**常量 30 天**，`quarantine_cutoff` 算，`cutoff` 由调用方给，这样"到期没有"是可核对的而不是
      藏在 SQL 里的一个数）、且**仍然**零引用的行才动手 —— 先 `DELETE` 那一行（`WHERE NOT EXISTS` 自己

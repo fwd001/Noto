@@ -916,6 +916,12 @@ impl Store {
     /// 为什么待办要一起关掉：这一行已经不在两个队列的取活范围里，永远没人再结它 ——
     /// 留下的是一条永远不掉下去的"待同步"计数（§18 要求这个数诚实）。
     ///
+    /// 为什么这里连 `failed` 一起结，而引擎那条 [`Self::outbox_settle`] 不许动 `failed`：
+    /// 那条是"这一轮做完了"的结清，`failed` 归退避重试管，替它改写结论就是把用户的失败吞掉；
+    /// 而这里的前提是**这一行被 GC 认领了**，它既离开下载队列也离开上传队列（两边的 SQL 都带
+    /// `deleted_at IS NULL`），那条 `failed` 从此不会有任何消费者 —— 虚高的计数就是这么来的。
+    /// 范围也卡在这：只对 `mark` 真落到那一行的 sha 执行，仍被引用的行那条 `failed` 一字不动。
+    ///
     /// 返回**实际隔离**的条数：库里没有、仍被引用、本来已隔离的都不计入。调用方靠
     /// "返回数 < 传入数"吵一声，这里不静默替它吞掉。
     pub fn mark_attachments_quarantined(&self, shas: &[String]) -> Result<usize, StoreError> {
@@ -933,7 +939,7 @@ impl Store {
             let mut settle = tx.prepare(
                 "UPDATE sync_operations SET state = 'done', updated_at = ?2
                   WHERE entity_type = 'attachment' AND entity_id = ?1
-                    AND state IN ('pending','inflight')",
+                    AND state IN ('pending','inflight','failed')",
             )?;
             let mut done = 0usize;
             for sha in &shas {
