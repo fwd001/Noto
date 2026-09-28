@@ -72,7 +72,15 @@
 `hang` 的 `target=` 形态此前**不存在**（只有全局 `timeout_all`），已补成 `Injection::hang_for` +
 `hang_on("GET *<path>")`，与 `status_for` 共用同一套规则文法（`["METHOD "]pathglob`），
 并由 `notera-test-webdav/tests/injection.rs::hang_on_follows_the_same_rule_grammar_as_status_for`
-钉住文法本身。**仍未实现的是 `times`（命中次数，防粘连）**：`Injection` 里没有这个字段，
+钉住文法本身。**2026-09-28 同一套文法又补了 `abort` 的 `target=` 形态**（`Injection::abort_for` +
+`abort_on("MOVE *")` / `abort_on("GET *<sha>")`）：此前 `FAIL(abort)` 只有按序号的 `drop_after_n`，
+一开就从那一条起**全部**断连，造不出"只掐某一个动作"这一形 —— 而 §27 的「上传中断」要的恰恰是
+"暂存写完了、只有发布被掐"。新旋钮与 `status_for`/`hang_for` **共用同一个 `rule_hit`**（同一个理由：
+两套各写一遍迟早漂成两种语法），文法另有一条单测盯着
+（`injection.rs::abort_on_follows_the_same_rule_grammar_as_status_for`，变异自证 M22 让它读错字段 → 红）。
+这条加完**第一次跑就红在自己的前置上** —— 规则当时还没接进服务器的判定，MOVE 拿到了 201，
+于是 FT-ATT-22 报"注入压根没打中"而不是"产品没问题"；这类"先验探针"的账本仓已经记过两次。
+**仍未实现的是 `times`（命中次数，防粘连）**：`Injection` 里没有这个字段，
 所以本表下方凡是写成 `times=1 / times=2 / times=99` 的行（SY-FAULT-02/03/04/09/10 那几条）
 **都不可能按字面跑起来** —— 那是"设计了注入语法但没实现"的一格，按 §40 记在这里而不是当作已有。
 要做的是给 `status_for` 加一个剩余次数（命中一次减一、归零后规则失效），改动只在工装、不碰产品。
@@ -135,7 +143,7 @@
 | FT-ATT-07 | 挂了一个附件的库 | `attach_file`（bytesBase64）→ `attachment_data` 读回 | sha256 由**核心**算（前端给的键不算数）；字节逐字节相同；`localPath` 与 `bytesBase64` 给两个或给零个都拒；坏 base64 不许"尽量解"；超过 32 MiB 在**读字节之前**就拒；`attachment_data` 的 sha 参数必须是 64 位小写 hex（它会被拼进 blob 路径，不校验等于给 `../../` 开门），形态对但盘上没有 → `attachment_missing` 而不是空成功 | L2 | P6 |
 | FT-ATT-02 | 已有附件 | 在设备 B 打开同一条笔记 | 附件按内容寻址取回并渲染；本地 sha256 校验通过；不产生第二份副本（同 sha256 只落一个文件）。**已有真服务器证据**：`notera-host/tests/sync_once.rs::an_attachment_follows_its_note_to_a_second_device` —— A 上传 → B 拉记录 → 登记 → 下载 → 两边字节与源一致 → 走 `attachment_data`（界面那条读路径）读得回来 → `attachment_refs==1`。注意它同时钉住一条顺序事实：引用住在 **doc** 里，所以"编辑器把附件块写进正文"那次保存必须发生，`attach_blob` 单独存在时第二台设备无从得知要取哪个 blob（另一半缺口见 ARCHITECTURE-MAP §尚未做） | L3 | P6 |
 | FT-ATT-03 | 20 MiB 附件，链路 `FAIL(latency,target=attachments/**)` 限速 1 Mbit | 上传附件的同时编辑并同步另一条纯文本笔记 | 文本笔记在设备 B 于 ≤25 s（设计周期）内可见；附件队列未完成不影响文本轮（`STATS` 显示文本轮请求不含 `attachments/**` 等待）；UI 不出现整体阻塞（输入延迟 <100 ms） | L3,L5 | P6 |
-| FT-ATT-04 | 上传中断（`FAIL(abort,target=attachments/**)`） | 下一轮同步 | 附件在后续轮重试成功；服务端仅存在 `.tmp-*` 残留，`DUMP` 中无残缺正式对象；引用该附件的 manifest 不出现（INV-09）。**2026-09-27 更正：这一行长期只有声称、没有实证**（全仓从未对 `attachments/**` 注入过任何东西）。同一性质更狠的形态（服务器只读到半份 body）现由 FT-ATT-15 真跑过；纯 `abort` 形态未单独再做一条，不以此充数 | L3,L4 | P6 |
+| FT-ATT-04 | 上传中断（`FAIL(abort,target=attachments/**)`） | 下一轮同步 | 附件在后续轮重试成功；服务端仅存在 `.tmp-*` 残留，`DUMP` 中无残缺正式对象；引用该附件的 manifest 不出现（INV-09）。**2026-09-27 更正：这一行长期只有声称、没有实证**（全仓从未对 `attachments/**` 注入过任何东西）。同一性质更狠的形态（服务器只读到半份 body）现由 FT-ATT-15 真跑过；纯 `abort` 那一形 2026-09-28 按**动作**拆开真打了两条 —— FT-ATT-22（发布那一步 MOVE 被掐）与 FT-ATT-24（复读校验的 GET 被掐），工装为此补了 `abort_for` | L3,L4 | P6 |
 | FT-ATT-05 | 删除含附件笔记 → 清空回收站 | `DUMP` + 检查 tombstone | `purged` 置位；tombstone 不被自动 GC（INV-11） | L3 | P6 |
 | FT-ATT-08 | 干净库（没有任何 `attachments` 行） | `apply_remote` 一条 doc 里带 `image` 块的远端笔记 | 与笔记**同一事务**登记 `attachments` + `note_attachments`：`attachment_refs == 1`、起始态是 `missing`/`unknown`、`attachment_downloads()` 真的给出这一条（漏登记 = 第二台设备永远占位 + 引用计数恒为 0 让 GC 删掉还在用的 blob）。畸形 sha（非 64 位小写 hex）不入库、也不许把整批同步拖回滚；重放同一条记录不产生第二行 | L1,L2 | P6 |
 | FT-ATT-09 | 4 MiB + 1234 字节的附件，服务器支持 Range | 一轮只取回一个 4 MiB 窗口后**真杀掉进程**，重启再跑一轮 | 第一轮：`.part` 恰好 4 MiB、**正式 blob 不存在**、outbox 仍是 pending（没下完不许结清）。第二轮：只发**一个** `Range: bytes=4194304-…` 请求（请求日志逐条核对，不是"看起来变快了"），拼完字节与源**逐字节相同**、`.part` 被删、`local_state=available`。拼接后 sha256 与期望不符 → 丢弃半截 + 记 failed，绝不把半截文件当完整附件（§10）。服务器探得不支持 Range 时整块取，不发一个注定被答 200 的请求骗自己。证据：`notera-host/tests/attachment_resume.rs::a_partial_attachment_keeps_its_progress_and_finishes_after_a_restart`。门禁自证：把 `want_range` 写死成 `false` → 立刻红 | L3,L4 | P6 |
@@ -154,6 +162,9 @@
 | FT-ATT-20 | 两台设备，源设备**正文里声明的图片尺寸比真实字节大**（块属性由客户端各自写，`upsert_attachment_row` 的冲突规则又是 `MAX(旧, 新)` —— 只许涨不许落） | 目标设备走完下载，再连跑两轮附件轮 | 磁盘体检为判身份已经把整份字节读完复算过 sha256，**哈希相符就意味着盘上那个长度是实测真值**，于是它必须回填登记尺寸（`Store::set_attachment_size`，只改那一列），而不是只记一句 debug 就 `continue`。断言四段：① 一轮之后 `attachment_repair_candidates()` 里这条的 size == 盘上长度；② 快路径判据（`stat` 长度 == 登记值且 > 0）**真的成立** —— 否则"下一轮只 stat"是好听话；③ 改尺寸的代价没碰字节（文件逐字节相同、没有 `.corrupt` 现场、两半状态仍是 `available`/`present`）；④ 针对该 sha 的 GET 数**没有增加**（完好的一份字节不许被重下）+ 第二轮仍是 `(0,0,0)` 且尺寸不漂回去。修之前实测红在 `left: 13096 / right: 9000`（前置成立、轮次 `(0,0,0)` 也成立，唯独尺寸永远不改）；变异自证 M19：把回填的值从实测长度换成"登记里那个旧值" → 同一条红在同一个断言。**没有声称测过 IO 次数** —— 工装不计数，能数的只有 GET 条数与判据落在哪条 `if` 上。证据：`attachment_faults.rs::a_hash_verified_row_has_its_size_corrected_once_and_then_stops_being_work` | L3,L4 | P6 |
 | FT-ATT-21 | 两台设备，B 有**三条**已下完的图，然后整个本机 blob 目录被清空（换盘没搬完 / 杀毒按目录隔离） | 手动跑一次体检（`sweep_lost_local_blobs(cap)`）两轮，再跑一轮完整附件轮 | §48 缺口 G4：修之前是"候选不分页 + 每行一个写事务"，一轮里能攒出成百上千次提交排队占住写锁，而用户那次保存正排在锁后面。现在断言：① `cap=2` 的一轮**只降 2 条**（多降一条就是分页没起作用），且第三条此刻仍是 `available` 且远端态没被顺手改；② 降下来的两条当轮就出现在下载队列里（`attachment_downloads`），第二轮补齐剩下那条；③ 三份字节全部逐字节补回来后体检**收手**（再扫一次返回 0，循环得断掉）。变异自证 **M20**：把 cap 忽略掉（`usize::MAX`）→ 红在 `cap=2 却降了 3 条`。**这一条能量化什么、不能量化什么都写在测试的 doc 注释里**：能数的是"一轮降了几条"，**数不清"提交了几次"**（Store 不暴露事务计数，为这条加一个只有测试在读的计数器就是 §39 禁的东西）—— 所以"一次批量写"那一半靠 `set_attachments_locally_missing` 只有一个 `write_tx` 这个代码事实，它的**语义**由 FT-ATT-21s 钉。证据：`attachment_faults.rs::the_sweep_demotes_at_most_its_cap_per_round_and_picks_the_rest_next` | L3,L4 | P6 |
 | FT-ATT-21s | 同上，但只到存储层：三条 `available`/`present` 的行 + 一个库里不存在的 sha | 调一次 `set_attachments_locally_missing(&[点名两条 + 那条幽灵])` | 批量这条路最容易悄悄做错的三件事一次钉住：**点名的全降到 `missing`**、**没点名的那行不许被顺手动到**（批量语句写成"整表 available 都降"就是这种错）、**远端态一字不动**（顺手写 absent 等于把这张图判死，下载队列口径是 present/unknown，从此再也不去问一次），外加返回条数**不虚报**（幽灵不计、已经降过的重复调用计 0 —— host 那声 warn 就靠这个差值）。变异自证 **M21a** 去掉 `local_state='available'` 那道 guard → 红在"已经不是 available 的行被重复计入成功条数"；**M21b** 改成整表形式 → 红在"库里没有的那条不许算成已降级：3"。证据：`notera-store/tests/attachment_queue.rs::a_batched_demotion_moves_exactly_the_listed_rows` | L1,L3 | P6 |
+| FT-ATT-22 | 源设备正文已推、图待传；**发布那一步（MOVE）连接被掐**（`FAIL(abort,target=MOVE *)` —— 工装为此新加一个按规则掐的旋钮 `abort_for`，与 `status_for`/`hang_for` 共用 `rule_hit`） | 跑一轮附件，清掉注入再跑一轮 | §27「上传中断」此前**只有文档声称**：FT-ATT-04 那行一直写着 `FAIL(abort,target=attachments/**)`，而从没真打过。切点选在 MOVE 而不是 body 半路，因为那一形前面全都成功（暂存整份已写完），客户端手里只剩"不知道成没成"。判据：本轮 `up==0` 且 `failed==1`、DUMP 里**不许**出现含该 sha 的正式对象、本机那份**独家字节**逐字节还在、账上保持精确的一对 `(available, unknown)`（"不知道服务器有没有"不许被写成任一侧的结论）、正文可用；恢复后重试 `up==1`、最终恰好一份且那份的 `sha256` 就是要传的字节。前置里还钉着"本轮恰好一条 PUT + 恰好一条 MOVE 且那条 MOVE 无响应"。证据：`attachment_faults.rs::a_severed_publish_step_rolls_the_upload_back_and_the_retry_lands_once`；**这一条第一次跑就是红的**，而红的是我的工装：`aborts()` 当时还没接进服务器的判定，MOVE 拿到 201 → 前置断言当场报"注入压根没打中"（不是"产品没问题"）。变异自证 **M23**：上传失败分支写 `present` → 本条与 FT-ATT-15/19/23 同时红 | L3,L4 | P6 |
+| FT-ATT-23 | 同上，但发布那一步**收到一个裸 404**（`FAIL(status=404,target=MOVE *)`；网关把目标判成没有这个集合、暂存被服务器侧清理回收、反代把不认识的动词转成 404 都是这形态） | 跑一轮附件，清掉注入再跑一轮 | **上传侧的 404 不是关于远端的结论** —— 下载侧那个 404 才是（FT-ATT-16 记 `absent` 收手）。这里两个方向都不许：读成 `present` 会让对面永远等一份不存在的东西，读成 `absent` 是凭一次失败的请求给服务器的存在性下判断。判据：`up==0`、`failed==1`、DUMP 无正式对象、账上**精确**保持 `(available, unknown)`、那次 404 之后**发过 DELETE**（别把暂存留成垃圾，§11.3）、正文可用；恢复后 `up==1` 且最终恰好一份。变异自证 **M24**：把下载侧那条判据错搬到上传侧（失败时写 `absent`）→ **只有本条红**（旧那批用的是 `assert_ne!(present)`，抓不到 `absent`；这就是精确状态对的用处）；**M25**：去掉那次 `best_effort_delete` → 红在"那份暂存没去清"。证据：`attachment_faults.rs::a_not_found_answer_on_the_publish_step_is_not_read_as_a_conclusion` | L3,L4 | P6 |
+| FT-ATT-24 | 同上，但**只有最后那次复读校验被掐**（`FAIL(abort,target=GET *<sha>)`）：PUT 与 MOVE 都成功了，服务器上**确实有**那份字节 | 跑一轮附件，清掉注入再跑一轮 | 最容易漏的一格，因为"报成功"看着无害 —— 可客户端**没有证据**（内容没比对过）。§13 那句"present 必须出自一次读回的内容比对"就是在这一格成立：判据是本轮 `up==0`、账上仍是 `(available, unknown)`，而 DUMP 里那份对象**已经落成**（前置，否则测不到这一形）。恢复那一轮顺带把 §13 承认的**例外**跑成门禁：`has_attachment` 的 HEAD 命中就直接算过，那个 present 是**借来的**（没有内容比对）—— 它今天可接受的唯一理由是消费侧下载会复验（FT-ATT-13 已证），代价与成因记在 SYNC-PROTOCOL §13 与 G5；这里钉的是"不许重复落第二份对象"。变异自证 **M26**：读回失败当成功（那条捷径）→ 本条红在 `round=(1,0,0)`。证据：`attachment_faults.rs::a_severed_read_back_after_a_landed_upload_records_no_present` | L3,L4 | P6 |
 | FT-CHK-01 | 新笔记 | 建 checklist 3 项，勾选第 1、3 项 | 重开后勾选状态为 `[x][ ][x]`；纯文本抽取输出与该状态一致 | L1,L5 | P2 |
 | FT-CHK-02 | 同 checklist | 设备 A 勾第 1 项、设备 B 勾第 2 项（同一 base） → 双向同步 | 结果为两项都勾（块级三方合并不丢勾选）或产生冲突副本且两份内容完整可见；**禁止出现"只剩一项勾选"的静默覆盖**（INV-01/05） | L3 | P5 |
 | FT-CHK-03 | checklist 中间项 | 在第 2 项内换行 / 删除整项 | 项序连续无空项；重开后条目数 = 操作后预期数 | L5 | P2 |
@@ -164,7 +175,7 @@
 
 | §27 原句 | 现状 | 证据 / 缺口 |
 | --- | --- | --- |
-| 上传中断 | 已覆盖（半上传形态） | FT-ATT-15。纯 `FAIL(abort)` 打在 `attachments/**` 的那一形态**没有单独一条**，不拿这条充数 |
+| 上传中断 | **已覆盖（2026-09-28 补齐，且补的是更阴的那一格）** | FT-ATT-15（半上传：服务器只读到半份 body）+ FT-ATT-22（**发布那一步 MOVE 被掐**：前面全都成功，客户端只剩"不知道"）+ FT-ATT-24（**复读校验被掐**：对象已经在服务器上了，但我们没证据）。FT-ATT-04 那行原先写的 `FAIL(abort,target=attachments/**)` 之所以一直只是文档，是因为工装只有按序号的 `drop_after_n`（一开就从那一条起**全部**断），造不出"只掐这一个动作"—— 今天补了 `abort_for`（与 `status_for`/`hang_for` 同一份 `rule_hit` 文法），并且它**第一次跑就红在自己的前置上**（规则还没接进服务器判定） |
 | 下载中断 | 已覆盖 | FT-ATT-14 |
 | Range 恢复 | 已覆盖 | FT-ATT-09、FT-ATT-10（含"服务器探测答 206、正式请求忽略 Range"） |
 | 错误 hash | 已覆盖 | FT-ATT-13（客户端复算 + `ingest_blob` 两处独立拦截，实测两处同时拆掉才红） |
@@ -173,9 +184,9 @@
 | 本地附件缺失 | 已覆盖，**且这一条暴露了一个真缺陷** | FT-ATT-11：体检前这类行两个队列都看不见 → 那张图永久坏掉而系统以为自己修好了。体检自己那两笔账另有门禁：FT-ATT-20（2026-09-28 补：哈希算完了却不回填尺寸 → 同一行每轮整份重读重哈希）、FT-ATT-21 / FT-ATT-21s（同日补：候选不分页 + 每行一个写事务 → 整个目录被删时一轮里 N 次提交把用户的保存顶在写锁外，§48 G4） |
 | 网络超时 | 已覆盖（2026-09-27 补齐，先修了工装） | FT-ATT-17。此前做不出这条的原因很具体：注入器只有**全局** `timeout_all`，一挂就把清单与探测一起挂住，测到的是"网络不通"。现在有了 `hang_for`（与 `status_for` 同套 glob 文法），才能表达"只有那一个附件对象不答应"。文法本身另有一条单测盯着（`injection.rs::hang_on_follows_the_same_rule_grammar_as_status_for`），因为匹配器一旦漂掉，消费者的失败会长得像"产品没问题" |
 | 服务器返回 412 | 已覆盖（2026-09-27 补齐，**并抓到一条真缺陷**） | FT-ATT-18 / FT-ATT-19：`post:MOVE→412`（真的并发落成了）当成功、裸 `MOVE→412`（什么都没落成）不许当成功。旧实现从 MOVE 的 405/412 那条臂**直接 `return Ok(())`，跳过了紧跟其后的复读校验**，于是账上凭空记一个 `remote_state=present`；第二台设备从此永远等一份服务器上没有的字节。改后判据只有一条：**present 必须出自一次读回的内容比对，不是出自一个状态码**。文本侧的 412 重规划另有 SY-FAULT-10 |
-| 服务器返回 404 | 已覆盖（下载侧） | FT-ATT-16；上传侧收到 404 的形态未注入 |
+| 服务器返回 404 | **已覆盖（两侧都在，2026-09-28 补齐上传侧）** | 下载侧 → FT-ATT-16（404 是结论：记 `absent` 后收手，后续轮次零请求）；上传侧 → FT-ATT-23（一次失败的 MOVE 上的 404 **不是**结论：账上精确保持 `(available, unknown)`，两个方向都不许写，且暂存要去清） |
 
-一句话账（按上表逐行数）：**十条里 9 行标了已覆盖、1 行未覆盖**；但"已覆盖"里有两行只覆盖了一半（Range 恢复、下载中断、上传半途中断、错误 hash、远端损坏、本地缺失、文件不存在/404、网络超时、412），剩下一条**"服务器返回 404"只覆盖了下载侧**（上传那一侧收到 404 从未注入），另有一个纯 `FAIL(abort)` 的上传形态没单独做（半上传形态已覆盖同一分支）。还有一条更大的、跨章节的账要记：记法表里的 `times` 参数**工装里没有实现**，所以 `SY-FAULT-02/03/04/09/10` 那些写着 `times=` 的行都还不能按字面跑起来 —— 见上面"这张记法表自己的账"。
+一句话账（按上表逐行数，2026-09-28 更新）：**十条现在十行都有会红的自动测试**，其中三行是"两侧都在"的（文件不存在 = 远端 FT-ATT-16 / 本机 FT-ATT-11；服务器返回 404 = 下载侧 FT-ATT-16 / 上传侧 FT-ATT-23；上传中断 = 半上传 FT-ATT-15 / 发布被掐 FT-ATT-22 / 复读被掐 FT-ATT-24），两行各带一条体检自己的账（本地附件缺失那行的 FT-ATT-20 / FT-ATT-21+21s）。**剩下没做的不是这十句里的某一句，而是组合**：一次里同时坏两种（比如"发布被掐 + 对面同时在传同一份"）、以及 GC 与体检的竞争 —— 见下面 §3.4 的"还没测的组合"。另有一条跨章节的账照旧记着：记法表里的 `times` 参数**工装里没有实现**，所以 `SY-FAULT-02/03/04/09/10` 那些写着 `times=` 的行都还不能按字面跑起来 —— 见上面"这张记法表自己的账"。
 
 ### 原始指令 §28「代理故障注入」十二条 —— 实证账（2026-09-27）
 

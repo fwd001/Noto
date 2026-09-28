@@ -37,6 +37,9 @@ use serde::{Deserialize, Serialize};
 /// * `hang_for` —— `FAIL(hang,target=…)`：只挂命中规则的请求，其余照常服务。
 ///   与 `timeout_all`（整个服务器不应答）是两种脾气，§27「只有附件端点超时，
 ///   文本轮必须照常完成」要的是前者。
+/// * `abort_for` —— `FAIL(abort,target=…)`：只掐命中规则的请求的连接，其余照常服务。
+///   与 `drop_after_n`（从第 n+1 个数据请求起全部断）是两种脾气：§27「上传中断」要的是
+///   "暂存写得好好的，只有发布那一步（MOVE）被掐"这种**按动作**的形态。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Injection {
@@ -56,6 +59,16 @@ pub struct Injection {
     /// 服务器上都很常见（附件走的是另一个反代 / 另一个存储桶），用一个全局挂起去测它，
     /// 测到的是别的东西。
     pub hang_for: Vec<String>,
+    /// `FAIL(abort, target=…)` —— 只掐**命中规则**的那些请求的连接，其余照常服务。
+    ///
+    /// 为什么单独有它而不只用 `drop_after_n`：那个按"第几个数据请求"计数，一开就是从那
+    /// 个数往后**全部**断连，测到的是"网络整体断了"。§27 的「上传中断」要的是精确形态
+    /// —— 比如 PUT 到暂存的好好的，只有**发布那一步（MOVE）**被中间设备掐掉。那种"半路
+    /// 断在一半"的形态只有按路径/动词掐才造得出来。
+    ///
+    /// 规则文法与 `status_for`、`hang_for` **同一份**（`rule_hit`）：三套各写一遍迟早漂成
+    /// 三种语法，而漂掉的 matcher 在消费者那里表现为"产品没问题"。
+    pub abort_for: Vec<String>,
 }
 
 impl Injection {
@@ -118,6 +131,23 @@ impl Injection {
     /// 该请求是否要被**挂住**（永不回应）。
     pub fn hangs(&self, method: &str, path: &str) -> bool {
         self.hang_for
+            .iter()
+            .any(|rule| Self::rule_hit(rule, method, path).is_some())
+    }
+
+    /// `FAIL(abort,target=pattern)` —— 只掐命中规则的请求，其余照常服务。
+    pub fn abort_on(pattern: impl Into<String>) -> Injection {
+        Injection {
+            abort_for: vec![pattern.into()],
+            ..Default::default()
+        }
+    }
+
+    /// 该请求是否要被**掐断**（连接直接断，不回应）。与 [`Injection::hangs`] 同文法、
+    /// 两种脾气：hang 是"对面不答应"，abort 是"对面挂了"—— 客户端的超时路径与
+    /// 传输错误路径不是同一条，所以两个旋钮必须分开存在。
+    pub fn aborts(&self, method: &str, path: &str) -> bool {
+        self.abort_for
             .iter()
             .any(|rule| Self::rule_hit(rule, method, path).is_some())
     }

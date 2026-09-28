@@ -11,7 +11,7 @@
 
 | 门禁 | 结果 | 出处 |
 |---|---|---|
-| `cargo test --workspace` | **537 通过 / 0 失败 / 1 ignored**（64 个测试二进制）—— 2026-09-28 §48 缺口 G3 + G4（体检回填登记尺寸 / 每轮量有界）那批。那 1 条 `#[ignore]` 是 P11 lane 的留档夹具 `conflict_payload_e2e.rs:519`，由 `scripts/verify-p11-panel.mjs` 显式跑；此前这里写的"0 ignored"与实测不符，已更正 | 本机 |
+| `cargo test --workspace` | **541 通过 / 0 失败 / 1 ignored**（64 个测试二进制）—— 2026-09-28 三批：§48 的 G3（体检回填登记尺寸）、G4（每轮量有界）、§27 最后两处上传侧注入（发布被掐 / 裸 404 / 复读被掐）。那 1 条 `#[ignore]` 是 P11 lane 的留档夹具 `conflict_payload_e2e.rs:519`，由 `scripts/verify-p11-panel.mjs` 显式跑；此前这里写的"0 ignored"与实测不符，已更正 | 本机 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 / 0 | 本机（CI-CD 原样命令） |
 | `cargo fmt --all --check` | 退出码 0（`rustfmt` 组件已装；全仓已格式化） | 本机 |
 | `node scripts/arch-check.mjs` | 28/28（第 26 = 版本单源，第 27 = 编译期嵌入的文件要进版本库，第 28 = 「或」断言必须写理由） | 本机 |

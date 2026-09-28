@@ -1259,3 +1259,239 @@ async fn a_refused_move_that_landed_nothing_is_not_a_success() {
     assert_eq!(a.store().attachment_for_state(&sha).1.as_str(), "present");
     srv.stop().await;
 }
+// ————————————————— 上传侧的两种中断（§27 台账里最后两处"只有声称"）———
+/// 这一轮里服务器收到过几条某个方法的请求（`-> 0` 表示没有响应 = 被掐）。
+fn requests_for(srv: &TestServer, method: &str) -> Vec<String> {
+    srv.request_log()
+        .iter()
+        .filter(|r| r.method == method)
+        .map(|r| format!("#{} {} -> {}", r.seq, r.path, r.status))
+        .collect()
+}
+
+/// §27 的「上传中断」此前**只有文档声称**：TEST-PLAN 的 FT-ATT-04 那行一直写着
+/// `FAIL(abort,target=attachments/**)`，而全仓从没对附件上传打过一条 abort —— 半上传
+/// （`truncate-upload`）那条 FT-ATT-15 打的是"服务器只读到半份 body"，不是"连接被掐"。
+///
+/// 切点选在**发布那一步**（MOVE），因为它比"body 读到一半"更阴：暂存对象已经整份写到
+/// 服务器上了，客户端手里只剩一个"不知道成没成"的事实。内容寻址最怕的就是把"不知道"
+/// 记成"有" —— 那会让对面设备永远去取一份服务器上并不存在的东西。
+///
+/// 坏的那一段咬住四件事：本轮不算成功、算一次失败、服务器上不许出现含该 sha 的正式对象、
+/// **本机那份独家字节与 `local_state` 都不许被动到**（传输失败与本机内容无关）。
+/// 恢复那一段要求重试真能落成，且最终**恰好一份**、内容就是要传的那份。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_severed_publish_step_rolls_the_upload_back_and_the_retry_lands_once() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..15_000).map(|i| (i % 197) as u8).collect();
+    let a_dir = Tmp::new("sevmove-a");
+    let (a, sha) = seed_ready_to_upload(a_dir.path(), &url, &blob).await;
+    let remote = a.remote_for_sync().await.unwrap().expect("有适配器");
+
+    srv.clear_log().await;
+    srv.inject(Injection::abort_on("MOVE *")).await;
+    let round = a.run_attachment_round(&remote).await;
+    srv.inject(Injection::none()).await;
+
+    // 前置：本轮恰好一次 PUT（暂存整份写完了）+ 恰好一次 MOVE，且那条 MOVE 没收到响应。
+    // 这两条都在**判产品之前**，否则"注入没打中"会被读成"产品没问题"。
+    assert_eq!(
+        requests_for(&srv, "PUT").len(),
+        1,
+        "附件上传该先整份写一份暂存，本轮 PUT 数不是 1：{:?}",
+        requests_for(&srv, "PUT")
+    );
+    let moves = requests_for(&srv, "MOVE");
+    assert_eq!(moves.len(), 1, "要掐的必须是那一次发布搬运：{moves:?}");
+    assert!(
+        moves[0].ends_with("-> 0"),
+        "那次 MOVE 拿到了响应码，说明注入压根没打中，这条测的就不是「上传中断」：{moves:?}"
+    );
+
+    assert_eq!(round.0, 0, "发布被掐却报上传成功：{round:?}");
+    assert_eq!(
+        round.2, 1,
+        "掐掉的这一次没被算进失败：账目对不上就等于没人知道它坏了（{round:?}）"
+    );
+    assert!(
+        served_blobs(&srv, &sha).is_empty(),
+        "上传没成却在服务器上落成了含该 sha 的正式对象：{:?}",
+        served_blobs(&srv, &sha)
+    );
+    assert_eq!(
+        blob_on_disk(&a, &sha),
+        blob,
+        "上传失败把本机那份字节弄没了 —— 那是这台机器上唯一的一份"
+    );
+    assert_eq!(
+        a.store().attachment_for_state(&sha),
+        ("available".into(), "unknown".into()),
+        "「不知道服务器有没有」被写成了一侧的结论"
+    );
+    assert_body_still_usable(&a, &sha);
+
+    // 恢复：下一轮真能传上去，最终恰好一份，内容就是要传的那份。
+    let round2 = a.run_attachment_round(&remote).await;
+    assert_eq!(round2.0, 1, "被掐一次之后就再也传不上去：{round2:?}");
+    let obj = served_blob(&srv, &sha);
+    assert_eq!(
+        obj.get("sha256").and_then(|v| v.as_str()),
+        Some(format!("sha256:{sha}").as_str()),
+        "重试落成对象的内容不是我们要传的那份：{obj}"
+    );
+    assert_eq!(
+        a.store().attachment_for_state(&sha),
+        ("available".into(), "present".into()),
+        "复读验过之后两半状态才允许同时落对"
+    );
+    srv.stop().await;
+}
+
+/// 上传那条路上收到 **404**（§27 台账原话："上传侧收到 404 的形态未注入"）。真实形态有
+/// 好几种：网关把 MOVE 的目标判成"没有这个集合"、暂存对象被服务器侧的清理步骤先回收了、
+/// 反代把未知动词转成了一个裸 404。
+///
+/// 关键是**这个 404 不是关于远端事实的结论**。下载侧那个 404 才是结论（服务器明确说没有
+/// ⇒ `absent`，就此收手，FT-ATT-16）。上传侧这个 404 只说明"我们这次搬运没成"：把它读成
+/// `present` 会让对面永远等一份不存在的东西，读成 `absent` 又是凭一次失败的请求下一个
+/// 关于服务器存在性的判断。今天两条都不该发生 —— 远端态只能由**读回内容比对**（上传侧）
+/// 或**下载那次的 404**（下载侧）来写，所以断言打在这对精确状态**保持不动**上：
+/// `(available, unknown)`。顺带钉住"别把暂存留成垃圾"：那次 404 之后要发过 DELETE。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_not_found_answer_on_the_publish_step_is_not_read_as_a_conclusion() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..15_000).map(|i| (i % 173) as u8).collect();
+    let a_dir = Tmp::new("move404-a");
+    let (a, sha) = seed_ready_to_upload(a_dir.path(), &url, &blob).await;
+    let remote = a.remote_for_sync().await.unwrap().expect("有适配器");
+
+    srv.clear_log().await;
+    srv.inject(Injection::status("MOVE *", 404)).await;
+    let round = a.run_attachment_round(&remote).await;
+    srv.inject(Injection::none()).await;
+
+    let moves = requests_for(&srv, "MOVE");
+    assert_eq!(moves.len(), 1, "404 必须落在那一次发布搬运上：{moves:?}");
+    assert!(
+        moves[0].ends_with("-> 404"),
+        "那条 MOVE 收到的不是 404，这条测的就不是「上传侧收到 404」：{moves:?}"
+    );
+
+    assert_eq!(round.0, 0, "服务器回了 404 却算成上传成功：{round:?}");
+    assert_eq!(round.2, 1, "这次失败没被记账：{round:?}");
+    assert!(
+        served_blobs(&srv, &sha).is_empty(),
+        "被 404 拒掉的一轮却落成了正式对象：{:?}",
+        served_blobs(&srv, &sha)
+    );
+    assert_eq!(
+        a.store().attachment_for_state(&sha),
+        ("available".into(), "unknown".into()),
+        "一次失败的 MOVE 被读成了关于远端的结论（present 与 absent 都不许）"
+    );
+    assert!(
+        !requests_for(&srv, "DELETE").is_empty(),
+        "搬完之后那份暂存没去清 —— 服务器上一堆 tmp 垃圾是 §11.3 明确不要的形态"
+    );
+    assert_body_still_usable(&a, &sha);
+
+    // 404 是"这次没成"，不是"这条坏了"：撤掉注入后下一轮必须真能传上去。
+    let round2 = a.run_attachment_round(&remote).await;
+    assert_eq!(round2.0, 1, "被 404 拒过一次之后就再也传不上去：{round2:?}");
+    assert_eq!(served_blobs(&srv, &sha).len(), 1, "最终恰好一份");
+    assert_eq!(
+        a.store().attachment_for_state(&sha),
+        ("available".into(), "present".into()),
+        "重试成功后两半状态没落对"
+    );
+    srv.stop().await;
+}
+
+/// 上传的**最后一步**（复读校验）被掐 —— 这一形是最容易漏的一格，因为它前面全都成功了：
+/// 暂存整份写完、MOVE 也落成了正式对象，唯独"读回来对一次哈希"这一步连接被掐。
+///
+/// 为什么值得单独一条：这时服务器上**确实有**那份字节，所以"报成功"看着无害 —— 但客户端
+/// 手里没有任何**证据**（内容没对过）。SYNC-PROTOCOL §13 那条规矩就是这个形状：
+/// **present 必须出自一次读回的内容比对**。当场记 present 的话，一份被中间设备改过的对象
+/// 会被这台设备当成"我已经确认过远端有了"，而它下面那一轮、对面那一台都会信这个数。
+///
+/// 恢复那一段顺便把 §13 承认的那个**例外**跑成门禁：第二轮 `has_attachment` 的 HEAD 命中
+/// 就直接算过 —— 那个 present 是**借来的**（没有内容比对）。它今天可接受的唯一理由是消费侧
+/// 下载时会复验（FT-ATT-13 已证那条路会拦下坏字节并记 `error`）；这条测试把"借来的 present"
+/// 与"最终恰好一份对象"钉住，同时把 G5 的成因留在文档里（服务器那份若坏了，本机不会再传）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_severed_read_back_after_a_landed_upload_records_no_present() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..13_000).map(|i| (i % 211) as u8).collect();
+    let a_dir = Tmp::new("sevread-a");
+    let (a, sha) = seed_ready_to_upload(a_dir.path(), &url, &blob).await;
+    let remote = a.remote_for_sync().await.unwrap().expect("有适配器");
+
+    srv.clear_log().await;
+    srv.inject(Injection::abort_on(format!("GET *{sha}"))).await;
+    let round = a.run_attachment_round(&remote).await;
+    srv.inject(Injection::none()).await;
+
+    // 前置：暂存与发布都做完了，只有复读被掐 —— PUT 一条 + MOVE 一条（带回 2xx）+ 一条无响应的 GET。
+    let moves = requests_for(&srv, "MOVE");
+    assert_eq!(moves.len(), 1, "要断的是那一次发布之后的复读：{moves:?}");
+    assert!(
+        !moves[0].ends_with("-> 0"),
+        "MOVE 本身被掐了，这条测的就不是「复读被掐」：{moves:?}"
+    );
+    let gets: Vec<String> = srv
+        .request_log()
+        .iter()
+        .filter(|r| r.method == "GET" && r.path.contains(&sha))
+        .map(|r| format!("#{} {} -> {}", r.seq, r.path, r.status))
+        .collect();
+    assert!(
+        gets.iter().any(|g| g.ends_with("-> 0")),
+        "针对这个 sha 的 GET 没被掐断，注入没打中：{gets:?}"
+    );
+
+    assert_eq!(
+        round.0, 0,
+        "没读到回包却把这次上传算成了成功（账要等验过才能落对）：{round:?}"
+    );
+    assert_eq!(round.2, 1, "这次失败没被记账：{round:?}");
+    assert_eq!(
+        a.store().attachment_for_state(&sha),
+        ("available".into(), "unknown".into()),
+        "内容没比对过就记 present —— 对面设备会拿这个数当「服务器上有，而且就是这份字节」"
+    );
+    // 服务器上那份字节**确实落成了**（MOVE 成功了），这正是这一形微妙的地方。
+    let landed = served_blobs(&srv, &sha);
+    assert_eq!(
+        landed.len(),
+        1,
+        "前置：MOVE 该已经把对象落成，才有「复读被掐」这一形：{landed:?}"
+    );
+    assert_body_still_usable(&a, &sha);
+
+    // 恢复：第二轮走 §13 那个 HEAD 例外 —— 不许重复落第二份对象。
+    let round2 = a.run_attachment_round(&remote).await;
+    assert_eq!(round2.0, 1, "复读被掐过一次之后就再也落不成：{round2:?}");
+    assert_eq!(
+        served_blobs(&srv, &sha).len(),
+        1,
+        "重试把同一份内容落成了第二个对象：{:?}",
+        served_blobs(&srv, &sha)
+    );
+    assert_eq!(
+        served_blob(&srv, &sha)
+            .get("sha256")
+            .and_then(|v| v.as_str()),
+        Some(format!("sha256:{sha}").as_str()),
+        "服务器上那份内容不是我们要传的字节"
+    );
+    assert_eq!(
+        a.store().attachment_for_state(&sha).1,
+        "present",
+        "HEAD 命中那条例外今天仍然当成功用（它的凭据是消费侧复验，见 §13 与本条上面的注释）"
+    );
+    srv.stop().await;
+}

@@ -148,12 +148,13 @@ assert!(got.get("code").is_some() || got.get("data").and_then(|v| v.as_str()).is
 | `--test proxy_account`（App 侧代理那条边） | 2/2，M15 变异自证 |
 | GitHub Actions | run #11（`52e175f`）**success**；#12–#15 被我自己后续 push 的 `cancel-in-progress` 取消；HEAD 的运行结果待查 |
 
-### 4.1 追记（2026-09-28，G3 与 G4 那两批之后）
+### 4.1 追记（2026-09-28，G3 / G4 / §27 上传侧那三批之后）
 
-上表按 §45 原样留着（它是 2026-09-27 那一刻的台账），下面三条是之后拿到或纠正的实测，不改写上面的行：
+上表按 §45 原样留着（它是 2026-09-27 那一刻的台账），下面几条是之后拿到或纠正的实测，不改写上面的行：
 
-* **本表 136 行那句"0 ignored"是错的**：2026-09-28 在同一套命令上实测 **537 通过 / 0 失败 / 1 ignored**（64 个测试二进制；G3 那批之后是 535，G4 那批又加了两条）。那 1 条是 `conflict_payload_e2e.rs:519` 的留档夹具（`#[ignore]`，由 `scripts/verify-p11-panel.mjs` 显式跑），不是被跳过的测试 —— 但台账一直写"0 ignored"，属于文档与实态不符，CHANGELOG / PRODUCTION-READINESS / IMPLEMENTATION-STATUS 三处同批改正。
-* **`--test attachment_faults` 现在是 **13/13**，变异自证记到 M21b**：新增的两条是 FT-ATT-20（G3 —— 体检复算过 sha256 却不回填登记尺寸）与 FT-ATT-21（G4 —— 候选不分页 + 每行一个写事务），批量语义另在存储层 `attachment_queue.rs`（FT-ATT-21s，M21a/M21b）。IMPLEMENTATION-STATUS 里"35/35 / 8/8"那两行旧数也一并对到上一批实测的 36/36、9/9。
+* **本表 136 行那句"0 ignored"是错的**：2026-09-28 在同一套命令上实测 **541 通过 / 0 失败 / 1 ignored**（64 个测试二进制；G3 那批之后 535，G4 那批 537，§27 上传侧那批 541）。那 1 条是 `conflict_payload_e2e.rs:519` 的留档夹具（`#[ignore]`，由 `scripts/verify-p11-panel.mjs` 显式跑），不是被跳过的测试 —— 但台账一直写"0 ignored"，属于文档与实态不符，CHANGELOG / PRODUCTION-READINESS / IMPLEMENTATION-STATUS 三处同批改正。
+* **`--test attachment_faults` 现在是 16/16，变异自证记到 M26**：新增的四条是 FT-ATT-20（G3 —— 体检复算过 sha256 却不回填登记尺寸）、FT-ATT-21 + 存储层 FT-ATT-21s（G4 —— 候选不分页 + 每行一个写事务）、FT-ATT-22 / 23 / 24（§27 台账里「上传中断」与「服务器返回 404」那两行的上传侧形态）。**§27 那十句到今天十行都有会红的门禁**（原来 9 行覆盖、1 行未覆盖）。IMPLEMENTATION-STATUS 里"35/35 / 8/8"那两行旧数也一并对到上一批实测的 36/36、9/9。
+* **FT-ATT-22 第一次跑就是红的，红的是我自己的工装**（规则没接进服务器判定，MOVE 拿到 201 → 前置断言报"注入压根没打中"）。这一条记在这里是因为它与本文件 3.1 节那句"比缺测试更糟的是不会红的断言"是同一类：一个从未被执行过的注入旋钮，写出来看着像证据。
 * **148 行那句"HEAD 的运行结果待查"已回填**：GitHub Actions 上 **#19 = `cf823a1`（当时的 HEAD）success**（run id 36330294995，15:38:21Z → 15:59:31Z，约 21 分钟），#16 = `bbc9bed` success、#11 = `52e175f` success；#12–#15 与 #17（`714974c`）、#18（`0bbd03f`）都是被 `cancel-in-progress` 取消的。要说清的边界是：**#13/#17 这两笔产品改动从未在各自那一版上单独跑完整 CI**，但它们的代码都在 #19 那棵树里、而 #19 全绿 —— 所以"当前树在 GitHub 的 GNU runner 上完整过了全部门禁"成立，"每一笔单独绿过"不成立。本批（0.0.18）推上去之后应再取一次运行结果。
 * **G4 也解除了，并且本表的函数名按 §45 对到现码**（上面"二、架构视角"里讲磁盘体检那段用的 `App::demote_lost_local_blobs` 已经不叫这个）：现在它是 `App::sweep_lost_local_blobs(cap) -> usize`，收候选上界、返回这一轮实际降级的条数，降级走一次批量写事务 `Store::set_attachments_locally_missing`。旧名在 CHANGELOG 的历史条目里原样留着（那是当时那批的记录），但**活文档**（DATA-MODEL / TEST-PLAN / 本表）按现名走，免得下次照着一个查不到的符号去改。同批门禁：FT-ATT-21 + FT-ATT-21s（变异 M20 / M21a / M21b）。
 

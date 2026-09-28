@@ -1030,7 +1030,9 @@ impl WebDavRemote {
                 return Err(e);
             }
         };
-        // 复读校验：写进去的不是这份内容，比写失败更糟（会污染所有引用同 sha 的笔记）
+        // 复读校验：写进去的不是这份内容，比写失败更糟（会污染所有引用同 sha 的笔记）。
+        // 读不回就等于**没验过**：这里必须让错误传出去，而不是"前面 MOVE 都成功了就当数"——
+        // 那条捷径是 M26 变异测的，红在 FT-ATT-24 的 `round.0 == 0`（`(1,0,0)`）。
         let back = self.get_raw(&dest, None).await?;
         if !back.is_success() {
             return Err(RemoteError::Protocol(match refused {

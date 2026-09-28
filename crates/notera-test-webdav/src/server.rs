@@ -466,6 +466,14 @@ fn decide(shared: &Arc<Shared>, req: &Request, proxied: bool) -> Decision {
         push_log(&mut c, &req.method, &req.path, 0, req.body.len() as u64);
         return Decision::Silent;
     }
+    // FAIL(abort,target=…)：只掐命中规则的那一类（其余照常服务）。放在全局 drop_after_n
+    // 之前，理由与 hang_for 一样 —— 更具体的形态先判。
+    if inj.aborts(&req.method, &req.path) {
+        c.counters.connections_dropped += 1;
+        c.served_data += 1;
+        push_log(&mut c, &req.method, &req.path, 0, req.body.len() as u64);
+        return Decision::Drop;
+    }
     // FAIL(abort)：第 n+1 个数据请求起直接断连。
     if let Some(n) = inj.drop_after_n {
         if c.served_data >= n {

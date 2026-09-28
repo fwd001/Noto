@@ -500,3 +500,50 @@ fn hang_on_follows_the_same_rule_grammar_as_status_for() {
         "行为是：`post:` 在 hang 这条路里被剥掉且**不参与判定**（它对 hang 没有意义）。         这条断言钉住这个事实；哪天真要支持 `FAIL(hang,post:…)`，先改这里再改实现"
     );
 }
+
+/// `abort_for` 与 `status_for` / `hang_for` **必须共用同一份文法**（`Injection::rule_hit`）。
+///
+/// 这条测试不是"顺手多测一个函数"：本仓两次踩过同一个形状 —— 注入规则漂了，消费者的失败
+/// 长得像"产品没问题"（`hang_for` 那条单测就是为同一个坑加的）。这里漂法有两种：复制一份
+/// 解析（早晚会漂成两种语法），或者 `aborts()` 里顺手读了别的字段（规则写进去、没人执行，
+/// 测试却照旧"跑过了"）。所以除了命中/不命中，还各钉一条"两个旋钮不许互相串"。
+#[test]
+fn abort_on_follows_the_same_rule_grammar_as_status_for() {
+    let sha = "b".repeat(64);
+    let obj = format!("/.notes/attachments/bb/{sha}");
+    let tmp = "/.notes/tmp/01a0-1.json";
+
+    let only_get = Injection::abort_on(format!("GET *{sha}"));
+    assert!(only_get.aborts("GET", &obj), "该命中的没命中：规则文法漂了");
+    assert!(
+        !only_get.aborts("PUT", &obj),
+        "方法限定失效了 —— 那会把暂存写入一起掐掉，测的就不是'发布那一步被掐'"
+    );
+    assert!(
+        !only_get.aborts("GET", "/.notes/manifest/index.json"),
+        "掐到了别的对象上：这条注入不再是'只掐那一个附件'"
+    );
+    assert!(
+        Injection::abort_on("MOVE *").aborts("MOVE", tmp),
+        "不带 sha 的按方法规则要能命中（附件上传的 MOVE 路径是暂存名，不含 sha）"
+    );
+    assert!(
+        Injection::abort_on("*.bin").aborts("PROPFIND", "/x/y.bin"),
+        "不带方法前缀应当任何方法都命中（与 status_for 同语法）"
+    );
+    // 两个旋钮不许互相串：按序号掐的全局 abort 不进 aborts()，按路径挂的 hang 也不进这里。
+    assert!(
+        !Injection::abort_after(0).aborts("GET", &obj),
+        "全局 abort（drop_after_n）与按规则 abort 是两个旋钮，不许互相串"
+    );
+    assert!(
+        !Injection::hang_on(format!("GET *{sha}")).aborts("GET", &obj),
+        "hang 的规则被 abort 读了 —— 那两种脾气（不应答 vs 直接断连）就分不开了"
+    );
+    // `post:` 对掐断没有意义（副作用做不做得完都不是这条路的语义），但必须**剥掉**而不是
+    // 当成路径的一部分去匹配 —— 否则写 `FAIL(abort,post:…)` 的人会静默得到一个不生效的规则。
+    assert!(
+        Injection::abort_on(format!("post:GET *{sha}")).aborts("GET", &obj),
+        "`post:` 前缀在 abort 这条路里被当成了规则字符，而不是被剥掉"
+    );
+}
