@@ -40,7 +40,7 @@
 **结构上没有新增违规**（arch-check 28/28 包含"只向下依赖""前端不许有 WebDAV 逻辑""同步协议只有一份实现"），
 本轮新增/改动的东西逐个说：
 
-* **磁盘体检 `App::demote_lost_local_blobs`**（`crates/notera-host/src/lib.rs`）
+* **磁盘体检 `App::sweep_lost_local_blobs(cap)`**（`crates/notera-host/src/lib.rs`；本轮审查时它叫 `demote_lost_local_blobs`，2026-09-28 因为 G4 改成收候选上界，见 4.1）
   * 它把 `local_state` 变成一个**由后台推导**的值 —— 这一点是本轮最大的架构性变化，之前
     `local_state` 只由传输代码写。任何将来读它做决策的地方（尤其 GC）都必须接受"它会自己变"。
     已写进 DATA-MODEL §8 与 ADR-0009 的更正里。
@@ -55,8 +55,9 @@
     把哈希相符算出来的真值回填成登记尺寸（`Store::set_attachment_size`，只改那一列、字节不碰），
     于是这一行下一轮回到只 `stat` 的快路；这一步必须有，因为登记那条路的规则是 `MAX(旧, 新)` —— 只许涨
     不许落，偏大的声明值它自己永远纠不掉。门禁 FT-ATT-20 + 变异自证 M19。
-  * 每行一个写事务 + 候选集不分页（`ORDER BY sha256` 无 `LIMIT`）：误删整个 `attachments/` 目录时
-    一轮里会有 N 次 rename + N 次提交。功能正确，代价待收（G4）。
+  * 每行一个写事务 + 候选集不分页（G4，**2026-09-28 已解除**）：原本误删整个 `attachments/` 目录时
+    一轮里会有 N 次 rename + N 次提交。现在候选按 `cap` 分页（常驻循环传 200），降级是**一次**批量写事务。
+    降下来的行当轮就进下载队列，这条不变。
 * **`put_attachment` 的 405/412 分支**：三种结局（成功 / 被拒 / 其他错）现在**共用同一次复读**，
   没有第二套校验逻辑。SYNC-PROTOCOL §13 那句话也按事实收窄了 —— 承认"HEAD 判存跳过上传"
   记下的 present 是**借来的**，代价写在文档里（消费侧靠下载复验兜住；第二次上传撞同一坏对象未覆盖，G5）。
@@ -111,7 +112,7 @@ assert!(got.get("code").is_some() || got.get("data").and_then(|v| v.as_str()).is
 | G1 | 附件 blob 回收（GC）未实现 | 设计有（DATA-MODEL §8 / ADR-0009），代码里 `attachment_refs()` 无生产调用者 | 盘上占用只增不减；用户长期会看到附件目录膨胀 | 与磁盘体检**一起**当一台状态机实现（`available → missing` 现在是后台可写的），并带一条"最后引用已删 + 无 pending 上传 → 不删/删"的门禁 |
 | G2 | `missing+absent` / `missing+error` 无重启路径 | 设计上 404 与内容不符都当**结论** | 一次瞬时故障让附件永久取不回（状态诚实，但仍然坏） | 二选一：界面上给"重试这个附件"（带意图的重武装），或给这两对状态一个过期时间。属产品决定 D1 |
 | G3 | ~~`size` 记错而行内容好的那一格：每轮整份读 + 重哈希~~ **已解除（2026-09-28）** | 复算通过后没写回 size | 最坏 32 MiB / 20 s 的常态浪费 | 已做：复算相符后 `Store::set_attachment_size` 回填盘上实测长度，门禁 FT-ATT-20（改前红在 `left: 13096 / right: 9000`，变异 M19 把回填值换成旧登记值 → 同处再红）。"第二轮不再整份读"这一半**没有声称测过 IO 次数** —— 工装不计数，实际断言的是快路径判据（`stat` 长度 == 登记值）成立 + 该 sha 的 GET 数没增加 |
-| G4 | 体检每行一个事务、候选不分页 | 实现取舍 | 整个 attachments 目录被删时一轮内 N 次 rename + N 次提交 | 一次批量降级调用 + 每轮上限（超过则下轮继续） |
+| G4 | ~~体检每行一个事务、候选不分页~~ **已解除（2026-09-28）** | 实现取舍 | 整个 attachments 目录被删时一轮内 N 次 rename + N 次提交 | 已做：候选查询收 `LIMIT`（常驻循环传 200），降级换成一次批量写事务 `set_attachments_locally_missing`。**边界照实说**：门禁能数"一轮降了几条"（FT-ATT-21，变异 M20），数不清"提交了几次"（Store 不暴露事务计数，加一个只有测试在读的计数器就是 §39 禁的东西）—— 所以"一次提交"那一半是代码事实（函数里只有一个 `write_tx`），它的**语义**由 FT-ATT-21s 钉（M21a/M21b 各打红一次）。100/1000 附件下体检实际花多少毫秒仍未测，欠账留在 PERF-10 |
 | G5 | 第二次上传撞上"服务器已有一份坏对象" | `put_attachment` 靠 HEAD 判存跳过，跳过时不复读 | 该设备上这张图永远取不回（账上 present），直到对面下载复验把它记成 error | 要么跳过前先判"这行是不是刚被复验否定过"，要么把 §13 那句例外收窄并补一条测试 |
 | G6 | `hang_for` 对 `post:` 静默剥掉 | 语义只对 status 有意义 | 写 `FAIL(hang,post:…)` 的人可能以为它在做事 | 已在 `injection.rs` 钉住"剥掉且不参与判定"这个事实；真需要再实现 |
 | G7 | macOS / Android / iOS 构建与真机 | 本机只有 Windows + GNU 工具链 | 跨平台原生感、移动端交互、平台产物**全无**真机证据 | 用户提供设备/权限（§49）或 CI 上跑对应 job |
@@ -147,13 +148,14 @@ assert!(got.get("code").is_some() || got.get("data").and_then(|v| v.as_str()).is
 | `--test proxy_account`（App 侧代理那条边） | 2/2，M15 变异自证 |
 | GitHub Actions | run #11（`52e175f`）**success**；#12–#15 被我自己后续 push 的 `cancel-in-progress` 取消；HEAD 的运行结果待查 |
 
-### 4.1 追记（2026-09-28，G3 那批之后）
+### 4.1 追记（2026-09-28，G3 与 G4 那两批之后）
 
 上表按 §45 原样留着（它是 2026-09-27 那一刻的台账），下面三条是之后拿到或纠正的实测，不改写上面的行：
 
-* **本表 136 行那句"0 ignored"是错的**：2026-09-28 在同一套命令上实测 **535 通过 / 0 失败 / 1 ignored**（64 个测试二进制）。那 1 条是 `conflict_payload_e2e.rs:519` 的留档夹具（`#[ignore]`，由 `scripts/verify-p11-panel.mjs` 显式跑），不是被跳过的测试 —— 但台账一直写"0 ignored"，属于文档与实态不符，CHANGELOG / PRODUCTION-READINESS / IMPLEMENTATION-STATUS 三处同批改正。
-* **`--test attachment_faults` 现在是 12/12，变异自证记到 M19**：新增的那条是 FT-ATT-20（§3.3 的 G3 已解除 —— 体检复算过 sha256 却不回填登记尺寸）。IMPLEMENTATION-STATUS 里"35/35 / 8/8"那两行旧数也一并对到上一批实测的 36/36、9/9。
+* **本表 136 行那句"0 ignored"是错的**：2026-09-28 在同一套命令上实测 **537 通过 / 0 失败 / 1 ignored**（64 个测试二进制；G3 那批之后是 535，G4 那批又加了两条）。那 1 条是 `conflict_payload_e2e.rs:519` 的留档夹具（`#[ignore]`，由 `scripts/verify-p11-panel.mjs` 显式跑），不是被跳过的测试 —— 但台账一直写"0 ignored"，属于文档与实态不符，CHANGELOG / PRODUCTION-READINESS / IMPLEMENTATION-STATUS 三处同批改正。
+* **`--test attachment_faults` 现在是 **13/13**，变异自证记到 M21b**：新增的两条是 FT-ATT-20（G3 —— 体检复算过 sha256 却不回填登记尺寸）与 FT-ATT-21（G4 —— 候选不分页 + 每行一个写事务），批量语义另在存储层 `attachment_queue.rs`（FT-ATT-21s，M21a/M21b）。IMPLEMENTATION-STATUS 里"35/35 / 8/8"那两行旧数也一并对到上一批实测的 36/36、9/9。
 * **148 行那句"HEAD 的运行结果待查"已回填**：GitHub Actions 上 **#19 = `cf823a1`（当时的 HEAD）success**（run id 36330294995，15:38:21Z → 15:59:31Z，约 21 分钟），#16 = `bbc9bed` success、#11 = `52e175f` success；#12–#15 与 #17（`714974c`）、#18（`0bbd03f`）都是被 `cancel-in-progress` 取消的。要说清的边界是：**#13/#17 这两笔产品改动从未在各自那一版上单独跑完整 CI**，但它们的代码都在 #19 那棵树里、而 #19 全绿 —— 所以"当前树在 GitHub 的 GNU runner 上完整过了全部门禁"成立，"每一笔单独绿过"不成立。本批（0.0.18）推上去之后应再取一次运行结果。
+* **G4 也解除了，并且本表的函数名按 §45 对到现码**（上面"二、架构视角"里讲磁盘体检那段用的 `App::demote_lost_local_blobs` 已经不叫这个）：现在它是 `App::sweep_lost_local_blobs(cap) -> usize`，收候选上界、返回这一轮实际降级的条数，降级走一次批量写事务 `Store::set_attachments_locally_missing`。旧名在 CHANGELOG 的历史条目里原样留着（那是当时那批的记录），但**活文档**（DATA-MODEL / TEST-PLAN / 本表）按现名走，免得下次照着一个查不到的符号去改。同批门禁：FT-ATT-21 + FT-ATT-21s（变异 M20 / M21a / M21b）。
 
 ---
 

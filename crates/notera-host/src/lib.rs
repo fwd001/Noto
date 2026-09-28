@@ -1732,23 +1732,24 @@ impl App {
     /// 不体检的代价是那张图**永久**打不开，而且系统以为自己已经修好了。
     /// 这里**不**写 `verified_at`：那一列的语义是"整份内容哈希核对通过的时刻"，
     /// 体检对大多数行只做了一次 `stat`，写它等于谎报"这份核对过了"。
-    fn demote_lost_local_blobs(&self) {
-        let mut lost = 0usize;
+    ///
+    /// 每轮工作量的上界是 `cap`（生产调用传 `run_attachment_round` 里那个 `SWEEP_CAP`），
+    /// 而降级是**一次写事务**（`set_attachments_locally_missing`）而不是逐行提交：整个
+    /// `attachments/` 目录被删时一轮能攒出成百上千条，逐行提交就是那么多次提交排队占住写锁，
+    /// 而用户那次保存正排在后面（§48 缺口 G4）。返回这一轮实际降级的条数。
+    pub fn sweep_lost_local_blobs(&self, cap: usize) -> usize {
+        let mut lost: Vec<String> = Vec::new();
         for (sha, size) in self
             .inner
             .store
-            .attachment_repair_candidates()
+            .attachment_repair_candidates(cap)
             .unwrap_or_default()
         {
             let path = self.inner.store.blob_path(&sha);
             let on_disk = match std::fs::metadata(&path) {
                 Ok(m) => m.len(),
                 Err(_) => {
-                    lost += 1;
-                    let _ = self
-                        .inner
-                        .store
-                        .set_attachment_states(&sha, Some("missing"), None);
+                    lost.push(sha);
                     continue;
                 }
             };
@@ -1758,11 +1759,7 @@ impl App {
             let bytes = match std::fs::read(&path) {
                 Ok(b) => b,
                 Err(_) => {
-                    lost += 1;
-                    let _ = self
-                        .inner
-                        .store
-                        .set_attachment_states(&sha, Some("missing"), None);
+                    lost.push(sha);
                     continue;
                 }
             };
@@ -1781,17 +1778,31 @@ impl App {
             if self.park_corrupt_blob(&path).is_err() {
                 continue;
             }
-            lost += 1;
-            let _ = self
-                .inner
-                .store
-                .set_attachment_states(&sha, Some("missing"), None);
+            lost.push(sha);
         }
-        if lost > 0 {
-            tracing::warn!(lost, "本机附件与账不符，降级重下（§27 本地附件缺失）");
-            // 离线时本轮补不回来：界面要先看到占位，而不是继续画一张打得开的图
-            self.emit(BusEvent::NotesChanged { ids: vec![] });
+        if lost.is_empty() {
+            return 0;
         }
+        let demoted = match self.inner.store.set_attachments_locally_missing(&lost) {
+            Ok(n) => n,
+            Err(e) => {
+                // 写不成就不声称修过：这些行下一轮还会被体检看到，而界面此刻仍是那张
+                // "账上说有、盘上没有"的图。安静 return 0 会让人以为已经降级了。
+                tracing::warn!(%e, attempted = lost.len(), "批量降级没写成：这些附件下一轮还会被体检看到");
+                return 0;
+            }
+        };
+        if demoted != lost.len() {
+            tracing::warn!(
+                demoted,
+                attempted = lost.len(),
+                "体检攒出来的降级有条没落成（行已不在 available 或库里没有）"
+            );
+        }
+        tracing::warn!(demoted, "本机附件与账不符，降级重下（§27 本地附件缺失）");
+        // 离线时本轮补不回来：界面要先看到占位，而不是继续画一张打得开的图
+        self.emit(BusEvent::NotesChanged { ids: vec![] });
+        demoted
     }
 
     /// 把一份哈希不符的坏文件挪到 `<原文件>.corrupt`，腾出正式位置给重下。
@@ -1847,8 +1858,14 @@ impl App {
         use std::io::Write;
         let (mut up, mut down, mut failed) = (0usize, 0usize, 0usize);
         let mut budget = BYTES;
+        // 每轮体检的候选上界。它只限制"一轮最多新认多少条缺失"（cap 次 `stat` + **一次**
+        // 批量写事务），不限制补回来的速度（那是 FILES 那个下载预算管的）。取 200 的理由：
+        // 整个 `attachments/` 目录被删时，它把最坏情况下的写锁占用压成一次提交，而不是
+        // 几百几千次排队 —— 用户那次保存正排在这把锁后面（§48 G4）；而一万条也只要 50 轮
+        // （常驻循环 20 s 一轮，约 17 分钟）就全部排进下载队列，这个代价换得值。
+        const SWEEP_CAP: usize = 200;
         // 先体检再挑活：降级出来的行要在**这一轮**就被下载队列看见
-        self.demote_lost_local_blobs();
+        self.sweep_lost_local_blobs(SWEEP_CAP);
 
         for (i, job) in self
             .inner

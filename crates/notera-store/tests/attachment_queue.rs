@@ -157,6 +157,71 @@ fn restore_from_a_bundle_registers_the_row_and_still_offers_to_upload() {
     assert!(store.attachment_uploads(5).unwrap().is_empty());
 }
 
+/// §27 磁盘体检的批量降级（`Store::set_attachments_locally_missing`）。
+///
+/// 一轮体检要把"账上 `available` 而盘上没有"的一批行交出去，**必须一次写事务做完**：
+/// 逐行开事务的代价记在 §48 的 G4 —— 整个 `attachments/` 目录被删（换盘没搬完、杀毒整目录
+/// 隔离）时，一轮里 N 次提交会把写锁占住好几秒，而用户那边的保存正排在这把锁后面。
+///
+/// 这条测试盯的是"批量"最容易悄悄做错的三件事：
+/// * 列出来的**全部**降到 `missing`，而 `remote_state` 一字不动 —— 体检只证明本机没有，
+///   远端有没有是另一回事（顺手改成 absent 就等于把这张图判死，永远不去问了）；
+/// * **没列出来的不许顺手动到** —— 批量语句写成 `WHERE local_state='available'` 这种
+///   "更省事"的形式会把好文件一起降级；
+/// * 传进来的 sha 库里没有、或本来就已经不是 `available` 时**不许算进成功条数** ——
+///   调用方（host 体检）就靠这个差值吵一声，静默吞掉就是 §39 禁的那种 fallback。
+#[test]
+fn a_batched_demotion_moves_exactly_the_listed_rows() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    let a = attach(&store, &folder, b"aa", "blk000001");
+    let b = attach(&store, &folder, b"bb", "blk000002");
+    let kept = attach(&store, &folder, b"cc", "blk000003");
+    for sha in [&a, &b, &kept] {
+        store
+            .set_attachment_states(sha, Some("available"), Some("present"))
+            .unwrap();
+    }
+
+    let ghost = notera_core::ContentHash::of("库里没有这一行".as_bytes())
+        .as_str()
+        .replace("sha256:", "");
+    let changed = store
+        .set_attachments_locally_missing(&[a.clone(), b.clone(), ghost.clone()])
+        .expect("批量降级");
+    assert_eq!(changed, 2, "库里没有的那条不许算成已降级：{changed}");
+    for sha in [&a, &b] {
+        assert_eq!(
+            store.attachment_for_state(sha),
+            ("missing".into(), "present".into()),
+            "列出来的行必须降级，而远端态不许被顺手改"
+        );
+    }
+    assert_eq!(
+        store.attachment_for_state(&kept),
+        ("available".into(), "present".into()),
+        "没列出来的那行被批量语句顺手动到了"
+    );
+    // 降级出来的行必须**立刻**是下载队列的活，否则"降级"只是把状态改了一下而没接线
+    let queued: Vec<String> = store
+        .attachment_downloads(10)
+        .unwrap()
+        .into_iter()
+        .map(|j| j.sha256)
+        .collect();
+    assert_eq!(queued.len(), 2, "降完两级必须马上排进下载队列：{queued:?}");
+
+    // 幂等：同一批再降一次不该再算成功（host 那声 warn 的判据就是这个数）
+    assert_eq!(
+        store
+            .set_attachments_locally_missing(&[a.clone(), b.clone()])
+            .expect("重复降级"),
+        0,
+        "已经不是 available 的行被重复计入成功条数"
+    );
+}
+
 #[test]
 fn finishing_ops_closes_the_outbox_rows_for_that_blob() {
     let fx = Fix::new();

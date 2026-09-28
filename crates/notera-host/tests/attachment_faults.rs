@@ -328,7 +328,7 @@ async fn a_truncated_local_blob_is_replaced_not_reused() {
 /// （`attachment_repair_candidates`），不为测试新开一个只有测试在读的口子。
 fn ledger_size(app: &App, sha: &str) -> i64 {
     app.store()
-        .attachment_repair_candidates()
+        .attachment_repair_candidates(500)
         .expect("体检候选查询要读得回来")
         .into_iter()
         .find(|(s, _)| s == sha)
@@ -398,7 +398,7 @@ async fn a_hash_verified_row_has_its_size_corrected_once_and_then_stops_being_wo
         blob.len() as i64,
         "体检复算过 sha256 却没回填真实尺寸 —— 这一行会每轮被整份重读重哈希"
     );
-    // ② 快路径的判据要**真的**成立（`demote_lost_local_blobs` 里那条
+    // ② 快路径的判据要**真的**成立（`sweep_lost_local_blobs` 里那条
     //    `size > 0 && on_disk == size`），否则"下一轮只 stat"只是好听话。
     assert!(
         std::fs::metadata(b2.store().blob_path(&sha))
@@ -437,6 +437,131 @@ async fn a_hash_verified_row_has_its_size_corrected_once_and_then_stops_being_wo
         ledger_size(&b2, &sha),
         blob.len() as i64,
         "第二轮登记尺寸又漂回偏大值"
+    );
+    srv.stop().await;
+}
+
+// ———————————————————————— 体检的每轮工作量有界（§48 缺口 G4）
+
+/// G4 管的是这一种真实场景：**整个 `attachments/` 目录被搬走或删掉**（换盘没搬完、
+/// 杀毒按目录隔离、误 `rm -r`）。此时体检一轮能攒出成百上千条候选，而修之前是
+/// "候选不分页 + 每行一个写事务" —— 那么多次提交排队占住写锁，用户那次保存正排在锁后面。
+/// 现在候选按 `cap` 分页，降级是**一次**批量写事务。
+///
+/// 工装能数什么、数不清什么，写在前面免得这条被当成量化了代价：
+/// * **能数**"一轮降了几条、剩下的要下一轮才降"（`sweep_lost_local_blobs` 的返回就是条数），
+///   以及"降级出来的行当轮就进了下载队列"（队列查询）。
+/// * **数不清**"提交了几次" —— Store 不暴露事务计数，为这条去加一个只有测试在读的计数器
+///   就是 §39 禁的那种东西。所以"一次批量写"那一半是**代码事实**：
+///   `set_attachments_locally_missing` 里只有一个 `write_tx`；它该被钉住的行为（点名的全降、
+///   没点名的不许动、远端态不被顺手改、返回数不虚报）结在
+///   `notera-store/tests/attachment_queue.rs::a_batched_demotion_moves_exactly_the_listed_rows`。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_sweep_demotes_at_most_its_cap_per_round_and_picks_the_rest_next() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blobs: Vec<Vec<u8>> = (0..3)
+        .map(|i| (0..600).map(|k| (k % (i + 7) as usize) as u8).collect())
+        .collect();
+
+    // A：三条笔记、三张图，正文都引用了，图都真传上去。
+    let a_dir = Tmp::new("cap-a");
+    let a = boot(a_dir.path(), &url);
+    a.sync_once().await.expect("A 入伙");
+    let folder = a.default_folder_id().unwrap();
+    let mut shas = Vec::new();
+    for blob in blobs.iter() {
+        let note = a.create_note(&folder, doc("有一张图的笔记")).unwrap();
+        let id = notera_core::EntityId::parse(&note.id).unwrap();
+        let sha = a
+            .store()
+            .attach_blob(&id, blob, "image/png", Some("shot.png"), "blk000002")
+            .unwrap()
+            .sha256;
+        let head = a.store().get_note(&id).unwrap().unwrap();
+        a.store()
+            .edit_note(
+                &id,
+                json!({ "v": 1, "content": [
+                    { "id": "blk000001", "type": "paragraph", "content": [{ "text": "有一张图的笔记" }] },
+                    { "id": "blk000002", "type": "image", "attrs": {
+                        "sha256": &sha, "ref": &sha, "role": "inline", "pending": false,
+                        "size": blob.len(), "mediaType": "image/png", "name": "shot.png" } },
+                ] }),
+                head.rev,
+            )
+            .unwrap();
+        shas.push(sha);
+    }
+    a.sync_once().await.expect("A 推正文");
+    let remote = a.remote_for_sync().await.unwrap().expect("A 有适配器");
+    let round = a.run_attachment_round(&remote).await;
+    assert_eq!(round.0, 3, "A 该把三张图都传上去：{round:?}");
+    drop(a);
+
+    // B：一轮把三张图都下回来，然后**整个目录没了**。
+    let b_dir = Tmp::new("cap-b");
+    let b = boot(b_dir.path(), &url);
+    b.sync_once().await.expect("B 拉到正文");
+    let remote = b.remote_for_sync().await.unwrap().expect("有适配器");
+    let round = b.run_attachment_round(&remote).await;
+    assert_eq!(round.1, 3, "B 第一轮该把三张图都下完：{round:?}");
+    for sha in &shas {
+        assert!(!blob_on_disk(&b, sha).is_empty(), "前置：{sha} 没落到本机");
+    }
+    for sha in &shas {
+        std::fs::remove_file(b.store().blob_path(sha)).expect("删掉本机 blob");
+    }
+
+    // ① cap=2 的一轮只许认两条。多降一条就是"候选不分页"还在起作用。
+    let demoted = b.sweep_lost_local_blobs(2);
+    assert_eq!(demoted, 2, "cap=2 却降了 {demoted} 条：每轮的上界没起作用");
+    let now_missing: Vec<&String> = shas
+        .iter()
+        .filter(|s| b.store().attachment_for_state(s).0 == "missing")
+        .collect();
+    assert_eq!(
+        now_missing.len(),
+        2,
+        "降级条数与账上的 `missing` 对不上（降了却没人知道）"
+    );
+    assert_eq!(
+        b.store().attachment_downloads(10).unwrap().len(),
+        2,
+        "降下来的两条必须当轮就进下载队列"
+    );
+    // 另一条此刻**还是** `available` —— 它没被这轮看到，也就没被顺手改判
+    let still = shas
+        .iter()
+        .find(|s| b.store().attachment_for_state(s).0 == "available")
+        .expect("第三条这一轮该还没被动到");
+    assert_eq!(
+        b.store().attachment_for_state(still).1,
+        "present",
+        "没被核对过的行，远端态被体检顺手改了"
+    );
+
+    // ② 下一轮补齐第三条（降过的行离开候选集，所以不会饿死后面那些）。
+    assert_eq!(b.sweep_lost_local_blobs(2), 1, "第二轮该只补上剩下那一条");
+
+    // ③ 三条都补回来，然后体检必须收手 —— 不许把已经修好的行继续当活。
+    let remote = b.remote_for_sync().await.unwrap().expect("有适配器");
+    let round = b.run_attachment_round(&remote).await;
+    assert_eq!(
+        round.1, 3,
+        "降级出来的三条要在同一轮都被下载队列看见：{round:?}"
+    );
+    for (sha, blob) in shas.iter().zip(&blobs) {
+        assert_eq!(
+            blob_on_disk(&b, sha),
+            blob.clone(),
+            "重下回来的字节必须与源逐字节相同：{sha}"
+        );
+    }
+    assert_eq!(
+        b.sweep_lost_local_blobs(2),
+        0,
+        "三份都补齐了体检还在降级 —— 循环没断"
     );
     srv.stop().await;
 }

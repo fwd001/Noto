@@ -819,6 +819,38 @@ impl Store {
         })
     }
 
+    /// 批量把"账上 `available` 而本机已经没有"的行降级，**一次写事务做完**。
+    ///
+    /// 为什么不逐行调 [`Store::set_attachment_states`]：整个 `attachments/` 目录被删
+    /// （换盘没搬完、杀毒整目录隔离、误 `rm`）时，一轮体检会攒出成百上千条 —— 逐行提交
+    /// 就是那么多次提交排队占住写锁，而用户那次保存正排在这把锁后面（§48 缺口 G4）。
+    ///
+    /// 只碰 `local_state`，而且只碰**点名传进来的**、当前确实是 `available` 的行：
+    /// * 远端态一字不动。体检只证明"本机没有"，远端有没有是另一回事；顺手写 `absent`
+    ///   等于把这张图判死 —— 下载队列的口径是 `present`/`unknown`，从此再也不去问一次。
+    /// * 不写成 `WHERE local_state='available'` 那种整表形式：那会把盘上明明好好的文件
+    ///   一起降级，而调用方只核对过点名的这一批。
+    ///
+    /// 返回**实际降级**的条数：库里没有这条、或它本来已经不是 `available` 的都不计入。
+    /// 调用方靠"返回数 < 传入数"吵一声，这里不静默替它吞掉。
+    pub fn set_attachments_locally_missing(&self, shas: &[String]) -> Result<usize, StoreError> {
+        if shas.is_empty() {
+            return Ok(0);
+        }
+        let shas = shas.to_vec();
+        self.write_tx(|tx, _now| {
+            let mut stmt = tx.prepare(
+                "UPDATE attachments SET local_state = 'missing'
+                  WHERE sha256 = ?1 AND local_state = 'available' AND deleted_at IS NULL",
+            )?;
+            let mut done = 0usize;
+            for sha in &shas {
+                done += stmt.execute(params![sha])?;
+            }
+            Ok(done)
+        })
+    }
+
     /// 附件的下载待办（`local_state='missing'` 且远端 `present` → 入队，UI 显示占位）。
     pub fn enqueue_download(&self, sha256: &str) -> Result<(), StoreError> {
         let sha = sha256.to_string();
@@ -869,14 +901,24 @@ impl Store {
     ///   `deleted_at IS NULL` 与两个队列同口径 —— 但今天它**不起作用**：没有生产代码往
     ///   `attachments.deleted_at` 写值（只有重置为 NULL 那两处），所以"回收站里等的东西不必救"
     ///   目前是意图而不是行为。
-    pub fn attachment_repair_candidates(&self) -> Result<Vec<(String, i64)>, StoreError> {
+    ///
+    /// `limit` 是**每轮工作量的上界**（§48 G4）：候选集不分页的话，整个目录被删时一轮要发
+    /// 出 N 次 `stat` 再攒 N 条降级，全挤在常驻循环那一格里。排序按 `sha256` 稳定，而降级
+    /// 出来的行会立刻离开候选集（不再是 `available`），所以每一轮取前 `limit` 条**不会饿死**
+    /// 后面的行 —— 下一轮它们自然浮上来。
+    pub fn attachment_repair_candidates(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, i64)>, StoreError> {
         let conn = self.read()?;
         let mut stmt = conn.prepare(
             "SELECT sha256, size FROM attachments
               WHERE local_state = 'available' AND remote_state = 'present'
-                AND deleted_at IS NULL ORDER BY sha256",
+                AND deleted_at IS NULL ORDER BY sha256 LIMIT ?1",
         )?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        let rows = stmt.query_map(params![limit as i64], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 

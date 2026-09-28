@@ -10,7 +10,7 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 535 通过 / 0 失败 / **1 ignored**（64 个测试二进制。那一条 ignored 是 `conflict_payload_e2e.rs:519` 的**留档夹具**，由 `scripts/verify-p11-panel.mjs` 显式调用生成两台设备的现场 —— 它是刻意 `#[ignore]` 的，不是被跳过的测试。此前台账写的"0 ignored"是错的，2026-09-28 按实测更正） |
+| `cargo test --workspace` | 537 通过 / 0 失败 / **1 ignored**（64 个测试二进制。那一条 ignored 是 `conflict_payload_e2e.rs:519` 的**留档夹具**，由 `scripts/verify-p11-panel.mjs` 显式调用生成两台设备的现场 —— 它是刻意 `#[ignore]` 的，不是被跳过的测试。此前台账写的"0 ignored"是错的，2026-09-28 按实测更正） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
 | L5 崩溃注入 `--test crash_recovery` | 小库矩阵 9 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零 |
 | L5 压实崩溃注入 `--test compaction_crash` | 1/1（240 条大库真死在 `after_segment_write`，索引不引用不存在的分段） |
@@ -23,7 +23,7 @@
 | P11 面板 `scripts/verify-p11-panel.mjs` | 11/11（真浏览器读**两台真设备留在盘上的现场**：右栏是服务器那一版、无载荷时说的是"没取回来"、冲突笔记留在正常列表且 ⚠ 只落在冲突行上；截图证据进 `docs/evidence/`） |
 | 性能基线 `scripts/verify-perf.mjs`（PERF-01/10/13） | 4/4（**空库预算口径已按用户决定定为 ≤1000 ms 含 WebView2**）：重编 release 壳后实测 空库最好 866 ms（首遍 1528）、5000 条 984 ms、滚动 434 帧 p95 17 ms、RSS 31.9/46.6→47.2 MiB；20000 条那一档 1322 ms。未采：100 附件规模、30 min 泄漏趋势、Android/macOS |
 | Windows 安装器 `pnpm tauri build --target x86_64-pc-windows-gnu --bundles nsis` | **`.exe` 产出 4.46 MiB**（`Notera_0.0.13_x64-setup.exe`）。出货产物侧另验通一件事：拿包内那个 `release/notera-desktop.exe` 起来后 `17323/health` **连不上** —— "dev 桥只关在 debug 构建里"在真正的 release 二进制上成立（不是只看 feature 门）。`--bundles msi` 仍 BLOCKED（WiX `LGHT0102` 的 loc 变量 + 我把自己 shell 的 cwd 留在了临时目录里造成文件锁），装移动作与代码签名未验。两个只露在真跑里的坑：`tauri build` 默认走 MSVC（被 Git Bash 的 coreutils `link` 顶掉），以及 JS/Rust 的 tauri 次版本错配会直接拒绝打包 —— 两侧已对到 2.12.0 |
-| §27 附件故障注入 `--test attachment_faults` | **12/12**（本机 blob 丢了自愈、截断换整份、服务器同长度坏字节被拒、下载被掐不 promote、半上传不落正式对象、远端 404 收手不空转、**只有附件端点超时**时文本轮并发验穿且附件轮在 45 s 预算内自己放手、**MOVE 被 412 拒的两端都咬住**、坏字节**只挪开不销毁**、同长度位腐在**读侧**被拒而不会被画进界面、**体检复算过哈希就把登记尺寸改对并且一次改对**）—— 十二条各配变异自证 M1..M19，见下面 commit 级的说明 |
+| §27 附件故障注入 `--test attachment_faults` | **13/13**（本机 blob 丢了自愈、截断换整份、服务器同长度坏字节被拒、下载被掐不 promote、半上传不落正式对象、远端 404 收手不空转、**只有附件端点超时**时文本轮并发验穿且附件轮在 45 s 预算内自己放手、**MOVE 被 412 拒的两端都咬住**、坏字节**只挪开不销毁**、同长度位腐在**读侧**被拒而不会被画进界面、**体检复算过哈希就把登记尺寸改对并且一次改对**、**体检一轮降的条数有上界**）—— 十三条各配变异自证 M1..M20；批量降级那条语义另在存储层（`attachment_queue.rs`，M21a/M21b），见下面 commit 级的说明 |
 | 前端 | **200 通过（21 文件）+ `vue-tsc --noEmit` 0 错**（2026-09-27 与 §27 那批同批重跑；本轮没动前端，跑它是为了确认"没受影响"这句话也是量出来的）。`run build` 的产物体积那一档**本轮未重测**，仍挂着上一批的 216.65 KB → gzip 74.22 KB |
 | `scripts/arch-check.mjs` | **28/28**（第 26 条 = 版本单源，第 27 条 = 编译期嵌入的文件要进版本库，第 28 条 = 新增：测试里的「或」断言必须就地写理由 —— 它抓的就是我这次写出的那条恒真断言） |
 | 版本单源 | 一致（权威 + 三处派生 + **Cargo.lock**）；三处变异（派生位置偷改、crate 自己写死版本、**lock 慢一个版本**）都能打红 | `node scripts/check-versions.mjs` |
@@ -173,6 +173,14 @@
 - **导出选择器"列表非空"被当成"列表最新"**：`toggleScoped` 原来只在 `folders.flat.length === 0` 时才重拉，于是本次会话里新建/同步带回的文件夹永远补不进来。改成每次打开开关都重拉
 
 ### 修复（都是会静默丢数据或静默错的那些，不是整理）
+
+- **磁盘体检一轮可以占住写锁好几秒：候选不分页 + 每行一个写事务（§48 缺口 G4）**。触发的场景不是假想的 —— 整个 `attachments/` 目录被搬走或删掉（换盘没搬完、杀毒按目录隔离、误 `rm -r`）时，体检一轮能攒出成百上千条候选，修之前是"一次查询把所有候选捞出来 + 每条一次 `set_attachment_states`"。真正的代价不在那次 `stat`，在**那么多次提交排队占住写锁**：用户那一次保存正排在这把锁后面。
+  - **修法两处**：① `Store::attachment_repair_candidates` 收 `limit`（常驻循环传 `SWEEP_CAP = 200`）；② 新增 `Store::set_attachments_locally_missing(&[String]) -> usize`，**一次 `write_tx`** 里用 prepared statement 把这批行降完，host 侧的体检改成 `App::sweep_lost_local_blobs(cap) -> usize`（返回这一轮实际降了几条，攒完再一次性写）。取前 N 条**不会饿死**后面的行：降完的行立刻离开候选集（不再 `available`），下一轮自然浮上来；200 那条数是权衡出来的 —— 一万条也只要 50 轮（20 s 一轮，约 17 分钟）就全部排进下载队列，而这换掉的是一整目录被删那一轮的写锁长占。
+  - **两处容易悄悄做错的地方，判据写在批量语句里**：只碰**点名传进来的**、且当前确实是 `available` 的行 —— 写成 `WHERE local_state='available'` 那种整表形式会把盘上明明好好的文件一起降级；而 `remote_state` **一字不动**，因为体检只证明"本机没有"，顺手写 `absent` 等于把这张图判死（下载队列的口径是 `present`/`unknown`，从此再也不去问服务器一次）。返回条数不虚报：库里没有的、本来就不是 `available` 的都不计入，host 靠"返回数 < 传入数"吵一声，不静默吞。
+  - **门禁两条**：`FT-ATT-21`（host，`attachment_faults.rs::the_sweep_demotes_at_most_its_cap_per_round_and_picks_the_rest_next`）三条图 + 全目录清空 → `cap=2` 那一轮**只降 2 条**、第三条此刻仍是 `available` 且远端态没被改、降下来的两条当轮就进下载队列、第二轮补齐、三份逐字节回来后体检**收手**（再扫返回 0）。变异自证 **M20**：把 cap 忽略（`usize::MAX`）→ 红在 `cap=2 却降了 3 条`。`FT-ATT-21s`（store，`attachment_queue.rs::a_batched_demotion_moves_exactly_the_listed_rows`）钉批量语义；变异自证 **M21a** 去掉 `local_state='available'` 那道 guard → 红在"已经不是 available 的行被重复计入成功条数"，**M21b** 换成整表形式 → 红在"库里没有的那条不许算成已降级：3"。
+  - **这条测试数不清的东西也写在注释里**（§40）：能数的是"一轮降了几条"，**数不清"提交了几次"** —— Store 不暴露事务计数，为这条去加一个只有测试在读的计数器就是 §39 禁的那种东西。所以"一次批量写"那一半的依据是**代码事实**（那个函数里只有一个 `write_tx`），不是测出来的数；而"100 / 1000 附件下体检实际花多少毫秒"这条**仍然没测**，PERF-10 那句欠账原样留着，只是现在每轮的量有上界了。
+  - 文档同批：DATA-MODEL §8 补上"每轮量有界"这两条与不饿死的理由；FINAL-REVIEW 的 G4 标为已解除、并在 4.1 追记里把函数名对到现码（`demote_lost_local_blobs` → `sweep_lost_local_blobs(cap)`，活文档按现名走，CHANGELOG 历史条目原样留着）；TEST-PLAN 加 FT-ATT-21 / 21s 与 §27 台账那一行。
+  - 复验（2026-09-28 本机 GNU 工具链）：`cargo test --workspace` **537 通过 / 0 失败 / 1 ignored**（64 个测试二进制）、`cargo fmt --all --check` 干净、`clippy --workspace --all-targets -- -D warnings` 0/0、`node scripts/arch-check.mjs` 28/28、`check-versions` 一致、`--test attachment_faults` **13/13**、`--test attachment_queue` **6/6**、前端 21 个测试文件全绿（这批没动前端，跑它是为了确认"没受影响"也是量出来的）。两条浏览器 lane（`verify-app` / `verify-blackbox`）本批**未重跑** —— 界面与命令面都没改。版本 0.0.18 → **0.0.19**（改了产品行为：后台每轮的候选量与写锁占用有了上界）。
 
 - **磁盘体检把算出来的事实丢掉了：登记尺寸纠正一次就该停（§48 缺口清单里的 G3）**。那条分支原本在"长度与登记不符但 sha256 相符"时只记一句 debug 就 `continue` —— 于是这一行在此后**每一轮**附件轮（常驻循环 20 s）里都被整份读进内存再复算一次哈希（单条上界 32 MiB），而那个偏大的登记值还会继续排进上传预算（`attachment_jobs` 按 `size` 排序）。不是坏数据，是常态浪费 + 一个已经知道却没人写回去的事实。
   - **为什么只有体检能纠**：`attachments.size` 实际是"各台设备报上来的最大值" —— 块属性由客户端各自写，`upsert_attachment_row` 的冲突规则是 `MAX(旧, 新)`（一个"不知道"（0）不许冲掉已知值），**只许涨不许落**。所以"账上 13096 / 盘上 9000"这样一行，登记那条路永远纠不掉。
