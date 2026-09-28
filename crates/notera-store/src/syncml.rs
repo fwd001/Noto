@@ -963,11 +963,18 @@ impl Store {
     /// 引用在这里问第二遍：从隔离到真删中间隔着整个宽限期，那一头笔记被还原（链接回来 +
     /// `deleted_at` 被登记那条路清成 NULL）是正常事件，不是异常。这一句把"到期"与"仍无人引用"
     /// 同时成立才放行；`purge_attachment_rows` 里那条 `ON DELETE RESTRICT` 是机器兜底。
+    ///
+    /// `remote_state='present'` 也在这里问第二遍，但**它的角色不是"再确认一次"** —— 真正的
+    /// 再确认是 host 那一轮销毁之前发的 HEAD。这一句管的是**别每轮重问**：一轮 HEAD 判下来
+    /// 会把结论写回这一格（服务器说没有 → `absent`；用户说"服务器那份是坏的" → `error`），
+    /// 写了之后就离开候选集，20 秒一轮的常驻循环因此不会反复去敲同一扇门（§27/§28 不许空转）。
+    /// `unknown` 也一并排除 —— 那是"用户刚点了重试、还没人问过服务器"那一格，判死不合资格。
     pub fn gc_ready_to_purge(&self, cutoff: &str, limit: usize) -> Result<Vec<String>, StoreError> {
         let conn = self.read()?;
         let mut stmt = conn.prepare(
             "SELECT a.sha256 FROM attachments a
               WHERE a.deleted_at IS NOT NULL AND a.deleted_at < ?1
+                AND a.remote_state = 'present'
                 AND NOT EXISTS (SELECT 1 FROM note_attachments na WHERE na.sha256 = a.sha256)
               ORDER BY a.deleted_at, a.sha256 LIMIT ?2",
         )?;

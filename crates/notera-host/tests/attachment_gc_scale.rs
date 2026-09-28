@@ -137,14 +137,22 @@ fn gc_and_sweep_per_round_cost_at_a_thousand_attachment_library() {
     );
 
     // ⑤ 销毁那一侧：宽限期一过，1500 条要几轮、每轮多少毫秒（先删行再删字节）。
+    // **这里量的是本地那两步（删行 + 删文件）**：生产在动手之前还会向远端确认一次
+    // （`confirm_still_remote`，一条一个零字节体的 HEAD），那个网络代价不在下面这些数字里 ——
+    // 这个基准没有服务器，硬把它算进来只会让"每轮多少毫秒"变成"本机磁盘的手感 + 一次往返"。
+    // 写在这里是因为读这些数字的人需要知道它没包含什么。
     let t = Instant::now();
     let mut purged_total = 0usize;
     let mut prows = 0usize;
     loop {
-        let n = app.purge_released_blobs("9999-01-01T00:00:00.000Z", CAP);
-        if n == 0 {
+        let ready = app
+            .store()
+            .gc_ready_to_purge("9999-01-01T00:00:00.000Z", CAP)
+            .unwrap();
+        if ready.is_empty() {
             break;
         }
+        let n = app.purge_verified_blobs(&ready);
         purged_total += n;
         prows += 1;
         assert!(prows < 40, "销毁轮数失控");
@@ -179,7 +187,11 @@ fn gc_and_sweep_per_round_cost_at_a_thousand_attachment_library() {
     for _ in 0..10 {
         assert_eq!(app.reclaim_unreferenced_blobs(CAP), 0, "无事可做时不该认领");
         assert_eq!(
-            app.purge_released_blobs("9999-01-01T00:00:00.000Z", CAP),
+            app.purge_verified_blobs(
+                &app.store()
+                    .gc_ready_to_purge("9999-01-01T00:00:00.000Z", CAP)
+                    .unwrap()
+            ),
             0,
             "账上没有已隔离的行时销毁清单必须是空的"
         );

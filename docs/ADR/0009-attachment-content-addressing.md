@@ -48,10 +48,13 @@
 
 1. **销毁不再是单步，中间多了一段可撤销的现场**。零引用的行先被**挪**进
    `<data>/attachments-quarantine/<2hex>/<sha>`（同一套内容寻址寻址，只差根目录），账上写
-   `local_state='missing'` + `deleted_at=now`；只有 `deleted_at` 过了 **30 天宽限期**且**仍然**零引用，
-   才删行、再删那份字节。理由：这是本仓唯一一段主动让用户的字节离开磁盘的代码，判据错一条就是
-   不可恢复的丢失，而"引用为 0"这件事最常见的成因恰好是用户刚做完的一次删除操作。
-   规则细节见 DATA-MODEL §8。
+   `local_state='missing'` + `deleted_at=now`；只有 `deleted_at` 过了 **30 天宽限期**、**仍然**零引用，
+   而且**这一轮刚从服务器问回来"还在"**（0.0.25 加的第三次确认：一条零字节体的 HEAD；
+   404 记成 `absent` 不销毁，5xx 不是结论、下一轮再问），才删行、再删那份字节。理由：这是本仓唯一
+   一段主动让用户的字节离开磁盘的代码，判据错一条就是不可恢复的丢失，而"引用为 0"这件事最常见的
+   成因恰好是用户刚做完的一次删除操作；至于为什么账上那个 `present` 不够 —— 它是隔离那一刻写的，
+   中间隔着整个宽限期，而本机这条 SQL 看不见别的设备的引用。
+   规则细节见 DATA-MODEL §8 与 SYNC-PROTOCOL §13。
 2. **准入判据从"无 `pending/inflight` 上传"换成 `remote_state='present'`**。原句把"还没传上去"当成
    一个待办状态去看，而 GC 真正的危险是**销毁本机独家的一份副本** —— 那是远端事实，账上早就有它的
    格子。所以现在只收"服务器已确认有副本"的行：没传上去过的字节继续走上传队列（它本来就在里面），
@@ -64,8 +67,9 @@
 3. **"构造'最后引用已删但上传仍 pending'，断言不删"这条用例今天由更强的判据代偿**：引用检查写在
    `UPDATE ... WHERE` 与 `DELETE ... WHERE` 里（检查与写入同一个事务），而
    `note_attachments.sha256 ON DELETE RESTRICT` 是机器兜底。落地后的门禁是 FT-ATT-29 / 29s / 30 / 31 /
-   32 / 33 / 34（`crates/notera-host/tests/attachment_gc.rs` 七条 + `crates/notera-store/tests/attachment_queue.rs`
-   两条），每条都配了变异自证（M32..M40 与 M46 / M46b / M46c，见 commit 级说明）。
+   32 / 33 / 34 / 35 / 36（`crates/notera-host/tests/attachment_gc.rs` 十条测试函数，其中一条是崩溃
+   子进程的占位；`crates/notera-store/tests/attachment_queue.rs` 三条），每条都配了变异自证
+   （M32..M40 与 M46 / M46b / M46c / M48 / M49 / M49b，见 commit 级说明）。
 4. **"引用为 0"这件事的取数口径补了一支写者**（0.0.22）。原句把 `note_attachments` 当作已经完整的事实源，
    而它当时只由 `attach_blob` 与外来笔记的 apply 两处写入 —— 本机 `create_note` / `edit_note` 不登记，
    于是"正文里引用着这张图、链接表里没有这一行"在生产里是**常态**（冲突副本就是拿服务器那一版的正文直接

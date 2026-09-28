@@ -516,10 +516,12 @@ async fn a_quarantined_blob_is_destroyed_only_after_the_grace_period_and_never_w
         .expect("前置：那条带图笔记还在列表里");
     a.store().purge_note(&nid).expect("永久删除");
     assert_eq!(a.reclaim_unreferenced_blobs(50), 1, "前置：先隔离");
+    // 销毁之前要向服务器再确认一次（FT-ATT-36），所以这一步要有个真适配器
+    let remote = a.remote_for_sync().await.unwrap().expect("A 有适配器");
 
     // ① 宽限期还没到：一条都不许销毁。
     assert_eq!(
-        a.purge_released_blobs(ALL_FUTURE, 50),
+        a.purge_verified_blobs(&a.confirm_still_remote(&remote, ALL_FUTURE, 50).await),
         0,
         "宽限期内就销毁 = 撤销窗口根本不存在"
     );
@@ -534,7 +536,7 @@ async fn a_quarantined_blob_is_destroyed_only_after_the_grace_period_and_never_w
 
     // ② 到期：行与隔离区那份字节一起消失，正式位置本来就空着。
     assert_eq!(
-        a.purge_released_blobs(ALL_PAST, 50),
+        a.purge_verified_blobs(&a.confirm_still_remote(&remote, ALL_PAST, 50).await),
         1,
         "到期又零引用的那一条要真的销毁掉"
     );
@@ -567,7 +569,7 @@ async fn a_quarantined_blob_is_destroyed_only_after_the_grace_period_and_never_w
         "还在被引用的那份一条都不许收"
     );
     assert_eq!(
-        a.purge_released_blobs(ALL_PAST, 50),
+        a.purge_verified_blobs(&a.confirm_still_remote(&remote, ALL_PAST, 50).await),
         0,
         "没有已隔离的行时销毁清单必须是空的"
     );
@@ -966,4 +968,126 @@ async fn a_local_note_that_references_an_image_in_its_doc_protects_its_bytes() {
         copy_note.has_attachment,
         "副本自己得知道它带着附件（派生列），否则这条测试的前提是空的"
     );
+}
+
+/// 打到这个 sha 上的 HEAD 条数（`confirm_still_remote` 那一次"你还在不在"就问的是这个）。
+/// 为什么单独有一个计数：销毁前的第二次确认是一个**动作**，不是一个说法。没有它，
+/// "我们先问了服务器"这句注释在代码被改回去之后照样能留着，而没人会看见。
+fn heads_for_sha(srv: &TestServer, sha: &str) -> usize {
+    srv.request_log()
+        .iter()
+        .filter(|r| r.method == "HEAD" && r.path.contains(sha))
+        .count()
+}
+
+/// §8 GC 第二步的凭据：账上那个 `present` 是**隔离那一刻**写下的，而隔离到销毁之间隔着整个
+/// 宽限期。销毁是本仓唯一不可逆的那一步，所以它只能建立在**当下问到的事实**上（独立审查第 3 条）。
+///
+/// 三种回答分工不同，这一条把它们各钉一遍：
+/// * **问不到**（这里是 503）= 不下结论 —— 字节不动，`remote_state` 也不写。
+///   与下面那个 404 的区别是 §27 早就划好的：404 是关于远端事实的结论，5xx 不是。
+/// * **服务器说没有**（404）= 本机这份成了仅存的一份 → 不销毁，并把这一格记成 `absent`。
+/// * **记下来之后不再每轮重问**：`gc_ready_to_purge` 只收 `present`，所以判过结论的行离开候选集
+///   （§27/§28 不许 20 秒一轮去敲同一扇门）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nothing_is_destroyed_until_the_server_confirms_it_still_has_the_bytes() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..6_400).map(|i| (i % 71) as u8).collect();
+    let a_dir = Tmp::new("36-a");
+    let (a, sha) = seed_uploaded(a_dir.path(), &url, &blob).await;
+    let nid = a
+        .store()
+        .list_notes(&notera_store::NoteQuery {
+            folder: None,
+            trash: false,
+            limit: 50,
+            offset: 0,
+        })
+        .unwrap()
+        .into_iter()
+        .find(|n| n.title.contains("GC 目标笔记"))
+        .map(|n| n.id.clone())
+        .expect("前置：那条带图笔记还在列表里");
+    a.store().purge_note(&nid).expect("永久删除");
+    assert_eq!(a.reclaim_unreferenced_blobs(50), 1, "前置：先隔离");
+    let remote = a.remote_for_sync().await.unwrap().expect("A 有适配器");
+
+    // ① 问不到：503 不是结论，所以账与字节都不许动
+    srv.inject(notera_test_webdav::Injection::status(
+        format!("HEAD *{sha}"),
+        503,
+    ))
+    .await;
+    let asked = heads_for_sha(&srv, &sha);
+    assert_eq!(
+        a.confirm_still_remote(&remote, ALL_PAST, 50).await,
+        Vec::<String>::new(),
+        "问不到的时候，销毁清单必须是空的"
+    );
+    assert!(
+        heads_for_sha(&srv, &sha) > asked,
+        "第二次确认根本没发出去 = 销毁还建立在隔离那一刻的旧结论上（问之前 {asked} 条，问之后 {} 条）",
+        heads_for_sha(&srv, &sha)
+    );
+    assert_eq!(
+        a.store().attachment_for_state(&sha).1,
+        "present",
+        "一次 503 不许被当成远端事实：把 present 改写掉就是拿猜代替问"
+    );
+    assert_eq!(
+        quarantine_bytes(&a, &sha),
+        blob,
+        "没问出结论就不许动一个字节"
+    );
+
+    // ② 服务器说没有：这一格本机这份成了仅存的一份 → 不销毁，并把结论记下来
+    srv.inject(notera_test_webdav::Injection::status(
+        format!("HEAD *{sha}"),
+        404,
+    ))
+    .await;
+    assert_eq!(
+        a.confirm_still_remote(&remote, ALL_PAST, 50).await,
+        Vec::<String>::new(),
+        "服务器已经没有副本了还销毁 = 把最后一份字节删掉"
+    );
+    assert_eq!(
+        a.store().attachment_for_state(&sha).1,
+        "absent",
+        "404 是关于远端事实的结论，要记到账上（否则下一轮重问，而那颗「重新上传本机这份」看不见这一格）"
+    );
+    assert_eq!(
+        quarantine_bytes(&a, &sha),
+        blob,
+        "记成 absent 的那一份必须还在隔离区：它是这张图现在唯一的地方"
+    );
+
+    // ③ 记过结论就不再每轮重问（§27/§28 那句"不许空转"在这一格的具体形态）
+    let asked = heads_for_sha(&srv, &sha);
+    assert_eq!(
+        a.confirm_still_remote(&remote, ALL_PAST, 50).await,
+        Vec::<String>::new(),
+        "已判 absent 的行不该再进销毁清单"
+    );
+    assert_eq!(
+        heads_for_sha(&srv, &sha),
+        asked,
+        "同一扇门每 20 秒敲一次 = 空转；结论要落在账上，让候选集自己把它排除掉"
+    );
+
+    // ④ 服务器确认还在：这才轮得到销毁，而且行与隔离区那份字节一起消失
+    srv.inject(notera_test_webdav::Injection::none()).await;
+    a.store()
+        .set_attachment_states(&sha, None, Some("present"))
+        .expect("把账恢复到「隔离完成、服务器有副本」那一格");
+    let verified = a.confirm_still_remote(&remote, ALL_PAST, 50).await;
+    assert_eq!(verified, vec![sha.clone()], "服务器说有 = 这一条该被放行");
+    assert_eq!(a.purge_verified_blobs(&verified), 1, "放行之后要真销毁");
+    assert_eq!(
+        a.store().attachment_for_state(&sha),
+        ("absent".to_string(), "absent".to_string()),
+        "销毁之后账上不该再留着这一行"
+    );
+    assert_eq!(quarantine_bytes(&a, &sha), Vec::<u8>::new());
 }

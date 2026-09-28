@@ -2126,32 +2126,83 @@ impl App {
         true
     }
 
-    /// §8 的 GC 第二步：销毁**过了宽限期且仍然零引用**的那些。
+    /// §8 的 GC 第二步的前半：动手销毁之前，**拿远端把"服务器还有一份"这件事再确认一次**。
+    ///
+    /// 为什么动手之前要再问一次服务器：账上那个 `present` 是**隔离那一刻**写下的结论，而隔离到
+    /// 销毁之间隔着整个宽限期。"这台设备是最后一个还拿着这份字节的地方"是可达的 —— 别的设备
+    /// 可能还在画它（引用在对面那台的账上，而我们这条 SQL 只看得到本机），服务器也可能在中间
+    /// 被运维清过一段。销毁是唯一不可逆的那一步，所以它的凭据必须是**当下的事实**，不能是
+    /// 30 天前的一个信念。
+    /// 三种回答里只有第一种会动手：
+    /// * 有（HEAD 2xx）→ 进销毁清单。
+    /// * 没有（HEAD 404）→ **一条字节都不碰**，把这一行的 `remote_state` 写成 `absent`。这一格
+    ///   从此离开候选集（`gc_ready_to_purge` 只收 `present`），于是既不会 20 秒一轮去重敲同一扇门
+    ///   （§27/§28 不许空转），也把"本机这份是仅存的一份"这件事留在账上 —— 用户那颗
+    ///   「重新上传本机这份」正是靠这一格才有的可点。
+    /// * 问不到（网络错误 / 超时 / 5xx）→ **不下任何结论**，本轮不动这一行，下一轮再问。
+    ///   注意这里与"404 收手"的分工：404 是关于远端事实的结论，问不到不是（§27 那条边界）。
     ///
     /// `cutoff` 由调用方给（见 `quarantine_cutoff`），这样"到期没有"是一件可以核对的事，
-    /// 而不是藏在 SQL 里的一个天数。顺序是先删行、再删字节，理由写在
-    /// `purge_attachment_rows` 的注释里（反过来一旦断电，就留下"账在、字节没了"的死链）。
-    /// 只有 `purge_attachment_rows` 真删掉的那些 sha 才会去动隔离区里的文件。
-    ///
-    /// 返回实际销毁的条数。
-    pub fn purge_released_blobs(&self, cutoff: &str, cap: usize) -> usize {
+    /// 而不是藏在 SQL 里的一个天数。返回**确认还在服务器上的那些 sha**，交给
+    /// [`Self::purge_verified_blobs`] 去销毁 —— "问"与"动手"分成两步，是为了让本地销毁的代价
+    /// 能被单独测（GC 的规模基准要的就是这一格），而不是让销毁长出第二个入口。
+    pub async fn confirm_still_remote(
+        &self,
+        remote: &notera_webdav::WebDavRemote,
+        cutoff: &str,
+        cap: usize,
+    ) -> Vec<String> {
         if cap == 0 {
-            return 0;
+            return Vec::new();
         }
         let ready = match self.inner.store.gc_ready_to_purge(cutoff, cap) {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(%e, "销毁清单没读回来：本轮一条都不删");
-                return 0;
+                return Vec::new();
             }
         };
         if ready.is_empty() {
-            return 0;
+            return Vec::new();
         }
-        let purged = match self.inner.store.purge_attachment_rows(&ready) {
+        // 第二次确认（第一条是引用）。这一轮最多 `cap` 个 HEAD、请求体零字节。
+        let mut verified: Vec<String> = Vec::with_capacity(ready.len());
+        for sha in ready {
+            match remote.has_attachment(&sha).await {
+                Ok(true) => verified.push(sha),
+                Ok(false) => {
+                    tracing::warn!(sha = %sha, "服务器说这份没有了：隔离区那份是仅存的一份，不销毁");
+                    if let Err(e) =
+                        self.inner
+                            .store
+                            .set_attachment_states(&sha, None, Some("absent"))
+                    {
+                        // 结论已经拿到而账没写成：下一轮会再问一次。这里不假装写上了。
+                        tracing::warn!(%e, %sha, "把「服务器没有」记到账上没成功：下一轮还会再问一次");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(%e, sha = %sha, "问不到远端的事实：本轮不销毁这一条");
+                }
+            }
+        }
+        verified
+    }
+
+    /// §8 的 GC 第二步的后半：销毁**已经确认服务器上仍有一份**的那些。
+    ///
+    /// 顺序是先删行、再删字节，理由写在 `purge_attachment_rows` 的注释里（反过来一旦断电，
+    /// 就留下"账在、字节没了"的死链）。只有真删掉的那些 sha 才会去动隔离区里的文件。
+    ///
+    /// 生产里唯一的调用方是 `run_attachment_round`，而它传进来的必须是
+    /// [`Self::confirm_still_remote`] 的返回值。
+    ///
+    /// 返回实际销毁的条数。
+    pub fn purge_verified_blobs(&self, verified: &[String]) -> usize {
+        let purged = match self.inner.store.purge_attachment_rows(verified) {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!(%e, attempted = ready.len(), "销毁附件行没成功：一个字节都不动");
+                tracing::warn!(%e, attempted = verified.len(), "销毁附件行没成功：一个字节都不动");
                 return 0;
             }
         };
@@ -2165,10 +2216,10 @@ impl App {
                 }
             }
         }
-        if purged.len() != ready.len() {
+        if purged.len() != verified.len() {
             tracing::warn!(
                 purged = purged.len(),
-                ready = ready.len(),
+                attempted = verified.len(),
                 "销毁清单里有条没真删掉（宽限期内被重新引用了）"
             );
         }
@@ -2230,7 +2281,10 @@ impl App {
         // 都在"挑活"之前做，于是这一轮挑出来的活已经是回收之后的账。
         self.reclaim_unreferenced_blobs(GC_CAP);
         let gc_cutoff = self.quarantine_cutoff();
-        self.purge_released_blobs(&gc_cutoff, GC_CAP);
+        // 销毁是不可逆的那一步，所以动手前先拿远端确认一次（理由与三种回答的分工写在
+        // `confirm_still_remote` 上）。本轮最多 `GC_CAP` 个 HEAD，请求体零字节。
+        let verified = self.confirm_still_remote(remote, &gc_cutoff, GC_CAP).await;
+        self.purge_verified_blobs(&verified);
 
         for (i, job) in self
             .inner
