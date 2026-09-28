@@ -717,3 +717,146 @@ async fn a_corrupt_quarantine_copy_does_not_silently_defeat_the_retry_button() {
     assert_eq!(ui_code, None, "那张图要能再画出来：{ui_code:?}");
     assert!(len.unwrap_or(0) > 0);
 }
+
+// ———————————————— FT-ATT-34：崩在"挪走了"与"写上账"之间（§20 的 L5 崩溃注入）
+
+/// 子进程模式的开关。崩溃注入靠的是"用同一个测试二进制再起一个进程，让它真的死在那里"
+/// （`notera_core::crash_point` 是 `process::exit`，不是 panic —— 要的就是不跑析构、不收尾）。
+const GC_CHILD: &str = "NOTERA_GC_CRASH_CHILD";
+
+/// 子进程：在父进程已经准备好的那个目录上，只跑回收那一步。
+/// `NOTERA_CRASH_AT=after_quarantine_move` 命中时它会在"字节已挪进隔离区、账还没写"那一瞬消失。
+#[test]
+fn child_reclaims_once() {
+    let Ok(spec) = std::env::var(GC_CHILD) else {
+        return; // 不是子进程模式：这条什么都不做（父进程靠 spawn 显式启用）
+    };
+    let Some((dir, url)) = spec.split_once('|') else {
+        return;
+    };
+    let app = boot(Path::new(dir), url);
+    let n = app.reclaim_unreferenced_blobs(50);
+    // 能从这一行走出去就说明注入点压根没接上（没东西可挪，或者 crash_point 忘了放）
+    eprintln!("CHILD_RECLAIM 走完了整次回收（这是错的）：认领 {n} 条");
+}
+
+/// GC 是本仓唯一一处"把用户的字节从正式位置搬走"的代码，而搬运是**两步**：先挪文件，后写账。
+/// 断电落在这两步中间的那一格，形状是"账上写着 available，而正式位置空了"—— 也就是本文件
+/// 开头那条"先挪后写"的顺序所选择的**残留**。这一条验的就是那个残留真的能自己收回来：
+/// * 字节必须还在盘上（只是换了地方），绝不能因为"崩了一下"就少一份；
+/// * 重启后一轮附件轮要把这一行纠正回来，而纠正的依据是既有的机器（磁盘体检把假账降级 →
+///   下载那一轮**先看隔离区** → 本地挪回），**不是**新写的一条恢复路径；
+/// * 补回来之后账回 `available`，再一轮 GC 才把它正常收进隔离区并写账 —— 也就是说系统会
+///   **收敛到设计里的那个状态**，而不是在"补/收"之间来回摆；
+/// * 全程为该 sha 发出去的请求数不变（本机就有那份字节）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_crash_between_the_move_and_the_ledger_heals_itself_without_one_request() {
+    use std::process::Command;
+
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..4_800).map(|i| (i % 37) as u8).collect();
+    let dir = Tmp::new("34-a");
+    let (a, sha) = seed_uploaded(dir.path(), &url, &blob).await;
+    let nid = a
+        .store()
+        .list_notes(&notera_store::NoteQuery {
+            folder: None,
+            trash: false,
+            limit: 50,
+            offset: 0,
+        })
+        .unwrap()
+        .into_iter()
+        .find(|n| n.title.contains("GC 目标笔记"))
+        .map(|n| n.id.clone())
+        .expect("前置：那条带图笔记在");
+    a.store().purge_note(&nid).expect("永久删除，让引用归零");
+    assert!(
+        a.store()
+            .gc_quarantine_candidates(500)
+            .unwrap()
+            .contains(&sha),
+        "前置：这一行要真是 GC 的候选，否则子进程根本走不到注入点"
+    );
+    assert_eq!(official_bytes(&a, &sha), blob, "前置：字节还在正式位置");
+    // 让出这个库：子进程要在同一个目录上开它自己的核心
+    drop(a);
+
+    let out = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "child_reclaims_once",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(GC_CHILD, format!("{}|{}", dir.path().display(), url))
+        .env("NOTERA_CRASH_AT", "after_quarantine_move")
+        .env("NOTERA_DEV_WEBDAV_SECRET", SECRET)
+        .output()
+        .expect("起子进程");
+    assert_eq!(
+        out.status.code(),
+        Some(notera_core::CRASH_EXIT_CODE),
+        "注入点没有让进程死在那里（退出码 {:?}）—— 那这一格测的就不是崩溃：stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // 崩完的形状：字节在隔离区、正式位置空、而账上还写着 available —— 就是那个窗口本身
+    let a = boot(dir.path(), &url);
+    assert_eq!(
+        quarantine_bytes(&a, &sha),
+        blob,
+        "崩在挪与写之间：那份字节必须整份还在盘上，只是在隔离区"
+    );
+    assert_eq!(
+        official_bytes(&a, &sha),
+        Vec::<u8>::new(),
+        "正式位置该是空的（文件确实被挪走了，不是复制）"
+    );
+    assert_eq!(
+        ledger(&a, &sha).0,
+        "available",
+        "账还没写：这一格就是那条假账，判据要打在它上面"
+    );
+    assert!(
+        ledger(&a, &sha).1.is_none(),
+        "隔离标记也还没落（写账那一步没跑到）"
+    );
+
+    let before = gets_for_sha(&srv, &sha);
+    let remote = a.remote_for_sync().await.unwrap().expect("A 有适配器");
+    let round = a.run_attachment_round(&remote).await;
+    assert!(
+        round.1 >= 1,
+        "重启后的第一轮要把这一行按「本机补回一份」记账：{round:?}"
+    );
+    assert_eq!(official_bytes(&a, &sha), blob, "字节要自己回到正式位置");
+    assert_eq!(
+        quarantine_bytes(&a, &sha),
+        Vec::<u8>::new(),
+        "挪回来了就不该在隔离区留第二份"
+    );
+    assert_eq!(ledger(&a, &sha).0, "available", "假账纠正回来了");
+    assert!(ledger(&a, &sha).1.is_none());
+    assert_eq!(
+        gets_for_sha(&srv, &sha),
+        before,
+        "本机隔离区里就有这一份，自愈却去服务器要了一遍：{round:?}"
+    );
+
+    // 收敛，而不是来回摆：再跑一次回收，它该正常认领并**把账写上**（这次没有断电）
+    assert_eq!(
+        a.reclaim_unreferenced_blobs(50),
+        1,
+        "补回来之后这一行仍是零引用，下一轮 GC 该把它收进隔离区并写账"
+    );
+    assert_eq!(ledger(&a, &sha).0, "missing", "写上了账：设计里的那个状态");
+    assert!(ledger(&a, &sha).1.is_some(), "隔离标记这次落了");
+    assert_eq!(
+        a.reclaim_unreferenced_blobs(50),
+        0,
+        "已认领过的行不该被再认领一次（否则就是补/收来回摆）"
+    );
+}

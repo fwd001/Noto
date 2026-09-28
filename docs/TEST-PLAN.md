@@ -591,7 +591,8 @@
 | CI-CRASH-06/07 | `before_attachment_upload` / `after_attachment_upload` | 字节在不在服务器与账上状态一致；不重复传也不谎报已传 | L4 |
 | CI-CRASH-08/09 | `before_manifest_commit` / `after_manifest_commit` | 公告失败 → 改动保持脏；**公告成功但本地未结清 → 下一轮必须把它结清**（今天就是这里坏过：P7 判 NoOp 后再没人回头，"待同步"计数永久挂着） | L3 |
 | CI-CRASH-10 | `after_segment_write`（压实：分段已落盘、索引尚未提交） | 大库夹具（240 条 > `WINDOW_MAX`）真死一次 → 重启同一座库 → 跑到结清 → 另一台设备追平。**必须成立**：崩完之后索引引用的每个分段都在盘上（INV-09）、窗口没超过上限、本机笔记数一条不少、两台设备标题+内容哈希逐条一致、待办归零。这一格由 `tests/compaction_crash.rs` 覆盖，**不在 9 点小库矩阵里**（那套夹具只写 1 条笔记，走不到压实）；两边的名单由 `CRASH_POINTS_NEED_LARGE_LIBRARY` 做减法拼回全表，`crash_point_lists_partition_registry` 保证"新加了点却两边都没盖"直接红。变异自证：摘掉注入点 → 报"没让进程死在那里"；让分段不落盘就换索引 → 报"索引引用了不存在的分段 seg-0000" | L4 |
-| CI-CRASH-ALL | 小库矩阵 9 个点连跑（另有 1 个大库点见 CI-CRASH-10） | 崩完重启后两台设备笔记**逐条一致**（不多不少）、`dirty_notes=0`、`outbox_pending=0`、FTS 行数 == 笔记数（I5） | L3 |
+| CI-CRASH-11 | `after_quarantine_move`（GC：**字节已挪进隔离区、账还没写**那一瞬） | 需要**零引用夹具**（那条笔记得已被永久删除，否则 GC 不认领 —— 与 `after_segment_write` 同一类"点名了但走不到"的坑，所以它单独一张表跑）。真死一次之后：字节整份还在盘上（只是换了位置）、账上仍是那条假账 `available`；重启后**一轮附件轮自己收回来**（磁盘体检把假账降级 → 下载那一轮先看隔离区 → 本地挪回，**为该 sha 的请求数不变**），再一轮 GC 才把它正常认领并写上账 —— 也就是**收敛到设计里的状态，而不是在"补/收"之间来回摆**。门禁 `attachment_gc.rs::a_crash_between_the_move_and_the_ledger_heals_itself_without_one_request`；变异自证 **M43** 摘掉那句 `crash_point` → 红在"注入点没有让进程死在那里（退出码 Some(0)）"，**M41** 短路掉下载轮的本地恢复 → 红在"本机隔离区里就有这一份，自愈却去服务器要了一遍" | L5 |
+| CI-CRASH-ALL | 小库矩阵 8 个点连跑（`after_segment_write` 要大库夹具、`after_quarantine_move` 要零引用夹具，各自单独跑，见 CI-CRASH-10/11） | 崩完重启后两台设备笔记**逐条一致**（不多不少）、`dirty_notes=0`、`outbox_pending=0`、FTS 行数 == 笔记数（I5） | L3 |
 
 门禁自身的反空转证明：把 P7 的结清分支改回"永远跳过"，CI-CRASH-09 立刻红并打出
 卡住的那一行（`outbox pending=1；脏笔记 [rev=3 sync_rev=0]；待办行 [note rev=3 op=Upsert]`）。

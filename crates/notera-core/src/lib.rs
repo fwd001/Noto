@@ -435,7 +435,17 @@ pub const CRASH_POINTS: &[&str] = &[
     "before_manifest_commit",
     "after_manifest_commit",
     "after_segment_write",
+    "after_quarantine_move",
 ];
+
+/// 需要**零引用夹具**才走得到的注入点：GC 只在"没有任何笔记引用 + 服务器已有副本"时才挪字节，
+/// 而 9 点崩溃矩阵的子进程夹具刚 `attach_blob` 完、那条笔记还活着 ⇒ 引用为 1，
+/// `after_quarantine_move` 永远不会被经过。把它放进大库那份名单也能"混过去"（矩阵会跳过它），
+/// 但那是对的理由不对：**这一格要的是"崩在挪与写账之间"，不是"崩在写完账之后"**。
+///
+/// 名单的理由与上面那条相同：矩阵按 `CRASH_POINTS` 减去这两份名单遍历，
+/// `attachment_gc` 按 `CRASH_POINTS_NEED_GC` 遍历，"新点没人覆盖"就会红而不是静静少测一格。
+pub const CRASH_POINTS_NEED_GC: &[&str] = &["after_quarantine_move"];
 
 /// 需要**大库夹具**才走得到的注入点：窗口超过 `WINDOW_MAX`(200) 才会触发清单压实，
 /// 而 9 点崩溃矩阵的子进程夹具只写 1 条笔记，永远碰不到这一步。
@@ -493,7 +503,16 @@ mod crash_tests {
             1,
             "大库专属点应当逐个有据可查"
         );
-        assert!(CRASH_POINTS.len() > CRASH_POINTS_NEED_LARGE_LIBRARY.len());
+        for extra in CRASH_POINTS_NEED_GC {
+            assert!(
+                CRASH_POINTS.contains(extra),
+                "{extra} 未登记在 CRASH_POINTS"
+            );
+        }
+        assert_eq!(CRASH_POINTS_NEED_GC.len(), 1, "GC 专属点应当逐个有据可查");
+        assert!(
+            CRASH_POINTS.len() > CRASH_POINTS_NEED_LARGE_LIBRARY.len() + CRASH_POINTS_NEED_GC.len()
+        );
     }
 
     #[test]

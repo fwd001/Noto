@@ -2017,6 +2017,10 @@ impl App {
             }
             moved.push(sha);
         }
+        // 崩溃注入点就落在这两者之间：这一格是整个 GC 唯一"字节已经离开正式位置、
+        // 而账还不知道"的窗口。断电在这一瞬的后果由既有的机器自己收（磁盘体检降级 →
+        // 下载那一轮先看隔离区 → 本地挪回，零请求），它是一条门禁（TEST-PLAN CI-CRASH-11），不是推理。
+        notera_core::crash_point("after_quarantine_move");
         let marked = match self.inner.store.mark_attachments_quarantined(&moved) {
             Ok(n) => n,
             Err(e) => {
