@@ -61,6 +61,20 @@ fn boot(dir: &Path, url: &str) -> App {
 /// A 建一条带图的笔记、把图和正文都落好账，**但还没跑附件轮**。返回 `(App, sha)`：
 /// App 必须交回调用方，否则"上传前"这一半没有设备可用。
 async fn seed_ready_to_upload(dir: &Path, url: &str, blob: &[u8]) -> (App, String) {
+    seed_ready_to_upload_declaring(dir, url, blob, blob.len()).await
+}
+
+/// 同上，但**正文图片块上声明的 `size`** 由调用方给（可以与真实字节数不等）。
+///
+/// 要造"台账尺寸与盘不符"就得走这条路而不是直接改库：块属性是每台设备各自写上去的，
+/// 而 `upsert_attachment_row` 的冲突规则是 `MAX(旧, 新)` —— 只许涨不许落，所以一个偏大
+/// 的声明值会稳定留在台账里，直到磁盘体检把它纠正（或直接改到那列就是作弊）。
+async fn seed_ready_to_upload_declaring(
+    dir: &Path,
+    url: &str,
+    blob: &[u8],
+    declared: usize,
+) -> (App, String) {
     let app = boot(dir, url);
     app.sync_once().await.expect("A 入伙");
     let folder = app.default_folder_id().unwrap();
@@ -79,7 +93,7 @@ async fn seed_ready_to_upload(dir: &Path, url: &str, blob: &[u8]) -> (App, Strin
                 { "id": "blk000001", "type": "paragraph", "content": [{ "text": "有一张图的笔记" }] },
                 { "id": "blk000002", "type": "image", "attrs": {
                     "sha256": &sha, "ref": &sha, "role": "inline", "pending": false,
-                    "size": blob.len(), "mediaType": "image/png", "name": "shot.png" } },
+                    "size": declared, "mediaType": "image/png", "name": "shot.png" } },
             ] }),
             head.rev,
         )
@@ -90,7 +104,12 @@ async fn seed_ready_to_upload(dir: &Path, url: &str, blob: &[u8]) -> (App, Strin
 
 /// A 建一条带图的笔记并真的把图传上去，返回 sha。
 async fn seed_source(dir: &Path, url: &str, blob: &[u8]) -> String {
-    let (app, sha) = seed_ready_to_upload(dir, url, blob).await;
+    seed_source_declaring(dir, url, blob, blob.len()).await
+}
+
+/// 同上，但正文声明的尺寸 = `declared`。
+async fn seed_source_declaring(dir: &Path, url: &str, blob: &[u8], declared: usize) -> String {
+    let (app, sha) = seed_ready_to_upload_declaring(dir, url, blob, declared).await;
     let remote = app.remote_for_sync().await.unwrap().expect("A 有适配器");
     let round = app.run_attachment_round(&remote).await;
     assert_eq!(round.0, 1, "源设备要把这张图传上去：{round:?}");
@@ -299,6 +318,125 @@ async fn a_truncated_local_blob_is_replaced_not_reused() {
         b2.store().attachment_for_state(&sha),
         ("available".into(), "present".into()),
         "补齐之后两半状态都要落对"
+    );
+    srv.stop().await;
+}
+
+// ———————————————— 登记尺寸与盘不符：体检复算出来的事实不许丢掉
+
+/// 台账里这条附件的登记尺寸。读的是**体检自己用的那条生产查询**
+/// （`attachment_repair_candidates`），不为测试新开一个只有测试在读的口子。
+fn ledger_size(app: &App, sha: &str) -> i64 {
+    app.store()
+        .attachment_repair_candidates()
+        .expect("体检候选查询要读得回来")
+        .into_iter()
+        .find(|(s, _)| s == sha)
+        .map(|(_, n)| n)
+        .expect("这条附件该还留在体检候选里（available ∧ present）")
+}
+
+/// 服务器收到过几条打到这个 sha 上的 GET（下载请求的路径就是内容寻址名）。
+/// 用它把"完好的一份字节没被重下一遍"变成可数的证据，而不是推理。
+fn gets_for_sha(srv: &TestServer, sha: &str) -> usize {
+    srv.request_log()
+        .iter()
+        .filter(|r| r.method == "GET" && r.path.contains(sha))
+        .count()
+}
+
+/// `attachments.size` 是"各台设备报上来的最大值"，不是"盘上那份字节的长度"：块属性由
+/// 客户端各自写，冲突规则又只许涨不许落，于是**账上 13096 / 盘上 9000** 这样一行是会
+/// 出现的，而且登记那条路永远不会纠正它。
+///
+/// 唯一能纠正它的是磁盘体检 —— 因为它为了判"是不是同一份字节"已经把整份读进内存复算过
+/// sha256，**哈希相符就意味着盘上这个长度就是真实尺寸**。修之前那条分支只记一句 debug
+/// 就 `continue`，把刚算出来的事实原样丢掉，代价是这一行在此后每一轮附件轮（常驻循环
+/// 20 s 一轮）里都被整份读+哈希一遍（单条上界 32 MiB），而那个偏大的错误尺寸还会继续
+/// 排进上传预算（`attachment_jobs` 按 `size` 排序）。
+///
+/// 断言打在三处：尺寸被一次改对、快路径判据（`stat` 长度 == 登记值）真的成立、以及
+/// 改对的代价没有碰那份字节。**没有**声称测过 IO 次数 —— 工装不计数，能数的只有
+/// "有没有多出一次 GET"和"判据落在哪条 `if` 上"。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hash_verified_row_has_its_size_corrected_once_and_then_stops_being_work() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..9000).map(|i| (i % 131) as u8).collect();
+    let declared = blob.len() + 4096;
+
+    let a_dir = Tmp::new("sizefix-a");
+    let sha = seed_source_declaring(a_dir.path(), &url, &blob, declared).await;
+    let b_dir = Tmp::new("sizefix-b");
+    let b = drain_target(b_dir.path(), &url, &blob, &sha).await;
+
+    // 前置：B 账上那个偏大的声明值是从正文里派生出来的，盘上却是整份真实字节。
+    assert_eq!(
+        ledger_size(&b, &sha),
+        declared as i64,
+        "前置不成立：正文声明的尺寸没进台账，这条测试就没在测它想测的那格"
+    );
+    assert_eq!(
+        blob_on_disk(&b, &sha),
+        blob,
+        "前置：本机盘上是完好的一份字节"
+    );
+
+    drop(b);
+    let b2 = boot(b_dir.path(), &url);
+    let remote = b2.remote_for_sync().await.unwrap().expect("有适配器");
+    let gets_before = gets_for_sha(&srv, &sha);
+    let round = b2.run_attachment_round(&remote).await;
+    assert_eq!(
+        round,
+        (0, 0, 0),
+        "一份哈希对得上的好文件被体检当成活干了：{round:?}"
+    );
+    // ① 尺寸一次改对，改成的正是盘上长度。
+    assert_eq!(
+        ledger_size(&b2, &sha),
+        blob.len() as i64,
+        "体检复算过 sha256 却没回填真实尺寸 —— 这一行会每轮被整份重读重哈希"
+    );
+    // ② 快路径的判据要**真的**成立（`demote_lost_local_blobs` 里那条
+    //    `size > 0 && on_disk == size`），否则"下一轮只 stat"只是好听话。
+    assert!(
+        std::fs::metadata(b2.store().blob_path(&sha))
+            .map(|m| m.len())
+            .unwrap_or(0)
+            == ledger_size(&b2, &sha) as u64
+            && ledger_size(&b2, &sha) > 0,
+        "登记值与盘上长度还是对不上：下一轮走的仍是慢路"
+    );
+    // ③ 改尺寸的代价不许碰到那份字节，也不许改状态。
+    assert_eq!(blob_on_disk(&b2, &sha), blob, "回填登记尺寸顺手把文件改了");
+    assert!(
+        parked_copies(&b2, &sha).is_empty(),
+        "一份哈希对得上的文件被挪成 .corrupt —— 那是在销毁好字节"
+    );
+    assert_eq!(
+        b2.store().attachment_for_state(&sha),
+        ("available".into(), "present".into()),
+        "回填尺寸把两半状态之一带跑了"
+    );
+    assert_eq!(
+        gets_for_sha(&srv, &sha),
+        gets_before,
+        "完好的一份字节被体检重下了一遍"
+    );
+
+    // ④ 稳定：再来一轮既不该有活，也不该把尺寸漂回去。
+    let remote2 = b2.remote_for_sync().await.unwrap().expect("有适配器");
+    let again = b2.run_attachment_round(&remote2).await;
+    assert_eq!(
+        again,
+        (0, 0, 0),
+        "纠正过尺寸的附件每轮又被当成活：体检没把它当已完成（round={again:?}）"
+    );
+    assert_eq!(
+        ledger_size(&b2, &sha),
+        blob.len() as i64,
+        "第二轮登记尺寸又漂回偏大值"
     );
     srv.stop().await;
 }

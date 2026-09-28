@@ -797,6 +797,28 @@ impl Store {
         })
     }
 
+    /// 回填**实测**尺寸：磁盘体检已经把整份字节读完并复算过 sha256，哈希相符就意味着
+    /// "盘上这个长度"就是这份 blob 的真实尺寸。
+    ///
+    /// 这是唯一允许把 `size` **往小**改的一路，而且是必需的：`upsert_attachment_row` 的
+    /// 冲突规则是 `MAX(attachments.size, excluded.size)` —— 一个"不知道"（0）不许冲掉已知值，
+    /// 于是正文里偏大的声明值永远纠不掉。不纠的代价不是显示错一个数，而是那一行在此后的
+    /// **每一轮**附件轮里都被整份读进内存再哈希一遍（单条上界 32 MiB），偏大的尺寸还会
+    /// 继续排进上传预算（`attachment_jobs` 按 `size` 排序）。
+    pub fn set_attachment_size(&self, sha256: &str, size: i64) -> Result<(), StoreError> {
+        let sha = sha256.to_string();
+        self.write_tx(|tx, _now| {
+            let n = tx.execute(
+                "UPDATE attachments SET size = ?2 WHERE sha256 = ?1",
+                params![sha, size],
+            )?;
+            if n == 0 {
+                return Err(StoreError::Constraint(format!("附件不存在: {sha}")));
+            }
+            Ok(())
+        })
+    }
+
     /// 附件的下载待办（`local_state='missing'` 且远端 `present` → 入队，UI 显示占位）。
     pub fn enqueue_download(&self, sha256: &str) -> Result<(), StoreError> {
         let sha = sha256.to_string();

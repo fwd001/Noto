@@ -11,14 +11,14 @@
 
 | 门禁 | 结果 | 出处 |
 |---|---|---|
-| `cargo test --workspace` | 534 通过 / 0 失败 / 0 ignored（64 个测试二进制）—— 2026-09-27 §27 附件故障注入那批 | 本机 |
+| `cargo test --workspace` | **535 通过 / 0 失败 / 1 ignored**（64 个测试二进制）—— 2026-09-28 §48 缺口 G3（体检回填登记尺寸）那批。那 1 条 `#[ignore]` 是 P11 lane 的留档夹具 `conflict_payload_e2e.rs:519`，由 `scripts/verify-p11-panel.mjs` 显式跑；此前这里写的"0 ignored"与实测不符，已更正 | 本机 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 / 0 | 本机（CI-CD 原样命令） |
 | `cargo fmt --all --check` | 退出码 0（`rustfmt` 组件已装；全仓已格式化） | 本机 |
 | `node scripts/arch-check.mjs` | 28/28（第 26 = 版本单源，第 27 = 编译期嵌入的文件要进版本库，第 28 = 「或」断言必须写理由） | 本机 |
 | 版本单源 | 权威 = 根 Cargo.toml；`check-versions` 一致 | 本机 |
 | `node scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 | 本机 |
-| `node scripts/verify-app.mjs` | 35/35（真 Rust 核心，非 mock） | 本机 |
-| `node scripts/verify-tauri-window.mjs` | 8/8（真 `invoke`，控制台 0 error） | 本机 |
+| `node scripts/verify-app.mjs` | **36/36**（真 Rust 核心，非 mock）—— 2026-09-27 那批实测；本表此前写的 35/35 是更早一批的数，已按 CHANGELOG/PRODUCTION-READINESS 的实测对齐。G3 这批没动界面与命令面，**未重跑** | 本机 |
+| `node scripts/verify-tauri-window.mjs` | debug **9/9** 且 release **9/9**（真 `invoke`）—— 同为上一批实测；本表此前写的 8/8 是更早的数。这批**未重跑** | 本机 |
 | `cargo fmt --check` | **已解除**（组件已装）：第一次跑就发现 92 个文件漂移，已纯格式化提交并复验 487/0 + clippy 0/0 | 本机 |
 
 ## 分领域状态

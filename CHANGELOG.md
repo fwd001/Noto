@@ -10,7 +10,7 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 534 通过 / 0 失败 / 0 ignored（64 个测试二进制） |
+| `cargo test --workspace` | 535 通过 / 0 失败 / **1 ignored**（64 个测试二进制。那一条 ignored 是 `conflict_payload_e2e.rs:519` 的**留档夹具**，由 `scripts/verify-p11-panel.mjs` 显式调用生成两台设备的现场 —— 它是刻意 `#[ignore]` 的，不是被跳过的测试。此前台账写的"0 ignored"是错的，2026-09-28 按实测更正） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
 | L5 崩溃注入 `--test crash_recovery` | 小库矩阵 9 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零 |
 | L5 压实崩溃注入 `--test compaction_crash` | 1/1（240 条大库真死在 `after_segment_write`，索引不引用不存在的分段） |
@@ -23,7 +23,7 @@
 | P11 面板 `scripts/verify-p11-panel.mjs` | 11/11（真浏览器读**两台真设备留在盘上的现场**：右栏是服务器那一版、无载荷时说的是"没取回来"、冲突笔记留在正常列表且 ⚠ 只落在冲突行上；截图证据进 `docs/evidence/`） |
 | 性能基线 `scripts/verify-perf.mjs`（PERF-01/10/13） | 4/4（**空库预算口径已按用户决定定为 ≤1000 ms 含 WebView2**）：重编 release 壳后实测 空库最好 866 ms（首遍 1528）、5000 条 984 ms、滚动 434 帧 p95 17 ms、RSS 31.9/46.6→47.2 MiB；20000 条那一档 1322 ms。未采：100 附件规模、30 min 泄漏趋势、Android/macOS |
 | Windows 安装器 `pnpm tauri build --target x86_64-pc-windows-gnu --bundles nsis` | **`.exe` 产出 4.46 MiB**（`Notera_0.0.13_x64-setup.exe`）。出货产物侧另验通一件事：拿包内那个 `release/notera-desktop.exe` 起来后 `17323/health` **连不上** —— "dev 桥只关在 debug 构建里"在真正的 release 二进制上成立（不是只看 feature 门）。`--bundles msi` 仍 BLOCKED（WiX `LGHT0102` 的 loc 变量 + 我把自己 shell 的 cwd 留在了临时目录里造成文件锁），装移动作与代码签名未验。两个只露在真跑里的坑：`tauri build` 默认走 MSVC（被 Git Bash 的 coreutils `link` 顶掉），以及 JS/Rust 的 tauri 次版本错配会直接拒绝打包 —— 两侧已对到 2.12.0 |
-| §27 附件故障注入 `--test attachment_faults` | 11/11（本机 blob 丢了自愈、截断换整份、服务器同长度坏字节被拒、下载被掐不 promote、半上传不落正式对象、远端 404 收手不空转、**只有附件端点超时**时文本轮并发验穿且附件轮在 45 s 预算内自己放手、**MOVE 被 412 拒的两端都咬住**、坏字节**只挪开不销毁**、同长度位腐在**读侧**被拒而不会被画进界面）—— 十一条各配变异自证 M1..M12，见下面四条 commit 级的说明 |
+| §27 附件故障注入 `--test attachment_faults` | **12/12**（本机 blob 丢了自愈、截断换整份、服务器同长度坏字节被拒、下载被掐不 promote、半上传不落正式对象、远端 404 收手不空转、**只有附件端点超时**时文本轮并发验穿且附件轮在 45 s 预算内自己放手、**MOVE 被 412 拒的两端都咬住**、坏字节**只挪开不销毁**、同长度位腐在**读侧**被拒而不会被画进界面、**体检复算过哈希就把登记尺寸改对并且一次改对**）—— 十二条各配变异自证 M1..M19，见下面 commit 级的说明 |
 | 前端 | **200 通过（21 文件）+ `vue-tsc --noEmit` 0 错**（2026-09-27 与 §27 那批同批重跑；本轮没动前端，跑它是为了确认"没受影响"这句话也是量出来的）。`run build` 的产物体积那一档**本轮未重测**，仍挂着上一批的 216.65 KB → gzip 74.22 KB |
 | `scripts/arch-check.mjs` | **28/28**（第 26 条 = 版本单源，第 27 条 = 编译期嵌入的文件要进版本库，第 28 条 = 新增：测试里的「或」断言必须就地写理由 —— 它抓的就是我这次写出的那条恒真断言） |
 | 版本单源 | 一致（权威 + 三处派生 + **Cargo.lock**）；三处变异（派生位置偷改、crate 自己写死版本、**lock 慢一个版本**）都能打红 | `node scripts/check-versions.mjs` |
@@ -173,6 +173,14 @@
 - **导出选择器"列表非空"被当成"列表最新"**：`toggleScoped` 原来只在 `folders.flat.length === 0` 时才重拉，于是本次会话里新建/同步带回的文件夹永远补不进来。改成每次打开开关都重拉
 
 ### 修复（都是会静默丢数据或静默错的那些，不是整理）
+
+- **磁盘体检把算出来的事实丢掉了：登记尺寸纠正一次就该停（§48 缺口清单里的 G3）**。那条分支原本在"长度与登记不符但 sha256 相符"时只记一句 debug 就 `continue` —— 于是这一行在此后**每一轮**附件轮（常驻循环 20 s）里都被整份读进内存再复算一次哈希（单条上界 32 MiB），而那个偏大的登记值还会继续排进上传预算（`attachment_jobs` 按 `size` 排序）。不是坏数据，是常态浪费 + 一个已经知道却没人写回去的事实。
+  - **为什么只有体检能纠**：`attachments.size` 实际是"各台设备报上来的最大值" —— 块属性由客户端各自写，`upsert_attachment_row` 的冲突规则是 `MAX(旧, 新)`（一个"不知道"（0）不许冲掉已知值），**只许涨不许落**。所以"账上 13096 / 盘上 9000"这样一行，登记那条路永远纠不掉。
+  - **修法**：哈希相符就意味着"盘上这个长度"是实测真值，新增 `Store::set_attachment_size` 回填它。这是全仓唯一允许把 `size` **往小**改的一路，只改那一列 —— 字节一个不碰、两半状态不动、不写 `verified_at`（那一列的语义仍留给"整份内容哈希核对通过的时刻"这个更早的定义：这次确实核对过了，但把 `verified_at` 的写法一起改要另立工作项，不混在这次）。顺带被纠正的还有 `stats().attachment_bytes`（它就是这个 SUM），也就是设置页那个"附件占用字节"以前会把一份 9000 字节的图报成 13096。
+  - **门禁 FT-ATT-20**（`attachment_faults.rs::a_hash_verified_row_has_its_size_corrected_once_and_then_stops_being_work`）：让**源设备在正文的图片块上声明一个偏大的尺寸**，B 下载完之后连跑两轮附件轮。断言四段：① 一轮后 `attachment_repair_candidates()` 里这条的 size == 盘上长度；② 快路径判据（`stat` 长度 == 登记值且 > 0）**真的成立** —— 否则"下一轮只 stat"就是一句好听话；③ 改尺寸的代价没碰字节（逐字节相同、没有 `.corrupt` 现场、状态仍是 `available`/`present`）；④ 针对该 sha 的 GET 数没有增加（完好的一份字节不许被重下），第二轮仍是 `(0,0,0)` 且尺寸不漂回去。改前实测红在 `left: 13096 / right: 9000`（前置成立、`round=(0,0,0)` 也成立，唯独尺寸永远不改）；变异自证 **M19** 把回填的值换成"登记里那个旧值"（看着像修其实没修）→ 同一条红在同一个断言。**没有声称测过 IO 次数**：工装不计数，能数的只有 GET 条数与判据落在哪条 `if` 上（§40 的口径）。
+  - 夹具那边把 `seed_ready_to_upload` / `seed_source` 各拆出一个 `*_declaring(尺寸)` 版本，这样"两台设备对同一份 blob 的登记分歧"是**从产品入口造出来的**，不是手改数据库那一列（改了就是把 bug 搬进测试）。
+  - 文档同批：DATA-MODEL §8 那句"相符就以哈希为准不动它"改成"回填盘上实测长度"并写清登记那条路为什么纠不掉，成本句补上"慢路不是常态循环"；TEST-PLAN 补 FT-ATT-20 与 §27 台账里那一行；FINAL-REVIEW §3.3 的 G3 标为已解除（并把"没测 IO 次数"这句留在解除条件里，免得下次当成已量化）。
+  - 复验（2026-09-28 本机 GNU 工具链）：`cargo test --workspace` **535 通过 / 0 失败 / 1 ignored**（64 个测试二进制）。那 1 条 `#[ignore]` 是 P11 lane 的留档夹具 `conflict_payload_e2e.rs:519`（由 `scripts/verify-p11-panel.mjs` 显式跑），不是被跳过的测试 —— **顺带纠正三份台账里一直写的"0 ignored"**，那句话此前就是错的。其余：`cargo fmt --all --check` 干净、`clippy --workspace --all-targets -- -D warnings` 0/0、`node scripts/arch-check.mjs` 28/28、`check-versions` 一致、`--test attachment_faults` **12/12**、前端 21 个测试文件全绿（这批没动前端，跑它是为了确认"没受影响"这句话也是量出来的）。两条浏览器 lane（`verify-app` / `verify-blackbox`）**本批未重跑** —— 界面与命令面都没改，重跑要另起 dev 桥，留到下一次动那里的批次。版本 0.0.17 → **0.0.18**（改了产品行为：后台会把台账里那个错尺寸写回，设置页的"附件占用字节"随之变准）。
 
 - **一次独立代码审查改掉的三处（都在今天那批附件自愈代码上）**。审查报的 Critical 说"体检会把独家字节降级成待下载、然后被 404 吸干" —— 那一条**机制不成立**（`attach_blob` 与 `restore_blob` 写的都是 `remote_state='unknown'`，而体检只扫 `present`；它引作证据的那处测试两行之前刚显式把远端设成 `present`），已按事实驳回。但它顺带指到的三处是真的：
   - **哈希不符时不该删，该挪开**。原来是 `remove_file` 之后降级重下：万一 `remote_state='present'` 本身是假的（旧版本那个 412 分支就记出过悬空 present，见上一条 commit），这台机器上最后一份现场就跟着没了。现在改名成 `<sha>.corrupt`（那里已有文件就带毫秒戳）留在原地，正式位置腾出来让 `ingest_blob` 写得进新的；等重下拿到**哈希对得上**的替代，下载那条分支才把它清掉 —— **销毁要有凭据**。挪不动就不降级（否则下一轮读到同一份坏文件白转）。新增 FT-ATT-12c 钉这条，变异自证 M10 把它换回 `remove_file` → 红在"体检把本机最后一份坏字节销毁了"。
