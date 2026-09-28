@@ -197,11 +197,11 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | **千库规模**（SY-INT-14，12.8 s） | 1/1（1000 条：公告/追平轮数有界、索引只装引用 ≤8 KiB、逐条比对**读满**、空轮 1 请求 + 304 + 0 字节、默认本全网络只有一条） | `cargo test -p notera-host --test big_library` |
 | 链路抖动收敛（§53 主循环） | 1/1（六轮各坏一次：停监听 / 建连就掐 / 读清单 500；恢复后本机账目归零，两台设备标题+内容哈希逐条一致） | `cargo test -p notera-host --test reconnect` |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` |
-| 浏览器端到端 | 35/35（真 Rust 核心，非 mock；含"设置页存服务器 → 能力块读回"、"库统计五行全是数字"、"删除 → 回收站 → 恢复 → 永久删除"、"勾一个文件夹 → 包就只有那一棵子树"、"侧栏建子文件夹 → '移动到'选得到"五条真实往返） | `notera-cli serve` + `pnpm dev` + `node scripts/verify-app.mjs` |
+| 浏览器端到端 | **36/36**（2026-09-27 实测；本表此前写 35/35 是没跟着设置页那条 `.enex` 步骤改）—— 真 Rust 核心，非 mock；含"设置页存服务器 → 能力块读回"、"库统计五行全是数字"、"删除 → 回收站 → 恢复 → 永久删除"、"勾一个文件夹 → 包就只有那一棵子树"、"侧栏建子文件夹 → '移动到'选得到"、"设置页真点一次 .enex 导入 → 报告与 notices 读得到" | `notera-cli serve` + `pnpm dev` + `node scripts/verify-app.mjs` |
 | L5 纯黑盒 UAT | 10/10（只用点击/输入/键盘/文件选择器/刷新，零 `/cmd/*`、零读库；含"插图后屏幕上真的解出像素、刷新后仍在"） | `node scripts/verify-blackbox.mjs` |
-| L4-L5 冲突面板（P11）| 10/10（真浏览器读**两台真设备留在盘上的现场**：右栏渲染的是服务器那一版而不是本机那份的复制；载荷缺失时屏幕上说的是"没能取回那一版"） | `node scripts/verify-p11-panel.mjs`（自己跑留档夹具 + 起桥；需 vite dev 在 5173） |
-| L5 性能基线 | 3/4（真实 release 壳 + 预先灌好的库：冷启动 907/1022 ms、滚动 p95 17 ms、RSS 31.6→46.7 MiB；空库那档超 800 ms 暂定预算 → 红了等 §51 定口径） | `node scripts/verify-perf.mjs`（`NOTES=` 换规模，`REPS=` 换遍数） |
-| 真窗口 | debug 8/8 **且 release 8/8**（开发服务器关闭 → 资源走内嵌 `frontendDist`，页面 `http://tauri.localhost/`；`stats` 键集合 == 契约那 8 个 → 建笔记→落库→列表刷新读回→点开正文→截图，控制台 0 error） | `pnpm build` + `cargo build [--release] -p notera-desktop` + `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223` + `node scripts/verify-tauri-window.mjs` |
+| L4-L5 冲突面板（P11）| **11/11 —— 2026-09-28 在当前 HEAD（`d5cf2ef`）上重跑**（真浏览器读**两台真设备留在盘上的现场**：右栏渲染的是服务器那一版而不是本机那份的复制；载荷缺失时屏幕上说的是"没能取回那一版"；截图与控制台/请求零失败都在断言里。本表此前写 10/10 是加"面板上没有漏出文案键名"那一步之前的数） | `node scripts/verify-p11-panel.mjs`（自己跑留档夹具 + 起桥；需 vite dev 在 5173） |
+| L5 性能基线 | 4/4（真实 release 壳 + 预先灌好的库；空库预算口径已按用户决定定为 **≤1000 ms 含 WebView2**，实测最好 866 ms、首遍 1528 ms 那一档的分布写在 TEST-PLAN PERF-01） | `node scripts/verify-perf.mjs`（`NOTES=` 换规模，`REPS=` 换遍数） |
+| 真窗口 | debug **9/9 —— 2026-09-28 在当前 HEAD 上重跑**（真 `invoke`、内嵌资源 `http://tauri.localhost/`、托盘与全局快捷键按**注册结果**为 true、建笔记真落 SQLite 且列表读回、截图 + 控制台零 error）；release 那 **9/9 沿用上一批**（本批没重编 release 壳）。本表此前写 8/8 是没跟着"能力探测"那一步改。<br>**⚠ 跑之前必须清残留**：上一次启动留下的 `notera-desktop.exe` / WebView2 进程会占着调试端口，于是 lane 连到的是**那份残留**（页面 `about:blank`）而不是新起的那个壳 —— 实测这样红过一轮 6 步（"假红"，产品没问题）。lane 自己的第 2 步（"`__TAURI_INTERNALS__` 在不在"）就是抓这个的。 | `pnpm build` + `cargo build [--release] -p notera-desktop` + `NOTERA_DATA_DIR=<空目录>` 与 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223` + `node scripts/verify-tauri-window.mjs` |
 
 **已建立**：12 个 crate + `apps/desktop`（Tauri 壳 + Vue 前端）+ `migrations/0001..0006` + 自建测试 WebDAV 服务器 + 上述四套验证脚本 + `docs/` 全套规格与 ADR-0001…0019。
 

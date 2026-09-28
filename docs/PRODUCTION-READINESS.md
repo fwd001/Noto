@@ -22,7 +22,7 @@
 | Rust 全量测试 | **541 通过 / 0 失败 / 1 ignored（64 个测试二进制）**（那一条 `#[ignore]` 是 P11 面板 lane 的留档夹具 `conflict_payload_e2e.rs:519`，由 `scripts/verify-p11-panel.mjs` 显式跑；此前这里写的"0 ignored"与实测不符，2026-09-28 更正） | `cargo test --workspace` | L0–L4 |
 | Clippy（CI 原样命令） | 0 error / 0 warning | `cargo clippy --workspace --all-targets -- -D warnings` | L0 |
 | 架构适应度 | **28/28**（含"扫描台账"：任何源码门禁扫到 0 个文件即判失败；第 28 条是本轮新增：测试里的「或」断言必须就地写理由，含空转保护，并用一条恒真断言反注验过） | `node scripts/arch-check.mjs` | 静态 |
-| 前端 | **200 通过（21 文件）**；`vue-tsc --noEmit` 0 错；构建 216.65 KB → gzip 74.22 KB | | `pnpm --dir apps/desktop test` / `run typecheck` / `run build` | L0/L1 |
+| 前端 | **201 通过（21 文件）**；`vue-tsc --noEmit` 0 错（两条都是 2026-09-28 原样重跑的实测；此前这里写 200 是更早一批的数）；构建 216.65 KB → gzip 74.22 KB 那一档本轮未重测 | | `pnpm --dir apps/desktop test` / `run typecheck` / `run build` | L0/L1 |
 | §26 无障碍 | 静态门禁 + 3 条专项测试（见 TEST-PLAN A11Y-01…04） | `arch-check` / `pnpm test` | L1 |
 | 崩溃注入（小库 9 点 + 大库压实 1 点） | 逐个**真把子进程杀死**（退出码 77）后重启，两台设备逐条一致、待办归零 | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery --test compaction_crash` | L5 |
 | 附件下载续传 | 2/2（真杀进程重启接着要；服务器**不理** `Range` 时当整份覆盖） | `cargo test -p notera-host --test attachment_resume` | L3/L5 |
@@ -36,7 +36,7 @@
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` | L2 |
 | 浏览器端到端（真 Rust 核心，非 mock） | **35/35** | `notera-cli serve` + `pnpm dev` + `node scripts/verify-app.mjs` | L4 |
 | 纯黑盒 UAT（§23：只用界面） | **10/10** —— 修好第 3 节那条竞态之后**连跑十一轮全绿**（每轮独立空库；其中六轮是冷 vite 缓存的稳定性加测） | `node scripts/verify-blackbox.mjs` | L4 |
-| 真窗口（走真 `invoke`） | debug **9/9** 且 release **9/9**（第 3 步为 2026-09-27 新增：在跑着的壳里读 `platform_caps`，断言托盘 / 全局快捷键 / 原生菜单 / 通知四项**真的注册上了**；能力由注册结果写，摘掉上报那行重新构建真壳 → 8/9 并点名 `tray 不是 true`。跑前确认 5173/17323 无监听；页面 `http://tauri.localhost/`，真 SQLite、CSP 生效） | `cargo build [--release] -p notera-desktop` + `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223` + `node scripts/verify-tauri-window.mjs` | L4 |
+| 真窗口（走真 `invoke`） | debug **9/9 —— 2026-09-28 在当前 HEAD（`d5cf2ef`）上重跑**（真 `invoke`、内嵌资源 `http://tauri.localhost/`、第 3 步读 `platform_caps` 断言托盘 / 全局快捷键 / 原生菜单 / 通知四项**真的注册上了**、建笔记真落 SQLite 且列表读回、截图 + 控制台零 error）。**release 那 9/9 沿用上一批**，本批没重编 release 壳。<br>踩到一次**假红并记在这里**：第一次跑 6 步红在"`__TAURI_INTERNALS__` 不存在"，根因是**上一次启动残留的 notera-desktop/WebView2 进程还占着调试端口**，lane 连到的是那份残留（`about:blank`）而不是新起的壳；清掉残留 + 换端口后同一条命令 9/9。lane 的第 2 步正是为这种情况准备的，它起作用了 | `cargo build -p notera-desktop` + `NOTERA_DATA_DIR=<空目录>` + `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=…` + `node scripts/verify-tauri-window.mjs` | L4 |
 | `cargo fmt --all --check` | **退出码 0** —— 代理到位后装了 `rustfmt` 组件（B5 解除）。装上后第一次 `--check` 就报出 **92 个文件**格式漂移，已按纯机械格式化单独提交并复验（tests 487/0、clippy 0/0） | `cargo fmt --all --check` |
 
 复现步骤的单一出处是 `docs/ARCHITECTURE-MAP.md` §8；分领域状态是 `docs/IMPLEMENTATION-STATUS.md`。

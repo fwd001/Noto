@@ -18,7 +18,7 @@
 | 版本单源 | 权威 = 根 Cargo.toml；`check-versions` 一致 | 本机 |
 | `node scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 | 本机 |
 | `node scripts/verify-app.mjs` | **36/36**（真 Rust 核心，非 mock）—— 2026-09-27 那批实测；本表此前写的 35/35 是更早一批的数，已按 CHANGELOG/PRODUCTION-READINESS 的实测对齐。G3 这批没动界面与命令面，**未重跑** | 本机 |
-| `node scripts/verify-tauri-window.mjs` | debug **9/9** 且 release **9/9**（真 `invoke`）—— 同为上一批实测；本表此前写的 8/8 是更早的数。这批**未重跑** | 本机 |
+| `node scripts/verify-tauri-window.mjs` | debug **9/9 —— 2026-09-28 在当前 HEAD 上重跑**（真 `invoke`、内嵌资源、控制台零 error）；release 那 9/9 **沿用上一批**（本批没重编 release 壳）。本表此前写的 8/8 是更早一批的数 | 本机 |
 | `cargo fmt --check` | **已解除**（组件已装）：第一次跑就发现 92 个文件漂移，已纯格式化提交并复验 487/0 + clippy 0/0 | 本机 |
 
 ## 分领域状态
