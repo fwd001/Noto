@@ -25,6 +25,9 @@ use std::sync::Mutex;
 
 pub const DB_FILE_NAME: &str = "notera.sqlite";
 pub const ATTACHMENTS_DIR_NAME: &str = "attachments";
+/// GC 的隔离区（DATA-MODEL §8）：零引用的 blob 先**挪**到这里，不删。
+/// 与 `attachments/` 同级、同样的 `<2hex>/<sha>` 两层结构，所以同一份字节在两侧的路径只差根目录。
+pub const QUARANTINE_DIR_NAME: &str = "attachments-quarantine";
 const META_DEVICE_ID: &str = "device_id";
 const META_INSTALL_ID: &str = "install_id";
 const META_CACHED_ROOT: &str = "cached_root_id";
@@ -563,10 +566,13 @@ impl Store {
         self.write_tx(|tx, now| {
             let cur = Self::load_cur(tx, &note_id)?;
             Self::assert_editable(&cur.note)?;
+            // `deleted_at=NULL`：GC 认领过的行如果又被挂回正文，它就不该继续排在销毁清单里。
+            // 这一列今天是"已隔离"的唯一凭据（宽限期按它算），留着旧值等于"笔记在用这张图，
+            // 而账上说它已经作废"。
             tx.execute(
                 "INSERT INTO attachments (sha256, size, media_type, filename, local_state, remote_state, created_at)
                  VALUES (?1,?2,?3,?4,'available','unknown',?5)
-                 ON CONFLICT(sha256) DO UPDATE SET local_state='available', size=excluded.size, verified_at=excluded.created_at",
+                 ON CONFLICT(sha256) DO UPDATE SET local_state='available', size=excluded.size, verified_at=excluded.created_at, deleted_at=NULL",
                 params![sha, bytes.len() as i64, media_type, filename, now],
             )?;
             let position: i64 = tx.query_row(
@@ -590,7 +596,22 @@ impl Store {
             self.commit_edit(tx, &cur, &Edit::default(), now)?;
             Ok(())
         })?;
+        // 重新挂载同一份字节 = 这一行又活了。隔离区里那份（如果有）此刻是纯多余：
+        // 正式位置上刚落下的是**调用方手上那份字节**，而 sha 就是它的内容寻址名。
+        self.release_quarantine_copy(&sha);
         self.with_read(|c| attachment_for(c, &note_id, &sha))
+    }
+
+    /// 清掉隔离区里那份已经多余的同名拷贝（尽力而为，失败不吵）。
+    ///
+    /// 为什么可以忽略失败：被删的那一份**不是**唯一的一份 —— 调这条的时候正式位置上
+    /// 一定有一份内容对得上的字节（`attach_blob` 刚按调用方的字节写过、`ingest_blob` /
+    /// `restore_blob` 都是先复算 sha256 才落盘），删掉的只是同一份内容的第二个副本。
+    /// 留着它的代价是同一份字节占两处，而这个代价下一轮 GC 再认领这一行时会被自然抹平
+    /// （挪进隔离区遇到同名文件就先腾位置）。这里不是"删用户数据失败也吞"。
+    fn release_quarantine_copy(&self, sha256: &str) {
+        // 大多数字节从没被隔离过，"没有这个文件"是常态而不是失败。
+        let _ = std::fs::remove_file(self.quarantine_path(sha256));
     }
 
     /// 收下远端发来的 blob：**先校验 sha256 再落盘**，内容不符就拒收。
@@ -611,6 +632,8 @@ impl Store {
         if !target.exists() {
             crate::store::write_atomic(&target, bytes)?;
         }
+        // 整份字节已经复算过哈希并落在正式位置 → 隔离区里同一 sha 的那一份没有主人了。
+        self.release_quarantine_copy(&sha);
         self.set_attachment_states(&sha, Some("available"), Some("present"))
     }
 
@@ -636,6 +659,8 @@ impl Store {
         if !target.exists() {
             write_atomic(&target, bytes)?;
         }
+        // 备份包里这份已经按 sha256 校验并落好了正式位置 → 隔离区那份是同一内容的第二副本。
+        self.release_quarantine_copy(sha256);
         let sha = sha256.to_string();
         let size = bytes.len() as i64;
         self.write_tx(move |tx, now| {
@@ -768,6 +793,22 @@ impl Store {
         let mut p = self.blob_path(sha256);
         p.as_mut_os_string().push(".part");
         p
+    }
+
+    /// GC 隔离区的根目录（与 `attachments/` 同级）。
+    ///
+    /// **不在 `open()` 里预建**：只有真要回收东西时才建，冷启动一个 syscall 都不多
+    /// （PERF-01 那条 1000 ms 预算含 WebView2，不该为一段几乎不跑的逻辑付钱）。
+    pub fn quarantine_dir(&self) -> PathBuf {
+        let parent = self.paths.attachments.parent().unwrap_or(Path::new("."));
+        parent.join(QUARANTINE_DIR_NAME)
+    }
+
+    /// 某份字节在隔离区里的位置：与正式位置**只差根目录**，因为两侧共用
+    /// `<2hex>/<sha>` 那套结构 —— 于是"挪过去 / 挪回来"都是同一条 `blob_path` 换个起点，
+    /// 不必再造第二套寻址规则（那是 §39 禁止的重复状态机）。
+    pub fn quarantine_path(&self, sha256: &str) -> PathBuf {
+        blob_path(&self.quarantine_dir(), sha256)
     }
 
     // ---------------------------------------------------------- 内部：编辑 ---

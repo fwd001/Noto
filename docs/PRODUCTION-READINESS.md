@@ -19,7 +19,7 @@
 
 | 门禁 | 结果 | 命令 | 层级 |
 |---|---|---|---|
-| Rust 全量测试 | **544 通过 / 0 失败 / 1 ignored（64 个测试二进制）**（那一条 `#[ignore]` 是 P11 面板 lane 的留档夹具 `conflict_payload_e2e.rs:519`，由 `scripts/verify-p11-panel.mjs` 显式跑；此前这里写的"0 ignored"与实测不符，2026-09-28 更正） | `cargo test --workspace` | L0–L4 |
+| Rust 全量测试 | **552 通过 / 0 失败 / 1 ignored**（52 个单元/集成测试二进制 + 13 个 doc-test；2026-09-28 在 0.0.21 那棵树上实测）（那一条 `#[ignore]` 是 P11 面板 lane 的留档夹具 `conflict_payload_e2e.rs:519`，由 `scripts/verify-p11-panel.mjs` 显式跑；此前这里写的"0 ignored"与实测不符，2026-09-28 更正） | `cargo test --workspace` | L0–L4 |
 | Clippy（CI 原样命令） | 0 error / 0 warning | `cargo clippy --workspace --all-targets -- -D warnings` | L0 |
 | 架构适应度 | **28/28**（含"扫描台账"：任何源码门禁扫到 0 个文件即判失败；第 28 条是本轮新增：测试里的「或」断言必须就地写理由，含空转保护，并用一条恒真断言反注验过） | `node scripts/arch-check.mjs` | 静态 |
 | 前端 | **209 通过（22 文件）**；`vue-tsc --noEmit` 0 错（两条都是 2026-09-28 与"两颗自救按钮"那批同批实测；此前写过的 201/21 与 200/21 都是更早的数）；构建 216.65 KB → gzip 74.22 KB 那一档本轮未重测 | | `pnpm --dir apps/desktop test` / `run typecheck` / `run build` | L0/L1 |
@@ -27,6 +27,7 @@
 | 崩溃注入（小库 9 点 + 大库压实 1 点） | 逐个**真把子进程杀死**（退出码 77）后重启，两台设备逐条一致、待办归零 | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery --test compaction_crash` | L5 |
 | 附件下载续传 | 2/2（真杀进程重启接着要；服务器**不理** `Range` 时当整份覆盖） | `cargo test -p notera-host --test attachment_resume` | L3/L5 |
 | §27 附件故障注入 | **16/16**（本机 blob 丢了能自愈、截断换整份、服务器同长度坏字节被拒、下载被掐不 promote、半上传不落正式对象、远端 404 收手不空转、只有附件端点超时而文本轮并发验穿、MOVE 被 412 拒的两端都咬住、坏字节只挪开不销毁、同长度位腐在读侧被拒、**体检复算过哈希就把登记尺寸改对**、**体检一轮降的条数有上界且降级是一次批量写**、**发布那一步被掐不许算成功**、**发布收到裸 404 不许写成任一侧的结论**、**只有复读被掐时对象已落成本机也不记 present**、**「重试取回」能重开一次收手的结论**、**该拒绝的恢复动作各有具名码**、**「重新上传本机这份」真把服务器上的坏对象换掉**；十九条各配一次变异自证 M1..M31）。**其中六条是真缺陷**（前三条是注入打出来的，第四条是独立代码审查改的，第五、六条是 §48 三重审查点出来的 G3/G4）："本机附件缺失"（那种行两个队列都看不见，图永久坏掉而系统以为自己修好了）、"MOVE 被 412 拒就当上传成功"（跳过复读、凭空记一个 present，对面设备永远等一份不存在的东西）、"体检把坏字节直接删掉"（没有替代的时候删掉就是销毁最后一份现场，现改成挪成 `.corrupt`）、"读侧不验哈希"（同长度位腐会被画成一张错图并按 sha 缓存整个会话，现在读一次算一次）、"体检算完哈希却不回填尺寸"（登记那条路的规则是 `MAX(旧, 新)` 只许涨，所以那一行每 20 s 被整份重读重哈希、设置页的附件字节数也跟着虚高 —— FT-ATT-20）、"体检一轮里逐行提交 + 候选不分页"（整个 `attachments/` 目录被删时，N 次提交排队占住写锁，而用户那次保存正排在锁后面 —— FT-ATT-21 / FT-ATT-21s） | `cargo test -p notera-host --test attachment_faults` | L3/L5 |
+| **附件回收（GC）** | **6/6**（host `--test attachment_gc`）+ 存储侧 **8/8**（`--test attachment_queue`，其中两条是本批新增）—— 零引用的 blob **挪进 `attachments-quarantine/` 而不是删**（回收站里的笔记仍算引用）、宽限期 30 天过完**且仍然**零引用才销毁（先删行再删字节，`ON DELETE RESTRICT` 是机器兜底）、撤销期内被重新引用则**本地挪回复算哈希、零请求**、只收"服务器已确认有副本"的行（`present`）所以独家副本不会被判死、每轮量有上界、两颗自救按钮认隔离区且隔离副本位腐时撤标记改走服务器（按钮不静默失效）。**这是本仓唯一一处主动让用户的字节离开磁盘的逻辑**。九次变异自证 M32..M40，其中 **M38 第一次打在 FT-ATT-30 上是绿的**（那条走登记路径、恒真），换到真正吃这条规则的 FT-ATT-32 才红 —— 按 §40 记着而不是改成"本来就红"。**仍没做的**：服务器侧孤儿对象不回收；GC 触发点在附件轮 ⇒ 未配置同步账户的设备不跑 GC（那条盘仍会涨）。§8 那条"编辑里删掉一张图不释放引用"的既有缺口也让 GC 的收益目前集中在"永久删除笔记"那一类（判据偏保守：宁可少收，绝不错收） | `cargo test -p notera-host --test attachment_gc`；`cargo test -p notera-store --test attachment_queue` | L2/L3/L4 |
 | 代理路由差分（§28） | 3/3（配 HTTP 代理必成、直连必 403；死代理与解析不出主机名必失败；bypass 命中放行、不相干不放行；撤掉代理立刻恢复。变异自证 M9 把 `b.proxy(p)` 换成 `no_proxy()` → 两条同时红）。**SOCKS5 端到端 / 407 错误密码 / 真 TLS 失败 / 取消** 四条仍缺，见 TEST-PLAN §28 实证账 | `cargo test -p notera-webdav --test proxy_routing` | L3 |
 | 清单压实 + 分段读回 | 1/1（>200 条变更后分段落盘、索引不引用不存在的分段、空库靠分段基线追平） | `cargo test -p notera-host --test compaction` | L3 |
 | 落后设备追平（260 条） | 1/1（标题+内容哈希逐条一致） | `cargo test -p notera-host --test late_device` | L3 |

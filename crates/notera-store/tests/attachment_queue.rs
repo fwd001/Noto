@@ -247,3 +247,168 @@ fn finishing_ops_closes_the_outbox_rows_for_that_blob() {
         "附件行必须被关掉，否则 outbox_pending 永远虚高：{left:?}"
     );
 }
+
+/// GC 的账上那一步（§8）：**一次写事务**里同时做完三件事 —— 只认领"仍然零引用"的行、
+/// 把它们写成 `missing ∧ deleted_at`、关掉它们还挂着的附件待办。
+///
+/// 为什么要在这一层再挡一次引用：候选集是上一句 SQL 查出来的，而"用户在这一瞬把笔记
+/// 还原了 / 另一台设备的记录刚把同一份字节引用进来"就落在那两条语句之间。判据写在
+/// `UPDATE ... WHERE` 里，检查与写入就是同一个事务，不需要外面再加一把锁。
+#[test]
+fn the_quarantine_mark_only_takes_rows_that_are_still_unreferenced() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    let live = attach(&store, &folder, b"live-bytes", "blk0000a1");
+    let orphan_note = store
+        .create_note(&folder, doc_text("要永久删除的那条"))
+        .unwrap();
+    let orphan = store
+        .attach_blob(
+            &orphan_note.id,
+            b"orphan-bytes",
+            "image/png",
+            None,
+            "blk0000a2",
+        )
+        .unwrap()
+        .sha256;
+    for sha in [&live, &orphan] {
+        store
+            .set_attachment_states(sha, Some("available"), Some("present"))
+            .unwrap();
+    }
+
+    // 先证明候选集这条 SQL 本身问的是引用，而不是别的什么：两条都 available ∧ present，
+    // 唯一差别就是有没有笔记还指着它。
+    store.purge_note(&orphan_note.id).unwrap();
+    let candidates = store.gc_quarantine_candidates(50).unwrap();
+    assert_eq!(
+        candidates,
+        vec![orphan.clone()],
+        "候选集必须只包含零引用的那一条"
+    );
+    assert_eq!(store.attachment_refs(&live).unwrap(), 1, "另一条仍被引用");
+
+    // 引用在这一瞬回来了：把 `live` 也塞进点名清单，它一条都不许被改。
+    let ghost = notera_core::ContentHash::of("库里没有这一行".as_bytes())
+        .as_str()
+        .replace("sha256:", "");
+    let changed = store
+        .mark_attachments_quarantined(&[live.clone(), orphan.clone(), ghost.clone()])
+        .expect("批量隔离");
+    assert_eq!(
+        changed, 1,
+        "有引用的那条与库里没有的那条都不许算成已隔离：{changed}"
+    );
+    assert_eq!(
+        store.attachment_for_state(&live),
+        ("available".into(), "present".into()),
+        "仍然被引用的行被批量语句顺手动到了 = 隔离判据根本没问引用"
+    );
+    let (local, deleted) = store
+        .attachment_quarantine_state(&orphan)
+        .expect("这一行该还在账上");
+    assert_eq!(local, "missing", "隔离要把本机态写成本来没有");
+    assert!(
+        deleted.is_some(),
+        "宽限期靠 `deleted_at` 起算，没落下去就等于没隔离"
+    );
+    assert_eq!(
+        store.attachment_for_state(&orphan).1,
+        "present",
+        "远端态一字不动：隔离只关于本机，改成 absent 等于把服务器上有副本这件事判死"
+    );
+
+    // 附件待办要一起关掉：这一行已经不在两个队列的取活范围里，留着 pending 就是
+    // `outbox_pending` 永远虚高（§18 要求这个数诚实）。
+    let left: Vec<_> = store
+        .outbox_take(notera_store::LOCAL_ACCOUNT_ID, 50)
+        .unwrap()
+        .into_iter()
+        .filter(|o| o.kind == notera_core::EntityKind::Attachment && o.entity_key == orphan)
+        .collect();
+    assert!(left.is_empty(), "隔离之后还挂着附件待办：{left:?}");
+
+    // 幂等：已隔离的行再点一次不该重复计入成功条数（host 那声 warn 的判据就是这个数）。
+    assert_eq!(
+        store
+            .mark_attachments_quarantined(std::slice::from_ref(&orphan))
+            .expect("重复隔离"),
+        0
+    );
+}
+
+/// 真删那一步的守卫：销毁清单由 SQL 判引用，`attachments` 行删不掉时**一个字节都不许动**。
+///
+/// `note_attachments.sha256` 上是 `ON DELETE RESTRICT`，所以就算判据哪天写错了，SQLite 也会
+/// 把整笔事务顶回来；但那条 FK 只是兜底 —— 这一层先自己问过引用，才轮得到它。
+#[test]
+fn a_purge_refuses_rows_that_are_still_referenced_or_absent() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    let live = attach(&store, &folder, b"still-used", "blk0000b1");
+    store
+        .set_attachment_states(&live, Some("available"), Some("present"))
+        .unwrap();
+
+    let ghost = notera_core::ContentHash::of("没这一行".as_bytes())
+        .as_str()
+        .replace("sha256:", "");
+    let purged = store
+        .purge_attachment_rows(&[live.clone(), ghost.clone()])
+        .expect("销毁清单");
+    assert!(
+        purged.is_empty(),
+        "有引用的与库里没有的都不许销毁：{purged:?}"
+    );
+    assert_eq!(
+        store.attachment_for_state(&live).0,
+        "available",
+        "被引用那一行的账被销毁掉了"
+    );
+
+    // 零引用 + 已隔离 + 过了宽限期 → 才进清单，也才真删得掉。
+    let gone_note = store.create_note(&folder, doc_text("用完就删")).unwrap();
+    let gone = store
+        .attach_blob(&gone_note.id, b"orphan", "image/png", None, "blk0000b2")
+        .unwrap()
+        .sha256;
+    store.purge_note(&gone_note.id).unwrap();
+    store
+        .set_attachment_states(&gone, Some("available"), Some("present"))
+        .unwrap();
+    assert_eq!(
+        store
+            .mark_attachments_quarantined(std::slice::from_ref(&gone))
+            .unwrap(),
+        1
+    );
+    let ready = store
+        .gc_ready_to_purge("9999-01-01T00:00:00.000Z", 50)
+        .unwrap();
+    assert_eq!(
+        ready,
+        vec![gone.clone()],
+        "过了宽限期的零引用行要进销毁清单"
+    );
+    assert!(
+        store
+            .gc_ready_to_purge("0000-01-01T00:00:00.000Z", 50)
+            .unwrap()
+            .is_empty(),
+        "宽限期内的行也进了清单 = 那个 cutoff 参数根本没参与判定"
+    );
+    assert_eq!(
+        store
+            .purge_attachment_rows(std::slice::from_ref(&gone))
+            .unwrap(),
+        vec![gone.clone()],
+    );
+    assert_eq!(
+        store.attachment_for_state(&gone),
+        ("absent".into(), "absent".into()),
+        "销毁后账上要彻底没有这一行"
+    );
+}

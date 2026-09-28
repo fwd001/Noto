@@ -677,6 +677,19 @@ impl App {
     /// 只撤远端那一半：`local_state` 是磁盘上的事实，不是意见，这里一字不动。
     pub fn retry_attachment(&self, sha256: &str) -> Result<AttachmentStateDto, CmdError> {
         Self::require_sha_hex(sha256)?;
+        // 先看本机隔离区（§8 的撤销期）。这一步不能省：刚被 GC 挪走的那一份在**三个**后台
+        // 口径里都是隐形的（两个队列与磁盘体检都带 `deleted_at IS NULL`），于是只改远端结论
+        // 再入队的话，用户点了「重试取回」而什么都没发生 —— 一颗说好会重试的按钮静默失效，
+        // 比报一个错更糟。字节就在本地，先本地补回来，一次网络都不打。
+        if self.restore_quarantined_blob(sha256) {
+            let (l, r) = self.inner.store.attachment_for_state(sha256);
+            tracing::info!(%sha256, "用户要求的重试在本地命中了隔离区，未发一次请求");
+            return Ok(AttachmentStateDto {
+                sha256: sha256.to_string(),
+                local_state: l,
+                remote_state: r,
+            });
+        }
         let (local, remote) = self.inner.store.attachment_for_state(sha256);
         if local == "absent" && remote == "absent" {
             // attachment_for_state 对"库里没有这一行"回的就是 ("absent","absent")（store.rs:740），
@@ -689,6 +702,26 @@ impl App {
             // 这一格该走的是另一侧的动作（「重新上传本机这份」）。
             return Err(CmdError::of("nothing_to_retry", false)
                 .with(serde_json::json!({ "sha256": sha256, "localState": local })));
+        }
+        // 走到这里意味着"本机没有这份字节"，而它可能是**被 GC 隔离**的（上面那次本地补回失败：
+        // 隔离区里那份位腐了，或那个目录被磁盘清理删了）。带着隔离标记的行在三个后台口径里
+        // 都是隐形的，只改远端态 + 入队的话：用户点了按钮，一次请求都不会发，而那条待办永远
+        // 关不掉。所以按用户此刻的意图把标记撤掉 —— 代价（宽限期结束）正是他要求的事。
+        if self
+            .inner
+            .store
+            .attachment_quarantine_state(sha256)
+            .and_then(|(_, deleted)| deleted)
+            .is_some()
+        {
+            self.inner
+                .store
+                .release_attachment_quarantine(sha256)
+                .map_err(CmdError::from)?;
+            tracing::warn!(
+                sha = %sha256,
+                "隔离区那份本地补不回来：按用户要求撤掉隔离标记，这一行重新排得进下载队列"
+            );
         }
         self.inner
             .store
@@ -726,6 +759,10 @@ impl App {
     /// 那比传失败严重得多。
     pub fn reupload_attachment(&self, sha256: &str) -> Result<AttachmentStateDto, CmdError> {
         Self::require_sha_hex(sha256)?;
+        // 用户要求"重新上传本机这份"，而"本机这份"此刻可能躺在隔离区里（§8 的撤销期）：
+        // 先挪回正式位置，下面那次读与哈希才有对象。挪不回来不算成功也不算谎报 ——
+        // 判据交给下面那句读（读不到就回 `nothing_to_upload`）。
+        self.restore_quarantined_blob(sha256);
         let (local, remote) = self.inner.store.attachment_for_state(sha256);
         if local == "absent" && remote == "absent" {
             return Err(CmdError::of("attachment_not_registered", false)
@@ -1939,6 +1976,219 @@ impl App {
         }
     }
 
+    /// §8 的 GC 第一步：**零引用**的 blob 不删，挪进隔离区，账上写"已隔离"。
+    ///
+    /// 判据全在 store 那一句 SQL 里（`gc_quarantine_candidates` 的注释逐条写了它在挡什么）：
+    /// 链接表零引用 + 服务器已确认有副本（`present`）+ 本机标着 `available`。这里只补两件事：
+    ///
+    /// **先挪字节，后写账**。反过来会出错：如果先写 `deleted_at` 再挪，而挪失败（跨卷、被
+    /// 占用、权限），账上说"已隔离"而字节还躺在正式位置 —— 那一行既不被队列看、也不被
+    /// 体检看，成了两边都不认领的死角。按现在的顺序，挪失败就是"本轮没收它"，下一轮还会
+    /// 看见它。而"挪成功了、写账时那条行却被引用了"（用户在这一瞬还原笔记）的残留是
+    /// **正式位置空了而账上还写 available**：读侧回 `attachment_missing`，磁盘体检把它降级
+    /// 成 missing，下载队列那一轮先看隔离区就把字节挪回来了（`restore_quarantined_blob`）。
+    ///
+    /// 每轮上界 `cap` 与体检同一套理由（§48 G4）：用户刚清空回收站时零引用的行可以有成百
+    /// 上千，一轮搬完就是把常驻循环那一格变成一段长 IO + 一段长写锁，而用户那次保存正排在后面。
+    ///
+    /// 返回这一轮实际隔离的条数（= 字节已经进了隔离区、账也写了）。
+    pub fn reclaim_unreferenced_blobs(&self, cap: usize) -> usize {
+        if cap == 0 {
+            return 0;
+        }
+        let candidates = match self.inner.store.gc_quarantine_candidates(cap) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(%e, "GC 候选查询没读回来：本轮一条都不回收");
+                return 0;
+            }
+        };
+        if candidates.is_empty() {
+            return 0;
+        }
+        let mut moved: Vec<String> = Vec::new();
+        for sha in candidates {
+            let official = self.inner.store.blob_path(&sha);
+            // 账上 `available` 而盘上没有：没有字节需要被保护，但仍然要认领这一行 ——
+            // 它是一条"available 却没有内容"的假账，不收它就会永远留在候选集头部
+            // （按 sha 稳定排序 = 后面的行永远轮不到）。字节那一步本来就没有可挪的东西。
+            if official.exists() && self.quarantine_move(&sha).is_err() {
+                continue;
+            }
+            moved.push(sha);
+        }
+        let marked = match self.inner.store.mark_attachments_quarantined(&moved) {
+            Ok(n) => n,
+            Err(e) => {
+                // 写不成就不声称收过：字节已经在隔离区里，界面此刻读不到它们，而下一轮
+                // 体检/下载会把这一行捡回来（上面那段"先挪后写"的自愈路径）。
+                tracing::warn!(%e, attempted = moved.len(), "GC 的隔离没写成：这些附件下一轮还会被体检看到");
+                return 0;
+            }
+        };
+        if marked != moved.len() {
+            tracing::warn!(
+                marked,
+                attempted = moved.len(),
+                "GC 隔离有条没落成（在这一瞬被重新引用，或本来已隔离）"
+            );
+        }
+        if marked > 0 {
+            tracing::info!(marked, "零引用的附件已挪进隔离区（§8 GC，宽限期后才销毁）");
+        }
+        marked
+    }
+
+    /// 把正式位置的那份 blob 挪进隔离区（同 sha 已在隔离区时先腾位置）。
+    ///
+    /// 同名文件可以覆盖的理由是内容寻址本身：`sha256` 就是文件名，两侧那份**按定义**是同一
+    /// 份内容，留旧删新都只是在同一份字节上绕圈子。真做不到（跨卷、被占用）就原样抛给调用方，
+    /// 让它"本轮不收这一条"而不是"就地销毁"。
+    fn quarantine_move(&self, sha: &str) -> std::io::Result<()> {
+        let from = self.inner.store.blob_path(sha);
+        let to = self.inner.store.quarantine_path(sha);
+        if let Some(dir) = to.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        if to.exists() {
+            std::fs::remove_file(&to)?;
+        }
+        std::fs::rename(&from, &to).map_err(|e| {
+            tracing::warn!(%e, sha = %sha, "挪进隔离区失败：这条本轮不收，字节留在正式位置");
+            e
+        })
+    }
+
+    /// 撤销期内被重新引用（或用户点了「重试取回」）时，**先在本地**把字节从隔离区挪回来。
+    ///
+    /// 命中的判据是"字节 + 哈希"，不是"隔离区里有这个文件名"：读回来复算一次 sha256，
+    /// 对得上才算这份东西真是那个 sha 的那一份。位腐了的留在那儿不动（数据安全优先），
+    /// 让下载那条路去替换它。
+    ///
+    /// 为什么这一步值得单独存在：跳过一次网络拉取必须有**读侧的持久来源**，否则"跳过"是猜的。
+    /// 这里的来源就是隔离区那个文件；而且它已经在本地过了一遍，再下一遍是同一段带宽的纯浪费。
+    /// 成功返回 `true` 时账上已经写回 `available`（`deleted_at` 由 `set_attachment_states`
+    /// 一起清成 NULL —— 不清的话这一行在两个队列里永远看不见）。
+    pub fn restore_quarantined_blob(&self, sha: &str) -> bool {
+        let quarantined = self.inner.store.quarantine_path(sha);
+        if !quarantined.exists() {
+            return false;
+        }
+        let official = self.inner.store.blob_path(sha);
+        if official.exists() {
+            // 正式位置不是空的：那份字节归磁盘体检与读侧哈希管，这里不动它，
+            // 更不拿隔离区的东西去盖它。
+            tracing::debug!(sha = %sha, "隔离区有同名文件而正式位置也有：交给体检判内容，这里不挪");
+            return false;
+        }
+        let bytes = match std::fs::read(&quarantined) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(%e, sha = %sha, "隔离区那份读不出来：本轮按本机没有处理");
+                return false;
+            }
+        };
+        if notera_crypto::sha256_hex(&bytes) != sha {
+            tracing::warn!(sha = %sha, bytes = bytes.len(), "隔离区那份内容与 sha 不符，不挪回正式位置");
+            return false;
+        }
+        drop(bytes);
+        if let Some(dir) = official.parent() {
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                tracing::warn!(%e, sha = %sha, "blob 目录建不出来，隔离区那份挪不回来");
+                return false;
+            }
+        }
+        if let Err(e) = std::fs::rename(&quarantined, &official) {
+            tracing::warn!(%e, sha = %sha, "隔离区那份挪不回正式位置，本轮改走下载");
+            return false;
+        }
+        if let Err(e) = self
+            .inner
+            .store
+            .set_attachment_states(sha, Some("available"), None)
+        {
+            // 字节已经在家而账还没跟上：回 `false` 让下载那一轮照常走 —— 它会 `ingest_blob`
+            // 发现目标已存在、把账写对，顺带清掉隔离区。这里不谎报"已经补好了"。
+            tracing::warn!(%e, %sha, "字节挪回来了但账没写成：这一轮还会去下载一次");
+            return false;
+        }
+        tracing::info!(%sha, "附件在撤销期内被重新引用：从隔离区本地补回，零网络");
+        true
+    }
+
+    /// §8 的 GC 第二步：销毁**过了宽限期且仍然零引用**的那些。
+    ///
+    /// `cutoff` 由调用方给（见 `quarantine_cutoff`），这样"到期没有"是一件可以核对的事，
+    /// 而不是藏在 SQL 里的一个天数。顺序是先删行、再删字节，理由写在
+    /// `purge_attachment_rows` 的注释里（反过来一旦断电，就留下"账在、字节没了"的死链）。
+    /// 只有 `purge_attachment_rows` 真删掉的那些 sha 才会去动隔离区里的文件。
+    ///
+    /// 返回实际销毁的条数。
+    pub fn purge_released_blobs(&self, cutoff: &str, cap: usize) -> usize {
+        if cap == 0 {
+            return 0;
+        }
+        let ready = match self.inner.store.gc_ready_to_purge(cutoff, cap) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(%e, "销毁清单没读回来：本轮一条都不删");
+                return 0;
+            }
+        };
+        if ready.is_empty() {
+            return 0;
+        }
+        let purged = match self.inner.store.purge_attachment_rows(&ready) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(%e, attempted = ready.len(), "销毁附件行没成功：一个字节都不动");
+                return 0;
+            }
+        };
+        for sha in &purged {
+            let path = self.inner.store.quarantine_path(sha);
+            if let Err(e) = std::fs::remove_file(&path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    // 行已经从账上没了，这份字节谁也读不到 —— 删不掉只是没省到磁盘，
+                    // 不是数据问题，但它得被说出来。
+                    tracing::warn!(%e, sha = %sha, "隔离区那份字节删不掉：磁盘上多占了一份没人认领的内容");
+                }
+            }
+        }
+        if purged.len() != ready.len() {
+            tracing::warn!(
+                purged = purged.len(),
+                ready = ready.len(),
+                "销毁清单里有条没真删掉（宽限期内被重新引用了）"
+            );
+        }
+        if !purged.is_empty() {
+            tracing::info!(
+                count = purged.len(),
+                "零引用且过了宽限期的附件已销毁（§8 GC）"
+            );
+        }
+        purged.len()
+    }
+
+    /// 宽限期的界：隔离时刻 + 30 天。**只**在这一条规则里用墙上时间，而且方向是"不删"：
+    /// 时间源读不出来时返回一个远古的 cutoff，于是 `deleted_at < cutoff` 恒不成立，
+    /// 销毁整步空转，最坏是隔离区多占一段磁盘 —— 而不是在判据不成立时销毁用户字节。
+    ///
+    /// 30 天这个数不是抠出来的：它要盖住"用户清空回收站 → 过一阵才发现要找回那张图"的实际
+    /// 尺度，又不至于让一个纯本机的目录无限涨。测试不依赖它（cutoff 由调用方给）。
+    fn quarantine_cutoff(&self) -> String {
+        const GRACE_DAYS: i64 = 30;
+        let ms = notera_core::Timestamp::parse(&self.inner.store.now())
+            .and_then(|t| t.as_millis())
+            .map(|v| v - GRACE_DAYS * 86_400_000);
+        match ms {
+            Some(v) => notera_core::Timestamp::from_millis(v).as_str().to_string(),
+            None => "0000-01-01T00:00:00.000Z".to_string(),
+        }
+    }
+
     /// §13 附件轮：与文本轮次**解耦**的独立传输。单轮预算 ≤4 个文件 / ≤64 MiB，
     /// 超出的留下一轮 —— 移动网络不该被一个大文件长期占住。
     ///
@@ -1962,8 +2212,16 @@ impl App {
         // 几百几千次排队 —— 用户那次保存正排在这把锁后面（§48 G4）；而一万条也只要 50 轮
         // （常驻循环 20 s 一轮，约 17 分钟）就全部排进下载队列，这个代价换得值。
         const SWEEP_CAP: usize = 200;
+        // 与 GC 同一个量级的上界：一轮最多搬 200 条、销毁 200 条（同样的"不饿死"论证 ——
+        // 被认领的行会立刻离开候选集）。
+        const GC_CAP: usize = 200;
         // 先体检再挑活：降级出来的行要在**这一轮**就被下载队列看见
         self.sweep_lost_local_blobs(SWEEP_CAP);
+        // §8 GC：体检之后回收（挪进隔离区），再销毁过了宽限期的那批。
+        // 都在"挑活"之前做，于是这一轮挑出来的活已经是回收之后的账。
+        self.reclaim_unreferenced_blobs(GC_CAP);
+        let gc_cutoff = self.quarantine_cutoff();
+        self.purge_released_blobs(&gc_cutoff, GC_CAP);
 
         for (i, job) in self
             .inner
@@ -2034,6 +2292,13 @@ impl App {
             // 于是"进程被杀 / 网断 / 这一轮预算用完了"都不会把进度清零 ——
             // 下一轮从 `have` 处接着要，而不是从头再拉一遍大文件。
             let sha = job.sha256.as_str();
+            // §8 的撤销期：这份字节如果在隔离区里等着，就**先在本地**挪回来 —— 一次网络都不打。
+            // 放在 `.part` 续传之前，否则一条本地就能满足的活会白白占住一个下载窗口。
+            if self.restore_quarantined_blob(sha) {
+                let _ = self.inner.store.finish_attachment_ops(sha, true);
+                down += 1;
+                continue;
+            }
             let part = self.inner.store.blob_part_path(sha);
             let mut have = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
             if job.size >= 0 && have > job.size as u64 {
@@ -4356,16 +4621,11 @@ mod tests {
 
         let folder = Eid::parse(&a.list_folders().unwrap().remove(0).id).unwrap();
         let note = a.create_note(&folder, doc("带一张图")).unwrap();
+        let note_id = Eid::parse(&note.id).unwrap();
         let blob = format!("PNG-ish bytes 图片 {}", note.id.as_str()).into_bytes();
         let sha = a
             .store()
-            .attach_blob(
-                &Eid::parse(&note.id).unwrap(),
-                &blob,
-                "image/png",
-                Some("pic.png"),
-                "blk0000001",
-            )
+            .attach_blob(&note_id, &blob, "image/png", Some("pic.png"), "blk0000001")
             .unwrap()
             .sha256;
 
@@ -4384,10 +4644,41 @@ mod tests {
             "已 present 的不得重传"
         );
 
-        // B 只知道"清单说远端有这个 sha"
+        // B 走的是真的那条路：收 A 那条正文的 **wire**（与同步引擎 PUT 的是同一份字节）并
+        // `apply_remote` —— apply 在同一个事务里同时登记 `attachments` 行与 `note_attachments` 链接。
+        //
+        // 这一步以前是手搓 `register_remote_attachment`，于是 B 上**没有任何笔记引用这份字节** ——
+        // 而那恰好就是 §8 GC 的回收条件（零引用 + 服务器已确认有副本）。GC 落地之后这份字节会在
+        // 下一轮被挪进隔离区，"远端 404 不牵连本地已有附件"那条断言就此红在这里。红得对：那条测试
+        // 的题旨是"另一份的缺失不该动这一份"，而它把样本搭成了生产里到不了的状态
+        // （`register_remote_attachment` 在生产代码里至今零调用）。所以修的是**前置**，不是那句断言。
+        a.store()
+            .edit_note(
+                &note_id,
+                serde_json::json!({ "v": 1, "content": [
+                    { "id": "b1", "type": "paragraph", "content": [{ "text": "带一张图" }] },
+                    { "id": "blk0000001", "type": "image", "attrs": {
+                        "sha256": &sha, "ref": &sha, "role": "inline", "pending": false,
+                        "size": blob.len(), "mediaType": "image/png", "name": "pic.png" } },
+                ] }),
+                a.store().get_note(&note_id).unwrap().unwrap().rev,
+            )
+            .expect("A 的正文要真的引用这份字节（图片块进正文是编辑器的下一次保存做的事，§8）");
+        let wire = a
+            .store()
+            .note_envelope_wire(&note_id)
+            .unwrap()
+            .expect("改过的正文必须有 wire");
         b.store()
-            .register_remote_attachment(&sha, blob.len() as i64, "image/png")
-            .unwrap();
+            .apply_remote(&[notera_store::ApplyOp::UpsertNote {
+                env: serde_json::from_slice(&wire).unwrap(),
+            }])
+            .expect("B 收下 A 的正文");
+        assert_eq!(
+            b.store().attachment_refs(&sha).unwrap(),
+            1,
+            "前置：B 上这条笔记必须真的引用着这份字节，否则下面测的是 GC 而不是 404 的隔离"
+        );
         assert_eq!(
             b.run_attachment_round(&rb).await,
             (0, 1, 0),

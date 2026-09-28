@@ -762,6 +762,10 @@ impl Store {
     // ------------------------------------------------------------ 附件态 ---
 
     /// 附件生命周期迁移（DATA-MODEL §8）：`local_state` / `remote_state` 由同步侧推进。
+    ///
+    /// 写成本地 `available` 会**顺带清掉 `deleted_at`**：那一列是 GC 的"已隔离、等宽限期"标记，
+    /// 而本机重新有了这份经过校验的字节就意味着它又活过来了 —— 留着它，两个队列与体检
+    /// 都看不见这一行（三条口径都带 `deleted_at IS NULL`），于是这份字节永远排不进上传。
     pub fn set_attachment_states(
         &self,
         sha256: &str,
@@ -786,7 +790,8 @@ impl Store {
                 "UPDATE attachments
                     SET local_state = COALESCE(?2, local_state),
                         remote_state = COALESCE(?3, remote_state),
-                        verified_at = CASE WHEN ?2 = 'available' THEN COALESCE(verified_at, ?4) ELSE verified_at END
+                        verified_at = CASE WHEN ?2 = 'available' THEN COALESCE(verified_at, ?4) ELSE verified_at END,
+                        deleted_at = CASE WHEN ?2 = 'available' THEN NULL ELSE deleted_at END
                   WHERE sha256 = ?1",
                 params![sha256, local_state, remote_state, self.now()],
             )?;
@@ -848,6 +853,176 @@ impl Store {
                 done += stmt.execute(params![sha])?;
             }
             Ok(done)
+        })
+    }
+
+    /// GC（§8）在账上的隔离判据：`local_state` + `deleted_at`。
+    ///
+    /// 为什么要单独读这一对：`deleted_at` 今天**只由 GC 写**（隔离），而两个队列与磁盘体检
+    /// 都按 `deleted_at IS NULL` 过滤，所以「这一行被 GC 认领了没有」既看不见在 `local_state`
+    /// 里，也看不见在任何队列里。界面与手动动作要分清"本机没有（还没下）"与"本机没有（被隔离）"，
+    /// 靠的就是这一列。行不存在时回 `None`。
+    pub fn attachment_quarantine_state(&self, sha256: &str) -> Option<(String, Option<String>)> {
+        let sha = sha256.to_string();
+        let conn = self.read().ok()?;
+        conn.query_row(
+            "SELECT local_state, deleted_at FROM attachments WHERE sha256 = ?1",
+            [sha.as_str()],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+        )
+        .optional()
+        .ok()
+        .flatten()
+    }
+
+    /// 可以进入隔离的附件行（§8 的 GC 第一步）。
+    ///
+    /// 三个条件每一个都在挡一类数据丢失，缺一个都不算"安全的那一半"：
+    /// * `NOT EXISTS note_attachments` —— 引用计数**只由链接表派生**（§8，不存 `ref_count` 列）。
+    ///   回收站里的笔记行还在，它的链接也还在 → 仍算引用 → 不收（用户随时可能还原）。
+    ///   只有笔记被**永久删除**（`notes` 行被 CASCADE 带走链接）才归零。
+    /// * `remote_state='present'` —— 只收"服务器已经确认有副本"的行。没传上去过的字节是
+    ///   本机独家的一份，而隔离会把它同时从上传队列里摘掉（那条队列也带 `deleted_at IS NULL`），
+    ///   于是"省磁盘"就变成了"判死一份独家副本"。数据安全排在性能前面，这一类今天不收：
+    ///   它会照常走上传队列，传成功了才变成 GC 的候选。
+    /// * `local_state='available'` —— 只有"账上说本机有"的行才谈得上回收字节。
+    ///
+    /// `limit` 是每轮工作量的上界（与磁盘体检同一条理由：§48 G4）。按 `sha256` 稳定排序，
+    /// 而被认领的行会**立刻**离开候选集（`deleted_at` 有值 + 不再是 `available`），所以取前
+    /// `limit` 条不会饿死后面的行。
+    pub fn gc_quarantine_candidates(&self, limit: usize) -> Result<Vec<String>, StoreError> {
+        let conn = self.read()?;
+        let mut stmt = conn.prepare(
+            "SELECT a.sha256 FROM attachments a
+              WHERE a.local_state = 'available' AND a.remote_state = 'present'
+                AND a.deleted_at IS NULL
+                AND NOT EXISTS (SELECT 1 FROM note_attachments na WHERE na.sha256 = a.sha256)
+              ORDER BY a.sha256 LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// 把点名的行**隔离**（账上那一步）：`local_state='missing'` + `deleted_at=now`，
+    /// 并关掉它们还挂着的附件待办 —— 全部在**一个写事务**里。
+    ///
+    /// 为什么引用检查要写在 `UPDATE ... WHERE` 里而不是让调用方先查一遍候选集：候选集是
+    /// 上一句 SQL 读出来的，"用户在这一瞬还原了那条笔记 / 另一台设备的记录刚把同一份字节
+    /// 引用进来"就落在那两条语句之间。写在同一条语句里，检查与写入才是原子的。
+    ///
+    /// 为什么远端态一字不动：隔离只关于**本机**。写成 `absent` 等于宣布"服务器上没有"，
+    /// 那一行从此不在下载队列的口径里，撤销期结束后也再没有谁会去取它。
+    ///
+    /// 为什么待办要一起关掉：这一行已经不在两个队列的取活范围里，永远没人再结它 ——
+    /// 留下的是一条永远不掉下去的"待同步"计数（§18 要求这个数诚实）。
+    ///
+    /// 返回**实际隔离**的条数：库里没有、仍被引用、本来已隔离的都不计入。调用方靠
+    /// "返回数 < 传入数"吵一声，这里不静默替它吞掉。
+    pub fn mark_attachments_quarantined(&self, shas: &[String]) -> Result<usize, StoreError> {
+        if shas.is_empty() {
+            return Ok(0);
+        }
+        let shas = shas.to_vec();
+        self.write_tx(|tx, now| {
+            let mut mark = tx.prepare(
+                "UPDATE attachments
+                    SET local_state = 'missing', deleted_at = ?2
+                  WHERE sha256 = ?1 AND local_state = 'available' AND deleted_at IS NULL
+                    AND NOT EXISTS (SELECT 1 FROM note_attachments na WHERE na.sha256 = attachments.sha256)",
+            )?;
+            let mut settle = tx.prepare(
+                "UPDATE sync_operations SET state = 'done', updated_at = ?2
+                  WHERE entity_type = 'attachment' AND entity_id = ?1
+                    AND state IN ('pending','inflight')",
+            )?;
+            let mut done = 0usize;
+            for sha in &shas {
+                if mark.execute(params![sha, now])? == 1 {
+                    settle.execute(params![sha, now])?;
+                    done += 1;
+                }
+            }
+            Ok(done)
+        })
+    }
+
+    /// 已经隔离、且**过了宽限期**、且仍然零引用的行（GC 第二步的清单）。
+    ///
+    /// `cutoff` 由调用方给（不是一个"天数"常量藏在 SQL 里），理由有两个：
+    /// * 宽限期是策略，判据是事实 —— host 那一层算 `now - 30 天`，测试就能用
+    ///   "远古 / 未来"两个值把到期与否变成确定性的断言，而不是等真时钟走过 30 天。
+    /// * `Timestamp` 是定宽 RFC 3339 毫秒 UTC，**字典序即时间序**（notera-core 那条注释），
+    ///   所以这里可以直接比字符串。
+    ///
+    /// 引用在这里问第二遍：从隔离到真删中间隔着整个宽限期，那一头笔记被还原（链接回来 +
+    /// `deleted_at` 被登记那条路清成 NULL）是正常事件，不是异常。这一句把"到期"与"仍无人引用"
+    /// 同时成立才放行；`purge_attachment_rows` 里那条 `ON DELETE RESTRICT` 是机器兜底。
+    pub fn gc_ready_to_purge(&self, cutoff: &str, limit: usize) -> Result<Vec<String>, StoreError> {
+        let conn = self.read()?;
+        let mut stmt = conn.prepare(
+            "SELECT a.sha256 FROM attachments a
+              WHERE a.deleted_at IS NOT NULL AND a.deleted_at < ?1
+                AND NOT EXISTS (SELECT 1 FROM note_attachments na WHERE na.sha256 = a.sha256)
+              ORDER BY a.deleted_at, a.sha256 LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![cutoff, limit as i64], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// 把销毁清单里那些行从账上**彻底抹掉**，返回真删掉了哪些 sha。
+    ///
+    /// 调用方只能按返回值去删隔离区里的文件 —— 顺序是"先删行、后删字节"，反过来一旦中间
+    /// 断电就留下"账上还在、字节没了"的笔记（那张图永远取不回来）。按这个顺序，最坏的残留
+    /// 是"行没了、字节还多占一份"，那是一条可以安全重跑的幂等清理，而不是数据损坏。
+    ///
+    /// `WHERE NOT EXISTS` 先自己问一遍引用，`note_attachments.sha256` 上的 `ON DELETE RESTRICT`
+    /// 再兜一层：判据哪天写错了，SQLite 会把整笔事务顶回来（错误原样抛给调用方，不吞）。
+    pub fn purge_attachment_rows(&self, shas: &[String]) -> Result<Vec<String>, StoreError> {
+        if shas.is_empty() {
+            return Ok(Vec::new());
+        }
+        let shas = shas.to_vec();
+        self.write_tx(|tx, now| {
+            let mut del = tx.prepare(
+                "DELETE FROM attachments WHERE sha256 = ?1
+                  AND NOT EXISTS (SELECT 1 FROM note_attachments na WHERE na.sha256 = attachments.sha256)",
+            )?;
+            let mut settle = tx.prepare(
+                "UPDATE sync_operations SET state = 'done', updated_at = ?2
+                  WHERE entity_type = 'attachment' AND entity_id = ?1
+                    AND state IN ('pending','inflight')",
+            )?;
+            let mut purged = Vec::new();
+            for sha in &shas {
+                if del.execute(params![sha])? == 1 {
+                    // 行都没了，挂在它上面的待办永远满足不了 —— 一起结掉（同上一条理由：
+                    // "待同步"计数必须诚实）。
+                    settle.execute(params![sha, now])?;
+                    purged.push(sha.clone());
+                }
+            }
+            Ok(purged)
+        })
+    }
+
+    /// 撤销一个隔离标记（只清 `deleted_at`，两个状态位一字不动）。
+    ///
+    /// 为什么需要这一条：被 GC 认领过的行在**三个**后台口径里都是隐形的（两个队列与磁盘
+    /// 体检都带 `deleted_at IS NULL`）。用户明确要求"把这份取回来"时，如果本机隔离区里那份
+    /// 已经不可用（位腐、被磁盘清理删掉），就必须把标记撤掉这一行才重新排得进下载队列 ——
+    /// 否则按钮点下去什么也不会发生，而那条待办永远关不掉（"待同步"计数永久虚高，§18）。
+    /// 撤掉的代价正是用户要的东西：宽限期到此为止。
+    pub fn release_attachment_quarantine(&self, sha256: &str) -> Result<(), StoreError> {
+        let sha = sha256.to_string();
+        self.write_tx(|tx, _now| {
+            let n = tx.execute(
+                "UPDATE attachments SET deleted_at = NULL WHERE sha256 = ?1",
+                params![sha],
+            )?;
+            if n == 0 {
+                return Err(StoreError::Constraint(format!("附件不存在: {sha}")));
+            }
+            Ok(())
         })
     }
 

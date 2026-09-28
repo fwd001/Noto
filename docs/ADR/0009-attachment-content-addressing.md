@@ -41,3 +41,28 @@
 - ARCHITECTURE.md §4.3 附件数据流
 - 实测：`docs/evidence/probe-windows-gnu.txt` 的 `sha256-known-answer`（3/3 vectors match）、`timeout-and-cancel`
 - ADR-0003（`attachments/<2hex>/<sha>` 与不可变语义）· ADR-0002（E2EE 预留）· ADR-0006（回收站引用保 blob）· ADR-0010（附件请求同样必经 notera-net）
+
+## 更正（2026-09-28 · GC 落地了"安全的那一半"）
+
+上面"物理删除条件"那一句与"删除安全用例"那一条按今天落地的实现要改三处，且改的都是判据而不是措辞：
+
+1. **销毁不再是单步，中间多了一段可撤销的现场**。零引用的行先被**挪**进
+   `<data>/attachments-quarantine/<2hex>/<sha>`（同一套内容寻址寻址，只差根目录），账上写
+   `local_state='missing'` + `deleted_at=now`；只有 `deleted_at` 过了 **30 天宽限期**且**仍然**零引用，
+   才删行、再删那份字节。理由：这是本仓唯一一段主动让用户的字节离开磁盘的代码，判据错一条就是
+   不可恢复的丢失，而"引用为 0"这件事最常见的成因恰好是用户刚做完的一次删除操作。
+   规则细节见 DATA-MODEL §8。
+2. **准入判据从"无 `pending/inflight` 上传"换成 `remote_state='present'`**。原句把"还没传上去"当成
+   一个待办状态去看，而 GC 真正的危险是**销毁本机独家的一份副本** —— 那是远端事实，账上早就有它的
+   格子。所以现在只收"服务器已确认有副本"的行：没传上去过的字节继续走上传队列（它本来就在里面），
+   传成功了才变成候选。附带的好处是那条队列不再与 GC 抢同一行。
+   待办仍要管：被认领的行会把它剩余的附件待办一次结掉（那一行已不在两个队列的取活范围里，
+   留着 pending 就是"待同步"计数永久虚高，§18 要求这个数诚实）。
+3. **"构造'最后引用已删但上传仍 pending'，断言不删"这条用例今天由更强的判据代偿**：引用检查写在
+   `UPDATE ... WHERE` 与 `DELETE ... WHERE` 里（检查与写入同一个事务），而
+   `note_attachments.sha256 ON DELETE RESTRICT` 是机器兜底。落地后的门禁是 FT-ATT-29 / 29s / 30 / 31 /
+   32 / 33（`crates/notera-host/tests/attachment_gc.rs` 六条 + `crates/notera-store/tests/attachment_queue.rs`
+   两条），每条都配了变异自证（M32..M40，见 commit 级说明）。
+
+仍未做的（按 §40 记着，不算已完成）：**服务器侧**的孤儿对象回收没实现，只回收本机盘；GC 的触发点在
+附件轮里，所以未配置同步账户的设备不跑 GC。
