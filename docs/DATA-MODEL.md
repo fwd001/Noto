@@ -478,6 +478,15 @@ len(query) <= 2   → content 表 LIKE + COLLATE NOCASE（慢一个数量级但�
      两个队列的取活范围 —— 留下一条没人再会消费的 `failed`，界面上就是"还有 1 项待发"永远不掉。
      范围只卡在本轮真被隔离的那些 sha：仍被引用的行那条 `failed` 一字不动，GC 不是替用户
      吞掉同步失败的那只手（这一点与引擎的 `outbox_settle` 相反，那条**不许**动 `failed`）。
+* **附件待办的生命周期：`failed` 不是"有人在管的待重试"，而是一条没有消费者的账**（0.0.26，判据 FT-ATT-38）。
+  以前 `outbox_settle` 的注释写着 failed 行"归退避逻辑管"，这是**错的**：文本引擎按 `local_views` 规划、
+  附件轮按 `attachments` 的状态挑活，而 `Store::outbox_take` 在生产里没有调用方 —— 没有任何东西会回去重试
+  一支 failed。`outbox_pending` 的口径又含 `failed`（`Store::stats`），所以它是一笔永远不会掉的数。
+  三条真实出路写清楚：**下一次变更把它重新入队**（`rows::enqueue` 的 `ON CONFLICT(dedupe_key)` 把状态打回
+  `pending`）、**附件侧两个收口器**（`settle_satisfied_attachment_ops` 只收"状态已满足"的，
+  `mark_attachments_quarantined` 只收"本轮真被 GC 认领的"）、**用户点界面上的重试动作**。
+  两个收口器的方向都是双向的，各挡一种错法：状态还没满足就去结 = 把用户真实的失败藏起来；
+  状态已经满足了还不结 = 计数永久虚高。
   2. **真删**（`App::confirm_still_remote(remote, cutoff, cap)` + `App::purge_verified_blobs(&verified)`，
      同一套上界）：`deleted_at` 早于宽限期界
      （**常量 30 天**，`quarantine_cutoff` 算，`cutoff` 由调用方给，这样"到期没有"是可核对的而不是

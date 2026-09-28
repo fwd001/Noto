@@ -421,7 +421,14 @@ impl Store {
     /// 结清某个实体某 rev 的待办（引擎手里只有"kind/id/rev"，没有行号也没有 dedupe_key，
     /// 所以定位只能按这三样）。返回 `false` = 没有匹配的待办行：调用方要能区分
     /// "结清了"和"没找到"，否则 outbox 会安静地停在 inflight，队列计数永远不掉。
-    /// 只动 pending/inflight：`failed` 行归退避逻辑管，`done`/`superseded` 不该被改写。
+    /// 只动 pending/inflight：`failed` **不在这里被改写** —— 这一条是"这一轮的活干完了"的结清，
+    /// 把一支 failed 写成 done 就等于替用户宣布"那次失败成功了"。
+    /// （顺带更正这句注释以前写的"`failed` 行归退避逻辑管"：并没有一条后台退避在重试 outbox 行 ——
+    /// 文本引擎按 `local_views` 规划、附件轮按 `attachments` 的状态挑活，`outbox_take` 在生产里没有
+    /// 调用方。failed 真正的出路是三条：下一次变更把它重新入队（`rows::enqueue` 的
+    /// `ON CONFLICT(dedupe_key) DO UPDATE SET state='pending'`）、附件那侧由
+    /// [`Self::settle_satisfied_attachment_ops`] / [`Self::mark_attachments_quarantined`] 收口、
+    /// 或用户点界面上的重试动作。）
     ///
     /// `kind` 刻意是 `EntityKind` 而不是字符串：`entity_type` 列写的是长标记
     /// （note/folder/attachment），而同步线上飘的是短标记（n/f/a）。这里收字符串的话，
@@ -1200,11 +1207,19 @@ impl Store {
     /// 于是永远没人去关它。留着的表现就是设置页的"待同步"计数永久虚高（§18 要求诚实）。
     /// 方向必须分开判：`upload` 看服务器有没有、`download` 看本地有没有；
     /// 用 OR 混在一起会把"本地还缺着"的下载单也顺手关掉，那才是真的丢数据。
+    ///
+    /// **`failed` 为什么也在这里收**（而不是"归退避重试管"）：这句注释以前写的是退避重试，
+    /// 实情是**没有任何后台消费者会再去碰一支 failed 的附件待办** —— 文本引擎只按 `local_views`
+    /// 规划（附件不走那条路），附件轮只按 `attachments` 的状态挑活，`outbox_take` 在生产里没有
+    /// 调用方。而 `outbox_pending` 的口径含 `failed`。所以"状态已经满足了还留着一支 failed"
+    /// 就是一笔永远不会掉的虚高。
+    /// **反过来那一半同样要守住**：状态**没**满足的 failed 一条都不许动 —— 那是"这一项确实还没
+    /// 同步上去"，用户应当看到（§27 的收手形状靠界面上那颗「重新上传本机这份」接手）。
     pub fn settle_satisfied_attachment_ops(&self) -> Result<u32, StoreError> {
         self.write_tx(|tx, now| {
             let n = tx.execute(
                 "UPDATE sync_operations SET state = 'done', updated_at = ?1
-                  WHERE entity_type = 'attachment' AND state IN ('pending','inflight')
+                  WHERE entity_type = 'attachment' AND state IN ('pending','inflight','failed')
                     AND EXISTS (
                       SELECT 1 FROM attachments a
                        WHERE a.sha256 = sync_operations.sha256

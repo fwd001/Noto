@@ -499,3 +499,65 @@ fn a_purge_refuses_rows_that_are_still_referenced_or_absent() {
         "销毁后账上要彻底没有这一行"
     );
 }
+
+/// 一支 `failed` 的上传待办，在**后来这一份真的传上去了**之后必须被结掉。
+///
+/// 为什么这条与 FT-ATT-35 不重复：那一条管"GC 认领了一行"这种**这行不再有任何活可干**的情形；
+/// 这一条管笔记仍被引用、活也确实干完了的情形。两边的共同点是 `outbox_pending` 的口径含
+/// `failed`（`Store::stats` 与 §18 那两处 SQL），而**没有任何后台消费者会再去碰一支 failed 的
+/// 附件待办** —— 文本引擎只按 `local_views` 规划、附件轮只按 `attachments` 的状态挑活，
+/// `outbox_take` 在生产里没有调用方。所以"留着它总会自己掉下去"是不成立的。
+///
+/// 方向同样要守住另一半：**还没传上去的 failed 不许被结掉** —— 那是用户真该看到的一条
+/// "这一项还没同步上去"（§27 的收手形状：404 / 内容不符时后台不再重试，界面上靠
+/// 「重新上传本机这份」接手）。把它悄悄写成的，就不是诚实的计数了。
+#[test]
+fn a_failed_upload_is_closed_once_a_later_round_proves_it_uploaded() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    let sha = attach(&store, &folder, b"retry-bytes", "blk0000d1");
+
+    // 第一轮上传失败：走公开接口（取出待办 → 回填失败），不手改表
+    store
+        .outbox_take(notera_store::LOCAL_ACCOUNT_ID, 50)
+        .expect("取待办");
+    store.finish_attachment_ops(&sha, false).expect("标成失败");
+    assert_eq!(
+        store
+            .outbox_len(
+                notera_store::LOCAL_ACCOUNT_ID,
+                &[notera_store::OpState::Failed]
+            )
+            .unwrap(),
+        1,
+        "前置：这一支确实是 failed"
+    );
+
+    // ① 还没传上去：这条要留着（用户看得见"这一项没同步上去"是对的）
+    assert_eq!(
+        store.settle_satisfied_attachment_ops().unwrap(),
+        0,
+        "远端还没有这份就结掉 failed = 把用户真实的失败藏起来"
+    );
+
+    // ② 后来这一份到了服务器上（另一轮成功，或对面设备传上去后清单确认了它）
+    store
+        .set_attachment_states(&sha, Some("available"), Some("present"))
+        .unwrap();
+    assert_eq!(
+        store.settle_satisfied_attachment_ops().unwrap(),
+        1,
+        "已经传上去了的那支 failed 必须被结掉：outbox_pending 含 failed，留着就是永久虚高"
+    );
+    assert_eq!(
+        store
+            .outbox_len(
+                notera_store::LOCAL_ACCOUNT_ID,
+                &[notera_store::OpState::Failed]
+            )
+            .unwrap(),
+        0,
+        "结掉之后不能再挂着：这一项已经同步完了"
+    );
+}
