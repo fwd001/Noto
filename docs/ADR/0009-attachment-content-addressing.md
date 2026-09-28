@@ -67,9 +67,13 @@
 3. **"构造'最后引用已删但上传仍 pending'，断言不删"这条用例今天由更强的判据代偿**：引用检查写在
    `UPDATE ... WHERE` 与 `DELETE ... WHERE` 里（检查与写入同一个事务），而
    `note_attachments.sha256 ON DELETE RESTRICT` 是机器兜底。落地后的门禁是 FT-ATT-29 / 29s / 30 / 31 /
-   32 / 33 / 34 / 35 / 36（`crates/notera-host/tests/attachment_gc.rs` 十条测试函数，其中一条是崩溃
+   32 / 33 / 34 / 35 / 36 / 37（`crates/notera-host/tests/attachment_gc.rs` 十一条测试函数，其中一条是崩溃
    子进程的占位；`crates/notera-store/tests/attachment_queue.rs` 三条），每条都配了变异自证
-   （M32..M40 与 M46 / M46b / M46c / M48 / M49 / M49b，见 commit 级说明）。
+   （M32..M40 与 M46 / M46b / M46c / M48 / M49 / M49b / M50b，见 commit 级说明）。
+   **FT-ATT-37 顺手推翻了一句我自己写的前提**：同一份数据目录并没有单实例锁（`pool.rs` 只有
+   `busy_timeout=5000`），第二个 store 打得开 —— 于是"跨进程 GC 竞争不构成风险"这句免责被换成实测：
+   回收那一步靠 `WHERE local_state='available' AND deleted_at IS NULL` 的 compare-and-set，销毁那一步
+   靠"只按真删到的 sha 才动文件"。**这一形只测了一个进程里的两个 store，真起两个 OS 进程仍未验**。
 4. **"引用为 0"这件事的取数口径补了一支写者**（0.0.22）。原句把 `note_attachments` 当作已经完整的事实源，
    而它当时只由 `attach_blob` 与外来笔记的 apply 两处写入 —— 本机 `create_note` / `edit_note` 不登记，
    于是"正文里引用着这张图、链接表里没有这一行"在生产里是**常态**（冲突副本就是拿服务器那一版的正文直接

@@ -1091,3 +1091,91 @@ async fn nothing_is_destroyed_until_the_server_confirms_it_still_has_the_bytes()
     );
     assert_eq!(quarantine_bytes(&a, &sha), Vec::<u8>::new());
 }
+
+/// 独立审查第 5 条：同一份数据目录被两个进程同时打开时，GC 会不会互相踩。
+///
+/// **这条推翻了我自己写在 §48 里的一句前提** —— 那里原本写着"同一目录上的第二个进程今天
+/// 会被锁挡住，所以这条不构成风险"。实情是 `pool.rs` 只有 `PRAGMA busy_timeout=5000`，
+/// **没有任何单实例锁**：第二个 store 打得开。既然挡不住，那句免责就得换成一份实测：
+/// 两个 store 抢同一批候选时，字节的去向要唯一、账只标一次、销毁只数到一次。
+///
+/// 形状是一个进程里开两个 `App` 指向同一个目录：它们各有自己的连接与自己那次候选查询
+/// （竞态的两半都在），共享的正是跨进程时也共享的那两样 —— 同一份 SQLite 与同一份磁盘。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_stores_on_one_data_dir_never_move_or_destroy_the_same_bytes_twice() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..5_200).map(|i| (i % 61) as u8).collect();
+    let dir = Tmp::new("37-shared");
+    let (a, sha) = seed_uploaded(dir.path(), &url, &blob).await;
+    // 第二个"进程"：同一个目录，另一套连接与另一份候选查询
+    let b = boot(dir.path(), &url);
+    let nid = a
+        .store()
+        .list_notes(&notera_store::NoteQuery {
+            folder: None,
+            trash: false,
+            limit: 50,
+            offset: 0,
+        })
+        .unwrap()
+        .into_iter()
+        .find(|n| n.title.contains("GC 目标笔记"))
+        .map(|n| n.id.clone())
+        .expect("前置：那条带图笔记还在");
+    a.store().purge_note(&nid).expect("永久删除");
+
+    // 两边都先看到同一条候选（这一句是这条门禁的前提：它们抢的是同一批东西）
+    assert_eq!(
+        a.store().gc_quarantine_candidates(50).unwrap(),
+        vec![sha.clone()]
+    );
+    assert_eq!(
+        b.store().gc_quarantine_candidates(50).unwrap(),
+        vec![sha.clone()]
+    );
+
+    // ① 回收：只能有一家把这一条算成自己认领的
+    let moved = a.reclaim_unreferenced_blobs(50) + b.reclaim_unreferenced_blobs(50);
+    assert_eq!(
+        moved, 1,
+        "同一份字节被两个 store 各自认领了一次 = 隔离那一步没有互斥"
+    );
+    assert_eq!(official_bytes(&a, &sha), Vec::<u8>::new(), "正式位置该空着");
+    assert_eq!(
+        quarantine_bytes(&b, &sha),
+        blob,
+        "隔离区里必须恰好一份、且内容还是那 5200 个字节"
+    );
+
+    // ② 销毁：两边都拿着同一份到期清单动手，只许数到一次
+    let verified_a = {
+        let remote = a.remote_for_sync().await.unwrap().expect("A 有适配器");
+        a.confirm_still_remote(&remote, ALL_PAST, 50).await
+    };
+    let verified_b = {
+        let remote = b.remote_for_sync().await.unwrap().expect("B 有适配器");
+        b.confirm_still_remote(&remote, ALL_PAST, 50).await
+    };
+    assert_eq!(verified_a, vec![sha.clone()], "前置：A 那一边问到了还在");
+    assert_eq!(verified_b, vec![sha.clone()], "前置：B 也拿到了同一份清单");
+    let destroyed = a.purge_verified_blobs(&verified_a) + b.purge_verified_blobs(&verified_b);
+    assert_eq!(
+        destroyed, 1,
+        "同一行被销毁两次 = 第二步也没有互斥（第二次的字节删除会踩到别人刚腾开的位置）"
+    );
+    assert_eq!(
+        a.store().attachment_for_state(&sha),
+        ("absent".to_string(), "absent".to_string()),
+        "两个 store 看同一份账，销毁之后都得没有这一行"
+    );
+    assert_eq!(
+        b.store().attachment_for_state(&sha),
+        ("absent".to_string(), "absent".to_string())
+    );
+    assert_eq!(
+        quarantine_bytes(&b, &sha),
+        Vec::<u8>::new(),
+        "隔离区不能留下第二份"
+    );
+}
