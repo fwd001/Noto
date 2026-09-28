@@ -19,7 +19,7 @@
 
 | 门禁 | 结果 | 命令 | 层级 |
 |---|---|---|---|
-| Rust 全量测试 | **554 通过 / 0 失败 / 2 ignored**（53 个单元/集成测试二进制 + 13 个 doc-test；2026-09-28 在 0.0.21 那棵树上实测。两条 `#[ignore]` 都是刻意的显式 lane：P11 面板的留档夹具 `conflict_payload_e2e.rs:519`（由 `scripts/verify-p11-panel.mjs` 跑）与 GC/体检的规模基准 `attachment_gc_scale.rs`（由 `-- --ignored` 跑，数字进 PERF-10）；此前这里写的"0 ignored"与实测不符，2026-09-28 更正） | `cargo test --workspace` | L0–L4 |
+| Rust 全量测试 | **556 通过 / 0 失败 / 2 ignored**（53 个单元/集成测试二进制 + 13 个 doc-test；2026-09-28 在 0.0.21 那棵树上实测。两条 `#[ignore]` 都是刻意的显式 lane：P11 面板的留档夹具 `conflict_payload_e2e.rs:519`（由 `scripts/verify-p11-panel.mjs` 跑）与 GC/体检的规模基准 `attachment_gc_scale.rs`（由 `-- --ignored` 跑，数字进 PERF-10）；此前这里写的"0 ignored"与实测不符，2026-09-28 更正） | `cargo test --workspace` | L0–L4 |
 | Clippy（CI 原样命令） | 0 error / 0 warning | `cargo clippy --workspace --all-targets -- -D warnings` | L0 |
 | 架构适应度 | **28/28**（含"扫描台账"：任何源码门禁扫到 0 个文件即判失败；第 28 条是本轮新增：测试里的「或」断言必须就地写理由，含空转保护，并用一条恒真断言反注验过） | `node scripts/arch-check.mjs` | 静态 |
 | 前端 | **209 通过（22 文件）**；`vue-tsc --noEmit` 0 错（两条都是 2026-09-28 与"两颗自救按钮"那批同批实测；此前写过的 201/21 与 200/21 都是更早的数）；构建 216.65 KB → gzip 74.22 KB 那一档本轮未重测 | | `pnpm --dir apps/desktop test` / `run typecheck` / `run build` | L0/L1 |

@@ -1768,3 +1768,123 @@ async fn a_user_reupload_replaces_a_corrupt_remote_object_for_every_device() {
     );
     srv.stop().await;
 }
+
+// —————————————— 崩溃：坏字节已经挪开、账还没降级（§20 那一格的 L5 证据）
+
+/// 子进程模式的开关：崩溃注入靠"用同一个测试二进制再起一个进程，让它真的死在那一点上"。
+const PARK_CHILD: &str = "NOTERA_PARK_CRASH_CHILD";
+
+/// 子进程：在父进程已经弄好的那座库上只跑一次体检。命中 `after_corrupt_park` 时进程当场消失，
+/// 于是现场停在"坏字节已挪成 `.corrupt`、正式位置空了、而账上还写着 available"这一格。
+#[test]
+fn child_sweeps_once() {
+    let Ok(spec) = std::env::var(PARK_CHILD) else {
+        return; // 不是子进程模式：这条什么都不做（父进程靠 spawn 显式启用）
+    };
+    let Some((dir, url)) = spec.split_once('|') else {
+        return;
+    };
+    let app = boot(Path::new(dir), url);
+    let n = app.sweep_lost_local_blobs(200);
+    // 能从这一行走出去就说明注入点压根没接上（体检没把那份认成坏的，或 crash_point 忘了放）
+    eprintln!("CHILD_SWEEP 走完了整次体检（这是错的）：降级 {n} 条");
+}
+
+/// 体检那一步也是**两条指令**：把坏字节挪开 → 把账降级。中间断电的形状是
+/// "正式位置空了、现场以 `.corrupt` 还在、而账上仍写 available" —— 一条假账加一份没人引用的现场。
+/// 这一条要证的是：**崩过一次既不会让本机最后一份现场消失，也不会让恢复卡死。**
+/// 恢复靠的还是既有的机器（下一轮体检看见"available 而正式位置没有"→ 降级 → 下载轮拿回好字节
+/// → 那时才有凭据清掉 `.corrupt`，也就是 §8 那句"没有替代就不销毁"）。
+///
+/// 与 GC 那一格（CI-CRASH-11）刻意相反：这一格本机**没有**好的一份字节，所以自愈**必须**去
+/// 服务器要一次 —— 请求数增加才是对的。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_crash_right_after_parking_the_corrupt_copy_still_gets_a_clean_replacement() {
+    use std::process::Command;
+
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..9_000).map(|i| (i % 113) as u8).collect();
+    let a_dir = Tmp::new("park-crash-a");
+    // 先造一台"正文引用着图、服务器上有一份好字节"的设备
+    let sha = seed_source(a_dir.path(), &url, &blob).await;
+
+    // **截断**（长度与登记不符）：体检的快路径只在长度相符时相信盘上那份，长度对不上才会把整份
+    // 读回来复算哈希 —— 也就是只有这一支会走到"挪开"。同长度位腐它是抓不到的（那是读侧的活，
+    // FT-ATT-12b 管那一格），所以这里必须截断，否则注入点压根不会被经过（第一版就红在这里）。
+    let a = boot(a_dir.path(), &url);
+    let mut rotted = blob.clone();
+    rotted.truncate(blob.len() / 2);
+    assert_ne!(rotted.len(), blob.len(), "前置：长度要与登记不符");
+    std::fs::write(a.store().blob_path(&sha), &rotted).expect("原地截断本机那份");
+    drop(a); // 让出这座库，子进程要自己开它
+
+    let out = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "child_sweeps_once",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(PARK_CHILD, format!("{}|{}", a_dir.path().display(), url))
+        .env("NOTERA_CRASH_AT", "after_corrupt_park")
+        .env("NOTERA_DEV_WEBDAV_SECRET", SECRET)
+        .output()
+        .expect("起子进程");
+    assert_eq!(
+        out.status.code(),
+        Some(notera_core::CRASH_EXIT_CODE),
+        "注入点没有让进程死在那里（退出码 {:?}）—— 那这一格测的不是崩溃：stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let a = boot(a_dir.path(), &url);
+    assert!(
+        !a.store().blob_path(&sha).exists(),
+        "前置：崩完之后正式位置该是空的（挪开了，不是原地留着坏字节）"
+    );
+    let parked = parked_copies(&a, &sha);
+    assert_eq!(
+        parked.len(),
+        1,
+        "本机最后一份现场必须以 .corrupt 的形式留在盘上 —— 断电不许变成销毁"
+    );
+    assert_eq!(parked[0], rotted, "那份现场要逐字节等于挪开前的坏字节");
+    assert_eq!(
+        a.store().attachment_for_state(&sha).0,
+        "available",
+        "账还没降级：这条假账正是这一格的形状，判据要打在它上面"
+    );
+    assert_body_still_usable(&a, &sha);
+
+    let before = gets_for_sha(&srv, &sha);
+    let remote = a.remote_for_sync().await.unwrap().expect("A 有适配器");
+    let round = a.run_attachment_round(&remote).await;
+    assert_eq!(round.1, 1, "重启后的第一轮要把这一行捡回来：{round:?}");
+    assert!(
+        gets_for_sha(&srv, &sha) > before,
+        "这一格本机没有好的一份字节，自愈就该去服务器要一次（不去才是假绿）"
+    );
+    assert_eq!(
+        blob_on_disk(&a, &sha),
+        blob,
+        "回来的那份必须逐字节等于服务器上那份好的"
+    );
+    assert!(
+        parked_copies(&a, &sha).is_empty(),
+        "拿到哈希对得上的替代之后才清现场；崩过一次不该让现场变成永久的垃圾"
+    );
+    assert_eq!(
+        a.store().attachment_for_state(&sha),
+        ("available".into(), "present".into()),
+        "两半状态都要落回真话"
+    );
+    let round2 = a.run_attachment_round(&remote).await;
+    assert_eq!(
+        round2,
+        (0, 0, 0),
+        "补回来之后必须收手，否则这条每 20 s 重下一遍"
+    );
+    srv.stop().await;
+}

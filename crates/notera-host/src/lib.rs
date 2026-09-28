@@ -1913,6 +1913,11 @@ impl App {
             if self.park_corrupt_blob(&path).is_err() {
                 continue;
             }
+            // 崩溃注入点：坏字节**已经挪开**（正式位置空了）而账还没降级。这一格和 GC 那格
+            // 是同一类窗口 —— 断电之后本机只剩一份 `.corrupt` 现场和一条写着 available 的假账。
+            // 它该由既有的机器自己收：重启后体检看见"available 而正式位置没有"→ 降级 → 下载
+            // 轮拿回好字节 → 那时才有凭据销毁 `.corrupt`（"没有替代就不销毁"那条序）。
+            notera_core::crash_point("after_corrupt_park");
             lost.push(sha);
         }
         if lost.is_empty() {

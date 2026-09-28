@@ -85,16 +85,16 @@ fn matrix_points() -> Vec<&'static str> {
             "大库名单里的 {extra} 不在 CRASH_POINTS 里"
         );
     }
-    for extra in notera_core::CRASH_POINTS_NEED_GC {
+    for extra in notera_core::CRASH_POINTS_NEED_SPECIAL_FIXTURE {
         assert!(
             notera_core::CRASH_POINTS.contains(extra),
-            "GC 名单里的 {extra} 不在 CRASH_POINTS 里"
+            "专门夹具名单里的 {extra} 不在 CRASH_POINTS 里"
         );
     }
     notera_core::CRASH_POINTS
         .iter()
         .filter(|p| !notera_core::CRASH_POINTS_NEED_LARGE_LIBRARY.contains(p))
-        .filter(|p| !notera_core::CRASH_POINTS_NEED_GC.contains(p))
+        .filter(|p| !notera_core::CRASH_POINTS_NEED_SPECIAL_FIXTURE.contains(p))
         .copied()
         .collect()
 }
