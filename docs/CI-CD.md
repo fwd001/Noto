@@ -466,7 +466,7 @@ jobs:
 | Android 构建 | **BLOCKED** | `[实测]` 无 JDK / 无 SDK / 无 NDK / 无 `adb` | 本机装 JDK17 + Android SDK/NDK；或只在 `ubuntu-22.04` CI 出包 |
 | iOS 构建 | **BLOCKED** | 平台事实：Windows 不能构建 iOS | macOS 14 + Xcode（本机永久不可行） |
 | macOS 产物构建 | **BLOCKED** | 同上 | `macos-14` runner 或借用人手 Mac |
-| 观察 GitHub Actions 运行 | **BLOCKED** | `[实测]` `github.com` / `api.github.com` curl `000` | **可访问 GitHub 的推送通道**（人工 push，回贴 Actions URL + 日志） |
+| 观察 GitHub Actions 运行 | **可用（有条件）** | `[实测 2026-09-28]` push 之后直接查 `api.github.com/repos/fwd001/Noto/actions/runs` 就能拿到 run 的 status/conclusion（`gh` 不在本机 PATH 上，REST 够用）；`f1f1bf0` = #38 success、`f4a4ffb` = #39 success | **条件是本机代理通**：同日它就 `SSL_ERROR_SYSCALL` 过一次，那一次 push 与查 CI 一起挡掉，只能按 §40 记 BLOCKED（不必再等人工回贴 URL） |
 | crates.io / npm 依赖拉取 | 可用 | `[实测]` 四个域 HTTP 200（探针 `https-tls-handshake` PASS） | 已解锁 |
 | 真实 WebDAV 服务器兼容性测试（Nextcloud/坚果云/阿里 OSS WebDAV 等） | **BLOCKED** | 设计只有 `notera-test-webdav`（127.0.0.1）；真实服务器凭据按 §1 非目标禁止入 CI | 人工提供 **可访问的真实 WebDAV 服务器**，且只在 `workflow_dispatch` 的独立 job 跑（不进 PR 门禁，不写日志凭据） |
 | Apple 签名/公证、Android release keystore、updater 签名密钥 | **BLOCKED** | 无证书/无私钥/secrets 未配置（`[实测]` 本机无相关凭据文件） | 见 §13，secrets 落地后才能验证 |

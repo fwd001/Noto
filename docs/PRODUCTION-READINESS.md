@@ -79,7 +79,7 @@
 
 ## 5. 需要人工决定的项（§51：我不动手，等拍板）
 
-1. **安装器**（`.msi`/`.exe`）—— **`.exe` 已产出并验通**（2026-09-27，pnpm 收敛后解锁：`@tauri-apps/cli` 2.12.0 已作为 devDependency 装上）。
+1. **安装器**（`.msi`/`.exe`）—— **两个包都产得出来**（0.0.28 起 `.msi` 通了；见下面那条 0.0.28 的结局），**`.exe` 已产出并验通**（2026-09-27，pnpm 收敛后解锁：`@tauri-apps/cli` 2.12.0 已作为 devDependency 装上）。
    命令与产物：`RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu pnpm --dir apps/desktop exec tauri build --target x86_64-pc-windows-gnu --bundles nsis`
    → `target/x86_64-pc-windows-gnu/release/bundle/nsis/Notera_0.0.21_x64-setup.exe`（**4.48 MiB**；2026-09-28 在本批的树上重新出包，此前这里挂的是 0.0.13 / 4.46 MiB）。
    同批在这个新包上重验了两件事：① 真窗口 **release 9/9**（`http://tauri.localhost/` 内嵌资源、真 `invoke`、真 SQLite 落盘）；② **"dev 桥只关在 debug 构建里"在新 release 二进制上成立** —— 起包内那个 exe，5 s 后 `127.0.0.1:17323/health` **连接被拒**（进程确实起来了，日志里有 WebView 窗口类那一行，不是"没跑起来所以连不上"）。
@@ -92,7 +92,7 @@
    > ② `tauri info`/`build` 会因 **JS `@tauri-apps/api` 与 Rust `tauri` crate 次版本不一致**直接拒绝打包
    > （此前是 2.11.1 对 2.12.0 —— 所有 lane 却都在这个组合下绿着，所以它是个"能跑但工具链不许出货"的错配）。
    > 已把两侧都对到 2.12.0，之后 200/200 前端测试与类型检查仍全绿。
-   > **MSI 这条路还没通**：`--bundles msi` 先报 `LGHT0102 !(loc.TauriCodepage) is unknown`
+   > **MSI 这条路 0.0.28 通了**（下面两段当时怎么猜的都留着 —— 它们的形状会被再踩一次，而真答案是 `LGHT0311`）：`--bundles msi` 先报 `LGHT0102 !(loc.TauriCodepage) is unknown`
    > （tauri 生成的 `main.wxs` 引用本地化变量却没把 `.wxl` 交给 `light`；已用
    > `bundle.windows.wix.language: ["en-US"]` 试修），随后卡在 `os error 32 另一个程序正在使用此文件`
    > —— WiX 临时目录 `target/…/release/wix/x64` 被某个进程握着句柄（`rm` 都报 Device or resource busy），
@@ -103,6 +103,13 @@
    > `wix.language` 解决。**这一条按 §40 记 BLOCKED**：原因（上一条 lock + loc 变量待复验）、
    > 影响（只影响 `.msi` 这种"给企业域推送用"的格式，`.exe` 安装器已可用）、
    > 解除条件（重启或换机器清掉句柄后再跑一次 `--bundles msi`，看语言参数是否已解决 LGHT0102）。
+   > **0.0.28 的结局**：按上面那句去跑（干净 shell + 绝对路径 + `-v`），`light` 的原文第一次被透出来 ——
+   > 是 **`LGHT0311`：字符串里有码页 1252 装不下的字符**，报在 `main.wxs` 118 / 123 行的
+   > `<ProgId Description="导入为笔记">`。真根因既不是 loc 变量也不是文件锁，而是 `wix.language = ["en-US"]`
+   > 把 MSI 码页钉成 1252，而 `fileAssociations` / `bundle.shortDescription` / `longDescription` 是中文。
+   > 改成 `["zh-CN"]` 一行，`light` 退出 0，产出 `Notera_0.0.28_x64_zh-CN.msi` 6.18 MiB（同批 `.exe` 也重出到 0.0.28 / 4.48 MiB，
+   > 并在打进包的那同一个 release exe 上重跑真窗口 9/9）。**这条剩下的 BLOCKED 只有一格：装移动作没验** ——
+   > 它需要在用户的机器上真装一次，我没有替他做；解除条件是用户装一次并回执（装完能起来、快捷方式与文件关联落地、卸载干净）。
    > **安装包内容本身已验的一件事**：拿真正进包的 `release/notera-desktop.exe`（不是 debug 产物）
    > 起过一次 —— 进程活着、数据目录被真实创建，而 `127.0.0.1:17323/health` 连不上，
    > 也就是 §9 那条"dev 桥只关在 debug 构建里"**在出货产物上成立**（不是只看代码里的 feature 门）。
