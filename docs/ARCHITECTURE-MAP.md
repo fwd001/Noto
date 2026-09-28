@@ -193,6 +193,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | L5 崩溃注入 | 小库矩阵 9 点 + 大库压实 1 点，逐个杀死真子进程 + 重启收敛（`crash_recovery` 2 条 + `compaction_crash` 1 条，名单由 `CRASH_POINTS_NEED_LARGE_LIBRARY` 减法拼回全表） | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery --test compaction_crash` |
 | 附件续传 + Range 兼容 | 2/2（一条真杀进程重启接着要、一条让服务器**不理** Range 头看它当不当整份覆盖） | `cargo test -p notera-host --test attachment_resume` |
 | 附件回收（GC：隔离 / 宽限期 / 本地恢复） | 6/6（§8 的 GC 两条 + 每轮上界 + 撤销期零网络 + 宽限期与引用守卫 + 两颗手动动作认隔离区 + 隔离副本坏了）；存储侧另有 2/2 | `cargo test -p notera-host --test attachment_gc`；`cargo test -p notera-store --test attachment_queue`（后两条门在 `the_quarantine_mark_only_takes_rows...` 与 `a_purge_refuses_rows...`） |
+| GC / 体检的每轮代价（规模基准，非门禁） | 已实测一次并写进 PERF-10：**空转一轮 1 ms**，爆发形一轮 200 条约 1.2 s（debug 构建，2000 份 blob，1500 条被永久删除）共 8 轮搬完，销毁 8 轮共 4.1 s；仍被引用的 500 份一份不少 | `cargo test -p notera-host --test attachment_gc_scale -- --ignored --nocapture` |
 | 清单压实 + 分段读回 | 1/1（>200 条变更：分段落盘、索引不引用不存在的分段、空库设备追平 260 条） | `cargo test -p notera-host --test compaction` |
 | 大库换设备追平 | 1/1（260 条变更 > 窗口上限：空库设备完整收敛、标题+内容哈希逐条一致） | `cargo test -p notera-host --test late_device` |
 | **千库规模**（SY-INT-14，12.8 s） | 1/1（1000 条：公告/追平轮数有界、索引只装引用 ≤8 KiB、逐条比对**读满**、空轮 1 请求 + 304 + 0 字节、默认本全网络只有一条） | `cargo test -p notera-host --test big_library` |
