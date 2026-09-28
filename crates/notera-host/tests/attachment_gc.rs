@@ -860,3 +860,110 @@ async fn a_crash_between_the_move_and_the_ledger_heals_itself_without_one_reques
         "已认领过的行不该被再认领一次（否则就是补/收来回摆）"
     );
 }
+
+// ——————————————— FT-ATT-35：链接表低估了引用，GC 就会销毁还在画的图
+
+/// **这一条打的不是"GC 的判据写错了"，而是"引用计数从哪来"本来就不可信。**
+///
+/// `note_attachments` 只有两个写者：`attach_blob`（挂载）与外来笔记的登记（apply 那条路）。
+/// 本机的 `create_note` / `edit_note` **从不派生链接** —— 于是"正文里明明引用着这张图，链接表里
+/// 却没有对应行"是可达状态，而这条路径生产里每天都在走：冲突副本就是拿**服务器那一版的正文**直接
+/// `create_note`（`App` 的 AdoptConflict 分支），那份正文里带着图片块；`swap_conflict_sides` 同理。
+///
+/// 后果是 GC 落地之后才成立的：零引用 = "这份字节可以回收"，于是当唯一保护着它的链接随着原件被
+/// 永久删除（CASCADE 带走），这份字节会在 30 天后被销毁，而副本还在画它。
+/// 修的是"引用不许被低估"：本机的 create/edit 也按正文派生链接 —— 宁可多算引用（少收点磁盘），
+/// 不可少算（少算就是丢数据）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_local_note_that_references_an_image_in_its_doc_protects_its_bytes() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..5_600).map(|i| (i % 41) as u8).collect();
+    let a_dir = Tmp::new("35-a");
+    let (a, sha) = seed_uploaded(a_dir.path(), &url, &blob).await;
+    let folder = a.default_folder_id().unwrap();
+
+    // 生产里每天都在走的一步：拿「另一个版本」的正文新建一条笔记（冲突副本就是这么造的）。
+    // 它的正文引用着同一张图，可没有人替它写链接表。
+    let copy = a
+        .create_note(
+            &folder,
+            json!({ "v": 1, "content": [
+                { "id": "blk000001", "type": "paragraph", "content": [{ "text": "冲突副本的正文" }] },
+                { "id": "blk000002", "type": "image", "attrs": {
+                    "sha256": &sha, "ref": &sha, "role": "inline", "pending": false,
+                    "size": blob.len(), "mediaType": "image/png", "name": "shot.png" } },
+            ] }),
+        )
+        .expect("冲突副本的创建（真走 create_note）");
+    let original = a
+        .store()
+        .list_notes(&notera_store::NoteQuery {
+            folder: None,
+            trash: false,
+            limit: 50,
+            offset: 0,
+        })
+        .unwrap()
+        .into_iter()
+        .find(|n| n.title.contains("GC 目标笔记"))
+        .map(|n| n.id.clone())
+        .expect("前置：原件还在");
+
+    // 第二条**编辑**路径：先把一张图搬进一条原本没有附件的笔记的正文里（编辑器里复制图片块、
+    // 冲突采纳"保留本机"改写正文都是这一形）—— 这一步不调 `attach_blob`，因为字节本来就在盘上，
+    // 于是链接表只能由正文派生。少了这一步，`edit_note` 那条路依然是"正文引用着、账上没登记"。
+    let doc_with_image = json!({ "v": 1, "content": [
+        { "id": "blk000001", "type": "paragraph", "content": [{ "text": "把图搬进来的那条" }] },
+        { "id": "blk900002", "type": "image", "attrs": {
+            "sha256": &sha, "ref": &sha, "role": "inline", "pending": false,
+            "size": blob.len(), "mediaType": "image/png", "name": "shot.png" } },
+    ] });
+    let third = a
+        .create_note(
+            &folder,
+            json!({ "v": 1, "content": [
+                { "id": "blk900001", "type": "paragraph", "content": [{ "text": "空的一条" }] },
+            ] }),
+        )
+        .expect("前置：建一条不带图的笔记");
+    let third_id = notera_core::EntityId::parse(&third.id).unwrap();
+    let head = a.store().get_note(&third_id).unwrap().unwrap();
+    a.store()
+        .edit_note(&third_id, doc_with_image, head.rev)
+        .expect("把图片块搬进正文（真走 edit_note）");
+
+    // 引用计数必须把副本与"搬进来"的那条都算进来 —— 这一句就是「少算 = 丢数据」那个洞的正身。
+    assert_eq!(
+        a.store().attachment_refs(&sha).unwrap(),
+        3,
+        "三条笔记的正文都引用着这份字节，链接表却认不全：GC 的判据建立在一个被低估的数上"
+    );
+
+    // 永久删掉原件：从此只有副本与搬进来的那条在引用它。
+    a.store().purge_note(&original).expect("永久删除原件");
+    assert_eq!(
+        a.store().attachment_refs(&sha).unwrap(),
+        2,
+        "另外两条链接必须还在，否则这份字节就成了「没人引用」的孤儿"
+    );
+    assert_eq!(
+        a.reclaim_unreferenced_blobs(50),
+        0,
+        "还在被副本引用的那份字节，一条都不许收"
+    );
+    assert_eq!(official_bytes(&a, &sha), blob, "被引用的字节一个都不许动");
+    let (code, len) = ui_read_code(&a, &sha);
+    assert_eq!(code, None, "副本打开那张图要拿得到字节：{code:?}");
+    assert!(len.unwrap_or(0) > 0);
+    let copy_id = notera_core::EntityId::parse(&copy.id).unwrap();
+    let copy_note = a
+        .store()
+        .get_note(&copy_id)
+        .unwrap()
+        .expect("前置：副本确实建起来了（不能靠「根本没建出来」混过上面那几条断言）");
+    assert!(
+        copy_note.has_attachment,
+        "副本自己得知道它带着附件（派生列），否则这条测试的前提是空的"
+    );
+}

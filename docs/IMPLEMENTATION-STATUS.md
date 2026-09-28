@@ -11,13 +11,13 @@
 
 | 门禁 | 结果 | 出处 |
 |---|---|---|
-| `cargo test --workspace` | **556 通过 / 0 失败 / 2 ignored**（53 个单元/集成测试二进制 + 13 个 doc-test）—— 2026-09-28 本机四批：§48 的 G3、G4，用户决定的两个附件自救动作，以及附件回收（GC 的安全半：隔离 30 天 + 零网络本地恢复 + 到期销毁）。两条 `#[ignore]` 都是刻意留给显式调用的 lane（P11 留档夹具 `conflict_payload_e2e.rs:519`，与 GC/体检规模基准 `attachment_gc_scale.rs`）；此前这里写的"0 ignored"与实测不符，已更正 | 本机 |
+| `cargo test --workspace` | **557 通过 / 0 失败 / 2 ignored**（53 个单元/集成测试二进制 + 13 个 doc-test）—— 2026-09-28 本机五批：§48 的 G3、G4，用户决定的两个附件自救动作，附件回收（GC 的安全半：隔离 30 天 + 零网络本地恢复 + 到期销毁），以及 GC 引用判据的分支缺失（0.0.22：本机 create/edit 也从正文登记链接）。两条 `#[ignore]` 都是刻意留给显式调用的 lane（P11 留档夹具 `conflict_payload_e2e.rs:519`，与 GC/体检规模基准 `attachment_gc_scale.rs`）；此前这里写的"0 ignored"与实测不符，已更正 | 本机 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 / 0 | 本机（CI-CD 原样命令） |
 | `cargo fmt --all --check` | 退出码 0（`rustfmt` 组件已装；全仓已格式化） | 本机 |
 | `node scripts/arch-check.mjs` | 28/28（第 26 = 版本单源，第 27 = 编译期嵌入的文件要进版本库，第 28 = 「或」断言必须写理由） | 本机 |
 | 版本单源 | 权威 = 根 Cargo.toml；`check-versions` 一致 | 本机 |
 | `node scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 | 本机 |
-| `node scripts/verify-app.mjs` | **37/37**（真 Rust 核心，非 mock）—— 2026-09-28 在当前 HEAD（`839d55d` 之后那一批）实测，含新增的一步"坏图占位上两颗自救按钮"。此前写 36/36 是没有那一步的数；G3/G4 那两批本批未重跑的那句已作废 | 本机 |
+| `node scripts/verify-app.mjs` | **36/37 ~ 37/37**（真 Rust 核心，非 mock）—— 2026-09-28 十二轮全新数据目录实测：「重排落到库里了」那一步偶发红（块顺序落库、加粗没落），带 0.0.22 的修复 **2/7 红**、撤掉修复回 HEAD 仍 **1/5 红** ⇒ **既有缺陷，非本批引入，待定位**（记在 §48 待办与任务清单里，不写成 37/37）。另有 1 轮整条假红（33/37）—— 起桥后没等够就开跑，属 lane 的 readiness 而不是产品。其余三十六步全绿，含新增的一步"坏图占位上两颗自救按钮"。此前写 36/36 是没有那一步的数；G3/G4 那两批本批未重跑的那句已作废 | 本机 |
 | `node scripts/verify-tauri-window.mjs` | debug **9/9 —— 2026-09-28 在当前 HEAD 上重跑**（真 `invoke`、内嵌资源、控制台零 error）；release 那 9/9 **沿用上一批**（本批没重编 release 壳）。本表此前写的 8/8 是更早一批的数 | 本机 |
 | `cargo fmt --check` | **已解除**（组件已装）：第一次跑就发现 92 个文件漂移，已纯格式化提交并复验 487/0 + clippy 0/0 | 本机 |
 

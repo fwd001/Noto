@@ -263,6 +263,7 @@ impl Store {
                 Some(rev),
                 Some(prepared.content_hash.as_str()),
             )?;
+            self.register_doc_attachments(tx, &id, &prepared.attachments, now)?;
             rows::read_note(tx, &id)?.ok_or_else(|| StoreError::not_found(EntityKind::Note, id.clone()))
         })
     }
@@ -604,11 +605,11 @@ impl Store {
 
     /// 清掉隔离区里那份已经多余的同名拷贝（尽力而为，失败不吵）。
     ///
-    /// 为什么可以忽略失败：被删的那一份**不是**唯一的一份 —— 调这条的时候正式位置上
-    /// 一定有一份内容对得上的字节（`attach_blob` 刚按调用方的字节写过、`ingest_blob` /
-    /// `restore_blob` 都是先复算 sha256 才落盘），删掉的只是同一份内容的第二个副本。
-    /// 留着它的代价是同一份字节占两处，而这个代价下一轮 GC 再认领这一行时会被自然抹平
-    /// （挪进隔离区遇到同名文件就先腾位置）。这里不是"删用户数据失败也吞"。
+    /// 为什么删得掉不心疼，凭据是**目录的准入**而不是"内容寻址所以内容一样"那句：这个目录里的文件
+    /// 只可能由 GC 的 `quarantine_move` 写入，而它的候选集要求 `remote_state='present'` —— 服务器上有
+    /// 一份。所以这里删掉的**永远不会是唯一的一份**（本机坏字节走的是 `<blobs>/<sha>.corrupt`，
+    /// 不在这个目录里，不会被这一句碰到）。留着它的代价是同一份字节占两处，而下一轮 GC 再认领这一行
+    /// 时会被同名覆盖顺带抹平。这里不是"删用户数据失败也吞"。
     fn release_quarantine_copy(&self, sha256: &str) {
         // 大多数字节从没被隔离过，"没有这个文件"是常态而不是失败。
         let _ = std::fs::remove_file(self.quarantine_path(sha256));
@@ -948,6 +949,11 @@ impl Store {
             .deleted_at
             .clone()
             .unwrap_or_else(|| cur.note.deleted_at.clone());
+        // 引用计数由 doc 派生：这一步缺席时链接表低报，GC 会把还在渲染的字节当无主物收走。
+        // 只登记、不 prune —— 多算引用只是少收一点磁盘，少算引用是丢数据，方向不能反。
+        if let Some(p) = &edit.doc {
+            self.register_doc_attachments(tx, &cur.note.id, &p.attachments, now)?;
+        }
         let has_attachment = doc_has || rows::has_linked_attachment(tx, &cur.note.id)?;
         let (sync_rev, sync_hash) = if edit.confirm_sync {
             (new_rev, Some(content_hash.clone()))

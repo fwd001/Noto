@@ -293,6 +293,8 @@ impl Store {
                     &device,
                     now,
                 )?;
+                // 新建分支不走 `commit_edit`，链接表在这里登记；更新分支由 `commit_edit` 登记。
+                self.register_doc_attachments(tx, &env.id, &refs, now)?;
                 rep.applied += 1;
                 rep.notes_written += 1;
             }
@@ -337,7 +339,6 @@ impl Store {
                 rep.notes_written += 1;
             }
         }
-        self.register_doc_attachments(tx, &env.id, &refs, now)?;
         Ok(())
     }
 

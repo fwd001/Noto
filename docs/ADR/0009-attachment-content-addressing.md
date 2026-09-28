@@ -61,8 +61,16 @@
 3. **"构造'最后引用已删但上传仍 pending'，断言不删"这条用例今天由更强的判据代偿**：引用检查写在
    `UPDATE ... WHERE` 与 `DELETE ... WHERE` 里（检查与写入同一个事务），而
    `note_attachments.sha256 ON DELETE RESTRICT` 是机器兜底。落地后的门禁是 FT-ATT-29 / 29s / 30 / 31 /
-   32 / 33（`crates/notera-host/tests/attachment_gc.rs` 六条 + `crates/notera-store/tests/attachment_queue.rs`
-   两条），每条都配了变异自证（M32..M40，见 commit 级说明）。
+   32 / 33 / 34（`crates/notera-host/tests/attachment_gc.rs` 七条 + `crates/notera-store/tests/attachment_queue.rs`
+   两条），每条都配了变异自证（M32..M40 与 M46 / M46b / M46c，见 commit 级说明）。
+4. **"引用为 0"这件事的取数口径补了一支写者**（0.0.22）。原句把 `note_attachments` 当作已经完整的事实源，
+   而它当时只由 `attach_blob` 与外来笔记的 apply 两处写入 —— 本机 `create_note` / `edit_note` 不登记，
+   于是"正文里引用着这张图、链接表里没有这一行"在生产里是**常态**（冲突副本就是拿服务器那一版的正文直接
+   `create_note`，把图片块搬进另一条笔记走的是 `edit_note`，两边都不碰 `attach_blob`）。在 GC 之前这只是
+   "引用计数不准"，GC 之后它就是**丢数据**的判据。修法是让链接表在每条写路径上都由 doc 派生
+   （`register_doc_attachments` 现由 create / commit_edit / apply 三处调用），且口径是**只登记不 prune**：
+   多算引用只是少收一点磁盘，少算引用是不可恢复的丢失 —— 这两个方向的代价不对称，所以不能反着做。
+   "从正文里删掉一张图"因此仍然不释放字节，那一格要等链接表随 doc 整体重算，写在 DATA-MODEL §8。
 
 仍未做的（按 §40 记着，不算已完成）：**服务器侧**的孤儿对象回收没实现，只回收本机盘；GC 的触发点在
 附件轮里，所以未配置同步账户的设备不跑 GC。
