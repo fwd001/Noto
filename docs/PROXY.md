@@ -71,8 +71,9 @@ ProxyProfile {
 ```
 
 * 凭据**永不**进 SQLite、不进日志、不进 URL 明文（`notera-net` 在写审计日志前统一脱敏，见 §9）。
-* 存储：`settings(scope='account')` 存 profile 本体；`CredentialRef{kind:Keychain, service:"app.notera.proxy", account:"<account_id>"}` 指向系统钥匙串。
-* 钥匙串不可用时（Linux 无 Secret Service 等）：降级为本地加密文件（argon2id 派生 + AES-256-GCM-SIV），并在 UI 明确告知"凭据保护强度下降"。**不静默降级为明文**。
+* 存储：配置只存 profile 本体 + 一个引用。as-built（0.0.29，ADR-0020）：`credential_ref` = `keychain:<账户 id>`，系统侧的条目名是 `notera:webdav:<账户 id>`；代理凭据同一条通道，条目名 `notera:proxy:<账户 id>`（`UserName` 装用户名、blob 装口令的 UTF-16 字节）。引用**只在真的存进去之后**才写 —— 它是"系统里有一条"的证据，不是"用户填过"的证据。
+* 上限：generic credential 的 blob 是 **512 字节**，按 UTF-16 算是 **256 个单元**。超限返回具名错误 `credential_too_long`（带上实际单元数），**什么都不写、也不截断** —— 截断存进去等于交给用户一个"配好了但永远 401"的账户。
+* **钥匙串不可用时的降级（本地加密文件：argon2id 派生 + AES-256-GCM-SIV，并在 UI 明说"凭据保护强度下降"）尚未实现**。今天的行为是：`credential_store::available() == false` → `put/get/remove` 一律 `credential_unavailable`，发布版徽标停在"需要凭据"（`caps.keychain` 报 `none`，这一处至少是诚实的）。按 §40 记：原因 = 各平台的凭据后端没接、这台机器上也无法验证；影响 = macOS / Linux / Android 上发布版仍不能同步；解除条件 = 各平台后端 + 真机验证，或者实现这条降级路径（`argon2` 与 `aes-gcm-siv` 已在工作区依赖里）。**不静默降级为明文**这一条始终成立。
 
 ---
 

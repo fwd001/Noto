@@ -211,7 +211,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 
 | 项 | 状态 | 缺什么 |
 |---|---|---|
-| OS 钥匙串接入（`credential_ref`） | 未实现 | Phase 5 平台工作；当前只有 debug 构建下的 `NOTERA_DEV_WEBDAV_USER/SECRET`，release 一律进 `needs_credentials`。`caps.keychain` 已改口为 `none`（此前对 Windows 报 `credential_manager`，是要用户误信"口令进钥匙串了"） |
+| OS 凭据库接入（`credential_ref`） | **已实现（Windows）**，非 Windows 未接 | `crates/notera-host/src/credential_store.rs` 一处收口：Windows 走凭据管理器的 generic credential（目标名 `notera:webdav:<id>` / `notera:proxy:<id>`），`credential_ref` **只在真存进去之后**才写，落配置失败回滚、删账户连带删、blob 超 512 字节具名报错不截断。`caps.keychain` 在 Windows 报 `credentialManager`（词汇表在 `platform/caps.ts` 的联合类型里，有一条测试钉着不许漂）。lane：`cargo test -p notera-host --test credentials`（会真动当前用户的凭据库，收尾抹掉 ⇒ 不叠跑）。非 Windows 的降级路径（本地加密文件）仍未实现，按 §40 写在 ADR-0020 |
 | 托盘 / 原生菜单 / 全局快捷键 / 通知 | 未实现 | 壳里一行相关代码都没有，但 `caps` 曾对 Windows 全报 true → 设置页摆出"关闭窗口时留在系统托盘"这种存了没人读的开关。现已按 as-built 报 false，UI 显示"此平台不可用"。**要恢复需评审**：分别需要 `tauri` 的 `tray-icon` 特性、`Menu::with_items`、`tauri-plugin-global-shortcut`、通知插件的实际调用 —— 都会动依赖图，按 §9 走，不"顺便"加 |
 | 协议 §5 能力探测 | 已接入 | `notera-webdav/probe.rs` 五项探测 → `sync_accounts.cap_mask`；启动路径**先探后装**（`App::remote_for_sync`），所以本次会话就按实测策略写，不用等下次启动。探测失败只提示不降级（`sync.probeDeferred`），当天不重复探测。判定结果经 `AccountDto`（`capMask`/`writeStrategy`/`capsProbedAt`）显示到设置页的"服务器能力"块，S3 明确建议多设备串行编辑 —— §5 末行要求的正是这句话。`notera-cli dav-probe` 可强制重探并打印结论 |
 | 协议 §11.4 尽力而为租约 | 已接入 | §11.2 第三层。开关由 §5 的探测结果决定：**S3 或探不到强 ETag 才开**（CAS 可信时白多两个请求没意义）。引擎在轮次开始贴自己的 `locks/<device>.json`（TTL 60s），在**写清单之前**看别人新不新鲜：新鲜就不提交清单，改动保持 dirty、状态显示 `sync.leaseHeld`，下一轮自动重来。读不到别人的租约 = 当作没人持有（这一层坏了绝不能变成永不同步）。不用 `LOCK`/`UNLOCK`。证据：引擎 7 例 + 适配器 6 例 + 两台设备真服务器 1 例 |

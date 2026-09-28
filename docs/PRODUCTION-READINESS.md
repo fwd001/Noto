@@ -9,7 +9,7 @@
 
 **READY FOR USER TEST —— 范围限于 Windows 桌面（debug 与 release 产物都已真窗口验通）。**
 
-**不是 READY FOR PRODUCTION**：发布链路（安装器/签名）与另外三个平台产物在本机无法验证；还等人工决定的收敛到三项（OS 钥匙串、>8 MiB `.enex` 流式导入、附件分片上传协议），见第 5 节。这两件事与"核心功能是否可用、数据安全是否成立"是分开判的，见第 4、5 节。
+**不是 READY FOR PRODUCTION**：发布链路（安装器/签名）与另外三个平台产物在本机无法验证；还等人工决定的收敛到两项（>8 MiB `.enex` 流式导入、附件分片上传协议）—— OS 钥匙串那一项 0.0.29 已按 §9 出 ADR 并在 Windows 侧落地，见第 5 节。这两件事与"核心功能是否可用、数据安全是否成立"是分开判的，见第 4、5 节。
 
 用户现在就可以开始"稍微测试一下"的最小闭环：装 release 的 `notera-desktop.exe` → 配一台自己的 WebDAV → 建笔记/改/删/回收站/恢复 → 插一张图 → 换第二台设备（或换数据目录）开机追平。要什么权限、在哪开、用于测哪一条，写在第 6 节。
 
@@ -19,9 +19,9 @@
 
 | 门禁 | 结果 | 命令 | 层级 |
 |---|---|---|---|
-| Rust 全量测试 | **563 通过 / 0 失败 / 2 ignored**（53 个单元/集成测试二进制 + 13 个 doc-test；2026-09-28 在 0.0.27 那棵树上**独占机器**实测——带墙钟判据的套件不能与别的套件叠着跑，叠跑会假红且 `cargo test` 默认在第一个失败的二进制就停，出来的数不是全量。两条 `#[ignore]` 都是刻意的显式 lane：P11 面板的留档夹具 `conflict_payload_e2e.rs:519`（由 `scripts/verify-p11-panel.mjs` 跑）与 GC/体检的规模基准 `attachment_gc_scale.rs`（由 `-- --ignored` 跑，数字进 PERF-10）；此前这里写的"0 ignored"与实测不符，2026-09-28 更正） | `cargo test --workspace` | L0–L4 |
+| Rust 全量测试 | **569 通过 / 0 失败 / 2 ignored**（53 个单元/集成测试二进制 + 13 个 doc-test；2026-09-28 在 0.0.27 那棵树上**独占机器**实测——带墙钟判据的套件不能与别的套件叠着跑，叠跑会假红且 `cargo test` 默认在第一个失败的二进制就停，出来的数不是全量。两条 `#[ignore]` 都是刻意的显式 lane：P11 面板的留档夹具 `conflict_payload_e2e.rs:519`（由 `scripts/verify-p11-panel.mjs` 跑）与 GC/体检的规模基准 `attachment_gc_scale.rs`（由 `-- --ignored` 跑，数字进 PERF-10）；此前这里写的"0 ignored"与实测不符，2026-09-28 更正） | `cargo test --workspace` | L0–L4 |
 | Clippy（CI 原样命令） | 0 error / 0 warning | `cargo clippy --workspace --all-targets -- -D warnings` | L0 |
-| 架构适应度 | **28/28**（含"扫描台账"：任何源码门禁扫到 0 个文件即判失败；第 28 条是本轮新增：测试里的「或」断言必须就地写理由，含空转保护，并用一条恒真断言反注验过） | `node scripts/arch-check.mjs` | 静态 |
+| 架构适应度 | **29/29**（含"扫描台账"：任何源码门禁扫到 0 个文件即判失败；第 28 条是本轮新增：测试里的「或」断言必须就地写理由，含空转保护，并用一条恒真断言反注验过） | `node scripts/arch-check.mjs` | 静态 |
 | 前端 | **209 通过（22 文件）**；`vue-tsc --noEmit` 0 错（两条都是 2026-09-28 与"两颗自救按钮"那批同批实测；此前写过的 201/21 与 200/21 都是更早的数）；构建 216.65 KB → gzip 74.22 KB 那一档本轮未重测 | | `pnpm --dir apps/desktop test` / `run typecheck` / `run build` | L0/L1 |
 | §26 无障碍 | 静态门禁 + 3 条专项测试（见 TEST-PLAN A11Y-01…04） | `arch-check` / `pnpm test` | L1 |
 | 崩溃注入（小库 9 点 + 大库压实 1 点） | 逐个**真把子进程杀死**（退出码 77）后重启，两台设备逐条一致、待办归零 | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery --test compaction_crash` | L5 |
@@ -125,7 +125,7 @@
    > -out:dump.xml` 看最终产物到底带了哪一份，并按需在 `build.rs` 里显式管住资源段；
    > 在那之前不把"能装能跑"当作已验（本条属于 §40 的"看得见但没验"，原因：本机没有安装包，
    > 影响：高 DPI 缩放与视觉风格可能与应用声明不一致，解除条件：安装器落地并真机看过）。
-2. ~~**托盘 / 全局快捷键**~~ —— **已实现且本机验通**（真壳 lane 9/9 里含"能力声明由注册结果写"那一步；见 PLATFORM §15 与 PLAT-01…05）。仍欠两件事：`PLAT-06` 要**真把托盘弄坏**才能验"降级看得见"，本机没有可重复的注入手段；**OS 钥匙串**（`credential_ref`）没动 —— 它是这一项里唯一还等 §9 评审的系统集成面。
+2. ~~**托盘 / 全局快捷键**~~ —— **已实现且本机验通**（真壳 lane 9/9 里含"能力声明由注册结果写"那一步；见 PLATFORM §15 与 PLAT-01…05）。仍欠两件事：`PLAT-06` 要**真把托盘弄坏**才能验"降级看得见"，本机没有可重复的注入手段；**OS 凭据库**已落地（0.0.29，Windows：ADR-0020 + FT-CRED 一组 + 变异 M55..M61；非 Windows 仍未接，按 §40 记在 ADR-0020）。
 3. ~~**`.enex` 导入的 XML 依赖**~~ —— **已实现**（`quick-xml` 已在 workspace；设置页的文件导入入口 + IMP-01…08 一组门禁；Evernote 里本库表达不了的字段逐条写进报告而不是悄悄消失）。留下的是一个范围决定：**>8 MiB 的 `.enex` 现在是一条可见失败**，要放开得动流式解析 —— 按 §9 等你点头。
 4. **CI 工作流的推送通道** —— 已授权并已推送。实测事实（REST，2026-09-27）：run #3 / #4 **success**（npm 时期，整条 workflow 完整跑通过），pnpm 收敛后的 run #5 **failure**，红在第 4 步"准备 pnpm"（action 去仓库根读 `packageManager`，而根目录没有 package.json），已用 `package_json_file` 修。**pnpm 这条路现在也有证据了，而且覆盖到安装器那次改动**：run #9（HEAD `f286065`）**completed/success** —— frozen 安装、前端构建、版本单源、arch-check、`cargo fmt --check`、clippy `-D warnings`、`cargo test --workspace`、前端单测与类型检查、`cargo build --release -p notera-desktop` 一路通过（run #6 是同一条链在"升 Tauri JS 包之前"的绿）。中间还红过一次并留下教训：run #7 死在第 6 步 `pnpm install --frozen-lockfile`，因为我把依赖 bump 与 pnpm 代写的 `minimumReleaseAgeExclude` 拆成两次提交，那个中间 commit 在 runner 上装不出来（见 CI-CD 的提交粒度硬规则）。仍未验的是：契约图那一步在 runner 上带 `continue-on-error`（脚本里 chromium 路径是本机写死的），以及 macOS/Android 三产物（要对应 runner 与证书，仍 §40 BLOCKED）。
 5. ~~**P11 远端版本可见性**~~ —— **已实现并验通**：载荷链路（CF-13）、无载荷时说实话 + 列表上的分歧标记（CF-15）、"接受对面的删除"真的落地删除（CF-16）、"保留两份"的语义按实测钉死（CF-17）；另有真浏览器 lane 11/11 与两台真设备断言。

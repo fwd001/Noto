@@ -514,6 +514,41 @@ check('hygiene:disjunctive-assertions-justified', '§45（不会红的断言比�
   `这些「或」断言没有就地写明为什么允许二选一：\n    ${disjViolations.join('\n    ')}`);
 
 
+// 被 .gitignore 吃掉的**源文件** = 干净检出编不过，而本机一切绿灯都是假的。
+// 这条是踩出来的：0.0.29 新增的 `crates/notera-host/src/credential_store.rs` 原本叫 `secrets.rs`，
+// 而仓库的 ignore 里有一条 `secrets.*`（那是防本地口令文件的）—— 于是这个源文件被静默忽略：
+// `cargo check`、clippy、workspace 测试、浏览器 lane 全绿，只有 CI 的干净检出会炸。
+const ignoredSources = [];
+{
+  const { execFileSync } = await import('node:child_process');
+  let listed = null;
+  try {
+    listed = execFileSync(
+      'git',
+      ['-C', ROOT, 'ls-files', '--others', '--ignored', '--exclude-standard', '--', 'crates', 'apps', 'scripts'],
+      { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
+    );
+  } catch {
+    listed = null;
+  }
+  if (listed === null) {
+    ignoredSources.push('git ls-files 跑不动 —— 本条在空转（没有 git 就只能靠人记得住）');
+  } else if (listed.trim() === '') {
+    ignoredSources.push('git 一个未跟踪文件都没列出来 —— 本条在空转');
+  }
+  for (const raw of listed ? listed.split('\n') : []) {
+    const f = raw.trim().replace(/\\/g, '/');
+    if (!f) continue;
+    if (!/^(crates|apps|scripts)\//.test(f)) continue;
+    if (!/\.(rs|ts|tsx|vue|mjs|cjs|css)$/.test(f)) continue;
+    if (/node_modules|\/dist\/|src-tauri\/gen\//.test(f)) continue;
+    ignoredSources.push(f);
+  }
+}
+check('hygiene:no-ignored-source-file', '§45（本机编得过、干净检出编不过，是最贵的一种假绿）', ignoredSources,
+  `这些源码文件被 .gitignore 挡住了，不会进版本库：\n    ${ignoredSources.join('\n    ')}`);
+
+
 // ------------------------------------------------------------------------- 输出 ---
 
 // "扫了 0 个文件"和"扫了但没问题"必须能区分开：前者是门禁在空转，

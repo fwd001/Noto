@@ -298,6 +298,12 @@
 | SY-CONF-10 | 一张已采纳的 UpdateUpdate 卡片 | 用户点"用我这一版" | 正文与副本**互换**（两版各有一处存放，谁都没被吃掉），正文变脏并重新公告；另一台同步后**同时持有两份**；卡片关闭 | L3 | P6 |
 | FT-SETUP-01 | 全新安装 | 配置 WebDAV URL + 账号密码（含自签 CA） → 测试连接 | 成功时有可见确认；失败时提示区分 DNS / 拒绝连接 / TLS 不受信 / 401 / 403，不得只给"网络错误" | L5 | P4 |
 | FT-SETUP-02 | 已配置 | 改为错误密码 → 同步 → 改回 | 错误期间本地不受影响且保留配置；恢复后一轮内追上；失败不删远端任何对象（`DUMP` 前后一致） | L3,L5 | P5 |
+| FT-CRED-01 | 空凭据库 | `credential_store::put` 一条带非 ASCII 用户名与口令的目标，再 `get` | 原样读得回来（编码没走形）；覆盖同名后第二次说了算；`remove` 之后再 `get` 是 `None`，**再 remove 一次仍算成功**（删账户与回滚都这么调）。非 Windows 上断言的是具名错误 `credential_unavailable` 与 `None`，不假装通过。证据：`credentials.rs::a_stored_secret_comes_back_byte_identical_and_removal_is_idempotent`；变异 **M60** | L2 | P4 |
+| FT-CRED-02 | 同上 | 正好 256 个 UTF-16 单元（全角字符）与 257 个各存一次 | 256 存得进且读得回；257 报 `credential_too_long` 并**带着实际单元数**，且**上一次那份还在** —— 被拒绝的写入不许顺手清掉已有的。上限的来源是系统侧的真实约束（generic credential 的 blob 512 字节）。证据：`credentials.rs::the_blob_limit_is_enforced_at_the_boundary_without_storing_anything`；变异 **M61**（把上限判断改成 `>` 的邻位） | L2 | P4 |
+| FT-CRED-03 | 全新数据目录 | 只填用户名、**不填口令**去配置账户 | `hasCredential` 必须是 **false**。这一格以前是 true（引用照写、口令其实被丢掉），于是设置页说"口令已设置"而发布版永远同步不了 —— 指示说谎 + 核心能力静默失效。证据：`credentials.rs::a_draft_without_a_password_stops_claiming_a_credential_exists`；变异 **M55**（把引用退回"填过就算"） | L2,L5 | P0 |
+| FT-CRED-04 | 已存过口令的账户 | 重新配置同一条账户、**不重填口令**（只改标签） | 引用还在、系统里那条口令一字不变 —— "没重填"不是"清空"（界面上那格显示的就是"已设置"的占位提示）。删账户时系统里那条必须跟着走。证据：`credentials.rs::an_account_reconfigured_without_a_password_keeps_the_stored_secret`；变异 **M59**（删账户不带走凭据） | L2 | P4 |
+| FT-CRED-05 | 解析点 | 开发环境变量里放一个**别的**值，账户口令存进系统 | `App::secret_for` 必须回**系统里那一条**（顺序错了就会用环境里的旧值掩盖界面上刚改的口令，而 release 根本没有这个变量）。另验配置文件字节里没有明文口令。证据：`lib.rs::account_mapping_roundtrips_without_leaking_secrets`；变异 **M56**（不往系统存）、**M57**（先看环境变量） | L2 | P0 |
+| FT-CRED-06 | 代理口令 | 配一条带用户名与口令的 HTTP 代理 → `net_proxy` | 引用要解析成真凭据（`username`/`password` 都在），删账户时代理口令也带走。以前这里一看到引用就报 `proxy_credentials_pending`，"填了代理口令"在出口层永远不成立。证据：`lib.rs::proxy_credentials_resolve_from_the_system_store`；变异 **M58** | L2 | P4 |
 
 ## 同步测试矩阵
 

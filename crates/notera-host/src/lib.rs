@@ -9,6 +9,7 @@
 
 pub mod commands;
 
+pub mod credential_store;
 pub mod devserver;
 /// 平台原生物的计划表（菜单项 / 通知判定）—— 纯逻辑，壳只负责摆上去。
 pub mod platform;
@@ -131,7 +132,7 @@ impl PlatformCaps {
                 notifications: true,
                 share_sheet: false,
                 background_task: "desktop_timer".into(),
-                keychain: "none".into(),
+                keychain: "credentialManager".into(),
                 file_picker: "native".into(),
                 safe_area: false,
             }
@@ -1342,6 +1343,41 @@ impl App {
         } else {
             draft.id.clone()
         };
+        // 口令**先落 OS 凭据库，再动配置**。反过来会留下"配置里写着有条凭据、系统里什么都没有"
+        // 的账户 —— 而 `has_credential` 正是照配置里那个引用算的，于是发布版会出现
+        // "设置页说口令已设置、引擎却永远拿不到凭据"的假指示（这批要消灭的就是它）。
+        // 存进去之后任何一步失败都要把刚存的抹掉（见下面的 rollback），不留孤立凭据。
+        let existing = cfg.accounts.iter().find(|a| a.id == id);
+        let mut stored: Vec<String> = Vec::new();
+        let credential_ref = match draft.password.as_deref().filter(|p| !p.is_empty()) {
+            Some(pwd) => {
+                let target = credential_store::webdav_target(&id);
+                credential_store::put(&target, draft.username.as_deref().unwrap_or(""), pwd)
+                    .map_err(secret_err)?;
+                stored.push(target);
+                credential_store::ref_of(&id)
+            }
+            // 编辑账户时不重填口令 = **不改口令**（界面上那格显示的是"已设置"的占位提示）
+            None => existing
+                .map(|a| a.credential_ref.clone())
+                .unwrap_or_default(),
+        };
+        let proxy_refs = match draft.proxy_password.as_deref().filter(|p| !p.is_empty()) {
+            Some(pwd) => {
+                let target = credential_store::proxy_target(&id);
+                credential_store::put(&target, draft.proxy_username.as_deref().unwrap_or(""), pwd)
+                    .map_err(secret_err)?;
+                stored.push(target);
+                (
+                    Some(format!("keychain:proxy-user:{id}")),
+                    Some(format!("keychain:proxy-pass:{id}")),
+                )
+            }
+            None => (
+                existing.and_then(|a| a.proxy.username_ref.clone()),
+                existing.and_then(|a| a.proxy.password_ref.clone()),
+            ),
+        };
         let acct = AccountConfig {
             id: id.clone(),
             label: draft.label,
@@ -1352,11 +1388,7 @@ impl App {
                 _ => notera_config::AuthKind::Basic,
             },
             username: draft.username.clone(),
-            credential_ref: if draft.password.is_some() || draft.username.is_some() {
-                format!("keychain:{id}")
-            } else {
-                String::new()
-            },
+            credential_ref,
             tls_policy: match draft.tls_policy.as_deref() {
                 Some("ca_bundle") => TlsPolicyKind::CaBundle,
                 Some("pin") => TlsPolicyKind::Pin,
@@ -1375,41 +1407,50 @@ impl App {
                 },
                 host: draft.proxy_host,
                 port: draft.proxy_port,
-                username_ref: draft
-                    .proxy_username
-                    .map(|_| format!("keychain:proxy-user:{id}")),
-                password_ref: draft
-                    .proxy_password
-                    .map(|_| format!("keychain:proxy-pass:{id}")),
+                username_ref: proxy_refs.0,
+                password_ref: proxy_refs.1,
                 bypass: draft.bypass.unwrap_or_default(),
                 resolve_remote_dns: true,
             },
             enabled: true,
         };
-        // 校验/落盘的规则全在 notera-config 里；host 只折叠错误码（原子写、拒绝覆盖损坏配置）
-        notera_config::validate_account(&acct).map_err(|e| {
-            CmdError::of("invalid_account", false).with(serde_json::json!({ "why": e.to_string() }))
-        })?;
-        self.inner
-            .config_repo
-            .upsert_account(&mut cfg, acct.clone())
-            .map_err(|e| {
+        // 校验/落盘的规则全在 notera-config 里；host 只折叠错误码（原子写、拒绝覆盖损坏配置）。
+        // 这一段任何一步失败，上面已经存进系统的那些口令都要抹掉：
+        // 配置没写、账户不存在，而系统凭据里躺着一辈子没人读的口令，那是纯粹的泄漏面。
+        let persisted = (|| -> Result<(), CmdError> {
+            notera_config::validate_account(&acct).map_err(|e| {
                 CmdError::of("invalid_account", false)
                     .with(serde_json::json!({ "why": e.to_string() }))
             })?;
-        self.inner.config_repo.save(&cfg).map_err(|e| {
-            CmdError::of("save_failed", false).with(serde_json::json!({ "why": e.to_string() }))
-        })?;
+            self.inner
+                .config_repo
+                .upsert_account(&mut cfg, acct.clone())
+                .map_err(|e| {
+                    CmdError::of("invalid_account", false)
+                        .with(serde_json::json!({ "why": e.to_string() }))
+                })?;
+            self.inner.config_repo.save(&cfg).map_err(|e| {
+                CmdError::of("save_failed", false).with(serde_json::json!({ "why": e.to_string() }))
+            })?;
+            // 配置里的账户必须在存储层落一行：outbox 是按 `sync_accounts` 扇出的，
+            // 没这一行 = 本地写入永远不会排队给这台服务器（静默不同步）。
+            self.inner
+                .store
+                .register_account(&acct.id, &acct.label, &acct.base_url)
+                .map_err(|e| {
+                    CmdError::of("invalid_account", false)
+                        .with(serde_json::json!({ "why": e.to_string() }))
+                })
+        })();
+        if persisted.is_err() {
+            for target in &stored {
+                if let Err(e) = credential_store::remove(target) {
+                    tracing::warn!(%e, %target, "配置没落成，刚存的凭据也没抹掉：需要人工在系统凭据里删");
+                }
+            }
+        }
+        persisted?;
         *self.inner.config.lock().unwrap() = cfg.clone();
-        // 配置里的账户必须在存储层落一行：outbox 是按 `sync_accounts` 扇出的，
-        // 没这一行 = 本地写入永远不会排队给这台服务器（静默不同步）。
-        self.inner
-            .store
-            .register_account(&acct.id, &acct.label, &acct.base_url)
-            .map_err(|e| {
-                CmdError::of("invalid_account", false)
-                    .with(serde_json::json!({ "why": e.to_string() }))
-            })?;
         self.set_sync(|v| v.phase = Phase::Provisioning);
         // 带上新账户的探测状态（刚配上 = 还没探过），界面才不会把"没探过"说成"不支持"
         ConfigRepository::active(&cfg)
@@ -1639,7 +1680,7 @@ impl App {
         let cfg = self.config();
         let (proxy, tls, from) = match ConfigRepository::active(&cfg) {
             Some(acct) => (
-                net_proxy(&acct.proxy)?,
+                net_proxy(&acct.proxy, &acct.id)?,
                 net_tls(acct),
                 format!("account:{}", acct.id),
             ),
@@ -1673,7 +1714,7 @@ impl App {
         credentials: notera_webdav::Credentials,
         caps: notera_webdav::Caps,
     ) -> Result<Arc<notera_webdav::WebDavRemote>, CmdError> {
-        let proxy = net_proxy(&acct.proxy)?;
+        let proxy = net_proxy(&acct.proxy, &acct.id)?;
         let http = Arc::new(
             notera_net::HttpClient::build(&proxy, &net_tls(acct), notera_net::Timeouts::default())
                 .map_err(|e| {
@@ -1695,10 +1736,24 @@ impl App {
         Ok(Arc::new(remote))
     }
 
-    /// 凭据解析点。`credential_ref` 指向 OS 钥匙串，那套接入在 Phase 5；
-    /// 在此之前**只有 debug 构建**能从开发用环境变量拿到口令 —— 发布版宁可
-    /// 显示"需要凭据"，也不把明文写进配置文件。
+    /// 凭据解析点：**先问 OS 凭据库**（`credential_ref` 只是"去哪一条找"的引用），
+    /// 问不到时 debug 构建再退回开发用环境变量（各条 lane 就是这么喂凭据的，且只此一路 ——
+    /// 发布版永远读不到那个变量）。取不到就返回 `None`，调用方把徽标停在"需要凭据"，
+    /// 绝不拿空凭据去写远端。
     fn secret_for(&self, acct: &AccountConfig) -> Option<(String, String)> {
+        if !acct.credential_ref.is_empty() {
+            match credential_store::get(&credential_store::webdav_target(&acct.id)) {
+                Ok(Some(pair)) => return Some(pair),
+                // 取不到是**正常状态**（换了机器、清了凭据、别的平台还没接），但必须看得见：
+                // 界面上那句"需要凭据"要能对上这里的原因。
+                Ok(None) => {
+                    tracing::debug!(id = %acct.id, "配置说有条凭据，系统里没有：这一轮按「需要凭据」走");
+                }
+                Err(e) => {
+                    tracing::warn!(%e, id = %acct.id, "问系统凭据没成功：这一轮按「需要凭据」走");
+                }
+            }
+        }
         let user = acct.username.clone()?;
         if !cfg!(debug_assertions) {
             return None;
@@ -2507,6 +2562,17 @@ impl App {
             CmdError::of("save_failed", false).with(serde_json::json!({ "why": e.to_string() }))
         })?;
         *self.inner.config.lock().unwrap() = cfg;
+        // 配置里没这个账户了，系统凭据里那两条也必须跟着走 —— 留下的是一条
+        // 没人引用、也没界面能再删掉的口令（用户看不见它，却每次登录都在他的凭据库里）。
+        // `remove` 对"本来没有"是幂等的，所以 debug 那套环境变量凭据的账户也能这么调。
+        for target in [
+            credential_store::webdav_target(id),
+            credential_store::proxy_target(id),
+        ] {
+            if let Err(e) = credential_store::remove(&target) {
+                tracing::warn!(%e, %target, "删账户时凭据没抹掉：需要在系统凭据里人工删一条");
+            }
+        }
         Ok(())
     }
 
@@ -2728,8 +2794,9 @@ fn store_err(e: StoreError) -> LocalError {
 
 /// 账户 → 下发给 UI 的视图（host 侧映射；字符串取值与 `api/types.ts` 的联合类型同名）。
 ///
-/// `has_credential` 只看"有没有凭据引用"——配置里从来没有明文口令（DATA-MODEL §6 凭据行），
-/// 所以这里不可能漏出口令，也不存在"下发明文"这条路。
+/// `has_credential` 看的是"有没有凭据引用"，而这个引用**只在口令真的存进系统凭据之后**才写
+/// （0.0.29 之前它是"用户填过没填过"，于是界面会说谎）。配置里从来没有明文口令
+/// （DATA-MODEL §6 凭据行），所以这里不可能漏出口令，也不存在"下发明文"这条路。
 fn account_dto(a: &AccountConfig) -> AccountDto {
     AccountDto {
         id: a.id.clone(),
@@ -2768,15 +2835,29 @@ fn account_dto(a: &AccountConfig) -> AccountDto {
     }
 }
 
+/// 系统凭据那几步的错误 → 界面能看懂的具名码。
+///
+/// `why` 里只放"哪一步、什么码、多长"，**绝不放口令本身** —— 这个结构体会被写进日志与
+/// 界面的错误详情，口令一旦进去就等于没进凭据库。
+fn secret_err(e: credential_store::SecretError) -> CmdError {
+    CmdError::of(e.code(), false).with(serde_json::json!({ "why": e.to_string() }))
+}
+
 /// 配置里的代理 → 出口层真正用的代理。
 ///
 /// 两层的类型不同是有意的（配置只管持久化，传输决策归 `notera-net`），
-/// 所以映射只能发生在组装根这里。引用了代理凭据而拿不到时**如实报错**：
-/// 静默按无凭据连，用户看到的是"配了代理却 407"，比一条明确提示难查得多。
-fn net_proxy(p: &ProxyProfile) -> Result<notera_net::ProxyProfile, CmdError> {
-    if p.username_ref.is_some() || p.password_ref.is_some() {
-        return Err(CmdError::of("proxy_credentials_pending", true));
-    }
+/// 所以映射只能发生在组装根这里。配置里那两条是**引用**，真凭据在系统里 ——
+/// 拿不到时**如实报错**：静默按无凭据连，用户看到的是"配了代理却 407"，
+/// 比一条明确提示难查得多。
+fn net_proxy(p: &ProxyProfile, account_id: &str) -> Result<notera_net::ProxyProfile, CmdError> {
+    let (proxy_user, proxy_pass) = if p.username_ref.is_some() || p.password_ref.is_some() {
+        match credential_store::get(&credential_store::proxy_target(account_id)) {
+            Ok(Some((user, secret))) => (Some(user), Some(secret)),
+            Ok(None) | Err(_) => return Err(CmdError::of("proxy_credentials_pending", true)),
+        }
+    } else {
+        (None, None)
+    };
     let mode = match p.mode {
         ProxyMode::Direct => notera_net::ProxyMode::Direct,
         ProxyMode::System => notera_net::ProxyMode::System,
@@ -2788,8 +2869,8 @@ fn net_proxy(p: &ProxyProfile) -> Result<notera_net::ProxyProfile, CmdError> {
         mode,
         host: p.host.clone(),
         port: p.port,
-        username: None,
-        password: None,
+        username: proxy_user.filter(|u| !u.is_empty()),
+        password: proxy_pass.filter(|s| !s.is_empty()),
         bypass: p.bypass.clone(),
         resolve_remote_dns: p.resolve_remote_dns,
     })
@@ -3472,6 +3553,15 @@ mod tests {
     use notera_core::next_rev;
     use notera_sync::plan::{Action, ConflictKind};
     use serde_json::{json, Value};
+
+    /// 真凭据库在同一个进程里并发写会偶发失败（实测约 1/17 次）—— 摸它的那两条单元测试因此串行。
+    static STORE: Mutex<()> = Mutex::new(());
+
+    fn lock_store() -> std::sync::MutexGuard<'static, ()> {
+        STORE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     fn tmpdir(tag: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("notera-host-{}-{tag}", std::process::id()));
@@ -4172,13 +4262,22 @@ mod tests {
         assert_eq!(got["notesInTrash"], 0);
     }
 
+    /// 凭据这一格从 0.0.29 起才有分量：`hasCredential` 的意思是"系统凭据里真有一条"，
+    /// 不再是"用户填过口令"。于是三条都要照着新语义验 —— **存得进、读得回（而且优先于
+    /// 开发环境变量，那才是发布版走的路）、删账户时带走**；外加一条"配置文件里没有明文"。
     #[test]
     fn account_mapping_roundtrips_without_leaking_secrets() {
-        let app = boot("account");
+        let _serial = lock_store();
+        const PW: &str = "pw-Ⅰ-唯一串-7f3a";
+        // 这一格**故意不写** `NOTERA_DEV_WEBDAV_SECRET`：解析点先问系统凭据，所以只要它回的是
+        // PW，走的就是钥匙串那条路 —— 也就是发布版走的那条（那边根本没有这个变量）。
+        // 同一套单元里也不去 set_var：那是进程级的，会串到并行跑的别的测试上。
+        let dir = tmpdir("account-clear");
+        let app = App::boot(&dir).expect("核心启动");
         let dto = commands::dispatch(
             &app,
             "configure_account",
-            json!({ "id": "", "label": "家里", "baseUrl": "http://127.0.0.1:5005/.notes", "username": "u", "password": "pw" }),
+            json!({ "id": "", "label": "家里", "baseUrl": "http://127.0.0.1:5005/.notes", "username": "u", "password": PW }),
         )
         .unwrap();
         assert_eq!(dto["label"], "家里");
@@ -4186,16 +4285,106 @@ mod tests {
         assert_eq!(dto["authKind"], "basic");
         assert_eq!(dto["tlsPolicy"], "strict");
         assert_eq!(dto["proxyMode"], "direct");
-        assert_eq!(dto["hasCredential"], true);
+        assert_eq!(dto["hasCredential"], true, "口令真存进去了，这个指示才许亮");
         let text = dto.to_string();
-        assert!(!text.contains("pw"), "下发给 UI 的账户视图里绝不能出现口令");
+        assert!(!text.contains(PW), "下发给 UI 的账户视图里绝不能出现口令");
         assert!(!text.contains("credentialRef"), "凭据引用也不属于 UI");
+
+        let id = dto["id"].as_str().unwrap().to_string();
+        let stored = credential_store::get(&credential_store::webdav_target(&id)).unwrap();
+        assert_eq!(
+            stored,
+            Some(("u".to_string(), PW.to_string())),
+            "配置说存进去了，系统凭据里就必须原样拿得回来（用户名也跟着进去了）"
+        );
+        let cfg_now = app.config();
+        let acct = ConfigRepository::active(&cfg_now).expect("有活动账户");
+        assert_eq!(
+            app.secret_for(acct),
+            Some(("u".to_string(), PW.to_string())),
+            "解析点必须优先用系统凭据，而不是被开发环境变量牵着走"
+        );
+        let raw = std::fs::read(ConfigRepository::new(&dir).path()).expect("配置文件读得到");
+        assert!(
+            !String::from_utf8_lossy(&raw).contains(PW),
+            "明文口令漏进了配置文件 —— 那正是凭据库要避免的事"
+        );
 
         let same = commands::dispatch(&app, "account", json!({})).unwrap();
         assert_eq!(same["id"], dto["id"], "`account` 必须回同一个活动账户");
-        let id = dto["id"].as_str().unwrap().to_string();
         commands::dispatch(&app, "remove_account", json!({ "id": id })).unwrap();
         assert!(app.current_account().unwrap().is_none());
+        assert_eq!(
+            credential_store::get(&credential_store::webdav_target(&id)).unwrap(),
+            None,
+            "删账户必须把系统里那条口令也带走，否则配置没了而口令永远留着"
+        );
+    }
+
+    /// 线格式的那份词汇表在 `apps/desktop/src/platform/caps.ts` 的联合类型里，
+    /// 而前端对不认识的值会**安静地退回 `'none'`** —— 也就是说这里换一个没在表里的字符串，
+    /// 界面就会说"这台机器没有凭据库"，而它其实是有的。这条把值钉在词汇表上。
+    #[test]
+    fn platform_caps_keychain_value_is_in_the_frontend_vocabulary() {
+        let v =
+            serde_json::to_value(PlatformCaps::for_current_target()).expect("能力要序列化得出去");
+        let got = v["keychain"].as_str().expect("keychain 必须是字符串");
+        const VOCAB: [&str; 4] = ["credentialManager", "keychain", "keystore", "none"];
+        assert!(
+            VOCAB.contains(&got),
+            "前端只认这四种，实际是 {got}（不在表里就会被静默退回 none）"
+        );
+        if cfg!(target_os = "windows") {
+            assert_eq!(
+                got, "credentialManager",
+                "Windows 上这一格从 0.0.29 起是真的"
+            );
+        }
+    }
+
+    /// 代理口令那条边：配置里存的是**引用**，出口层必须拿到真凭据。
+    ///
+    /// 为什么单独立一条：`net_proxy` 以前一看到引用就报 `proxy_credentials_pending`，
+    /// 于是"填了代理口令"这件事在界面上看着成立、在出口层永远不成立 —— 这是本项目踩过两次的
+    /// 形状（实现齐全、单测全绿、没人调用它）。这一条把"引用 → 真凭据"这一跳钉住。
+    #[test]
+    fn proxy_credentials_resolve_from_the_system_store() {
+        let _serial = lock_store();
+        if !credential_store::available() {
+            return; // 非 Windows：这一格按 §46 记 BLOCKED（ADR-0020），不假装通过
+        }
+        const PP: &str = "pp-唯一代理串-9c11";
+        let app = boot("proxy-creds");
+        let dto = commands::dispatch(
+            &app,
+            "configure_account",
+            json!({
+                "id": "", "label": "代理", "baseUrl": "http://127.0.0.1:5005/.notes",
+                "username": "u", "proxyMode": "http", "proxyHost": "127.0.0.1", "proxyPort": 7897,
+                "proxyUsername": "pu", "proxyPassword": PP,
+            }),
+        )
+        .unwrap();
+        let id = dto["id"].as_str().unwrap().to_string();
+        let cfg_now = app.config();
+        let acct = ConfigRepository::active(&cfg_now).expect("有活动账户");
+        assert!(
+            acct.proxy.username_ref.is_some() && acct.proxy.password_ref.is_some(),
+            "代理那两条引用必须一起写（`validate_account` 要求成对，只写一条会静默退回无凭据）"
+        );
+        let net = net_proxy(&acct.proxy, &id).expect("代理凭据要解析得开");
+        assert_eq!(
+            net.username.as_deref(),
+            Some("pu"),
+            "用户名要从系统凭据里回来"
+        );
+        assert_eq!(net.password.as_deref(), Some(PP), "口令要从系统凭据里回来");
+        commands::dispatch(&app, "remove_account", json!({ "id": id })).unwrap();
+        assert_eq!(
+            credential_store::get(&credential_store::proxy_target(&id)).unwrap(),
+            None,
+            "删账户也要把代理口令带走"
+        );
     }
 
     /// 引擎判出的冲突要在收件箱里看得见，并且卡片说得出是哪条笔记。

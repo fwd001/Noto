@@ -18,7 +18,7 @@ members = [
 exclude = ["tools/feasibility-probe"]
 
 [workspace.package]
-version = "0.0.28"
+version = "0.0.29"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
@@ -60,6 +60,10 @@ bytes = "1"
 quick-xml = "0.37"
 percent-encoding = "2"
 tempfile = "3"
+
+# OS 凭据库只在一个地方碰 Win32（crates/notera-host/src/credential_store.rs）。
+# 版本钉在依赖树里已有的那一份，免得同一个构建里出现两套 windows-sys。
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials"] }
 
 [profile.dev]
 opt-level = 0

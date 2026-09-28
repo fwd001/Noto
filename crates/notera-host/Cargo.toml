@@ -24,6 +24,11 @@ uuid = { workspace = true }
 # 只做一件事：给 RemoteBorrow 的转发 impl 用（引擎的 port 是 async trait）
 async-trait = { workspace = true }
 
+# 凭据库只有 Windows 这条路是接了的；别的平台上这个依赖根本不进图，
+# `credential_store::available()` 直接返回 false（见 ADR-0020）。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
 [dev-dependencies]
 notera-test-webdav = { workspace = true }
 tokio = { workspace = true }

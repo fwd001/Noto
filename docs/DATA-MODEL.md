@@ -383,7 +383,7 @@ CREATE VIRTUAL TABLE notes_fts USING fts5(
 | 元数据 | `created_at` `sha256` `size` `media_type` | 是 | 不可变，取较早者 |
 | 设备态 | `sync_rev` `remote_rev` `lease_token` `seq_applied` | 否（本地推导） | — |
 | UI 态 | 侧栏折叠、每设备列宽、滚动位置、排序方式（设备作用域） | 否 | — |
-| 凭据 | WebDAV 密码 / token | **永不进 SQLite**，存系统钥匙串（PROXY.md §凭据） | — |
+| 凭据 | WebDAV 密码 / token | **永不进 SQLite**。0.0.29 起真的进系统凭据库（Windows 凭据管理器，目标名 `notera:webdav:<账户 id>`，代理那条是 `notera:proxy:<账户 id>`，ADR-0020）；配置里那列 `credential_ref` 的语义因此收紧成**「系统里真有一条」**——只有写成功才落引用，落配置失败还要把刚存的抹掉。旧实现是「口令收到就丢掉、引用照写」，于是界面的「口令已设置」是假的，而发布版永远拿不到凭据 | — |
 
 规则：**新增字段必须先归类**。归为"同步"即承诺跨设备可合并，否则不得同步。归类记录在 ARCHITECTURE-MAP.md 的字段表，并在本文件 DDL 落地。
 
