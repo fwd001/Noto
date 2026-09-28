@@ -736,7 +736,12 @@ impl Store {
     }
 
     /// blob 的落盘路径（内容寻址，无 path 列）。
-    /// 读回附件的两个状态位（测试与诊断用；生产代码走队列查询）。
+    /// 读回附件的两个状态位。**库里没有这一行**时回 `("absent","absent")` —— 这是唯一的
+    /// "没登记"哨兵（`local_state` 的四个取值里没有 `absent`，见 0001 迁移的 CHECK），
+    /// 调用方可以直接按那一对判"这行不存在"。
+    /// 生产调用者是 `App::retry_attachment` / `App::reupload_attachment`（先看清那对状态
+    /// 再决定撤哪一半）与测试诊断；**队列本身不看它**，挑活走 `attachment_uploads` /
+    /// `attachment_downloads` 的 SQL 口径。
     pub fn attachment_for_state(&self, sha256: &str) -> (String, String) {
         let sha = sha256.to_string();
         self.with_read(|c| {

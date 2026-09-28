@@ -114,6 +114,21 @@ export interface SearchHit {
 
 /* -------------------------------------------------------------------- 附件 */
 
+/**
+ * 一条附件在**这台设备账上**的那对状态（`attachment_retry` / `attachment_reupload` 的返回）。
+ *
+ * 界面只读它、不解释它：撤哪一半状态、要不要覆盖服务器，判断全在核心那两条命令里 ——
+ * 在这儿再写一份"absent 就该怎么、error 就该怎么"就是 §39 禁的第二套状态机，
+ * 而两套判据迟早漂成两种行为（本仓在 kind 词汇上漂过两次，见 TEST-PLAN 记法表那节）。
+ */
+export interface AttachmentLedgerState {
+  sha256: string;
+  /** missing | partial | available | error（DATA-MODEL §8）。 */
+  localState: string;
+  /** unknown | absent | present | error。 */
+  remoteState: string;
+}
+
 export interface Attachment {
   id: Uuid;
   noteId?: Uuid;
@@ -339,6 +354,9 @@ export const Commands = {
   listFolders: 'list_folders',
   attachFile: 'attach_file',
   attachmentData: 'attachment_data',
+  // 坏图/坏附件占位上的两个用户动作。名字与载荷都是核心那两条命令的逐字契约。
+  attachmentRetry: 'attachment_retry',
+  attachmentReupload: 'attachment_reupload',
   stats: 'stats',
   syncNow: 'sync_now',
   configureAccount: 'configure_account',

@@ -470,6 +470,36 @@ len(query) <= 2   → content 表 LIKE + COLLATE NOCASE（慢一个数量级但�
 * 下载缺失 blob（换设备）：`local_state='missing'` 且远端**没被否定**（`present` 或 `unknown`）→ 入 download 队列，UI 显示占位而非报错。
   口径为什么含 `unknown`：外来笔记登记出来的行起步就是 `unknown`（谁也没确认过），只等 `present` 就等于永远不去问服务器一次。
   404 走既有的一条路 —— 标 `absent` 后收手，不会每轮空转。
+* **`absent` / `error` 只能由用户的意图重开（2026-09-28 的决定，两条命令）**：收手换来的是"不空转"，
+  代价是那一格永远不会自愈，而用户手里没有任何能点的东西 —— 所以界面在占位上给两颗按钮，命令面是
+  `attachment_retry` 与 `attachment_reupload`（`App::retry_attachment` / `App::reupload_attachment`）。
+  * 「重试取回」把 `remote_state` 从 `absent`/`error` 撤成 `unknown`，并补一条 download 待办
+    （只改行不落待办的话，界面上那个"待同步"不动，用户会以为点了没反应）。**`local_state` 一字不动**
+    —— 本机有没有那份字节是磁盘上的事实，不是意见。本机已 `available` 时它回 `nothing_to_retry`：
+    对着一次不会发生的下载说"重试成功"，比报错更坏。
+  * 「重新上传本机这份」把 `remote_state` 写成 **`error`**，这就是本仓第二个写 `error` 的地方
+    （第一个是下载复验不符）。为什么用账而不是内存标志：上传队列的远端口径本来就含 `error`
+    （不用新加一条队列），而 `run_attachment_round` 对 `error` 行**不许**走 HEAD 跳过、要走覆盖式
+    MOVE + 复读（SYNC-PROTOCOL §13 那条例外就此有了边界）；落账意味着进程重启、这台设备离线、
+    这一轮 64 MiB 预算用完，用户点的那一下都还在。前置是本机那份真在且哈希就是它 —— 否则
+    `nothing_to_upload`（把对不上号的字节传上去会污染所有引用同一 sha 的笔记）。
+  * 三个失败码（`attachment_not_registered` / `nothing_to_retry` / `nothing_to_upload`）各有自己的文案，
+    因为这三格看起来一样、用户下一步该做的事不一样。判据分别见 FT-ATT-25 / 26 / 27 / 28。
+* **`absent`/`error` 是收手的结论，只能由**用户的一次意图**重开（2026-09-28 补，决定于"要不要给手动动作"那一问）**：
+  这两格里那两个后台动作（`App::retry_attachment` / `App::reupload_attachment`，命令面 `attachment_retry` /
+  `attachment_reupload`）各自只做一件事 —— 改这一张表，然后催一轮同步；下载与覆盖仍由既有的附件轮去做，
+  **没有第二条传输路径**。
+  * 「重试取回」把 `remote_state` 从 `absent`/`error` 撤成 `unknown`，并补一条 download 待办（界面上那个
+    "待同步"要有动静）。`local_state` **一字不动** —— 本机有没有那份字节是磁盘上的事实，不是意见。
+    本机已经 `available` 时它拒绝（`nothing_to_retry`）：说"重试成功"会让用户等一次不会发生的下载。
+  * 「重新上传本机这份」把 `remote_state` 写成 `error`，含义正是"这一份被内容比对否定过" —— 于是
+    `run_attachment_round` 对它**不许**再走 HEAD 跳过，要走覆盖式 MOVE（见 SYNC-PROTOCOL §13）。
+    意图落在**账上**而不是内存标志：进程重启、这台设备离线、这一轮 64 MiB 预算用完，点下去那一下都不能丢。
+    前置是本机那份真的在且哈希就是它 —— 内容与 sha 不符的一份字节传上去会污染所有引用同一 sha 的笔记，
+    那比传失败严重得多，所以这里必须拒（`nothing_to_upload`）。拒绝的代价止于"没传"：这条命令不删不改本机文件、
+    也不动账（挪开/销毁坏字节是磁盘体检那条路的事，它有自己那套"没有替代就不销毁"的凭据要求）。
+  * 三个失败码各有自己的文案（`attachment_not_registered` / `nothing_to_retry` / `nothing_to_upload`），
+    因为这三格看起来一样、用户下一步该做的事完全不一样。
 * **`available` → `missing` 的反向迁移（磁盘体检，2026-09-27 补）**：账与盘会分叉 —— 磁盘清理、杀毒隔离、
   误删 `attachments/` 目录、换盘没搬完。这种行**两个队列都看不见**（`available` 不进下载队列、远端已 `present`
   不进上传队列），于是那张图永久打不开而系统以为自己修好了。所以附件轮开工前先扫一遍

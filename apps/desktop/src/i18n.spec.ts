@@ -42,6 +42,12 @@ const COMMAND_CODES = [
   'sync_refused',
   'sync_busy',
   'unknown_account',
+  // 「重试取回 / 重新上传本机这份」这两条用户动作的失败面（核心侧 App::retry_attachment /
+  // reupload_attachment）。它们必须各有一条自己的文案：这三格长得几乎一样，但用户下一步
+  // 该做的事完全不同（等同步 / 改用另一个按钮 / 从别的设备重插一次）。
+  'attachment_not_registered',
+  'nothing_to_retry',
+  'nothing_to_upload',
 ];
 
 describe('命令层错误文案', () => {

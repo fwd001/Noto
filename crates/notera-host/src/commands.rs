@@ -136,6 +136,21 @@ pub struct SyncStatusDto {
     pub retryable: bool,
 }
 
+/// 附件在这台设备账上的那对状态，给界面的占位/按钮用。
+///
+/// 走 DTO 而不是 `serde_json::json!` 手写字面：这条边上的键名就是契约（`stats` 那次
+/// snake_case 直发让设置页三行恒为 `—`，而前端测试因为喂的是 camelCase 假数据，
+/// 全程绿灯）。字段名交给 `rename_all` 派生，写错编译不过。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentStateDto {
+    pub sha256: String,
+    /// `missing` / `partial` / `available` / `error`（DATA-MODEL §8）。
+    pub local_state: String,
+    /// `unknown` / `absent` / `present` / `error`。
+    pub remote_state: String,
+}
+
 /// 库统计的对外视图。
 ///
 /// 这条边以前是 `serde_json::to_value(StoreStats)` 直发 —— 存储层的字段名（`notes_trash`、
@@ -285,6 +300,13 @@ pub struct AttachCmd {
 pub struct AttachmentDataCmd {
     /// 内容寻址键。必须是 64 位小写 hex —— 它会被拼进 blob 路径，
     /// 不校验就等于把"任意相对路径"交给文件系统（`../../` 那类）。
+    pub sha256: String,
+}
+
+/// 「重试取回」/「重新上传本机这份」这两条用户动作的参数（同形，同一个校验）。
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentShaCmd {
     pub sha256: String,
 }
 
@@ -562,6 +584,22 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
             let c: AttachmentDataCmd =
                 serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.attachment_data(&c.sha256)?)
+        }
+        // 用户在坏图占位上点「重试取回」。为什么是一条命令而不是后台自己再试一次：
+        // 后台对 `absent`/`error` 收手是**刻意的**（§27/§28 那两条保证句要的就是不每 20 s 空转），
+        // 而收手的代价是那一格永远不会自愈。重开它的凭据只能是用户的一次意图。
+        "attachment_retry" => {
+            let c: AttachmentShaCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            j(app.retry_attachment(&c.sha256)?)
+        }
+        // 同一格的动作面另一半：本机有好字节、服务器那份被证明坏了 → 授权一次覆盖式重传。
+        // 注意它**不是**在这里做网络（dispatch 的处理器不许 await 网络，见本文件开头）：
+        // 它只把意图落到账上（remote_state='error'），由常驻附件轮去做那次覆盖。
+        "attachment_reupload" => {
+            let c: AttachmentShaCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            j(app.reupload_attachment(&c.sha256)?)
         }
         // 冲突面板的并排预览：前端一直在调这条，而核心没有 —— 于是它每次都是
         // unknown_command，面板安静地退回卡片摘要（用户以为看到的就是那一版）。

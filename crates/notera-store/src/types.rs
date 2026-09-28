@@ -498,4 +498,9 @@ pub struct AttachmentJob {
     pub sha256: String,
     pub size: i64,
     pub media_type: String,
+    /// 账上此刻的远端态。上传队列带它出来，是因为**"这次搬运要不要覆盖服务器上那份"
+    /// 是一个关于账的判断，不是关于 HTTP 的判断**：`remote_state='error'` 的含义是
+    /// "这一份被内容比对否定过"（下载复验不符，或用户看着坏图点了「重新上传本机这份」），
+    /// 于是"服务器上有同名对象所以跳过"那个省流量的例外对它不成立 —— 见 SYNC-PROTOCOL §13。
+    pub remote_state: String,
 }

@@ -11,13 +11,13 @@
 
 | 门禁 | 结果 | 出处 |
 |---|---|---|
-| `cargo test --workspace` | **541 通过 / 0 失败 / 1 ignored**（64 个测试二进制）—— 2026-09-28 三批：§48 的 G3（体检回填登记尺寸）、G4（每轮量有界）、§27 最后两处上传侧注入（发布被掐 / 裸 404 / 复读被掐）。那 1 条 `#[ignore]` 是 P11 lane 的留档夹具 `conflict_payload_e2e.rs:519`，由 `scripts/verify-p11-panel.mjs` 显式跑；此前这里写的"0 ignored"与实测不符，已更正 | 本机 |
+| `cargo test --workspace` | **544 通过 / 0 失败 / 1 ignored**（64 个测试二进制）—— 2026-09-28 三批：§48 的 G3、G4，以及用户决定的两个附件自救动作（`attachment_retry` / `attachment_reupload`）。那 1 条 `#[ignore]` 是 P11 lane 的留档夹具 `conflict_payload_e2e.rs:519`，由 `scripts/verify-p11-panel.mjs` 显式跑；此前这里写的"0 ignored"与实测不符，已更正 | 本机 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 / 0 | 本机（CI-CD 原样命令） |
 | `cargo fmt --all --check` | 退出码 0（`rustfmt` 组件已装；全仓已格式化） | 本机 |
 | `node scripts/arch-check.mjs` | 28/28（第 26 = 版本单源，第 27 = 编译期嵌入的文件要进版本库，第 28 = 「或」断言必须写理由） | 本机 |
 | 版本单源 | 权威 = 根 Cargo.toml；`check-versions` 一致 | 本机 |
 | `node scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 | 本机 |
-| `node scripts/verify-app.mjs` | **36/36**（真 Rust 核心，非 mock）—— 2026-09-27 那批实测；本表此前写的 35/35 是更早一批的数，已按 CHANGELOG/PRODUCTION-READINESS 的实测对齐。G3 这批没动界面与命令面，**未重跑** | 本机 |
+| `node scripts/verify-app.mjs` | **37/37**（真 Rust 核心，非 mock）—— 2026-09-28 在当前 HEAD（`839d55d` 之后那一批）实测，含新增的一步"坏图占位上两颗自救按钮"。此前写 36/36 是没有那一步的数；G3/G4 那两批本批未重跑的那句已作废 | 本机 |
 | `node scripts/verify-tauri-window.mjs` | debug **9/9 —— 2026-09-28 在当前 HEAD 上重跑**（真 `invoke`、内嵌资源、控制台零 error）；release 那 9/9 **沿用上一批**（本批没重编 release 壳）。本表此前写的 8/8 是更早一批的数 | 本机 |
 | `cargo fmt --check` | **已解除**（组件已装）：第一次跑就发现 92 个文件漂移，已纯格式化提交并复验 487/0 + clippy 0/0 | 本机 |
 

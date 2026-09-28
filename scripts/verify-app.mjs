@@ -24,8 +24,43 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 const consoleErrors = [];
 const pageErrors = [];
 const failedRequests = [];
+// 某些步骤**故意**走核心的拒绝路径（具名错误码 + 400）。两条全局不变量（控制台零 error、
+// 网络请求零失败）要是把这些也算成坏了，就只能永远不去点那条路 —— 那等于把失败面留在无人验证的黑暗里。
+// 所以这里按 `命令名:错误码` **精确配对**放行，而不是放行"这一步里的所有 4xx"：
+// 配不上对的 4xx 照旧算坏了，而多放行的额度由 assertRefusalsSeen 反过来查（声明了却没发生 = 步骤在空转）。
+const allowedRefusals = new Map();
+const seenRefusals = new Map();
+// 编辑器每次渲染缺的图都会探一次 attachment_data，条数不固定 —— 记成"至少几条"。
+let expectedAtLeast = 0;
+function expectRefusal(cmd, code, atLeast = 1) {
+  allowedRefusals.set(`${cmd}:${code}`, true);
+  expectedAtLeast += atLeast;
+}
+function assertRefusalsSeen() {
+  let seen = 0;
+  for (const k of seenRefusals.keys()) if (!allowedRefusals.has(k)) throw new Error(`出现了没声明过的拒绝：${k}`);
+  for (const [k] of allowedRefusals) {
+    const n = seenRefusals.get(k) ?? 0;
+    if (n === 0) throw new Error(`声明了 ${k} 却一次没发生 —— 这一步在空转`);
+    seen += n;
+  }
+  if (seen < expectedAtLeast) throw new Error(`预期的拒绝只有 ${seen} 条，声明了 ${expectedAtLeast} 条`);
+}
+const classify4xx = (body) => {
+  const m = /"code"\s*:\s*"([a-z_]+)"/.exec(body);
+  return m ? m[1] : null;
+};
 page.on('console', (m) => {
-  if (m.type() === 'error') consoleErrors.push(m.text());
+  if (m.type() !== 'error') return;
+  // 一条 4xx 会被 Chrome 额外记一行 "Failed to load resource"。放行它**不看步骤、只看出处**：
+  // 这条 console 消息的 location.url 必须正是某条已声明拒绝的命令端点，否则照旧算坏。
+  const text = m.text();
+  if (/Failed to load resource/.test(text)) {
+    const url = m.location()?.url ?? '';
+    const cmd = url.split('/cmd/')[1]?.split('?')[0] ?? '';
+    if (cmd && [...allowedRefusals.keys()].some((pair) => pair.startsWith(`${cmd}:`))) return;
+  }
+  consoleErrors.push(text);
 });
 page.on('pageerror', (e) => pageErrors.push(String(e)));
 page.on('requestfailed', (r) => failedRequests.push(`${r.method()} ${r.url()} → ${r.failure()?.errorText}`));
@@ -34,7 +69,16 @@ page.on('requestfailed', (r) => failedRequests.push(`${r.method()} ${r.url()} �
 page.on('response', (r) => {
   if (r.status() < 400) return;
   r.text()
-    .then((body) => failedRequests.push(`${r.request().method()} ${r.url()} → HTTP ${r.status()} [步骤：${currentStepName}] ${body.slice(0, 120)}`))
+    .then((body) => {
+      const cmd = r.url().split('/cmd/')[1]?.split('?')[0] ?? '';
+      const code = classify4xx(body);
+      const pair = `${cmd}:${code}`;
+      if (code && allowedRefusals.has(pair)) {
+        seenRefusals.set(pair, (seenRefusals.get(pair) ?? 0) + 1);
+        return; // 这一步要的就是这条拒绝，界面上也确实把它显示成了人话
+      }
+      failedRequests.push(`${r.request().method()} ${r.url()} → HTTP ${r.status()} [步骤：${currentStepName}] ${body.slice(0, 120)}`);
+    })
     .catch(() => failedRequests.push(`${r.request().method()} ${r.url()} → HTTP ${r.status()} [步骤：${currentStepName}]`));
 });
 
@@ -337,6 +381,70 @@ await step('插入图片：真选一个文件 → 显示出来，而正文里只
   // base64 进了 doc = 每个附件在正文里再存一份（+4/3 体积），还会跟着每次编辑同步走
   if (doc.includes('base64')) throw new Error('附件的 base64 被写进了正文');
   return `图片显示 ✓ · 正文只存 sha256 ✓ · ${png.length} 字节落盘`;
+});
+
+// 坏图/坏附件占位上的两个自救动作（2026-09-28 的决定：终态那一格必须给用户一个能点的东西）。
+//
+// 这一步只证"点得动、答得回人话"这一条边：占位上真有两颗按钮、点了真进核心、核心的
+// 具名结论真以中文显示出来、而且不阻塞正文。至于"撤掉结论之后当轮真能取回""覆盖式重传
+// 真把服务器那份坏字节换掉"—— 那两条需要一台真 WebDAV 服务器与两台设备，由
+// FT-ATT-25 / FT-ATT-27 在 Rust 侧证（`cargo test -p notera-host --test attachment_faults`）。
+// 记在这里是为了别让"lane 绿了"被读成"整条功能都验过了"。
+const toastLines = async () => (await page.locator('.toast').allInnerTexts()).map((x) => x.trim());
+await step('坏图占位上的两颗自救按钮：点了真进核心，回答是真话', async () => {
+  const rows = await callBridge('list_notes', { limit: 500 });
+  const hit = rows.filter((r) => r.hasAttachment).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
+  if (!hit) throw new Error('前置不成立：这一步要在一条真有附件的笔记上跑');
+  const doc = JSON.stringify(await (await callBridge('get_note', { id: hit.id })).doc);
+  const sha = (doc.match(/"sha256":"([0-9a-f]{64})"/) ?? [])[1];
+  if (!sha) throw new Error(`正文里没有内容键：${doc.slice(0, 160)}`);
+  const blob = `${DATA_DIR}/attachments/${sha.slice(0, 2)}/${sha}`;
+  if (!fs.existsSync(blob)) throw new Error(`前置不成立：本机那份字节本应在 ${blob}`);
+  const savedBytes = fs.readFileSync(blob);
+  // 声明这一步**要看的**具名拒绝（精确到 命令名:错误码，配不上对的 4xx 照旧算坏）：
+  // 编辑器的占位本身靠一次 attachment_data 的具名缺失，两颗按钮各走一条核心的拒绝。
+  expectRefusal('attachment_data', 'attachment_missing');
+  expectRefusal('attachment_reupload', 'nothing_to_upload');
+  expectRefusal('attachment_retry', 'nothing_to_retry');
+  fs.unlinkSync(blob); // 磁盘清理 / 杀毒隔离就是这形态
+  await page.reload();
+  await page.locator(`[data-testid^="note-row-"]`).first().waitFor({ timeout: 6000 });
+  await page.locator(`[data-testid="note-row-${hit.id}"]`).click();
+  const retry = page.locator('[data-testid="attachment-retry"]');
+  const reup = page.locator('[data-testid="attachment-reupload"]');
+  await retry.first().waitFor({ timeout: 6000 });
+  if ((await reup.count()) === 0) throw new Error('占位上只有「重试取回」，另一颗动作没渲染出来');
+  const names = [(await retry.first().innerText()).trim(), (await reup.first().innerText()).trim()];
+  if (names.some((n) => n.length === 0)) throw new Error(`按钮没有读得出来的名字：${JSON.stringify(names)}`);
+
+  // ① 本机那份已经不在了 —— 「重新上传本机这份」必须被核心**具名拒绝**，并且说的是人话。
+  await reup.first().click();
+  await page.waitForTimeout(400);
+  const afterReup = await toastLines();
+  if (!afterReup.some((x) => x.includes('不能上传'))) {
+    throw new Error(`点了「重新上传本机这份」，界面上没有出现核心的那句拒绝（提示：${JSON.stringify(afterReup)}）`);
+  }
+  // ② 「重试取回」也要真进核心。这一格有两种诚实答案：账上还说"本机有"→ 告诉你不必取回；
+  //    后台已经把它降级 → 接受意图并说"已排进下载队列"。两种都比"点了没反应"强，
+  //    而**任何一种都不许漏出内部码**。
+  await retry.first().click();
+  await page.waitForTimeout(400);
+  const afterRetry = await toastLines();
+  const answered = afterRetry.some((x) => x.includes('不需要取回') || x.includes('已重新排进下载队列'));
+  if (!answered) throw new Error(`点了「重试取回」没有得到核心的答复（提示：${JSON.stringify(afterRetry)}）`);
+  if (afterRetry.some((x) => x.includes('cmd.') || x.includes('error.'))) {
+    throw new Error(`答复里漏出了错误码而不是文案：${JSON.stringify(afterRetry)}`);
+  }
+  // ③ 附件坏了不许把正文一起带走（§8 收尾句）。
+  const body = await page.locator('[data-testid="editor-doc"]').innerText();
+  if (body.trim().length === 0) throw new Error('附件占位把正文顶掉了');
+  assertRefusalsSeen();
+  // 收尾把本机那份放回去：后面的"导出"那一步要求"库里有附件 → 包里就有 attachments/"，
+  // 这一步制造的是**临时**的缺失，不留给别人当假红（真要说的是"读不到就少传并如实记账"，
+  // 那条由 notera-importer 的导出测试与上面那段 tracing::warn 负责）。
+  fs.writeFileSync(blob, savedBytes);
+  if (!fs.existsSync(blob)) throw new Error('没能把本机字节放回去');
+  return `${names.join(' / ')} 都在 · 覆盖被拒说得清 · 重试有真答复 · 正文仍在`;
 });
 
 await step('界面上没有漏出文案键名（编辑器 + 工具条）', async () => {

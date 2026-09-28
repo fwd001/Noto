@@ -10,7 +10,7 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | 541 通过 / 0 失败 / **1 ignored**（64 个测试二进制。那一条 ignored 是 `conflict_payload_e2e.rs:519` 的**留档夹具**，由 `scripts/verify-p11-panel.mjs` 显式调用生成两台设备的现场 —— 它是刻意 `#[ignore]` 的，不是被跳过的测试。此前台账写的"0 ignored"是错的，2026-09-28 按实测更正） |
+| `cargo test --workspace` | 544 通过 / 0 失败 / **1 ignored**（64 个测试二进制。那一条 ignored 是 `conflict_payload_e2e.rs:519` 的**留档夹具**，由 `scripts/verify-p11-panel.mjs` 显式调用生成两台设备的现场 —— 它是刻意 `#[ignore]` 的，不是被跳过的测试。此前台账写的"0 ignored"是错的，2026-09-28 按实测更正） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测） |
 | L5 崩溃注入 `--test crash_recovery` | 小库矩阵 9 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零 |
 | L5 压实崩溃注入 `--test compaction_crash` | 1/1（240 条大库真死在 `after_segment_write`，索引不引用不存在的分段） |
@@ -23,12 +23,12 @@
 | P11 面板 `scripts/verify-p11-panel.mjs` | **11/11 —— 2026-09-28 在当前 HEAD（`d5cf2ef`）上重跑**（真浏览器读**两台真设备留在盘上的现场**：右栏是服务器那一版、无载荷时说的是"没取回来"、冲突笔记留在正常列表且 ⚠ 只落在冲突行上；截图证据进 `docs/evidence/`。本表此前写的是"11/11（…）"没标日期，那是上一批的数；两张台账里还有 10/10 的旧数也在同批对齐到 11/11） |
 | 性能基线 `scripts/verify-perf.mjs`（PERF-01/10/13） | 4/4（**空库预算口径已按用户决定定为 ≤1000 ms 含 WebView2**）：重编 release 壳后实测 空库最好 866 ms（首遍 1528）、5000 条 984 ms、滚动 434 帧 p95 17 ms、RSS 31.9/46.6→47.2 MiB；20000 条那一档 1322 ms。未采：100 附件规模、30 min 泄漏趋势、Android/macOS |
 | Windows 安装器 `pnpm tauri build --target x86_64-pc-windows-gnu --bundles nsis` | **`.exe` 产出 4.46 MiB**（`Notera_0.0.13_x64-setup.exe`）。出货产物侧另验通一件事：拿包内那个 `release/notera-desktop.exe` 起来后 `17323/health` **连不上** —— "dev 桥只关在 debug 构建里"在真正的 release 二进制上成立（不是只看 feature 门）。`--bundles msi` 仍 BLOCKED（WiX `LGHT0102` 的 loc 变量 + 我把自己 shell 的 cwd 留在了临时目录里造成文件锁），装移动作与代码签名未验。两个只露在真跑里的坑：`tauri build` 默认走 MSVC（被 Git Bash 的 coreutils `link` 顶掉），以及 JS/Rust 的 tauri 次版本错配会直接拒绝打包 —— 两侧已对到 2.12.0 |
-| §27 附件故障注入 `--test attachment_faults` | **16/16**（本机 blob 丢了自愈、截断换整份、服务器同长度坏字节被拒、下载被掐不 promote、半上传不落正式对象、远端 404 收手不空转、**只有附件端点超时**时文本轮并发验穿且附件轮在 45 s 预算内自己放手、**MOVE 被 412 拒的两端都咬住**、坏字节**只挪开不销毁**、同长度位腐在**读侧**被拒而不会被画进界面、**体检复算过哈希就把登记尺寸改对并且一次改对**、**体检一轮降的条数有上界**、**发布被掐不算上传成功**、**发布收到裸 404 不写任何一侧的结论**、**复读被掐时对象虽已落成也不许记 present**）—— 十六条各配变异自证 M1..M26；另有存储层两条（`attachment_queue.rs` 的 M21a/M21b、`injection.rs` 的文法 M18/M22），见下面 commit 级的说明 |
-| 前端 | **201 通过（21 文件）+ `vue-tsc --noEmit` 0 错**（2026-09-28 又原样重跑一次，仍是 201/21；此前这里写的 200 是更早一批的数，PRODUCTION-READINESS 同批对齐）。`run build` 的产物体积那一档**本轮未重测**，仍挂着上一批的 216.65 KB → gzip 74.22 KB |
+| §27 附件故障注入 `--test attachment_faults` | **16/16**（本机 blob 丢了自愈、截断换整份、服务器同长度坏字节被拒、下载被掐不 promote、半上传不落正式对象、远端 404 收手不空转、**只有附件端点超时**时文本轮并发验穿且附件轮在 45 s 预算内自己放手、**MOVE 被 412 拒的两端都咬住**、坏字节**只挪开不销毁**、同长度位腐在**读侧**被拒而不会被画进界面、**体检复算过哈希就把登记尺寸改对并且一次改对**、**体检一轮降的条数有上界**、**发布被掐不算上传成功**、**发布收到裸 404 不写任何一侧的结论**、**复读被掐时对象虽已落成也不许记 present**、**「重试取回」真能重开一次收手的结论**、**该拒绝的恢复动作各有自己的具名码**、**「重新上传本机这份」真把服务器上的坏对象换掉**）—— 十九条各配变异自证 M1..M31；另有存储层两条（`attachment_queue.rs` 的 M21a/M21b、`injection.rs` 的规则文法 M18/M22）与前端 5 条契约测试（`stores/attachmentRecovery.spec.ts`），见下面 commit 级的说明 |
+| 前端 | **209 通过（22 文件）+ `vue-tsc --noEmit` 0 错**（2026-09-28 与"两颗自救按钮"那批同批重跑：+5 条来自新的 `attachmentRecovery.spec.ts`，此前两处写的 201/21 与 200/21 都是更早一批的数）。`run build` 的产物体积那一档**本轮未重测**，仍挂着上一批的 216.65 KB → gzip 74.22 KB |
 | `scripts/arch-check.mjs` | **28/28**（第 26 条 = 版本单源，第 27 条 = 编译期嵌入的文件要进版本库，第 28 条 = 新增：测试里的「或」断言必须就地写理由 —— 它抓的就是我这次写出的那条恒真断言） |
 | 版本单源 | 一致（权威 + 三处派生 + **Cargo.lock**）；三处变异（派生位置偷改、crate 自己写死版本、**lock 慢一个版本**）都能打红 | `node scripts/check-versions.mjs` |
 | `scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 |
-| `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | **36/36**（新增一步：设置页里真点一次 `.enex` 导入 —— 报告 2/0/0、说明里点出 `<tag>` 没落地、两条笔记刷新后在列表里看得见。变异自证：把命令名改成 `import_files_MUTATED` 重新起桥 → 该步红，且"零失败请求"那步直接点名 `POST /cmd/import_files → HTTP 400`） |
+| `scripts/verify-app.mjs`（浏览器端到端，真 Rust 核心） | **37/37**（2026-09-28 在当前 HEAD 上新增并跑过一步：坏图占位上两颗自救按钮 —— 都在、有名字、点了真进核心、答复是中文且不漏键名、正文仍在。此前的 36/36 一步不差，只是没有这一步。变异自证：把命令名改成 `import_files_MUTATED` 重新起桥 → 该步红，且"零失败请求"那步直接点名 `POST /cmd/import_files → HTTP 400`） |
 | `scripts/verify-blackbox.mjs`（§23 纯黑盒：只用界面，零 `/cmd/*`） | **10/10** —— 曾是**不稳定门禁**（连跑三轮 10/10、4/10、4/10；只修 hydrate 那一版仍四轮 1 绿 3 红）。定位并修好「在飞保存的旧回包」那条竞态之后**连跑十一轮全绿**（每轮独立空库，含冷缓存六轮）。本轮改完设置页（导入按钮 + 说明列表）与偏好存储后**复跑仍 10/10**，且新增的浏览器 lane 步骤同库并行无冲突 |
 | `scripts/verify-tauri-window.mjs`（真窗口，走真 `invoke`） | debug **9/9** 且 **release 9/9**（第 3 步是本轮新增：在跑着的壳里读 `platform_caps`，断言托盘与全局快捷键**真的注册上了**；变异自证见 TEST-PLAN PLAT-05） |
 
@@ -38,7 +38,18 @@
 
 ### 新增
 
-- **注入器补上"按规则掐连接"（`Injection::abort_for` / `abort_on("MOVE *")`），并据此把 §27 最后两处"只有声称"变成会红的东西**。此前 `FAIL(abort)` 只有按序号的 `drop_after_n` —— 一开就从那一条起**全部**断连，造不出"只掐某一个动作"这一形；而「上传中断」要的恰恰是"暂存写完了、只有发布被掐"。新旋钮与 `status_for`/`hang_for` **共用同一个 `rule_hit`**（三个规则各写一遍解析，迟早漂成三种语法，而漂掉的 matcher 在消费者那里表现为"产品没问题"），文法本身另钉一条单测。
+- **坏图/坏附件的占位上有了两颗能点的按钮：「重试取回」与「重新上传本机这份」**（用户 2026-09-28 的决定第 1 条，一次解掉 §48 的 D1/G2 与 G5 两格）。
+  - **为什么不是后台自己再试一次**：`absent`（一次 404 说"没有"）与 `error`（一次内容比对说"不对"）是**收手的结论**，而收手本身是 §27/§28 那两条保证句要的（不许每 20 s 空转）。收手的代价就是这一格永远不会自愈、而用户手里没有任何能点的东西 —— 所以重开它的凭据只能是**人的意图**。
+  - **命令面**：`attachment_retry` / `attachment_reupload`（`App::retry_attachment` / `App::reupload_attachment`），返回一律走 DTO `AttachmentStateDto{sha256, localState, remoteState}` —— 不走 `json!` 手写字面，因为这条边的对端是界面，而 TS 类型是断言不是校验（`stats` 那次键名漂移就是这么把 140 条绿灯下的洞盖住的）。处理器里**不做任何网络**（`commands.rs` 开头那条不变量）：只改账 + `request_sync()`，下载与覆盖仍由常驻附件轮去做 —— **没有第二条传输路径，也没有第二台状态机**。
+  - **「重试取回」**只撤远端那一半（`absent`/`error` → `unknown`），并补一条 download 待办（只改行不落待办，那个"待同步"不动，用户会以为点了没反应）；`local_state` 一字不动 —— 本机有没有那份字节是磁盘上的事实，不是意见。本机已 `available` 时回 `nothing_to_retry`：对着一次不会发生的下载说"重试成功"比报错更坏。
+  - **「重新上传本机这份」**把远端态写成 **`error`**（本仓第二个写它的地方，第一个是下载复验），意图**落在账上而不是内存标志**：进程重启、这台设备离线、这一轮 64 MiB 预算用完，点下去那一下都还在。配套：`attachment_jobs` 把 `remote_state` 带出来（`AttachmentJob.remote_state`），上传那一侧对 `error` 行**不许**再走 HEAD 跳过，改走覆盖式 `MOVE(Overwrite: T)` 且**照旧复读校验**（`put_attachment` 新增 `force`）。不先 DELETE —— 那会开出一个"服务器上暂时没有"的窗口，而一次覆盖就能完成替换；覆盖被服务器拒时复读会判失败，不留"以为传好了"的假象。前置是本机那份真在且哈希就是它（否则 `nothing_to_upload`），而且拒绝的代价止于"没传"：这条命令不删不改本机文件、也不动账。
+  - **三个失败码各有自己的文案**（`attachment_not_registered` / `nothing_to_retry` / `nothing_to_upload`，`i18n.ts` + `i18n.spec.ts` 同批登记，arch-check"Rust 错误码必须有文案"那条门禁盯着）：这三格看起来一样，用户下一步该做的事完全不一样。
+  - **门禁四条**：FT-ATT-25（前置一轮必须 `(0,0,0)`，否则测不到"点了一下才活过来" → 点完 `remoteState=unknown`、`localState` 不动、待办 +1 → 下一轮 `down==1`、字节逐字相同；变异 **M28**"撤了个寂寞"红）、FT-ATT-26（三种拒绝各打一个具名码 + "拒绝不许顺手删改本机文件或改账"；变异 **M31** 去掉哈希 guard 红）、FT-ATT-27（服务器那份被原地改坏 + `RESTART`：覆盖真发生、DUMP 里恰好一份且内容正确，**一台从没见过的干净设备**随后取回好字节；变异 **M30** `force` 恒 false 红在"坏字节没被换成好的"）、FT-ATT-28（真浏览器 + 真核心：两颗按钮都在、有读得出来的名字、点完得到核心的中文答复、答复里不漏 `cmd.*`、正文仍在）。前端另有 L1 契约测试 `stores/attachmentRecovery.spec.ts`（5 条：命令名与载荷逐字、两个失败码显示成中文且不漏键名、块上没 sha 时一条命令都不发）。
+  - **lane 顺手立了条规矩**：`verify-app` 那两条全局不变量（控制台零 error / 网络请求零失败）原本会把"核心故意的具名拒绝"也算成坏了 —— 那等于逼所有人别去点失败面。现在按 `命令名:错误码`**精确配对**放行（配不上对的照旧算坏；console 那条还要求 `location.url` 确实是同一支命令），并由 `assertRefusalsSeen()` 反查"声明了却没发生"（**声明空转也算失败**，与 arch-check 那套空转保护同一脾气）。这一步还顺手暴露了一次自相干扰：它删掉本机字节后没放回去，导致后面的"导出 ZIP 必须含 attachments/"红了 —— 那是 lane 自己造的假红，收尾已复原（真该说的那条"读不到就少传并如实记账"由导出侧的 `tracing::warn` 与 importer 测试负责，不是这条 lane）。
+  - 文档同批：DATA-MODEL §8 加"absent/error 只能由用户意图重开"那一节（含 `error` 现在有两个写者）；SYNC-PROTOCOL §13 把 HEAD 例外的**边界**写清（`error` 行不走跳过）；FINAL-REVIEW 的 G2/G5 标为已解除，§五 把 D1/G5 记成已决、D4 记成"有决定的待办"。版本 0.0.19 → **0.0.20**（改了产品行为：新增两条命令，上传跳过新增一条例外）。
+  - 复验（2026-09-28 本机 GNU 工具链）：`cargo test --workspace` **544 通过 / 0 失败 / 1 ignored**（64 个测试二进制）、`cargo fmt --all --check` 干净、`clippy --workspace --all-targets -- -D warnings` 0/0、`node scripts/arch-check.mjs` **28/28**、`check-versions` 一致、`--test attachment_faults` **19/19**、前端 **209 通过（22 文件）** + `vue-tsc` 0 错、`verify-app` **37/37**（含新的一步）、`verify-p11-panel` 11/11 与真窗口 debug 9/9（都是今天在当前 HEAD 上重跑的）。§28 那两条代理 lane 本批未重跑（没碰代理），`verify-blackbox` 也未重跑（纯黑盒那十条不依赖新按钮；下一次动界面时一并重跑）。
+
+此前 `FAIL(abort)` 只有按序号的 `drop_after_n` —— 一开就从那一条起**全部**断连，造不出"只掐某一个动作"这一形；而「上传中断」要的恰恰是"暂存写完了、只有发布被掐"。新旋钮与 `status_for`/`hang_for` **共用同一个 `rule_hit`**（三个规则各写一遍解析，迟早漂成三种语法，而漂掉的 matcher 在消费者那里表现为"产品没问题"），文法本身另钉一条单测。
   - **这条工装第一次跑就红在自己身上**（这不是变异，是探针自检）：规则加完了、`aborts()` 也写完了，但**没接进服务器的判定**，于是 `abort_on("MOVE *")` 那条 MOVE 照样拿到 201。红的是新测试的前置断言（"那次 MOVE 拿到了响应码，说明注入压根没打中"），不是产品结论 —— 这正是前置断言存在的意义：否则下一句就是"上传中断已验证"。变异自证 **M22**：让 `aborts()` 去读 `hang_for`（两个旋钮互相串）→ 文法单测当场红在"该命中的没命中"。
   - **三条新门禁**：
     - FT-ATT-22 `a_severed_publish_step_rolls_the_upload_back_and_the_retry_lands_once`（发布那一步被掐）：`up==0` 且 `failed==1`、DUMP 里不许出现含该 sha 的正式对象、**本机那份独家字节逐字节还在**、账上精确保持 `(available, unknown)`、正文可用；清掉注入后重试 `up==1`、最终恰好一份且内容就是要传的字节。

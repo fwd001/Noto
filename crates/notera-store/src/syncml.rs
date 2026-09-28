@@ -930,7 +930,7 @@ impl Store {
     ) -> Result<Vec<AttachmentJob>, StoreError> {
         let placeholders = remote_in.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
-            "SELECT sha256, size, media_type FROM attachments
+            "SELECT sha256, size, media_type, remote_state FROM attachments
               WHERE local_state IN ('{local}','partial','error')
                 AND remote_state IN ({ph})
                 AND deleted_at IS NULL
@@ -955,6 +955,7 @@ impl Store {
                 sha256: r.get(0)?,
                 size: r.get::<_, i64>(1)?,
                 media_type: r.get(2)?,
+                remote_state: r.get(3)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)

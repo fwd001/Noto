@@ -63,7 +63,12 @@ const MESSAGES: Record<MessageKey, string> = {
   'editor.versionTooNew': '这条笔记由更新版本的 Notera 保存，请升级后编辑（当前可查看）。',
   'editor.unknownBlock': '暂不支持的内容（已原样保留）',
   'editor.attachmentMissing': '附件不在这台设备上，正在等待下载',
-  'editor.attachmentDownload': '获取附件',
+  // 坏图/坏附件占位上的两个手动动作（2026-09-28 的决定：终态那一格必须给用户一个能点的东西）。
+  // 界面只表达意图 —— 撤哪一半状态、要不要覆盖服务器，判断全在核心那两条命令里。
+  'editor.attachmentRetry': '重试取回',
+  'editor.attachmentReupload': '重新上传本机这份',
+  'editor.attachmentRetryDone': '已重新排进下载队列，下一次同步会再去问服务器一次。',
+  'editor.attachmentReuploadDone': '已记下你的要求，下一次同步会把本机这份覆盖上去。',
   'editor.imageMissing': '图片不在这台设备上',
   'editor.blockCode': '代码',
   'editor.blockQuote': '引用',
@@ -246,6 +251,12 @@ const MESSAGES: Record<MessageKey, string> = {
   'error.corrupt_record': '发现一条无法识别的记录，已跳过以保护其他数据。',
   'error.attachment_missing': '附件暂时不可用，正文不受影响。',
   'error.attachment_corrupt': '本机这份附件的内容和它的校验和不一致，已拒绝显示；正文不受影响，同步会尝试把它换回来。',
+  // 下面三条是「重试取回 / 重新上传本机这份」这两个手动动作的失败面。它们的共同点：
+  // 点下去没生效时必须说清**为什么没生效**，而不是安静地什么都不发生 —— 用户手上有
+  // 一份好字节却看到"重试失败"和看到"这台设备没有可取回的对象"，是两件完全不同的事。
+  'error.attachment_not_registered': '这台设备的账上没有这份附件的记录，所以没有可重试的对象。正文和其它数据没有被改动。',
+  'error.nothing_to_retry': '这台设备上已经有这份附件的本机副本，不需要取回。如果屏幕上显示的内容不对，请改用「重新上传本机这份」。',
+  'error.nothing_to_upload': '本机没有这份附件的完好副本（文件不在，或内容与校验和不符），不能上传。没有向服务器发送任何内容。',
   'error.too_large': '这个文件超过单个附件 32 MiB 的上限，没有添加。正文与其它附件都没被改动。',
   'error.read_failed': '本地文件没能读出来，未改动任何数据。',
   'error.no_default_folder': '这台设备上找不到默认笔记本，已停止这一步 —— 免得把笔记放进一个说不清的位置。',

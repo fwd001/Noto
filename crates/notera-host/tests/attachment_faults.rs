@@ -1495,3 +1495,276 @@ async fn a_severed_read_back_after_a_landed_upload_records_no_present() {
     );
     srv.stop().await;
 }
+
+// —————————— 用户自救动作：「重试取回」与「重新上传本机这份」（2026-09-28 的决定）
+
+/// 走真命令面调一条恢复动作，返回**序列化出来的形状**（错误码 or 返回体）。
+///
+/// 为什么不直接调 `App::retry_attachment`：这两个动作的终点是界面上的按钮，而界面拿到的
+/// 只有 JSON —— 键名/词汇漂了功能就静默坏掉（`stats` 那条边上踩过一次：wire 上是
+/// snake_case、前端读 camelCase，140 条前端测试全绿把洞完整盖住）。断言必须打在真字节上。
+fn call_recovery(app: &App, name: &str, sha: &str) -> (Option<String>, Option<serde_json::Value>) {
+    match notera_host::commands::dispatch(app, name, json!({ "sha256": sha })) {
+        Ok(v) => (None, Some(v)),
+        Err(e) => (Some(e.code), None),
+    }
+}
+
+/// 一台设备的账落到 `missing ∧ absent` 这一格（本机没有 + 一次 404 说"服务器也没有"），
+/// 后台**按设计收手** —— 那是不许每 20 s 空转的那半条保证（FT-ATT-16 钉的就是它）。
+/// 代价是这张图永久坏掉而用户手里没有任何能点的东西。这条测"点一下"这条路：撤掉那个
+/// 否定结论 → 当轮就取回来。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_user_retry_reopens_an_absent_attachment_and_the_next_round_fetches_it() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..11_000).map(|i| (i % 149) as u8).collect();
+    let a_dir = Tmp::new("retry-a");
+    let sha = seed_source(a_dir.path(), &url, &blob).await;
+    let b_dir = Tmp::new("retry-b");
+    let b = drain_target(b_dir.path(), &url, &blob, &sha).await;
+
+    // 用户侧真会发生的事：本机那份被清掉，而之前某一次 404 把远端判成了"没有"
+    // （网页端手删过、后来运维又把那个目录恢复了 —— 账上留着的是**旧的**否定结论）。
+    std::fs::remove_file(b.store().blob_path(&sha)).expect("删掉本机 blob");
+    b.store()
+        .set_attachment_states(&sha, Some("missing"), Some("absent"))
+        .expect("把远端判成 absent");
+    let remote = b.remote_for_sync().await.unwrap().expect("有适配器");
+    let before = b.run_attachment_round(&remote).await;
+    assert_eq!(
+        before,
+        (0, 0, 0),
+        "前置不成立：absent 的行本来就该收手，不然这条测不到\"用户点了一下才活过来\"：{before:?}"
+    );
+    assert_eq!(
+        ui_read(&b, &sha).code.as_deref(),
+        Some("attachment_missing"),
+        "前置：这一格在界面上就该是具名的缺失"
+    );
+
+    let (code, ok) = call_recovery(&b, "attachment_retry", &sha);
+    assert_eq!(code, None, "用户点「重试取回」却失败：{code:?}");
+    let v = ok.expect("成功路径该有返回体");
+    // 键集合逐字钉住：这条边的对端是界面，而 TypeScript 的类型是断言不是校验。
+    assert_eq!(
+        v.as_object()
+            .map(|o| o.keys().collect::<Vec<_>>())
+            .unwrap_or_default(),
+        vec!["localState", "remoteState", "sha256"],
+        "attachment_retry 的返回键集合漂了：{v}"
+    );
+    assert_eq!(
+        v["localState"].as_str(),
+        Some("missing"),
+        "本机有没有是磁盘上的事实，重试一个字都不许动它"
+    );
+    assert_eq!(
+        v["remoteState"].as_str(),
+        Some("unknown"),
+        "重试的实质就是把\"服务器没有\"那个结论撤掉"
+    );
+    assert_eq!(v["sha256"].as_str(), Some(sha.as_str()));
+    // 点了之后界面上该看得见"有事在做"：待办要落一条，否则那个数字永远是 0。
+    assert!(
+        b.store()
+            .outbox_len(
+                notera_store::LOCAL_ACCOUNT_ID,
+                &[notera_store::OpState::Pending]
+            )
+            .expect("待办读得回来")
+            >= 1,
+        "重试只改了行、没落待办 —— 用户点完看不到任何事在发生"
+    );
+
+    let after = b.run_attachment_round(&remote).await;
+    assert_eq!(
+        after.1, 1,
+        "撤掉 absent 之后这一轮就该把图取回来：{after:?}"
+    );
+    assert_eq!(blob_on_disk(&b, &sha), blob, "取回来的字节必须一字不差");
+    assert_eq!(
+        b.store().attachment_for_state(&sha),
+        ("available".into(), "present".into()),
+        "取回来之后两半状态都要落对"
+    );
+    assert_body_still_usable(&b, &sha);
+    srv.stop().await;
+}
+
+/// 三个具名失败。这三格长得几乎一样，但用户下一步该做的事完全不同（等同步 / 改用另一个
+/// 按钮 / 从别的设备重插一次），所以**不许**共用一条"操作没有成功，可以稍后再试"。
+/// 判据打在真 dispatch 返回的错误码上；顺带钉住"被拒绝的动作不许顺手改本机现场或改账"。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_two_recovery_actions_refuse_the_cases_where_they_would_lie() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..9_000).map(|i| (i % 127) as u8).collect();
+    let a_dir = Tmp::new("guard-a");
+    let sha = seed_source(a_dir.path(), &url, &blob).await;
+    let a = boot(a_dir.path(), &url);
+
+    // ① 库里没有这一行（形态合法、本机从没登记过的 sha）。
+    let ghost: String = notera_core::ContentHash::of("这台设备没见过这个附件".as_bytes())
+        .as_str()
+        .replace("sha256:", "");
+    for name in ["attachment_retry", "attachment_reupload"] {
+        assert_eq!(
+            call_recovery(&a, name, &ghost).0.as_deref(),
+            Some("attachment_not_registered"),
+            "{name} 对一个没登记过的 sha 假装成功了"
+        );
+    }
+    // ② 本机明明有：「重试取回」没有对象可取。说"重试成功"会让用户一直等一次不会发生的下载。
+    assert_eq!(
+        a.store().attachment_for_state(&sha).0,
+        "available",
+        "前置：这一台本机有好字节"
+    );
+    assert_eq!(
+        call_recovery(&a, "attachment_retry", &sha).0.as_deref(),
+        Some("nothing_to_retry"),
+        "本机已经有了还说\"重试成功\""
+    );
+    // ③ 本机那份**不在盘上**（账还说 available —— 磁盘体检之前的一瞬）：不能凭空上传。
+    std::fs::remove_file(a.store().blob_path(&sha)).expect("删掉本机 blob");
+    assert_eq!(
+        call_recovery(&a, "attachment_reupload", &sha).0.as_deref(),
+        Some("nothing_to_upload"),
+        "本机没有那份字节却接受了\"重新上传\""
+    );
+    // ④ 本机那份在、但内容与 sha **不符**：这时传上去会污染所有引用同一 sha 的笔记
+    //    （内容寻址的全部意义就是 sha 与字节一一对应），必须拒。
+    std::fs::write(a.store().blob_path(&sha), &blob).expect("先把好字节放回去");
+    let mut wrong = blob.clone();
+    wrong[10] = wrong[10].wrapping_add(7);
+    std::fs::write(a.store().blob_path(&sha), &wrong).expect("写坏本机那份");
+    assert_eq!(
+        call_recovery(&a, "attachment_reupload", &sha).0.as_deref(),
+        Some("nothing_to_upload"),
+        "内容与 sha 不符的一份字节被允许按用户要求传上服务器"
+    );
+    // 拒绝的代价只能止于"没传"：这条命令不许顺手删改本机现场（挪开/销毁是磁盘体检那条路
+    // 的事，它有自己那套"没有替代就不销毁"的凭据要求），也不许顺手改账。
+    assert_eq!(
+        blob_on_disk(&a, &sha),
+        wrong,
+        "一条只做校验的命令把本机现场改掉了"
+    );
+    assert_eq!(
+        a.store().attachment_for_state(&sha),
+        ("available".into(), "present".into()),
+        "被拒绝的动作不许顺手改账"
+    );
+    srv.stop().await;
+}
+
+/// G5 的正解：**服务器那一份坏了**，而只有"还握着好字节"的那台设备能修它 —— 它自己却看不到
+/// 任何异常（本机那份是好的，`attachment_data` 读得出来、图也画得出来）。修之前那条路上
+/// HEAD 判存说"远端已有"就直接跳过上传，于是这个坏对象谁都不会去动它，直到对面某台设备
+/// 下载复验把它记成 `error` 才收手（FT-ATT-13）—— 而那已经是对面设备的事了。
+///
+/// 用户点「重新上传本机这份」之后必须看到三件事，缺一个都不算修好：
+/// ① 意图**落在账上**（`remote_state='error'`）而不是内存标志 —— 进程重启、这台设备离线、
+///    这一轮 64 MiB 预算用完，点下去的那一下都不能丢；
+/// ② 服务器上那份**被换成好字节**（DUMP 里 sha256 对回来），且不是"又多落一份对象"；
+/// ③ 一台**从没见过的干净设备**随后能取回好字节 —— 这才叫整个库被修好了。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_user_reupload_replaces_a_corrupt_remote_object_for_every_device() {
+    let dav = Tmp::new("reup-dav");
+    let srv = TestServer::start(Backend::Fs(dav.path().to_path_buf())).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..12_000).map(|i| (i % 167) as u8).collect();
+    let a_dir = Tmp::new("reup-a");
+    let (a, sha) = seed_ready_to_upload(a_dir.path(), &url, &blob).await;
+    let remote = a.remote_for_sync().await.unwrap().expect("有适配器");
+    let up = a.run_attachment_round(&remote).await;
+    assert_eq!(up.0, 1, "前置：A 先把图传上去：{up:?}");
+    assert_eq!(
+        served_blob(&srv, &sha)
+            .get("sha256")
+            .and_then(|v| v.as_str()),
+        Some(format!("sha256:{sha}").as_str()),
+        "前置：服务器那份一开始是好的"
+    );
+
+    // 服务器上那份被**原地**改坏（长度不变，只有内容不对 —— 磁盘故障、别人写了同一路径）。
+    let victim = find_remote_blob(dav.path(), &sha, blob.len());
+    let mut bad = blob.clone();
+    for (i, byte) in bad.iter_mut().enumerate().take(4096).step_by(89) {
+        *byte = byte.wrapping_add(5 + (i % 241) as u8);
+    }
+    assert_ne!(bad, blob, "前置不成立：这一改压根没改到内容");
+    std::fs::write(&victim, &bad).expect("写坏服务器上那份");
+    // Fs 后端平时服务**内存表**：不 RESTART 就还是好字节，测试会假绿（同一个坑踩过）。
+    srv.restart().await;
+    let served_now = served_blob(&srv, &sha);
+    assert_ne!(
+        served_now
+            .get("sha256")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default(),
+        format!("sha256:{sha}"),
+        "前置：服务器现在发的必须真是那份坏字节：{served_now}"
+    );
+
+    // A 这边没有任何异常可看，所以这条动作只能由用户发起。
+    let (code, ok) = call_recovery(&a, "attachment_reupload", &sha);
+    assert_eq!(code, None, "用户点「重新上传本机这份」却失败：{code:?}");
+    let v = ok.expect("成功路径该有返回体");
+    assert_eq!(
+        v.as_object()
+            .map(|o| o.keys().collect::<Vec<_>>())
+            .unwrap_or_default(),
+        vec!["localState", "remoteState", "sha256"],
+        "attachment_reupload 的返回键集合漂了：{v}"
+    );
+    assert_eq!(v["localState"].as_str(), Some("available"));
+    assert_eq!(
+        v["remoteState"].as_str(),
+        Some("error"),
+        "这条动作的落点就是把\"远端那份不对\"写到账上 —— 它必须比这一轮活得久"
+    );
+
+    // 这一轮：账上是 `error` 的行**不许**再走 HEAD 跳过，要走覆盖式 MOVE。
+    let round = a.run_attachment_round(&remote).await;
+    assert_eq!(
+        round.0, 1,
+        "坏对象没被覆盖掉（这一轮该真做一次上传）：{round:?}"
+    );
+    let fixed = served_blobs(&srv, &sha);
+    assert_eq!(
+        fixed.len(),
+        1,
+        "覆盖变成了两份对象（或一份都没留下）：{fixed:?}"
+    );
+    assert_eq!(
+        fixed[0].get("sha256").and_then(|v| v.as_str()),
+        Some(format!("sha256:{sha}").as_str()),
+        "服务器上那份坏字节没被换成好的：{fixed:?}"
+    );
+    assert_eq!(
+        a.store().attachment_for_state(&sha),
+        ("available".into(), "present".into()),
+        "复读比对过之后才允许把远端态落回 present"
+    );
+
+    // 决定性一段：另一台从没见过的设备现在取得到好字节。
+    let c_dir = Tmp::new("reup-c");
+    let c = boot(c_dir.path(), &url);
+    c.sync_once().await.expect("C 拉到正文");
+    let remote_c = c.remote_for_sync().await.unwrap().expect("有适配器");
+    let got = c.run_attachment_round(&remote_c).await;
+    assert_eq!(got.1, 1, "C 该把这张图取回来：{got:?}");
+    assert_eq!(
+        blob_on_disk(&c, &sha),
+        blob,
+        "C 取回来的不是那份好字节 —— 服务器上的坏对象其实没被替掉"
+    );
+    assert_eq!(
+        c.store().attachment_for_state(&sha),
+        ("available".into(), "present".into()),
+        "C 复验通过之后两半状态都该落对"
+    );
+    srv.stop().await;
+}

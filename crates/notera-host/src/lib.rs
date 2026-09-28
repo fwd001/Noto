@@ -14,8 +14,9 @@ pub mod devserver;
 pub mod platform;
 
 use commands::{
-    AccountDraftCmd, AccountDto, CmdError, ConflictDto, ExportCmd, FolderDto, ImportCmd,
-    ListNotesCmd, NoteDto, NoteListDto, SearchCmd, SearchHitDto, StatsDto, SyncStatusDto,
+    AccountDraftCmd, AccountDto, AttachmentStateDto, CmdError, ConflictDto, ExportCmd, FolderDto,
+    ImportCmd, ListNotesCmd, NoteDto, NoteListDto, SearchCmd, SearchHitDto, StatsDto,
+    SyncStatusDto,
 };
 use notera_config::{
     AccountConfig, AppConfig, ConfigRepository, ProxyMode, ProxyProfile, TlsPolicyKind,
@@ -616,14 +617,7 @@ impl App {
         // 只认**小写** 64hex：`sha256_hex` 出来的就是这个形态，收大写等于允许同一个
         // blob 有两种拼法、两条路径（Windows 上还不报错）。更关键的是它挡住 `../` 那类
         // 字符串走进 `blob_path` —— 这个参数会被拼进文件路径，不能靠"调用方总不会乱传"。
-        if sha256.len() != 64
-            || !sha256
-                .chars()
-                .all(|ch| ch.is_ascii_digit() || ('a'..='f').contains(&ch))
-        {
-            return Err(CmdError::of("bad_args", false)
-                .with(serde_json::json!({ "detail": "sha256 必须是 64 位 hex" })));
-        }
+        Self::require_sha_hex(sha256)?;
         let path = self.inner.store.blob_path(sha256);
         let bytes = std::fs::read(&path).map_err(|_| {
             CmdError::of("attachment_missing", false).with(serde_json::json!({ "sha256": sha256 }))
@@ -655,6 +649,110 @@ impl App {
             "size": bytes.len(),
             "bytesBase64": notera_crypto::b64::encode(&bytes),
         }))
+    }
+
+    /// `sha256` 参数的形态闸门：只认**小写** 64 hex。它会被拼进 blob 路径
+    /// （`<attachments>/<2hex>/<sha>`），放过大写或 `../` 就是允许任意相对路径去碰文件系统。
+    fn require_sha_hex(sha256: &str) -> Result<(), CmdError> {
+        if sha256.len() != 64
+            || !sha256
+                .chars()
+                .all(|ch| ch.is_ascii_digit() || ('a'..='f').contains(&ch))
+        {
+            return Err(CmdError::of("bad_args", false)
+                .with(serde_json::json!({ "detail": "sha256 必须是 64 位小写 hex" })));
+        }
+        Ok(())
+    }
+
+    /// 用户在坏图/坏附件的占位上点**「重试取回」**：把"远端没有"（`absent`）与"远端那份
+    /// 内容不对"（`error`）这两个**否定结论**撤掉，让这一行重新被下载队列看见，并催一轮同步。
+    ///
+    /// 为什么非要有这条命令（2026-09-28 的用户决定）：后台的收手是**刻意的** —— 一次 404 记
+    /// `absent`、一次内容不符记 `error`，之后不再每 20 s 空转（§27/§28 那两条保证句要的就是
+    /// 这个）。代价是这种行永远不会自己再试一次：那张图在这台设备上**永久**坏掉，而用户手里
+    /// 没有任何能点的东西。"要不要再去问服务器一次"是一个**意图** —— 意图由用户给、由核心
+    /// 落实；界面这边不写状态、不判状态机，它只调这一条命令并画返回的那一对状态。
+    ///
+    /// 只撤远端那一半：`local_state` 是磁盘上的事实，不是意见，这里一字不动。
+    pub fn retry_attachment(&self, sha256: &str) -> Result<AttachmentStateDto, CmdError> {
+        Self::require_sha_hex(sha256)?;
+        let (local, remote) = self.inner.store.attachment_for_state(sha256);
+        if local == "absent" && remote == "absent" {
+            // attachment_for_state 对"库里没有这一行"回的就是 ("absent","absent")（store.rs:740），
+            // 而 local_state 的取值里没有 absent —— 所以这一对是"没登记"的唯一哨兵。
+            return Err(CmdError::of("attachment_not_registered", false)
+                .with(serde_json::json!({ "sha256": sha256 })));
+        }
+        if local == "available" {
+            // 本机已经有这份字节，"取回"没有对象可取。让用户误以为重试成功了比报错更糟 ——
+            // 这一格该走的是另一侧的动作（「重新上传本机这份」）。
+            return Err(CmdError::of("nothing_to_retry", false)
+                .with(serde_json::json!({ "sha256": sha256, "localState": local })));
+        }
+        self.inner
+            .store
+            .set_attachment_states(sha256, None, Some("unknown"))
+            .map_err(CmdError::from)?;
+        // 待办也要落一条：界面上那个"待同步"的数来自 sync_operations，只改行不动待办，
+        // 用户点完会看不到任何事在发生。
+        self.inner
+            .store
+            .enqueue_download(sha256)
+            .map_err(CmdError::from)?;
+        self.request_sync();
+        let (l, r) = self.inner.store.attachment_for_state(sha256);
+        tracing::info!(%sha256, from = %remote, "用户要求重试取回：撤掉远端否定结论，重新排进下载队列");
+        Ok(AttachmentStateDto {
+            sha256: sha256.to_string(),
+            local_state: l,
+            remote_state: r,
+        })
+    }
+
+    /// 用户在坏图占位上点**「重新上传本机这份」**：本机有好字节、而服务器那一份被证明不对
+    /// （或干脆没有）时，由用户授权一次**覆盖式**重传。这是 §48 的 G5 的解 —— 而不是让每次
+    /// 跳过上传都付一次全量读回来复验（同一轮决定里用户选了"保持便宜的跳过"）。
+    ///
+    /// 做法是把账上远端态写成 `error`，它的含义正是"这一份被内容比对否定过"。为什么用账
+    /// 而不是一个内存标志：
+    /// * 上传队列本来就看得见 `error` 行（`attachment_uploads` 的远端口径），不用新加一条队列；
+    /// * `run_attachment_round` 看到 `job.remote_state == "error"` 就走 `put_attachment(force = true)`：
+    ///   不许再用 HEAD 判存跳过，并且 `Overwrite: T` 覆盖（见 SYNC-PROTOCOL §13）；
+    /// * 落在账上就意味着**进程重启、这台设备离线、这一轮预算用完，意图都还在** ——
+    ///   内存标志会在下一次启动时悄悄丢掉，用户点的那一下就不算数了。
+    ///
+    /// 前置是本机那份**真的在**且**哈希就是它**：传错字节会污染所有引用同一 sha 的笔记，
+    /// 那比传失败严重得多。
+    pub fn reupload_attachment(&self, sha256: &str) -> Result<AttachmentStateDto, CmdError> {
+        Self::require_sha_hex(sha256)?;
+        let (local, remote) = self.inner.store.attachment_for_state(sha256);
+        if local == "absent" && remote == "absent" {
+            return Err(CmdError::of("attachment_not_registered", false)
+                .with(serde_json::json!({ "sha256": sha256 })));
+        }
+        let bytes = std::fs::read(self.inner.store.blob_path(sha256)).map_err(|_| {
+            CmdError::of("nothing_to_upload", false)
+                .with(serde_json::json!({ "sha256": sha256, "why": "本机没有这份字节" }))
+        })?;
+        if notera_crypto::sha256_hex(&bytes) != sha256 {
+            tracing::warn!(sha = %sha256, bytes = bytes.len(), "本机那份内容与 sha 不符，拒绝按用户要求上传");
+            return Err(CmdError::of("nothing_to_upload", false)
+                .with(serde_json::json!({ "sha256": sha256, "why": "本机那份内容与 sha 不符" })));
+        }
+        drop(bytes);
+        self.inner
+            .store
+            .set_attachment_states(sha256, Some("available"), Some("error"))
+            .map_err(CmdError::from)?;
+        self.request_sync();
+        let (l, r) = self.inner.store.attachment_for_state(sha256);
+        tracing::info!(%sha256, from = %remote, "用户要求重新上传本机这份：远端态记为 error，下一轮走覆盖式上传");
+        Ok(AttachmentStateDto {
+            sha256: sha256.to_string(),
+            local_state: l,
+            remote_state: r,
+        })
     }
 
     pub fn stats(&self) -> Result<StatsDto, CmdError> {
@@ -1895,7 +1993,12 @@ impl App {
                 }
             };
             notera_core::crash_point("before_attachment_upload");
-            match remote.put_attachment(&job.sha256, &bytes).await {
+            // `remote_state='error'` 的含义是"这一份被**内容比对**否定过"（下载复验不符，
+            // 或用户看着那张坏图点了「重新上传本机这份」）。那种时候 HEAD 判存那个跳过
+            // 不成立 —— 名字在而字节不对，跳过就是让坏对象永久留在服务器上（§48 的 G5）。
+            // 判据取自账上，不取自任何 HTTP 状态码。
+            let force = job.remote_state == "error";
+            match remote.put_attachment(&job.sha256, &bytes, force).await {
                 Ok(()) => {
                     // 字节已经在服务器上、账上还没标 present：崩在这里必须既不重复传、
                     // 也不留下"以为没传"的悬账（内容寻址 + 复验就是为这一刻准备的）。

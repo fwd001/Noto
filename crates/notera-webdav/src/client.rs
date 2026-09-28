@@ -995,9 +995,24 @@ impl WebDavRemote {
         }
     }
 
-    /// 上传：tmp → MOVE(Overwrite:F) → 复读校验 sha256。
+    /// 上传：tmp → MOVE(Overwrite: F 或 T) → **复读校验 sha256**。
     /// 目标已存在视为成功（同一 sha = 同一内容，去重是内容寻址的本意）。
-    pub async fn put_attachment(&self, sha256: &str, bytes: &[u8]) -> Result<(), RemoteError> {
+    ///
+    /// `force` 给"这台设备的账说远端那份是坏的"那一格用（`remote_state='error'`：下载复验
+    /// 不符，或用户看着那张坏图点了「重新上传本机这份」—— 2026-09-28 的决定）。那种时候
+    /// 上面那个跳过**不成立**：`has_attachment` 只回答"有没有这个名字"，而我们手里的事实是
+    /// "里面装的字节不对"，跳过就是把一个已证明坏掉的对象永久留在服务器上（§48 的 G5，
+    /// SYNC-PROTOCOL §13 那句"present 是借来的"说的就是它）。所以 force 走 `Overwrite: T`
+    /// 直接换成我们这份，再由下面那次复读确认换没换成。
+    /// 这里**不**先 DELETE：那会开出一个"服务器上暂时没有"的窗口，期间对面设备取不到东西，
+    /// 而一次覆盖式 MOVE 本身就能完成替换。覆盖要是被服务器拒（有些服务器不许改已存在的对象），
+    /// 下面那次复读会把它判成失败 —— 账上不会留下"以为传好了"的假象。
+    pub async fn put_attachment(
+        &self,
+        sha256: &str,
+        bytes: &[u8],
+        force: bool,
+    ) -> Result<(), RemoteError> {
         if bytes.len() > MAX_RECORD_BYTES * 8 {
             return Err(RemoteError::Protocol(format!(
                 "附件过大（{} 字节），拒绝上传",
@@ -1005,7 +1020,7 @@ impl WebDavRemote {
             )));
         }
         let dest = self.paths.attachment(sha256)?;
-        if self.has_attachment(sha256).await? {
+        if !force && self.has_attachment(sha256).await? {
             return Ok(());
         }
         let tmp = self.paths.tmp(&self.device, self.next_nonce())?;
@@ -1015,7 +1030,7 @@ impl WebDavRemote {
         // 成败交给下面那次复读 —— 服务器上有、且哈希对得上，才算真成功。
         // 直接 return Ok 的旧写法跳过复读，于是账上会凭空多出一个 `present`，
         // 第二台设备从此永远等一份服务器上并不存在的字节（实测就是这样红出来的）。
-        let refused = match self.move_raw(&tmp, &dest, false, None).await {
+        let refused = match self.move_raw(&tmp, &dest, force, None).await {
             Ok(r) if r.is_success() => None,
             Ok(r) if matches!(r.status, 405 | 412) => {
                 self.best_effort_delete(&tmp).await;

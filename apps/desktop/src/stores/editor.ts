@@ -6,7 +6,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { callCommand } from '../api/bridge';
-import { Commands, type Attachment, type Note, type NoteDoc } from '../api/types';
+import { Commands, type Attachment, type AttachmentLedgerState, type Note, type NoteDoc } from '../api/types';
 import { messageFor, t } from '../i18n';
 import { asBridgeError } from '../util/errors';
 import { AUTOSAVE_DEBOUNCE_MS, createDebounced } from '../util/timing';
@@ -390,6 +390,53 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   /**
+   * 坏图/坏附件占位上的**「重试取回」**：让核心去撤那个否定结论（`absent`/`error`），
+   * 这一条命令本身不下载任何东西 —— 下载还是由常驻附件轮去做（同一套队列、同一套预算）。
+   *
+   * 界面上为什么不自己判断"该不该重试"：那种判据会在前端长出一台第二状态机（§39），
+   * 而本仓已经在 kind 词汇、stats 键名这两类边上漂过两次。这里只把意图递过去、
+   * 把核心说的话（成没成、为什么没成）显示出来。
+   */
+  async function retryAttachmentFetch(sha256: string | undefined): Promise<AttachmentLedgerState | null> {
+    if (!sha256) return null;
+    try {
+      const st = await callCommand<AttachmentLedgerState>(Commands.attachmentRetry, { sha256 });
+      toasts.pushText(t('editor.attachmentRetryDone'), 'info');
+      // 这一次意图会落成一条待办，徽标该立刻反映"还有事在做"
+      void sync.syncNow();
+      return st;
+    } catch (e) {
+      pushAttachmentActionError(e);
+      return null;
+    }
+  }
+
+  /**
+   * **「重新上传本机这份」**：本机有好字节、而服务器那一份被证明坏了（或干脆没有）时，
+   * 由用户授权一次覆盖式重传。同样地，覆盖与复读校验都在核心那侧；这里只显示结果。
+   * 核心拒绝的三种情况（没登记 / 本机没有那份 / 那份内容与 sha 不符）各有各的文案，
+   * 因为用户下一步该做的事不一样。
+   */
+  async function reuploadAttachment(sha256: string | undefined): Promise<AttachmentLedgerState | null> {
+    if (!sha256) return null;
+    try {
+      const st = await callCommand<AttachmentLedgerState>(Commands.attachmentReupload, { sha256 });
+      toasts.pushText(t('editor.attachmentReuploadDone'), 'info');
+      void sync.syncNow();
+      return st;
+    } catch (e) {
+      pushAttachmentActionError(e);
+      return null;
+    }
+  }
+
+  /** 恢复动作失败的显示：错误码与 messageKey 都是核心给的，这里只把它显示出来（不自己判语义）。 */
+  function pushAttachmentActionError(e: unknown): void {
+    const bridge = asBridgeError(e);
+    toasts.push(bridge.messageKey, 'error');
+  }
+
+  /**
    * 全局快捷键（Shift+F）与工具条/命令面板共用同一个取文件入口：这里只递一个意图，
    * 真正开选择器的是 RichEditor 里那颗隐藏的 `<input type=file>`。两处各开各的
    * 选择器就会出现"快捷键那条测不到、也没带 accept 过滤"的分叉。
@@ -457,6 +504,9 @@ export const useEditorStore = defineStore('editor', () => {
     attachmentState,
     attachmentUrl,
     ensureAttachmentUrl,
+    // 占位上的两个用户动作（「重试取回」/「重新上传本机这份」）
+    retryAttachmentFetch,
+    reuploadAttachment,
     schedule: () => debouncedSave(),
     cancelScheduled: () => debouncedSave.cancel(),
     reset,

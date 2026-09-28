@@ -41,13 +41,11 @@ import {
   type TextBlockType,
 } from '../editor/model';
 import { useEditorStore } from '../stores/editor';
-import { useSyncStore } from '../stores/sync';
 import { t } from '../i18n';
 
 const MARK_KINDS = ['bold', 'italic', 'underline', 'strike', 'code', 'highlight', 'link'] as const;
 
 const store = useEditorStore();
-const sync = useSyncStore();
 
 const docEl = ref<HTMLElement | null>(null);
 const blocks = computed(() => store.blocks);
@@ -173,11 +171,21 @@ function imageSrc(block: EditorBlock): string | null {
   return store.attachmentUrl(stringAttr(block, 'sha256'));
 }
 
-/** 缺附件时的那颗按钮：既要让同步去把 blob 拉回来，也要在拉回后重新取一次显示 URL。 */
+/**
+ * 缺附件/坏附件占位上的两个用户动作（2026-09-28 的决定：终态那一格必须给用户一个能点的东西）。
+ *
+ * 两颗都递意图，不做判断 —— 前端看不见账上那对状态（本机有没有、远端被不被否定），
+ * 而"什么时候该重试、什么时候该覆盖上传"是核心的判据。在这里猜就等于在前端长第二台
+ * 状态机（§39），而判据漂掉之后表现是"产品没问题、按钮点了没反应"。
+ * 该按钮不适用于当前情况时，核心回的是**具名错误**，界面上有明确的 toast 说明为什么 ——
+ * 安静地不显示按钮同样是让用户猜，两条比不过"点一下然后听懂为什么不行"。
+ */
 function retryAttachment(block: EditorBlock): void {
-  const sha = stringAttr(block, 'sha256') ?? stringAttr(block, 'ref');
-  if (sha) void store.ensureAttachmentUrl(sha);
-  void sync.syncNow();
+  void store.retryAttachmentFetch(stringAttr(block, 'sha256') ?? stringAttr(block, 'ref'));
+}
+
+function reuploadAttachment(block: EditorBlock): void {
+  void store.reuploadAttachment(stringAttr(block, 'sha256') ?? stringAttr(block, 'ref'));
 }
 
 function attachmentName(block: EditorBlock): string {
@@ -681,7 +689,12 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
               <span class="nb-chip__glyph" aria-hidden="true">▦</span>
               <span>{{ t('editor.imageMissing') }}</span>
               <span v-if="attachmentName(block)" class="nb-chip__meta">{{ attachmentName(block) }}</span>
-              <button type="button" class="btn btn--quiet" @click="retryAttachment(block)">{{ t('editor.attachmentDownload') }}</button>
+              <button type="button" class="btn btn--quiet" data-testid="attachment-retry" @click="retryAttachment(block)">
+                {{ t('editor.attachmentRetry') }}
+              </button>
+              <button type="button" class="btn btn--quiet" data-testid="attachment-reupload" @click="reuploadAttachment(block)">
+                {{ t('editor.attachmentReupload') }}
+              </button>
             </figcaption>
           </figure>
 
@@ -692,7 +705,12 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
               <span v-if="formatSize(block.attrs.size)" class="nb-chip__meta">{{ formatSize(block.attrs.size) }}</span>
               <template v-if="attachmentMissing(block)">
                 <span class="nb-chip__meta">{{ t('editor.attachmentMissing') }}</span>
-                <button type="button" class="btn btn--quiet" @click="retryAttachment(block)">{{ t('editor.attachmentDownload') }}</button>
+                <button type="button" class="btn btn--quiet" data-testid="attachment-retry" @click="retryAttachment(block)">
+                  {{ t('editor.attachmentRetry') }}
+                </button>
+                <button type="button" class="btn btn--quiet" data-testid="attachment-reupload" @click="reuploadAttachment(block)">
+                  {{ t('editor.attachmentReupload') }}
+                </button>
               </template>
             </span>
           </div>
