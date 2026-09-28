@@ -81,7 +81,9 @@
 
 1. **安装器**（`.msi`/`.exe`）—— **`.exe` 已产出并验通**（2026-09-27，pnpm 收敛后解锁：`@tauri-apps/cli` 2.12.0 已作为 devDependency 装上）。
    命令与产物：`RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu pnpm --dir apps/desktop exec tauri build --target x86_64-pc-windows-gnu --bundles nsis`
-   → `target/x86_64-pc-windows-gnu/release/bundle/nsis/Notera_0.0.13_x64-setup.exe`（**4.46 MiB**）。
+   → `target/x86_64-pc-windows-gnu/release/bundle/nsis/Notera_0.0.21_x64-setup.exe`（**4.48 MiB**；2026-09-28 在本批的树上重新出包，此前这里挂的是 0.0.13 / 4.46 MiB）。
+   同批在这个新包上重验了两件事：① 真窗口 **release 9/9**（`http://tauri.localhost/` 内嵌资源、真 `invoke`、真 SQLite 落盘）；② **"dev 桥只关在 debug 构建里"在新 release 二进制上成立** —— 起包内那个 exe，5 s 后 `127.0.0.1:17323/health` **连接被拒**（进程确实起来了，日志里有 WebView 窗口类那一行，不是"没跑起来所以连不上"）。
+   ①里那条命令的 `RUSTUP_TOOLCHAIN` **不能省**：只给 `--target …-gnu` 不够，build script 与 proc macro 永远按 host triple 编，而 host 是 msvc → 照样去调被 Git Bash 的 coreutils `link` 顶掉的 `link.exe`，炸出来的是"serde_core/proc-macro2 这堆第三方 crate 编不过"，看起来完全像依赖坏了。
    > **两个只有真跑才会露出来的坑（都记下了）**：
    > ① `tauri build` **默认走 MSVC**，而本仓库只能编 GNU —— 失败信息是
    > `link: extra operand …`，那是 **Git Bash 的 coreutils `link`** 顶替了 MSVC 的 `link.exe`
@@ -122,7 +124,8 @@
 5. ~~**P11 远端版本可见性**~~ —— **已实现并验通**：载荷链路（CF-13）、无载荷时说实话 + 列表上的分歧标记（CF-15）、"接受对面的删除"真的落地删除（CF-16）、"保留两份"的语义按实测钉死（CF-17）；另有真浏览器 lane 11/11 与两台真设备断言。
 6. **附件分片上传协议**（维持原状）：下载侧已续传，上传大附件中断仍整份重传 —— 要动协议，按 §9 评审。
 7. ~~**`package-lock.json` 与 `pnpm-lock.yaml` 双锁**~~ —— **已定 pnpm 并收敛完**：仓库只留 `apps/desktop/pnpm-lock.yaml`，版本由 `packageManager: pnpm@12.5.1` 钉住，CI 改 `pnpm install --frozen-lockfile`；收敛前后产物一字不差（`index-*.js 216.65 kB → gzip 74.22 kB`）。
-8. ~~**冷启动预算口径**~~ —— **已定**：按"双击图标到看见内容"计，**含** WebView2 启动，空库 ≤1000 ms（判据取 3 遍里最好的一遍，每一遍都打印）。实测最好 866 ms / 首遍 1528 ms —— 首遍那个差值一并公布，不拿最好值冒充日常体验。
+8. ~~**冷启动预算口径**~~ —— **已定**：按"双击图标到看见内容"计，**含** WebView2 启动，空库 ≤1000 ms（判据取 3 遍里最好的一遍，每一遍都打印）。
+   **2026-09-28 用本批新编的 0.0.21 release 壳重测：这一条现在不达标**（best-of-3 = **1134~1184 ms**；同一会话里上一批那个旧壳对照 = 1090 ms ⇒ 差异在跑与跑的散布内，**不是我这几批代码引入的回归**，但历史上写的 866 ms 今天复现不出来，所以"已达成"这句撤回了）。另一件更要紧的：**一个全新数据目录的第一次启动实测 6.2~8.1 s**，而"取最好的一遍"正好把新装用户的那一次藏掉了 ⇒ 从本批起同时记**首遍与最好**（记法已改）。缺口记在 §48 的 **G13**，含两条路：真把首帧压回 1000 ms 以内，或者由你把口径分成"首启 / 日常"两档 —— **我不擅自改口径**（§51）。5000 条那一档 1088 ms ✓（预算 ≤1500）、滚动 p95 17 ms ✓、RSS 31.5 → 47.4 MiB ✓。
 
 ---
 
