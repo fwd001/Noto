@@ -47,6 +47,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | `notera-cli` | 诊断与 E2E 驱动（sync-once / net probe / verify） | host 及其全部 | 独立实现任何逻辑 | L3,L4 | 2 |
 | `notera-test-webdav` | 真实 HTTP + 故障注入（仅 dev/test） | 无（独立实现 DAV 子集） | 不得被产品 crate 依赖 | 测试基建 | 1末,2 |
 | `apps/desktop/src` | 三栏 UI、编辑器 View、命令构造、4 态徽标 | 仅经 Commands/事件与 host 交互 | **reqwest/webdav/协议词汇** | L5 | 4 |
+| `apps/mobile/src-tauri`（`notera-mobile`） | **移动壳**：与桌面壳同一条 `notera_command` 转发 + 同一事件名 + 同一 `App::boot` 数据目录口径；**不注册**托盘/全局快捷键/原生菜单（Android 上没有这三个面，所以也**不上报**那两个能力） | host 及其全部 | 业务规则、第二份命令词表、按机型分支 | L3 | 1 |
 | `platform/*` | 窗口、托盘、菜单、通知、后台任务、分享、钥匙串 | Tauri 插件 + 原生 API | 业务规则、同步判定 | L5,L6 | 4,5 |
 
 **判据**：若一个 crate 需要知道"同步"这件事，它就不该知道。业务规则放领域层，否则 Rust 侧测不到。
@@ -207,7 +208,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | L5 性能基线 | **3/4（空库那一档本批未达标 → §48 缺口 G13）**。2026-09-28 用本批新编的 0.0.21 release 壳重测：空库 best-of-3 1134~1184 ms（口径 ≤1000；同会话旧壳对照 1090 ms ⇒ 不是回归，是这条门今天在这台机器上不绿），5000 条 1088 ms ✓、滚动 p95 17 ms ✓、RSS 31.5/46.6→47.4 MiB ✓。**两件事一并记**：而"全新数据目录首启 6.2~8.1 s"这句**在 0.0.28 的树上复现不出来**（按 §40 改成「未能重现、复现条件未知」）；判据从本批起同时记首遍与最好。**0.0.28 另加了一把分解量具** `scripts/measure-startup-breakdown.mjs`：把同一段等待拆成「文档之前 670~795 ms（壳 + WebView2 建窗与导航）」与「文档之内 261~439 ms（bundle + 第一次 IPC + 首帧）」两格，并证明**建库/迁移不在这段关键路径上**（cold 与 warm 的总等待互相重叠）—— 它只出数，判绿仍归这条 lane；`RUN_TAG` 要换新目录，复用上一次的"空库"会量到夹具的账（实测 4695 ms） | `RUN_TAG=<新tag> NOTES=5000 REPS=3 SHELL_EXE=target/x86_64-pc-windows-gnu/release/notera-desktop.exe node scripts/verify-perf.mjs`（`NOTES=` 换规模，`REPS=` 换遍数） |
 | 真窗口 | debug **9/9 —— 2026-09-28 在当前 HEAD 上重跑**；**release 也 9/9（本批重编 release 壳后实测，不再是"沿用上一批"）**：内嵌资源 `http://tauri.localhost/`、真 `invoke`、新建笔记真落 SQLite 且列表读回、托盘与全局快捷键按**注册结果**为 true、截图 + 控制台零 error。本表此前写 8/8 是没跟着"能力探测"那一步改。<br>**⚠ 跑之前必须清残留**：上一次启动留下的 `notera-desktop.exe` / WebView2 进程会占着调试端口，于是 lane 连到的是**那份残留**（页面 `about:blank`）而不是新起的那个壳 —— 实测这样红过一轮 6 步（"假红"，产品没问题）。lane 自己的第 2 步（"`__TAURI_INTERNALS__` 在不在"）就是抓这个的。 | `pnpm build` + `cargo build [--release] -p notera-desktop` + `NOTERA_DATA_DIR=<空目录>` 与 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223` + `node scripts/verify-tauri-window.mjs` |
 
-**已建立**：12 个 crate + `apps/desktop`（Tauri 壳 + Vue 前端）+ `migrations/0001..0006` + 自建测试 WebDAV 服务器 + 上述四套验证脚本 + `docs/` 全套规格与 ADR-0001…0019。
+**已建立**：13 个 crate + `apps/desktop`（Tauri 壳 + Vue 前端）+ `apps/mobile/src-tauri`（Android 壳，复用桌面那份前端产物）+ `migrations/0001..0006` + 自建测试 WebDAV 服务器 + 上述四套验证脚本 + `docs/` 全套规格与 ADR-0001…0019。
 
 **尚未做，且明确不算完成**：
 

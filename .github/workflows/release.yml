@@ -156,9 +156,80 @@ jobs:
             target/release/bundle/macos/*.app
           if-no-files-found: error
 
+  android:
+    name: Android（.apk，debug 签名；无 secrets）
+    needs: meta
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust + Android 目标三元组
+        run: |
+          rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+          rustc -Vv
+
+      # JDK 17 是 AGP 8 的硬要求；NDK 由 sdkmanager 装（本机没有 JDK/SDK/NDK，
+      # 所以这一格**只能在 CI 上验** —— CI-CD §环境与网络限制里 Android 那行写的就是这个）。
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: 安装 NDK
+        run: sdkmanager --install "ndk;26.1.10909125" "cmake;3.22.1" | tail -3
+
+      - name: 准备 pnpm（版本取自 apps/desktop/package.json 的 packageManager）
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/desktop/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+
+      - name: 依赖安装（frozen lockfile）
+        run: pnpm --dir apps/desktop install --frozen-lockfile
+
+      # 移动壳**复用**桌面那份前端产物（apps/mobile/src-tauri/tauri.conf.json 的
+      # frontendDist = ../../desktop/dist）。所以这里先 build 桌面前端，一次即可，
+      # 不留 beforeBuildCommand 里的第二次构建（两处产物不同步就是"手机上跑的是旧界面"）。
+      - name: 前端构建（移动壳用的就是这份 dist）
+        run: pnpm --dir apps/desktop build
+
+      - name: 生成 Android 工程（tauri android init）
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          # NDK_HOME 指到**具体版本目录**（Tauri 认这个变量；给 ANDROID_HOME 根目录它会报找不到 NDK）。
+          export NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
+          test -d "$NDK_HOME" || { echo "NDK 没装上：$NDK_HOME"; exit 1; }
+          pnpm exec tauri android init --config ../mobile/src-tauri/tauri.conf.json
+          ls -1 ../mobile/src-tauri/gen/android 2>/dev/null || ls -1 src-tauri/gen/android
+
+      - name: 出 APK（debug 签名 = Android SDK 自带的 debug keystore，不需要 secrets）
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          export NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
+          pnpm exec tauri android build --config ../mobile/src-tauri/tauri.conf.json --apk --debug --target aarch64
+
+      - name: 收集产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: |
+            apps/mobile/src-tauri/gen/android/app/build/outputs/apk/**/app*.apk
+            apps/desktop/src-tauri/gen/android/app/build/outputs/apk/**/app*.apk
+          if-no-files-found: error
+
   publish:
     name: 汇总到 GitHub Release（草稿）
-    needs: [meta, windows, macos]
+    needs: [meta, windows, macos, android]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -182,8 +253,7 @@ jobs:
             echo
             echo "本 Release 由 tag \`v$v\` 的推送自动构建（\`.github/workflows/release.yml\`）。"
             echo
-            echo "**产物状态**：Windows 安装包由 GNU 工具链产出（本机与 CI 同一条口径）；macOS 包**未经代码签名与公证**，"
-            "首次打开需要在系统设置里手动允许；Android 尚未进入出包矩阵（原因与解除条件见 CI-CD §13）。"
+            echo "**产物状态**：Windows 安装包由 GNU 工具链产出（本机与 CI 同一条口径）；macOS 包**未经代码签名与公证**，首次打开需要在系统设置里手动允许；Android 的 APK 由 debug keystore 签名（无发布 secrets），未经 Play 上架验证。"
             echo
             echo "### CHANGELOG 里对应这一版的那一条"
             echo

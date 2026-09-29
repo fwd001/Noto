@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Notera",
+  "identifier": "app.notera",
+  "build": {
+    "beforeDevCommand": "pnpm --dir ../../desktop dev",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "",
+    "frontendDist": "../../desktop/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Notera",
+        "width": 1080,
+        "height": 720,
+        "minWidth": 360,
+        "minHeight": 480,
+        "resizable": true,
+        "fullscreen": false,
+        "dragDropEnabled": false,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "plugins": {},
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.ico", "icons/icon.png", "icons/32x32.png", "icons/128x128.png"],
+    "shortDescription": "Local-first 笔记",
+    "longDescription": "Notera —— 数据在你自己的 WebDAV 上，离线可用，自动同步。",
+    "category": "Productivity",
+    "android": {
+      "minSdkVersion": 24
+    }
+  }
+}

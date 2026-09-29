@@ -2848,6 +2848,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "notera-mobile"
+version = "0.0.40"
+dependencies = [
+ "notera-core",
+ "notera-host",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-notification",
+ "tokio",
+]
+
+[[package]]
 name = "notera-net"
 version = "0.0.40"
 dependencies = [

@@ -1,0 +1,33 @@
+[package]
+name = "notera-mobile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Notera 移动壳（Tauri 2 / Android）"
+
+[lib]
+name = "notera_mobile_lib"
+# 移动端要的三条：`lib` 给 CI 里 `cargo check`（宿主 target）用，
+# `staticlib` + `cdylib` 给 Android 的 JNI 入口用。
+# 桌面壳（notera-desktop）**不**带后两条，是实测过的：Windows GNU 下 cdylib 的
+# PE 导出表超限（`ld.exe: error: export ordinal too large`），桌面产物链不出来。
+# 所以移动壳是**它自己的 crate**，而不是给桌面 crate 加两个 crate-type。
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# 这里**只**依赖 notera-host / notera-core：壳不许有业务规则（ARCHITECTURE-MAP §5），
+# 移动壳与桌面壳共用的是同一个 `commands::dispatch`，不是第二份状态机（§39）。
+tauri = { version = "2", features = [] }
+tauri-plugin-notification = "2"
+notera-host = { workspace = true }
+notera-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

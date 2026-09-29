@@ -58,3 +58,6 @@ secrets.*
 
 # 本地验证日志（不参与版本控制）
 .logs/
+
+# 移动壳由 CI 的 `tauri android init` 生成，本机一般不跑
+apps/mobile/src-tauri/gen/
