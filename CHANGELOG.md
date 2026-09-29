@@ -87,18 +87,30 @@
     **"By default version 1.0 is used on Android"** —— 这一格漏掉，装出去的 APK 会永远显示 1.0，正是 §5 要防的那种"版本号与库里的不是同一个"。
     派生位置从三处变**四处**（`bump-version.mjs` 一起写，crate 清单也补上移动壳）。
     **变异自证**：把移动壳漂成 `1.0` → 门禁点名 `apps/mobile/src-tauri/tauri.conf.json = 1.0，权威是 0.0.41`（RC=1）；改回去 → 一致（RC=0）。
-  - **§4 / §5 那两条腿的状态（照实记，不当已达成）**：tag 触发的 `release.yml` 在 run #4（`v0.0.40`）上是
-    **meta ✓ / Windows ✓ / macOS ✓ / Android ✗**，产物 `windows-x64` + `macos-universal` 两份齐；
-    Android 红在 `tauri android build` 那一步，记成缺口 **G25（BLOCKED）**。原因不是代码猜不出来，是**读数递不回来**：
-    未认证读不到 job 日志正文（403），也读不到产物字节（本批实测 `artifact zip` = **401 Requires authentication**，
-    所以"把日志当产物传上去再下载"这条路根本不存在）—— 于是本批把**错误行编进产物名字**那条通道做出来
-    （4 条环境事实 + 8 条日志错误行，各 90 字，槽位不足填 `none`），并且**本机拿一份假日志复演过**：12 个槽位全填、非法字符换 `-`。
-    工装账再记一条：run #3/#4 之所以什么都没递出来，是我把"递证据"那一步写在了失败步骤**之前**（`if: failure()` 只看它之前的步骤）。
-    `publish` job `needs: android` ⇒ **GitHub Release 草稿还没建出来**（不是发布失败，是还没走到发布）。
-  - **台账（2026-09-29 深夜，0.0.41，独占机器）**：workspace **598 通过 / 0 失败 / 6 ignored**（`TEST_EXIT=0`、75 个 test result 行）、
-    前端 **215 通过 / 22 文件** + `vue-tsc` 0 错（`FE=0`）、`cargo fmt --check` **0**、clippy `-D warnings` **0 error / 0 warning**
+  - **tag 的移动史（§5 要说清楚，不然"版本号 = 某一棵树"这句话是空的）**：`v0.0.41` 这一个 tag 被**移动过 4 次**
+    （每次都是把出包流水线的一格修复或本批的界面修法并进同一版）。这之所以可以接受，是因为
+    **它从来没有被 Publish 过、也没有 Release 草稿、更没有用户装过** —— tag 一旦对应到发出去的版本就不许再动，
+    那条线在这里还没到。判据是 `scripts/tag-release.mjs` 的 preflight（版本单源一致 + CHANGELOG 里恰好一条
+    `→ 0.0.41` + 工作树干净），它每次都拒过不干净的状态（有一次就是它把三张未提交的 lane 截图拦下来的）。
+  - **§4 / §5 那两条腿的状态（照实记，不当已达成）**：tag 触发的 `release.yml` 从 run #4 到 run #9 一直是
+    **meta ✓ / Windows ✓ / macOS ✓ / Android ✗**，两份桌面产物每次都在；`publish` job `needs: android` ⇒
+    **GitHub Release 草稿还没建出来**（不是发布失败，是还没走到发布）。Android 这一格记成缺口 **G25**，
+    它的定位过程本身就是这一批最大的一块工装账 —— 因为**未认证读不到 job 日志正文（403），也读不到产物字节
+    （实测 `artifact zip` = 401 Requires authentication）**，唯一能把现场递出来的通道是**产物名字**。
+    这条通道修了四轮才有力气：① run #3/#4 什么都没递出来 = "递证据"那一步写在了失败步骤**之前**
+    （`if: failure()` 只看它之前的步骤）；② run #5 递回**根因一**：`could not compile notera-desktop` 13 条 +
+    `on_menu_event` / `tray_by_id` 找不到 —— `--config` 只换配置文件、不换要编的 crate，app path 由工作目录定，
+    我把它跑在 `apps/desktop` 下，于是拿桌面壳去链 aarch64；改到 `apps/mobile` 里跑之后 run #6 起 `gen-mobile=yes`、
+    桌面 crate 不再进编译（**这一半已经修好并被读数证实**）；③ run #6/#7/#8 卡在**读数本身**：那两条
+    `gen-*=no` 是假读数（递证据那步没继承 `working-directory`，相对路径量到仓库根外面）、
+    一个槽（90 字）装不下那条 module 路径、而"下一行"往往是 Node 的 stack frame 不是答案；
+    ④ run #9 的 `Cannot find module '…/tauri-` **开引号没闭合** 才看出是 bash 命令替换在 **NUL 字节**处截断 ——
+    于是清洗那步改成"ANSI + NUL 一起丢 + 把 26 字的 runner 前缀折成 `~/`"，本机复演带两条断言
+    （拼回完整 module 路径、带出 require 方的文件行）都 PASS。**当前状态：读数通道有断言撑着，Android 那一腿仍红，按 §40 记 BLOCKED。**
+  - **台账（2026-09-29 深夜，0.0.41，独占机器）**：workspace **599 通过 / 0 失败 / 6 ignored**（`TEST_EXIT=0`、75 个 test result 行）、
+    前端 **216 通过 / 22 文件** + `vue-tsc` 0 错（`FE=0`）、`cargo fmt --check` **0**、clippy `-D warnings` **0 error / 0 warning**
     （退出码与 error/warning 计数两条一起看，按上面那行的口径）、arch-check **30/30**、check-versions 一致（0.0.40 → 0.0.41）、
-    黑盒 lane **11/11**。**产物与复验同批补齐**（2026-09-29 晚，本机 GNU 工具链，两次 `BUILD_EXIT=0`）：
+    黑盒 lane **12/12**。**产物与复验同批补齐**（2026-09-29 晚，本机 GNU 工具链，两次 `BUILD_EXIT=0`）：
     **`Notera_0.0.41_x64_zh-CN.msi` 7.33 MiB + `Notera_0.0.41_x64-setup.exe` 5.40 MiB**（20:38 出品）。
     **这对包重出过一次**：20:14 那一对是在"「今天」在别的文件夹视图里按了看不见"那条修法**进树之前**编的，
     前端已经变了 ⇒ 拿旧包冒充新树就是 §45 要防的那种"文档说一套、包里是另一套"。重出之后在**打进这两个包的那同一个壳**
