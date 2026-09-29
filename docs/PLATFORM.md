@@ -191,6 +191,20 @@ trait SystemTheme    { fn current(&self) -> Theme; fn changes(&self) -> Stream<T
 * 通知渠道：`sync`（低优先级，可静默）与 `error`（需要处理时）；
 * 目标 ABI：`arm64-v8a` 首发（`armeabi-v7a` 与 `x86_64` 由构建开关决定）。
 
+> **上面那九条是设计意图，不是现状**（§45 要求文档说真话，所以这里把"已经有的"和"还欠的"分开写）。
+>
+> **现在真有的**：移动壳 crate `notera-mobile`（`crate-type = ["lib","staticlib","cdylib"]` +
+> `#[tauri::mobile_entry_point]`），它**复用桌面那份前端产物**（`frontendDist = ../../desktop/dist`）
+> 与**同一个** `commands::dispatch` —— 不是第二份状态机（§39）。桌面壳那个 crate 是 `rlib`，
+> 因为 Windows GNU 下给它加 `cdylib` 会撞 `export ordinal too large`，所以移动壳是它自己的 crate 而不是复用。
+>
+> **刻意不做的**：托盘、全局快捷键、原生菜单在移动壳里**不注册**，于是 `platform_caps` 按注册结果
+> 一律报 false —— 界面因此不会显示"这台有托盘"却找不到它（那是 §5 能力声明那一格反复防的假）。
+>
+> **还欠的**：返回手势、Material 涟漪/底部弹层、`adjustResize`、SAF、`ACTION_SEND` 收件、通知渠道分级
+> 都**没有实现**，也没有判据；出包那一腿在 CI 上还是红的（缺口 **G25**，见 `PRODUCTION-READINESS` §7）；
+> 跨零点的"今天"在没有真设备之前按 §40 记成未验，不写"理论通过"。
+
 ---
 
 ## 10. 快捷键（跨端语义一致，键位各端原生）
