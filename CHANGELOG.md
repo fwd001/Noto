@@ -120,6 +120,28 @@
     "恢复只排期并留下可核对的标记"两步 —— 那两步按 `DATA_DIR` 的**默认值**（`.logs/e2e-data`）去盘上找 blob 与
     `restore-pending.json`，而我这次把桥起在另一个目录里，等于让它们去敲别人家的门；桥起回默认目录 + 显式带 `DATA_DIR` 就是 37/37。
     这条 lane 的头部一直写着"前置由调用方起"，这次就是调用方（我）没起对。
+  - **§4/§5 的出包流水线本批补的三件（纯工装，不动产品行为）**：
+    ① **两条产物结构校验门禁**（CI-CD.md L6 早就承诺、流水线里一条都没有，按 §45 那是文档说一套）——
+    `scripts/check-apk-badging.mjs` 读 `aapt dump badging` + `aapt list` 断包名 / `versionName` /
+    `native-code: arm64-v8a` / `launchable-activity` / **assets 里真的有 JS**（缺界面的 APK 装上能起
+    Activity、开起来白屏，job 状态看不出来）；`scripts/check-macos-bundle.mjs` 挂 `.dmg` 后读
+    `plutil -p Info.plist` + `file` 断 `CFBundleShortVersionString` / bundle id / 主程序名 /
+    `CFBundlePackageType == APPL` / 主程序真是 Mach-O。两份 `--list`、`--file` 都做成**必需参数**，
+    CI 里 `aapt`/`hdiutil`/卷里找不到东西一律红，不 skip。**两个门禁都先证它会红再信它的绿**：
+    APK 侧 5 种变异（versionName→1.0、删 native-code、换包名、删 launchable、空文件）+ 2 种用法错；
+    macOS 侧 6 种变异 —— 其中**第一次的夹具本身是错的**（`sed …/2` 只改了 `CFBundleVersion`，
+    那条不在断言里，"变异"照样绿），改成只动 `CFBundleShortVersionString` 才真红。
+    ② **§4 的"或发布 Release 自动触发"接上**：`on:` 以前只有 tag 推送 + 手动 dispatch，
+    而对**已有 tag** 在 Releases 页面点 Publish 不产生 tag push 事件 ⇒ 那半边本来是不通的。
+    现在挂 `release: types: [published]`；`meta` 用 `GITHUB_REF_NAME`、`publish` 已经会
+    "Release 在就 `upload --clobber`"，所以不用改别的。**这条要真跑就得在公开仓库真 Publish**
+    （那是用户的决定，§13 的 D3 未签名），所以标成"已接线、待用户第一次 Publish 验"，不写"已验证"。
+    ③ **G25 的两层根因定位**（细节与读数在 `docs/PRODUCTION-READINESS.md` 的 G25 条）：
+    先是 CLI 被叫在错误目录（编的是桌面壳），然后是**生成的 gradle 会拿"当初怎么启动 CLI 的那串相对路径"
+    在 `src-tauri` 里重放一次**。定位过程中我自己造的读数机器坏了四轮（`if: failure()` 的位置、
+    没继承 working-directory、URL 形状写错 + `|| echo` 吞掉 curl 的 22、假定红在哪一步），
+    每条都记进 §48 的账；修法 `scripts/patch-android-buildtask.mjs` 把 `BuildTask.kt` 那两节钉成绝对路径，
+    按文件名找而不是猜路径（真身在 `buildSrc/src/main/java/app/notera/kotlin/`，猜错过一轮）。
 - **本机把一条笔记从回收站里恢复出来，而对面已经把它永久删除 —— 恢复被静默公告出去，等于用同步把永久删除的数据复活了（缺口 G24，P1 级；判据 SY-DEL-03；版本 0.0.39 → 0.0.40）**
   - **实测形状**（两台真设备 + 真 TCP 服务器 + `Backend::Fs`）：A 建一条并公告 → B 追平 → **B 删（本机脏、还没公告）** →
     A `purge_note` 并公告 → **B 把这条恢复** → B 连跑 4 轮。修之前的读数：`轮次(冲突/拒收/结局)=[(0,0,Converged),(0,0,NoOp)×3]`、
