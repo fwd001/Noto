@@ -393,6 +393,22 @@ CI 必须运行的四类检查（映射到 job）：
 > - **`android`**（`ubuntu-22.04`：rustup 加四个 Android 三元组 + JDK 17 + **runner 自带的 SDK/NDK**，
 >   在 **`apps/mobile`** 目录里 `tauri android init` 与 `android build --apk --debug --target aarch64`）——
 >   **这一条还是红的，缺口 G25**。debug keystore 签名，不需要 secrets；上架 Play 另说。
+>   - **Android 这条腿有一条别处没有的性质**（G25 定位过程中照 tauri-cli 模板原文读出来的，`[实测]` 见
+>     `PRODUCTION-READINESS.md` 的 G25 条）：生成的 `gen/android/buildSrc/.../BuildTask.kt` 里写死了
+>     `executable = """<当初启动 CLI 的那串字的头一节>"""` 与 `args = listOf(<其余各节>, …)`，
+>     而它的 `workingDir = File(projectDir, rootDirRel)` = **`<app>/src-tauri`**。
+>     也就是说 **gradle 会在另一个目录里重放"我是怎么被叫起来的"** —— 所以**用绝对路径直接叫 `.bin` 的 shim 是坏的**：
+>     记下来的是相对启动目录的那一节，换到 `src-tauri` 就解不出来（`Cannot find module '<…>/src-tauri/tauri'`）。
+>     工装上的两个后果：① `init`/`build` 都**不传 `--config`**（`src-tauri/tauri.conf.json` 就是默认位置，
+>     传进去会把一条相对路径写进生成的工程）；② `init` 之后由 `scripts/patch-android-buildtask.mjs`
+>     把那两节**钉成绝对路径**（`node` + `…/@tauri-apps/cli/tauri.js`），钉完在 CI 里复验那两行。
+>     这条路能不能走通要等 run 的读数，没读到之前 G25 不撤。
+>   - **产物的结构校验（L6 那一格）**：出 APK 之后跑 `scripts/check-apk-badging.mjs`，读
+>     `aapt dump badging` 的原文断四件 —— 包名 `app.notera`、`versionName` 等于这一版（**不是** tauri
+>     在 Android 上退回的 `1.0`）、`native-code` 含 `arm64-v8a`（Rust 库真打进去了）、有
+>     `launchable-activity`（装上点得着）。`aapt`/APK 找不到或 badging 是空的 ⇒ **按红算，不 skip**（§40）。
+>     门禁自己先过变异测试：删掉 `native-code` 那行、把 `versionName` 改成 `1.0`、换包名、删启动入口、
+>     空文件 —— 五种全红；正常形状绿。真机安装与首屏另算一格（§49，要用户的设备）。
 > - **`publish`** —— `needs: [meta, windows, macos, android]`，把三平台产物收拢、算 `SHA256SUMS.txt`、
 >   从 CHANGELOG 里取「版本 … → `<v>`」那一条当正文，**建的是 draft Release**（没签名就公开发布 = 替用户做决定）。
 > - **打 tag 的唯一入口是 `scripts/tag-release.mjs`**（preflight：版本单源一致 + CHANGELOG 里**恰好一条**
