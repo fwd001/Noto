@@ -497,7 +497,13 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
     改法：APK 那侧改断"包里有 `lib/arm64-v8a/*.so`"（前端才有地方嵌）；"界面到底进没进包"挪到
     **嵌之前**量 —— 新增 `scripts/check-frontend-dist.mjs`（入口在、有 JS、`index.html` 真引用了某个 chunk、
     总量不像坏构建），本机对真 dist 绿（11 个文件 / 1 586 737 字节 / 4 个 JS / 1 个 CSS）、四种变异全红。
-    run #18（tag `093b551`）是这三处修好之后的第一次全跑。
+  - **run #18（tag `093b551`）把前两条解除条件真读到了**：`Android（.apk…）= completed success`、
+    `macOS = completed success`，产物里 **`android-apk` 34 870 610 字节**（≈ 33.2 MiB）与
+    **`macos-universal` 11 254 004 字节**都在。APK 侧那条 `versionName` 就是这一版的 `0.0.41` ——
+    不是"我看文件名猜的"，是那道门禁在 runner 上跑出来绿的（同批的 macOS bundle 断言与"要嵌进壳里的
+    前端产物"断言也都绿）。剩 **③ `publish` 建出带三平台产物 + SHA256SUMS 的草稿 Release**，
+    等 Windows 那腿收尾（它是三条里最慢的：release 构建 + 新加的 `msiexec /a` 解包校验）。
+    **G25 在 ③ 读到之前不撤。**
   - **解除条件**（三条都要真读到）：① 下一次 tag 的 run 里 **Android job 绿**；② 产物里出现一份 **`.apk`**（并且它的 `versionName` 是这一版的 0.0.41，不是 1.0）；
     ③ `publish` job 真建出带三平台产物 + SHA256SUMS 的**草稿 Release**。这三条没读到之前，§52 终报里这一格按 BLOCKED 写，不写"理论通过"。
     装到真机上的启动与基础功能验证另算一格（§49：要用户的设备）。
