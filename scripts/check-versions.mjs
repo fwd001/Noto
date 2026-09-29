@@ -32,9 +32,18 @@ export function checkVersions(root = ROOT) {
   if (!conf) drifts.push('tauri.conf.json 里找不到 version 字段');
   else if (conf[1] !== want) drifts.push(`tauri.conf.json = ${conf[1]}，权威是 ${want}`);
 
+  // 移动壳必须一起管：tauri-utils 2.10 的配置源码（config.rs:4101-4117）明写
+  // "**By default version 1.0 is used on Android**"，且没写 version 时读的是 Cargo.toml ——
+  // 也就是说这一格漏掉，装出去的 APK 会永远显示 1.0，而 §5 要的是"发布时同步更新版本号"。
+  // 这条不是推测：是本仓库编译到的那份 tauri-utils 里读到的原话。
+  const mconf = read('apps/mobile/src-tauri/tauri.conf.json').match(/"version"\s*:\s*"([^"]+)"/);
+  if (!mconf) drifts.push('apps/mobile/src-tauri/tauri.conf.json 里找不到 version 字段（Android 会退回 1.0）');
+  else if (mconf[1] !== want) drifts.push(`apps/mobile/src-tauri/tauri.conf.json = ${mconf[1]}，权威是 ${want}`);
+
   // 所有 crate 一律不许自己写版本号：必须走 workspace
   const manifests = [
     'apps/desktop/src-tauri/Cargo.toml',
+    'apps/mobile/src-tauri/Cargo.toml',
     ...readdirSync(join(root, 'crates')).filter((d) => d !== 'node_modules').map((d) => `crates/${d}/Cargo.toml`),
   ];
   for (const rel of manifests) {
@@ -46,7 +55,7 @@ export function checkVersions(root = ROOT) {
       drifts.push(`${rel} 既没有 version.workspace = true，也没有版本号 —— 版本来源不明`);
     }
   }
-  // Cargo.lock 也要跟着走：`bump-version.mjs` 只改三个源文件，锁文件要等下一次 cargo
+  // Cargo.lock 也要跟着走：`bump-version.mjs` 只改那几处派生位置，锁文件要等下一次 cargo
   // 跑起来才自己追平 —— 于是"已提交的状态"里 lock 比权威慢一个版本（0.0.1 那次是手工
   // 补的，0.0.2 又漂了一次：手工补过一次的东西第二次一定会忘）。
   const names = [];

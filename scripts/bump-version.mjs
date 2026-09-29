@@ -6,7 +6,7 @@
  *   node scripts/bump-version.mjs patch|minor|major   # 递增一位，另两位清零规则见下
  *   node scripts/bump-version.mjs 0.3.1               # 直接指定
  *
- * 为什么"改版本"必须是**独立的一步**、且只经这个脚本：三处派生位置各由不同的人手改，
+ * 为什么"改版本"必须是**独立的一步**、且只经这个脚本：派生位置各由不同的人手改，
  * 迟早出现"安装包是 0.1.0、库里 app_version 是 0.0.9"。脚本改完立刻自证一致，
  * 不一致就直接失败 —— 不留"看起来改好了"的状态。
  *
@@ -47,6 +47,7 @@ const edits = [
   ['Cargo.toml', /^\[workspace\.package\]([\s\S]*?)^version\s*=\s*"[^"]+"/m, (g) => `[workspace.package]${g}version = "${next}"`],
   ['apps/desktop/package.json', /^(\s*"version"\s*:\s*")([^"]+)"/m, (g) => `${g}${next}"`],
   ['apps/desktop/src-tauri/tauri.conf.json', /("version"\s*:\s*")([^"]+)"/, (g) => `${g}${next}"`],
+  ['apps/mobile/src-tauri/tauri.conf.json', /("version"\s*:\s*")([^"]+)"/, (g) => `${g}${next}"`],
 ];
 
 for (const [rel, re, build] of edits) {
@@ -80,4 +81,4 @@ if (drifts.length !== 0) {
   console.error(`已经写成 ${next}，但一致性检查没过：\n  - ${drifts.join('\n  - ')}`);
   process.exit(1);
 }
-console.log(`版本：${cur} → ${next}（三处派生位置 + Cargo.lock 已同步，check-versions 通过）`);
+console.log(`版本：${cur} → ${next}（四处派生位置 + Cargo.lock 已同步，check-versions 通过）`);
