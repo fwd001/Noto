@@ -1,0 +1,109 @@
+diff --git a/crates/notera-host/tests/sync_once.rs b/crates/notera-host/tests/sync_once.rs
+index 6d4103b..476b0a7 100644
+--- a/crates/notera-host/tests/sync_once.rs
++++ b/crates/notera-host/tests/sync_once.rs
+@@ -971,3 +971,104 @@ async fn a_vanished_remote_record_keeps_local_content_and_leaves_no_pending_stat
+     assert!(problems.is_empty(), "{}", problems.join(" ｜ "));
+     srv.stop().await;
+ }
++
++/// P13（别处把这条**永久删除**了）此前只有一条规划层单测看着 —— 规则审计里它红在 1 条，就是那一格。
++/// 这一条补上两设备那一半：A 永久删除并公告之后，B（干净、空闲）那台这一条要**整个读不到**，
++/// 并留下一张 purged 墓碑 —— 于是它以后既不会被对面那一版写活，也不会从本机历史里被翻出来。
++/// 形状与 G20 同源（干净那一行进不进本轮计划），所以这一格必须**真的被走到**才算过。
++#[tokio::test]
++async fn a_permanent_delete_reaches_a_device_that_had_nothing_pending() {
++    let srv = TestServer::start(Backend::Mem).await;
++    let url = srv.base_url();
++    let a = Device::boot("purge-a", &url);
++    let folder = a.app.default_folder_id().unwrap();
++    let note = a.app.create_note(&folder, doc("要被永久删掉的一版")).unwrap();
++    let id = notera_core::EntityId::parse(&note.id).unwrap();
++    for _ in 0..3 {
++        a.app.sync_once().await.expect("A 公告起点");
++    }
++    let b = Device::boot("purge-b", &url);
++    for _ in 0..4 {
++        b.app.sync_once().await.expect("B 追平");
++    }
++    assert!(
++        b.app.store().get_note(&id).unwrap().is_some(),
++        "夹具没造对：B 该先有这一条"
++    );
++
++    a.app.store().purge_note(&id).expect("A 永久删除");
++    for _ in 0..4 {
++        a.app.sync_once().await.expect("A 公告永久删除");
++    }
++    for i in 0..5 {
++        let st = b.app.sync_once().await.expect("B 追永久删除");
++        println!(
++            "[diag4] B 第 {i} 轮：{:?} ｜ 本机这一行={}",
++            st,
++            b.app
++                .store()
++                .get_note(&id)
++                .unwrap()
++                .map(|n| format!("rev={}/删={}/purged表={}", n.rev, n.deleted_at.is_some(), n.purged_at.is_some()))
++                .unwrap_or_else(|| "读不到".to_string())
++        );
++    }
++    let st = b.app.store().stats().unwrap();
++    let mut problems = Vec::new();
++    if b.app.store().get_note(&id).unwrap().is_some() {
++        problems.push("对面永久删除之后，B 那台还读得到这一条（回收站里也不许有）".to_string());
++    }
++    if st.notes != 0 || st.notes_trash != 0 {
++        problems.push(format!(
++            "B 那台还留着这一行的痕迹：正常 {} 回收站 {}",
++            st.notes, st.notes_trash
++        ));
++    }
++    if st.tombstones_purged == 0 {
++        problems.push("B 那台没落下 purged 墓碑 —— 以后任何一份旧视图都可能把它写活".to_string());
++    }
++    if st.dirty_notes != 0 || st.outbox_pending != 0 {
++        problems.push(format!(
++            "追平之后账没结清：dirty={} outbox={}",
++            st.dirty_notes, st.outbox_pending
++        ));
++    }
++    println!(
++        "[diag2] 服务器上的路径：{}",
++        srv.fs_dump()["entries"]
++            .as_array()
++            .cloned()
++            .unwrap_or_default()
++            .iter()
++            .filter(|e| e["is_dir"].as_bool() != Some(true))
++            .map(|e| format!("{}:{}B", e["path"].as_str().unwrap_or("?"), e["bytes"].as_u64().unwrap_or(0)))
++            .collect::<Vec<_>>()
++            .join(" | ")
++    );
++    let acct_b = b.app.config().active_account.unwrap_or_default();
++    println!(
++        "[diag2] B 的持久远端视图：{:?} ｜ B 的墓碑 purged 位={}",
++        b.app
++            .store()
++            .remote_index_lookup(&acct_b, notera_core::EntityKind::Note, id.as_str())
++            .unwrap()
++            .map(|e| (e.rev, e.deleted, e.purged)),
++        st.tombstones_purged
++    );
++    let cand = b.app.store().remote_moved_entities(&acct_b).unwrap();
++    let row = b.app.store().get_note(&id).unwrap();
++    println!(
++        "[diag3] B 的候选集={} 里含这一条={} ｜ 本机这一行 rev/sync_rev={}",
++        cand.len(),
++        cand.iter().any(|c| c.id == id),
++        row.as_ref()
++            .map(|n| format!("rev={}/sync_rev={}/删={}", n.rev, n.sync_rev, n.deleted_at.is_some()))
++            .unwrap_or_else(|| "（本机没这一行）".to_string())
++    );
++    println!(
++        "诊断 P13：B 的 tombstones={}/purged={} 而 A 的 purged={}（B 完全没这一行才算走到 P13）",
++        st.tombstones, st.tombstones_purged, a.app.store().stats().unwrap().tombstones_purged
++    );
++    assert!(problems.is_empty(), "{}", problems.join(" ｜ "));
++    srv.stop().await;
++}
