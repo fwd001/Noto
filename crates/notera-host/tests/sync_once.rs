@@ -1088,3 +1088,94 @@ async fn a_permanent_delete_reaches_a_device_that_had_nothing_pending() {
     assert!(problems.is_empty(), "{}", problems.join(" ｜ "));
     srv.stop().await;
 }
+
+/// 量一件事（**`#[ignore]` 量具，只出数不判绿**）：一条**带附件**的笔记被永久删除之后，
+/// 服务器上那些按 sha256 寻址的 blob 还在不在 —— 本机这一侧有 GC，远端这一侧今天没有判据。
+///
+/// 2026-09-29 用它量到的事实（`cargo test -p notera-host --test sync_once -- --ignored --nocapture`）：
+/// 笔记记录被换成 369 B 的墓碑公告（`purged=true / payload=null`）、B 那台的引用数归 0、A 留下 purged 墓碑，
+/// **而 `.notes/attachments/<sha前两位>/<sha>` 那份字节原样躺在服务器上**。
+/// 口径没定之前不写断言（定了就要反过来断"不许在"），见 PRODUCTION-READINESS §7 的 **G23**。
+#[tokio::test]
+#[ignore = "量具：永久删除之后服务器上的附件 blob 走没走 —— 只出数，不当门禁"]
+async fn probe_purge_and_remote_attachment_blobs() {
+    let dav = Tmp::new("probe-purge-dav");
+    let srv = TestServer::start(Backend::Fs(dav.path().to_path_buf())).await;
+    let url = srv.base_url();
+    let a = Device::boot("pp-a", &url);
+    let folder = a.app.default_folder_id().unwrap();
+    let note = a
+        .app
+        .create_note(&folder, doc("带图并且要被永久删掉"))
+        .unwrap();
+    let blob: Vec<u8> = vec![
+        0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, b'X', b'Y', b'Z',
+    ];
+    let nid = notera_core::EntityId::parse(&note.id).unwrap();
+    let sha = a
+        .app
+        .store()
+        .attach_blob(&nid, &blob, "image/png", Some("shot.png"), "blk000002")
+        .unwrap()
+        .sha256;
+    let head = a.app.store().get_note(&nid).unwrap().unwrap();
+    let with_image = json!({ "v": 1, "content": [
+        { "id": "blk000001", "type": "paragraph", "content": [{ "text": "带图并且要被永久删掉" }] },
+        { "id": "blk000002", "type": "image", "attrs": {
+            "sha256": &sha, "ref": &sha, "role": "inline", "pending": false,
+            "size": blob.len(), "mediaType": "image/png", "name": "shot.png" } },
+    ] });
+    a.app.store().edit_note(&nid, with_image, head.rev).unwrap();
+    let ra = a.app.remote_for_sync().await.unwrap().expect("A 适配器");
+    a.app.sync_once().await.expect("A 文本轮");
+    let round_a = a.app.run_attachment_round(&ra).await;
+    println!("量具：A 的附件轮={round_a:?} sha={sha}");
+    let b = Device::boot("pp-b", &url);
+    let rb = b.app.remote_for_sync().await.unwrap().expect("B 适配器");
+    for _ in 0..4 {
+        b.app.sync_once().await.expect("B 文本追平");
+        b.app.run_attachment_round(&rb).await;
+    }
+    let blob_on_b = b.app.store().attachment_for_state(&sha);
+    println!("量具：B 那台读到的附件状态={blob_on_b:?}");
+    let walk = |tag: &str| {
+        let mut out = Vec::new();
+        let mut stack = vec![dav.path().to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            if let Ok(rd) = std::fs::read_dir(&dir) {
+                for e in rd.flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        stack.push(p);
+                    } else if let Ok(m) = std::fs::metadata(&p) {
+                        out.push(format!(
+                            "{}:{}B",
+                            p.strip_prefix(dav.path()).unwrap().display(),
+                            m.len()
+                        ));
+                    }
+                }
+            }
+        }
+        out.sort();
+        println!("量具 {tag} 服务器上的文件：{}", out.join(" | "));
+        out.iter().any(|f| f.contains(&sha))
+    };
+    let before = walk("永久删除之前");
+    a.app.store().purge_note(&nid).expect("A 永久删除");
+    for _ in 0..4 {
+        a.app.sync_once().await.expect("A 公告永久删除");
+        a.app.run_attachment_round(&ra).await;
+    }
+    for _ in 0..3 {
+        b.app.sync_once().await.expect("B 追永久删除");
+        b.app.run_attachment_round(&rb).await;
+    }
+    let after = walk("永久删除之后");
+    let refs_b = b.app.store().attachment_refs(&sha).unwrap();
+    println!(
+        "量具结论：服务器上带这个 sha 的文件 删除前={before} 删除后={after} ｜ B 那台的引用数={refs_b} ｜ A 的 purged 墓碑={}",
+        a.app.store().stats().unwrap().tombstones_purged
+    );
+    srv.stop().await;
+}
