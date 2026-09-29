@@ -392,6 +392,14 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
   实测候选集确实收进了这一条（`候选=1，含这一条=true`），**可那几轮还是 `NoOp`**，
   所以卡点在候选行**下游**（304 那一支的 `remotes` 来源与窗口/分段合并，见 `sync/lib.rs:550-552`），
   不是输入集合。当时我改的候选查询因此被回退了：一条"改了但没修好"的规则不进主干。
+  **下一步最短的一跳（先想清楚，别重新推）**：`outcome: NoOp` 这一格有歧义 —— 落墓碑那一支
+  （`sync/lib.rs` 里的 `tombstone_ops`）**既不动 `st.outcome` 也不加 `pulled`**，所以"这轮说 NoOp"
+  并不等于"这轮没规划"（实测第 0 轮就是 NoOp，而那次软删正是它落的）。下一批要做的不是继续读代码，
+  而是把两件事**分开量**：① 在引擎侧用 FakeLocal/FakeRemote 造一次"locals 里有这条干净行 +
+  远端视图 purged=true"的轮次（`crates/notera-sync/tests/engine.rs` 的 `local(...)` / `ent(...)` 把
+  `p` 置 1 就够），看引擎给不给 `ApplyRemotePurge`；② 若给，卡点就在 host 的输入侧 ——
+  `local_views()` 一旦报错会被快路径的 `unwrap_or(false)` 当成"没活"，这条路径要一并验掉。
+  两边各打一次读数之后再动手改：本批就是靠"先读"排除了候选集那一半的。
   解除条件：① 定位"locals 里有这一行、远端视图说 purged=1，而本轮仍判不到 P13"的那一跳；
   ② 一并拍板永久删除要不要把服务器上的记录字节也抹掉（隐私口径，属 §8 的承诺范围）；
   ③ 判据就是 `patches/g22-purge-propagation-gate.patch`（打上即红，红在
