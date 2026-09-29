@@ -416,7 +416,7 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
   实测候选集确实收进了这一条（`候选=1，含这一条=true`），**可那几轮还是 `NoOp`**，
   所以卡点不在输入集合。当时改的候选查询因此被回退了：一条"改了但没修好"的规则不进主干。
 
-- **G25 总指令 §4 的三条出包腿里，Android 那一腿在 CI 上还是红的（2026-09-29 实测；状态 = **根因已量出、修法已提交，等下一次 run 的读数**）**：
+- **G25 总指令 §4 的三条出包腿里，Android 那一腿在 CI 上还是红的（2026-09-29 实测；状态 = **出包本身已通（run #16 起 `出 APK = success`），红的是本批新加的产物门禁写错了判据，判据已改、等 run #18 的读数**）**：
   实测到现在的形状：`release.yml` 由 tag 触发，run #4（`v0.0.40`）与 run #5（`v0.0.41`）都是
   **meta ✓ / Windows ✓ / macOS ✓ / Android ✗**，产物 `windows-x64`、`macos-universal` 两份都在，Android 一步没有。
   红的位置在 `tauri android build --apk --debug --target aarch64` 那一步（前面 SDK/NDK 定位、`android init` 都已过）。
@@ -481,6 +481,23 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
   - **影响**：交付验收标准里"GitHub Actions 可自动构建 Windows、macOS、Android 最新版本包"这一格**只满足 2/3**；
     `publish` 那个 job `needs: android`，所以 GitHub Release 草稿**还没建出来**（不是"发布失败"，是"还没走到发布"）。
     桌面产品与本地功能不受这条影响 —— 它红的是出包流水线，不是核心。
+  - **run #16 与 #17：Android 那一腿的"出包"已经通了，红的是我自己写的产物门禁**（读数是这两轮从
+    commit 评论通道递回来的整段现场）：
+    #16 里 `出 APK … = success`（第一次），gradle 回头叫 CLI 那件事被钉死之后不再坏；
+    #17 的 `aapt dump badging` 全文显示这个包本身是好的 ——
+    `package=app.notera versionCode=41 versionName=0.0.41`、`native-code: arm64-v8a`、
+    `launchable=app.notera.MainActivity`。唯一红的那条是我写的 `assets/ 里要有 .js`，
+    **而那条判据是错的**：tauri v2 把前端资源**嵌进 Rust 的 `.so`**，APK 的 `assets/` 只放
+    `tauri.conf.json`（`aapt list` 的原文读数就是这样）。macOS 那腿同批红在同一类问题上：
+    挂载与 bundle 全通，但 `CFBundleExecutable` 的真值是 **`notera-desktop`**，我默认写的是 `Notera`。
+    **两个都是"门禁判错"，不是"包坏"** —— 这条必须先说清楚，不然读起来像产品有问题。
+    一处值得记的自查：我一度推断"`--debug` 的包没前端是因为 `devUrl` 在那儿"，**动手改配置之前**
+    去读了 `crates/tauri-cli/src/mobile/android/build.rs` 原文，里面 `dev: false`（build 路径不按 dev 走），
+    于是没把一个不是缺陷的东西"修"掉、顺手把 `tauri android dev` 的热更新弄坏。
+    改法：APK 那侧改断"包里有 `lib/arm64-v8a/*.so`"（前端才有地方嵌）；"界面到底进没进包"挪到
+    **嵌之前**量 —— 新增 `scripts/check-frontend-dist.mjs`（入口在、有 JS、`index.html` 真引用了某个 chunk、
+    总量不像坏构建），本机对真 dist 绿（11 个文件 / 1 586 737 字节 / 4 个 JS / 1 个 CSS）、四种变异全红。
+    run #18（tag `093b551`）是这三处修好之后的第一次全跑。
   - **解除条件**（三条都要真读到）：① 下一次 tag 的 run 里 **Android job 绿**；② 产物里出现一份 **`.apk`**（并且它的 `versionName` 是这一版的 0.0.41，不是 1.0）；
     ③ `publish` job 真建出带三平台产物 + SHA256SUMS 的**草稿 Release**。这三条没读到之前，§52 终报里这一格按 BLOCKED 写，不写"理论通过"。
     装到真机上的启动与基础功能验证另算一格（§49：要用户的设备）。
