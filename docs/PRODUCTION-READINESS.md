@@ -450,6 +450,19 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
     重放时成了 `src-tauri/src-tauri/tauri.conf.json`。
     补丁脚本本机照模板复演过 5 个用例：两种形状（裸 `tauri` / 带层级的相对路径）都钉对，
     三种变异（模板里没有那两行 / args 是空的 / 传了相对 CLI 路径）全红。
+  - **run #15：那一次钉补丁没生效，是**我自己猜错了文件位置**（读数把这件事说得清清楚楚）**：
+    补丁那步的读数是 `BT=…/buildSrc/src/main/kotlin/BuildTask.kt 存在吗：NO`，
+    而按文件名找到的真身在 **`buildSrc/src/main/java/app/notera/kotlin/BuildTask.kt`**
+    （生成的 buildSrc 按应用包名落目录，不是模板仓库里那个 `src/main/kotlin/` 的形状）。
+    于是"步骤绿、文件一个没改"，gradle 里跑的还是那串相对路径 —— 关键行原样复现：
+    `Cannot find module '~/apps/mobile/src-tauri/tauri'` + `Execution failed for task ':app:rustBuildArm64Debug'`。
+    同一份读数顺带把 `rootDirRel = "../../../"` 量实了（`gen/android/app` 往上三层正是 `src-tauri`，
+    与上面那套推导一致）。**改成按文件名找**（找到几个钉几个，一个都没有就红），
+    并把这一步的三条收口都打在**读数**上而不是它自己的说法上：`找到 N 个` / 每个文件的 `patch-rc=` /
+    钉完那两行长什么样。本机照真实形状复演过：正常路径钉上（`val args = listOf("<绝对 tauri.js>", "android", "build")`）、
+    文件不存在时 exit=1。
+    另记一条工装账：这一步是 `continue-on-error`，所以**它红了在步骤列表里显示的是 success** ——
+    这是为了拿到后面整段 gradle 日志付的代价，代价要求"红不红必须能从读数里读出来"，上面那三条就是为此存在的。
   - **工装账（递证据那台机器自己坏了三处，都是一轮量一处）**：① 贴评论那步读的 `apk.clean.log`
     是**后面**那步才产出的 ⇒ "关键行"那一节整段是空的，我把"没有错误行"当读数读了半天；
     ② 那步里两处 grep 用了相对路径而 cwd 是 `apps/mobile` ⇒ 扫到 0 项；③ 早一轮是 `POST` 的 URL 形状写错

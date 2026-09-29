@@ -20,8 +20,9 @@ const expect = {
   abi: arg('--abi', 'arm64-v8a'),
   minSdk: arg('--min-sdk', '24'),
 };
-if (!file || !expect.version) {
-  console.error('用法：check-apk-badging.mjs <badging.txt> --version <版本> [--package …] [--abi …] [--min-sdk …]');
+if (!file || !expect.version || !arg('--list')) {
+  console.error('用法：check-apk-badging.mjs <badging.txt> --version <版本> --list <aapt-list.txt> [--package …] [--abi …] [--min-sdk …]');
+  console.error('（--list 是必需项：少了它就等于"包里没有界面"这一格没人看，那种缺口不能靠调用方记得传）');
   process.exit(2);
 }
 
@@ -40,6 +41,31 @@ if (text.trim().length < 20) {
 
 const failures = [];
 const notes = [];
+
+// badging 只说"这个包是什么"，不说"界面进没进去"。tauri 的 Android 包把前端产物放进
+// `assets/`，缺了它 APK 一样能装、一样能起 Activity —— 只是开起来是白屏，
+// 而"白屏"在 CI 的 job 状态里和"正常"长得一模一样。所以再断一份 `aapt list` 的原文。
+const listFile = arg('--list');
+if (listFile) {
+  let list;
+  try {
+    list = readFileSync(listFile, 'utf8');
+  } catch (e) {
+    console.error(`读不到 aapt list 输出：${e.message}`);
+    process.exit(2);
+  }
+  const assets = list.split('\n').filter((l) => l.trim().startsWith('assets/'));
+  if (assets.length === 0) {
+    failures.push('APK 里没有 assets/ —— 前端产物根本没打进这个包（装上就是白屏）');
+  } else {
+    const js = assets.filter((l) => /\.js(\b|$)/.test(l.trim()));
+    if (js.length === 0) {
+      failures.push(`assets/ 有 ${assets.length} 项但没有一个 .js —— 打进去的不是构建出来的界面`);
+    } else {
+      notes.push(`assets=${assets.length} 项，含 JS ${js.length} 项（如 ${js[0].trim().split(/\s+/).pop()}）`);
+    }
+  }
+}
 
 const pkg = /^package: name='([^']+)' versionCode='([^']*)' versionName='([^']*)'/m.exec(text);
 if (!pkg) {
@@ -77,4 +103,4 @@ if (failures.length > 0) {
   console.error(`check-apk-badging: ${failures.length} 条不过`);
   process.exit(1);
 }
-console.log(`check-apk-badging: 四项全过（${expect.package} / ${expect.version} / ${expect.abi} / minSdk ${expect.minSdk}）`);
+console.log(`check-apk-badging: 全过（${expect.package} / ${expect.version} / ${expect.abi} / minSdk ${expect.minSdk}；上面 PASS 行有几条就是查了几件事）`);
