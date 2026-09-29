@@ -34,6 +34,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'list.emptyHint': '按 Ctrl+N 或在右侧开始写。',
   'list.emptyFolder': '这个文件夹是空的',
   'list.newNote': '新建笔记',
+  'list.dailyNote': '今天',
   'list.pin': '固定',
   'list.unpin': '取消固定',
   'list.hasAttachment': '含附件',

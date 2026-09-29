@@ -9,6 +9,9 @@ notera-core = { workspace = true }
 notera-richtext = { workspace = true }
 notera-crypto = { workspace = true }
 notera-store = { workspace = true }
+# 「今天」按**本地日历日**算（§1 的日记那一格）：按 UTC 会让 UTC+8 的用户在早上 8 点前
+# 写到"昨天"那一篇去。依赖本身与 notera-store 用的是同一个 workspace 版本源。
+chrono = { workspace = true }
 notera-sync = { workspace = true }
 notera-config = { workspace = true }
 notera-net = { workspace = true }

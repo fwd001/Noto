@@ -238,6 +238,22 @@ struct Inner {
     dirty_ticks: AtomicU64,
 }
 
+/// 今天那一篇日记是哪一条（纯函数，给上面那条方法用）。
+/// 输入已经是"非回收站"的行（`NoteQuery::all()`），所以这里不再判删除态 ——
+/// 抽出来只为一件事：**"取最近改动的那条"这条规则有测试**，不必把时钟拨到明天才能验。
+fn pick_daily_note<'a>(
+    day: &str,
+    rows: impl Iterator<Item = (&'a notera_core::EntityId, &'a str, &'a str)>,
+) -> Option<&'a notera_core::EntityId> {
+    // 判据是"标题以当天日期开头"，**不是**"日期后面得跟一个空格"：光标落在那一行末尾
+    // 直接打字是常见打法，带空格那一版会把这种标题认成"不是今天的"，于是下一次按
+    // 「今天」多建一篇（这条红过，两个 UUID 不一样）。误命中只在"另一篇也以同一串日期开头"
+    // 时发生，而那本来就该算今天的记录。
+    rows.filter(|(_, title, _)| title.starts_with(day))
+        .max_by(|(_, _, a), (_, _, b)| a.cmp(b))
+        .map(|(id, _, _)| id)
+}
+
 impl App {
     /// 步骤 1–4：开库、迁移、读最近数据、准备出首帧。**不做任何网络动作。**
     pub fn boot(data_dir: &Path) -> Result<App, BootError> {
@@ -363,6 +379,51 @@ impl App {
         let n = self.inner.store.create_note(folder_id, doc)?;
         self.note_saved(&n);
         self.to_dto(n)
+    }
+
+    /// §1 的"日记"这一格：**一天一篇**，按**本地**日历日找/建。
+    ///
+    /// 三条口径写在代码里而不是散在界面：
+    /// ① 日界取**本地日**，不取 UTC —— 按 UTC 的话，UTC+8 的用户在早上 8 点前会写到"昨天"那一篇去；
+    /// ② 认"今天那一篇"的依据是**标题以 `YYYY-MM-DD` 开头**（整条等于它，或后面接了正文第一句），
+    ///    不新增表、不加迁移、也不需要内部标记字段 —— 用户在列表里看到的那一行就是这一格的可见契约。
+    ///    为什么不是"标题正好等于日期"：他一打字，标题就变成「2026-09-29 今天下了雨」，
+    ///    正好相等的话下一次按「今天」就会**再多出一篇**（这条是被测试抓出来的，不是推出来的）；
+    /// ③ 有多条同名时取 `updated_at` 最大的那条 —— 那是他正在写的那本；挑最早那条或"再建一条"
+    ///    都是把用户的日记越拆越碎。
+    pub fn daily_note(&self) -> Result<commands::DailyNoteDto, CmdError> {
+        let day = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let rows = self
+            .inner
+            .store
+            .list_notes(&notera_store::NoteQuery::all())?;
+        let today = {
+            let day = day.as_str();
+            pick_daily_note(
+                day,
+                rows.iter()
+                    .map(|r| (&r.id, r.title.as_str(), r.updated_at.as_str())),
+            )
+            .cloned()
+        };
+        let (note, created) = match today {
+            Some(id) => (
+                self.get_note(&id)?
+                    .ok_or_else(|| CmdError::of("not_found", true))?,
+                false,
+            ),
+            None => {
+                let folder = self.default_folder_id()?;
+                let doc = serde_json::json!({
+                    "v": 1,
+                    "content": [{ "id": "blk000001", "type": "paragraph", "content": [{ "text": day }] }],
+                });
+                let created = self.inner.store.create_note(&folder, doc)?;
+                self.note_saved(&created);
+                (self.to_dto(created)?, true)
+            }
+        };
+        Ok(commands::DailyNoteDto { note, day, created })
     }
 
     /// 没选文件夹时的落点：默认本。规则放在核心，UI 不猜。
@@ -3716,6 +3777,150 @@ async fn stop_signal(stop: &Arc<AtomicBool>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pick_daily_note_takes_the_newest_of_the_same_day_and_skips_other_days() {
+        use notera_core::EntityId;
+        let yesterday = EntityId::new();
+        let today = EntityId::new();
+        let rows = [
+            (yesterday.clone(), "2026-09-28", "2026-09-28T10:00:00.000Z"),
+            (today.clone(), "2026-09-29", "2026-09-29T08:00:00.000Z"),
+        ];
+        assert_eq!(
+            pick_daily_note("2026-09-29", rows.iter().map(|r| (&r.0, r.1, r.2))),
+            Some(&today),
+            "今天那一篇要按标题正好等于本地日历日认出来"
+        );
+        // 他已经往标题那一行后面写了字（"2026-09-29 今天下了雨"）→ 还认得是**同一篇**，
+        // 不再多造一篇（这条是被上一版的测试抓出来的）。
+        let typed = [(
+            today.clone(),
+            "2026-09-29 今天下了雨",
+            "2026-09-29T09:00:00.000Z",
+        )];
+        assert_eq!(
+            pick_daily_note("2026-09-29", typed.iter().map(|r| (&r.0, r.1, r.2))),
+            Some(&today),
+            "标题被接着写了字，就不许再建第二篇"
+        );
+        // 规则的边界是"**以当天日期开头**"，不是"含有当天日期"：一篇标题写的是
+        // "补记 2026-09-29 那次谈话"的旧笔记，日期出现在中间，按「今天」不该跳进去。
+        let near = [(
+            yesterday.clone(),
+            "补记 2026-09-29 那次谈话",
+            "2026-09-28T10:00:00.000Z",
+        )];
+        assert_eq!(
+            pick_daily_note("2026-09-29", near.iter().map(|r| (&r.0, r.1, r.2))),
+            None,
+            "日期不在开头就不算当天那一篇"
+        );
+        assert_eq!(
+            pick_daily_note("2026-09-27", rows.iter().map(|r| (&r.0, r.1, r.2))),
+            None,
+            "没有那一天就别硬凑一条"
+        );
+        // 同一天两条同名（用户手滑建过第二篇）：取**最近改动**的那条 —— 那是他正在写的那本。
+        // 取最早那条会把他带回旧内容，再建第三条会把日记越拆越碎。
+        let older = EntityId::new();
+        let newer = EntityId::new();
+        let dup = [
+            (older.clone(), "2026-09-29", "2026-09-29T01:00:00.000Z"),
+            (newer.clone(), "2026-09-29", "2026-09-29T09:00:00.000Z"),
+        ];
+        assert_eq!(
+            pick_daily_note("2026-09-29", dup.iter().map(|r| (&r.0, r.1, r.2))),
+            Some(&newer),
+            "同名两条要取最近改动的那条"
+        );
+    }
+
+    #[test]
+    fn the_diary_button_reopens_the_same_note_of_the_day_and_never_touches_what_he_wrote() {
+        let app = boot("diary");
+        let first = app
+            .daily_note()
+            .expect("第一次按「今天」要能建出当天那一篇");
+        assert!(first.created, "第一次当然是新建");
+        assert_eq!(
+            first.note.title, first.day,
+            "标题就是本地日历日：这一格的可见契约"
+        );
+        assert!(
+            !first.day.contains("T"),
+            "日界必须是本地日历日（YYYY-MM-DD），带 T 就是拿 UTC 时间戳当日子"
+        );
+        let second = app.daily_note().expect("第二次按也要成功");
+        assert!(!second.created, "同一天第二次按不许再多出一篇");
+        assert_eq!(first.note.id, second.note.id, "回到的是同一篇日记");
+
+        let id = notera_core::EntityId::parse(&first.note.id).unwrap();
+        let doc = serde_json::json!({
+            "v": 1,
+            "content": [{ "id": "blk000001", "type": "paragraph",
+                "content": [{ "text": format!("{} 今天下了雨", first.day) }] }],
+        });
+        app.edit_note(&id, doc.clone(), notera_store::Rev(first.note.rev))
+            .expect("在当天那一篇里写字");
+        let third = app.daily_note().expect("写完再按「今天」");
+        assert_eq!(first.note.id, third.note.id, "写完再按还是同一篇");
+        // 比的是**他打进去的那句话**，不是整个 doc 的字节 —— 落库时 normalize 会补
+        // `attrs:{}` / `marks:[]`（那是编辑器与同步都要的规范形），拿字面 JSON 相等去比
+        // 会把"表达形式变了"误报成"内容被动过"。
+        let after = app.get_note(&id).unwrap().unwrap();
+        assert_eq!(
+            after.doc["content"][0]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default(),
+            format!("{} 今天下了雨", first.day),
+            "他写的字一个字都不许被动过"
+        );
+        assert!(after.rev > first.note.rev, "写过字之后编号要往前走");
+        let same_day = app
+            .store()
+            .list_notes(&notera_store::NoteQuery::all())
+            .unwrap()
+            .into_iter()
+            // 与 `pick_daily_note` 同一口径：**以当天日期开头**（他往那一行后面写了字之后
+            // 标题就不再正好等于日期了）。这里如果用 `==` 数，就会把"只有一篇"数成 0 篇。
+            .filter(|n| n.title.starts_with(&first.day))
+            .count();
+        assert_eq!(same_day, 1, "一天一篇，不许越按越多");
+    }
+
+    #[test]
+    fn pressing_today_after_typing_without_a_space_reopens_the_same_note() {
+        // 真实打字形状：光标准则落在"2026-09-29"那一行末尾，直接敲字，**中间没有空格**。
+        // 识别规则如果要求"日期 + 空格"，第二次按「今天」就会认不出这一篇而再多建一篇 ——
+        // 那是"越按越多"，是这条功能唯一不能有的样子。
+        let app = boot("diary-nospace");
+        let first = app.daily_note().expect("第一次按建出当天那一篇");
+        let id = notera_core::EntityId::parse(&first.note.id).unwrap();
+        let typed = format!("{}下雨，没写空格", first.day);
+        let doc = serde_json::json!({
+            "v": 1,
+            "content": [{ "id": "blk000001", "type": "paragraph", "content": [{ "text": typed }] }],
+        });
+        app.edit_note(&id, doc, notera_store::Rev(first.note.rev))
+            .expect("在那一篇里打字");
+        let again = app.daily_note().expect("再按一次「今天」");
+        assert_eq!(
+            first.note.id, again.note.id,
+            "标题是「日期紧接正文」时也必须认回同一篇"
+        );
+        assert!(!again.created, "认回旧篇就不许新建");
+        assert_eq!(
+            app.store()
+                .list_notes(&notera_store::NoteQuery::all())
+                .unwrap()
+                .into_iter()
+                .filter(|n| n.title.starts_with(&first.day))
+                .count(),
+            1,
+            "一天只能留下一篇"
+        );
+    }
+
     #[test]
     fn drain_only_follows_real_progress() {
         let st = |outcome, pushed, pulled| notera_sync::RoundStats {

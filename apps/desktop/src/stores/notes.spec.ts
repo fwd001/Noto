@@ -163,3 +163,42 @@ describe('列表与回收站', () => {
     expect(folders.flat.map((entry) => entry.node.name)).toEqual(['工作', '项目', '细节']);
   });
 });
+
+describe('「今天」这一格（日记）', () => {
+  it('按一次只打一条 daily_note，并把核心认出的那一篇选上并打开', async () => {
+    const service = stubLocalService({
+      daily_note: () => ({
+        note: noteFixture({ id: 'd-1', title: '2026-09-29' }),
+        day: '2026-09-29',
+        created: true,
+      }),
+      list_notes: () => [row('d-1', '2026-09-29')],
+      get_note: () => noteFixture({ id: 'd-1', title: '2026-09-29' }),
+    });
+    const notes = useNoteStore();
+    await notes.openToday();
+    // 日子归核心算：界面这里一次调用都不许自己拼日期或按标题找（那是第二份判据）。
+    expect(service.callsOf('daily_note')).toHaveLength(1);
+    expect(service.lastArgsOf('daily_note')).toEqual({});
+    expect(notes.selectedId).toBe('d-1');
+    expect(service.callsOf('get_note').length).toBeGreaterThan(0);
+  });
+
+  it('核心报错时把具名文案交出去，并且不选中任何一篇', async () => {
+    const service = stubLocalService({
+      daily_note: () => {
+        throw Object.assign(new Error('cmd'), {
+          code: 'no_default_folder',
+          messageKey: 'error.no_default_folder',
+          retryable: false,
+        });
+      },
+      list_notes: () => [],
+    });
+    const notes = useNoteStore();
+    const got = await notes.openToday();
+    expect(got).toBeNull();
+    expect(notes.selectedId).toBeNull();
+    expect(service.callsOf('get_note')).toHaveLength(0);
+  });
+});

@@ -133,6 +133,9 @@ onBeforeUnmount(() => {
       <button type="button" class="btn btn--quiet" data-testid="new-note" :title="t('list.newNote')" @click="notes.create(notes.mode.kind === 'folder' ? notes.mode.folderId : null)">
         {{ t('list.newNote') }}
       </button>
+      <button type="button" class="btn btn--quiet" data-testid="daily-note" :title="t('list.dailyNote')" :aria-label="t('list.dailyNote')" @click="notes.openToday()">
+        {{ t('list.dailyNote') }}
+      </button>
     </div>
 
     <SearchField ref="searchField" />

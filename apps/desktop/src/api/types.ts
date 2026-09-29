@@ -338,6 +338,7 @@ export type UiEvent =
 /** 统一命令名（全部经 callCommand 走壳层）。 */
 export const Commands = {
   createNote: 'create_note',
+  dailyNote: 'daily_note',
   editNote: 'edit_note',
   setNoteFolder: 'set_note_folder',
   setNotePinned: 'set_note_pinned',

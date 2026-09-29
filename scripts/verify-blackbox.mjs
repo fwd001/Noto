@@ -154,6 +154,38 @@ await step('删除 → 回收站看得见 → 恢复 → 回到列表', async ()
   return '回收站 → 恢复，全程只看屏幕';
 });
 
+// 「今天」这颗按钮的判据全在屏幕上：按下 → 编辑器里是当天那一篇；打字（**紧跟日期、不空格**，
+// 这是真人的打法）；再按 → 列表里以那天日期开头的行**还是一行**，且刚打的字还在。
+// 后两条是这条功能的死穴：识别规则一旦只认"日期 + 空格"，第二次按就多造一篇日记。
+const pad2 = (n) => String(n).padStart(2, '0');
+const now = new Date();
+const day = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+await step('点「今天」→ 建出当天那一篇 → 打完字再按一次，还是一篇且字没丢', async () => {
+  await page.click('[data-testid="nav-all"]');
+  await page.waitForTimeout(500);
+  await page.click('[data-testid="daily-note"]');
+  await page.waitForTimeout(1200);
+  const opened = await visible('[data-testid="editor-doc"]');
+  // `editor-doc` 的 innerText 里带着块把手那两颗字形（"+ ⠿ "），所以判定是"含当天日期"
+  // 而不是"以它开头" —— 第一次跑就是拿 `startsWith` 去比，红在自己的预期上，不是产品。
+  if (!opened.includes(day)) throw new Error(`按「今天」之后编辑器里不是当天那一篇（应含 ${day}）：${opened.slice(0, 80)}`);
+  await page.locator('[data-testid="editor-doc"]').click();
+  await page.keyboard.press('End');
+  const marker = '黑盒今天';
+  await page.keyboard.type(marker);
+  await page.waitForTimeout(1500);
+  await page.click('[data-testid="daily-note"]');
+  await page.waitForTimeout(1200);
+  // 只数**标题那一行**：每行右侧还带着"更新时间"，今天动过的行全都含当天日期，
+  // 拿整行的 hasText 去数会把三行都数成"今天那一篇"。
+  const titles = (await page.locator('.row-item__title').allInnerTexts()).map((s) => s.replace(/\s+/g, ' ').trim());
+  const rowsToday = titles.filter((s) => s.startsWith(day)).length;
+  if (rowsToday !== 1) throw new Error(`按了两次「今天」之后，标题以 ${day} 开头的行有 ${rowsToday} 行（要恰好 1 行）：${titles.join(' | ')}`);
+  const doc = await visible('[data-testid="editor-doc"]');
+  if (!doc.includes(marker)) throw new Error(`第二次按「今天」把刚打的字弄丢了：${doc.slice(0, 90)}`);
+  return `${day} 一行，正文含「${marker}」`;
+});
+
 await step('刷新（等价于重启 App）之后：列表和正文都还在', async () => {
   await page.reload();
   await page.locator('[data-testid="note-list"]').waitFor({ timeout: 8000 });

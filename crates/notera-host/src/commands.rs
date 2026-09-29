@@ -36,6 +36,16 @@ pub struct NoteDto {
     pub deleted_at: Option<String>,
 }
 
+/// 「今天这一篇日记」的出参。`created` 明写这一按是**新建**还是**回到已有那一篇** ——
+/// 前端不许靠"标题是不是今天的日期"自己猜（那是第二份判定，与核心的判据迟早分叉）。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DailyNoteDto {
+    pub note: NoteDto,
+    pub day: String,
+    pub created: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NoteListDto {
@@ -496,6 +506,7 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
             };
             j(app.create_note(&fid, c.doc)?)
         }
+        "daily_note" => j(app.daily_note()?),
         "edit_note" => {
             let c: EditNoteCmd =
                 serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;

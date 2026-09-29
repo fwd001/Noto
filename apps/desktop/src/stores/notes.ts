@@ -168,6 +168,29 @@ export const useNoteStore = defineStore('notes', () => {
 
   /* ------------------------------------------------------------- 写入 */
 
+  /**
+   * §1 的"日记"入口：**一天一篇**，日子由核心按**本地日历日**算并找回/新建。
+   * 前端不自己算日子、也不自己按标题找 —— 那就是第二份判据，核心那边一改这里就悄悄不一致。
+   */
+  async function openToday(): Promise<Note | null> {
+    try {
+      const today = await callCommand<{ note: Note; day: string; created: boolean }>(
+        Commands.dailyNote,
+        {},
+      );
+      if (mode.value.kind === 'trash') await setMode({ kind: 'all' });
+      else await load();
+      selectedId.value = today.note.id;
+      titles.value = { ...titles.value, [today.note.id]: today.note.title };
+      // 与"新建笔记"同一件事：只选中不打开，用户看到的是一块空白面板（真窗口实测踩过）。
+      await useEditorStore().open(today.note.id);
+      return today.note;
+    } catch (error) {
+      errorKey.value = asBridgeError(error).messageKey;
+      return null;
+    }
+  }
+
   async function create(folderId: string | null, doc?: NoteDoc): Promise<Note | null> {
     try {
       const note = await callCommand<Note>(Commands.createNote, { folderId, doc: doc ?? emptyDoc() });
@@ -276,6 +299,7 @@ export const useNoteStore = defineStore('notes', () => {
     requestSearch,
     clearSearch,
     create,
+    openToday,
     setPinned,
     moveTo,
     moveToTrash,
