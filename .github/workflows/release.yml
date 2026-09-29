@@ -287,12 +287,17 @@ jobs:
           } > /tmp/diag/comment.md
           # JSON 转义交给 node（这个 job 里本来就有 node），不手搓引号。
           node -e 'const fs=require("fs");const b=fs.readFileSync("/tmp/diag/comment.md","utf8").slice(0,60000);fs.writeFileSync("/tmp/diag/body.json",JSON.stringify({body:b}));'
-          curl -sf -X POST \
+          curl -sS -o /tmp/diag/comment-resp.json -w "HTTP=%{http_code}\n" -X POST \
             -H "authorization: Bearer $GH_TOKEN" \
             -H "accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/comments/${GITHUB_SHA}" \
-            --data @/tmp/diag/body.json > /tmp/diag/comment-resp.json || echo "贴评论失败（不改变这一步之外的结论）"
-          head -c 200 /tmp/diag/comment-resp.json
+            "https://api.github.com/repos/${{ github.repository }}/commits/${GITHUB_SHA}/comments" \
+            --data @/tmp/diag/body.json
+          # 上一条**不带 `|| echo`**：run #12 就是被 `|| echo` 骗过的 —— 那次 URL 写错（POST 到
+          # `/comments/{sha}` 那是"改/删某条评论"的形状，创建要 `/commits/{sha}/comments`），
+          # curl `-f` 退出 22，被 `|| echo` 吞掉之后这一步报的是 success。**递证据的步骤自己假绿，
+          # 比没有证据更糟** —— 它会让人以为已经拿到读数。失败要响。
+          head -c 300 /tmp/diag/comment-resp.json
+          grep -q '"html_url"' /tmp/diag/comment-resp.json || { echo "评论没建起来（见上面的 HTTP 与响应头）"; exit 1; }
 
       - name: 摘出事实与错误行（编进产物名递出来）
         if: failure()
