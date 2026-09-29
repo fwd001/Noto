@@ -321,6 +321,14 @@ jobs:
       - name: 前端构建（移动壳用的就是这份 dist）
         run: pnpm --dir apps/desktop build
 
+      # 移动壳的 `frontendDist` 指的就是上面这份 dist，而 tauri 是把前端**嵌进 Rust 的 .so**
+      # （不是 APK 的 assets/ —— run #17 的 `aapt list` 读数纠正了我对打包方式的错误模型）。
+      # 所以"界面进没进包"要在**嵌之前**看：入口 html 在不在、有没有 JS、index 有没有真的引用它、
+      # 总量别是小得像个坏构建。判据本机对真 dist 跑通（11 个文件 / 1.59 MB / 4 个 JS），
+      # 变异（空目录 / 删 index / 删 JS / 换成没引用的 js）全红。
+      - name: 校验要嵌进壳里的那份前端产物
+        run: node scripts/check-frontend-dist.mjs apps/desktop/dist
+
       # **为什么必须在 apps/mobile 里跑**：run #5 的产物名把根因递回来了 ——
       # `could not compile notera-desktop (lib) due to 13 previous errors`，头两条是
       # `no method named 'on_menu_event'`、`no method named 'tray_by_id'`（桌面那套 muda/托盘 API
@@ -435,7 +443,7 @@ jobs:
               echo "### Android 产物核对（§4）"
               echo "- 文件：\`$(basename "$APK")\`（$(wc -c <"$APK") 字节）"
               echo "- SHA-256：\`$(sha256sum "$APK" | cut -c1-64)\`"
-              echo "- 打进包里的 JS 资产：$(grep -c -E '\.js$' /tmp/apk-list.txt) 项"
+              echo "- Rust 壳：$(grep -m1 -E 'lib/arm64-v8a/.*\.so' /tmp/apk-list.txt || echo '（没找到 .so）')"
               grep -E "^package:|^sdkVersion:|^native-code:|^launchable-activity:" /tmp/apk-badging.txt
             } >> "$GITHUB_STEP_SUMMARY"
           fi

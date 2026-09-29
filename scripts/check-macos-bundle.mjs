@@ -15,7 +15,7 @@ const arg = (name, fallback = null) => {
 const plistFile = argv.find((a) => !a.startsWith('--') && !a.startsWith('-'));
 const version = arg('--version');
 const identifier = arg('--identifier', 'app.notera');
-const executable = arg('--executable', 'Notera');
+const executable = arg('--executable', 'notera-desktop');
 const fileOut = arg('--file');
 if (!plistFile || !version || !fileOut) {
   console.error('用法：check-macos-bundle.mjs <plutil.txt> --version <版本> --file <file(1) 输出> [--identifier …] [--executable …]');

@@ -42,9 +42,13 @@ if (text.trim().length < 20) {
 const failures = [];
 const notes = [];
 
-// badging 只说"这个包是什么"，不说"界面进没进去"。tauri 的 Android 包把前端产物放进
-// `assets/`，缺了它 APK 一样能装、一样能起 Activity —— 只是开起来是白屏，
-// 而"白屏"在 CI 的 job 状态里和"正常"长得一模一样。所以再断一份 `aapt list` 的原文。
+// 断**壳与 Rust 库**到位。tauri v2 是把前端资源**嵌进 `lib<abi>/libnotera_mobile_lib.so`**
+// （编壳时由 tauri-build 打进二进制），APK 的 `assets/` 里根本不会有 `.js` ——
+// 这条不是推测，是 run #17 的 `aapt list` 读数：那个包 `native-code: arm64-v8a` 在、
+// `assets/` 里只有 `tauri.conf.json`。我上一版把"assets 里要有 JS"当成"界面进没进包"的判据，
+// 那是**对这个工具怎么打包的错误模型**，一个好包会被它判红。
+// 前端在不在要看**嵌之前**的那份 dist（`scripts/check-frontend-dist.mjs`，CI 里出包前跑）；
+// 这里只断"装得下前端的 Rust 库在这个包里"。
 const listFile = arg('--list');
 if (listFile) {
   let list;
@@ -54,16 +58,14 @@ if (listFile) {
     console.error(`读不到 aapt list 输出：${e.message}`);
     process.exit(2);
   }
-  const assets = list.split('\n').filter((l) => l.trim().startsWith('assets/'));
-  if (assets.length === 0) {
-    failures.push('APK 里没有 assets/ —— 前端产物根本没打进这个包（装上就是白屏）');
+  const so = list
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.includes(`lib/${expect.abi}/`) && l.endsWith('.so'));
+  if (!so) {
+    failures.push(`包里没有 lib/${expect.abi}/ 下的 .so —— Rust 壳不在这个 APK 里，前端资源没地方嵌`);
   } else {
-    const js = assets.filter((l) => /\.js(\b|$)/.test(l.trim()));
-    if (js.length === 0) {
-      failures.push(`assets/ 有 ${assets.length} 项但没有一个 .js —— 打进去的不是构建出来的界面`);
-    } else {
-      notes.push(`assets=${assets.length} 项，含 JS ${js.length} 项（如 ${js[0].trim().split(/\s+/).pop()}）`);
-    }
+    notes.push(`so=${so}`);
   }
 }
 
