@@ -403,12 +403,30 @@ CI 必须运行的四类检查（映射到 job）：
 >     传进去会把一条相对路径写进生成的工程）；② `init` 之后由 `scripts/patch-android-buildtask.mjs`
 >     把那两节**钉成绝对路径**（`node` + `…/@tauri-apps/cli/tauri.js`），钉完在 CI 里复验那两行。
 >     这条路能不能走通要等 run 的读数，没读到之前 G25 不撤。
->   - **产物的结构校验（L6 那一格）**：出 APK 之后跑 `scripts/check-apk-badging.mjs`，读
->     `aapt dump badging` 的原文断四件 —— 包名 `app.notera`、`versionName` 等于这一版（**不是** tauri
->     在 Android 上退回的 `1.0`）、`native-code` 含 `arm64-v8a`（Rust 库真打进去了）、有
->     `launchable-activity`（装上点得着）。`aapt`/APK 找不到或 badging 是空的 ⇒ **按红算，不 skip**（§40）。
->     门禁自己先过变异测试：删掉 `native-code` 那行、把 `versionName` 改成 `1.0`、换包名、删启动入口、
->     空文件 —— 五种全红；正常形状绿。真机安装与首屏另算一格（§49，要用户的设备）。
+>   - **产物的结构校验（L6 那一格，三平台都有）**：
+>     - **Android** `scripts/check-apk-badging.mjs` 读 `aapt dump badging` **加 `aapt list`** 的原文，断
+>       包名 `app.notera`、`versionName` 等于这一版（**不是** tauri 在 Android 上退回的 `1.0`）、
+>       `native-code` 含 `arm64-v8a`（Rust 库真打进去了）、有 `launchable-activity`（装上点得着）、
+>       **`assets/` 里真的有 JS** —— badging 只说"这包是什么"，不说"界面进没进去"，缺界面的 APK 装上能起
+>       Activity、开起来是白屏，那种形状在 job 状态里和正常一模一样。`--list` 是**必需参数**。
+>     - **macOS** `hdiutil attach` 挂上 `.dmg`（这平台的"安装"等价动作，不要管理员），
+>       `scripts/check-macos-bundle.mjs` 读 `plutil -p Info.plist` + `file`，断 `CFBundleShortVersionString` /
+>       bundle id / 主程序名 / `CFBundlePackageType == APPL`（不是那种没有主程序的壳）/ 主程序真是 Mach-O。
+>       `--file` 同样是必需参数。主程序名从已经读出的 plutil 文本里取，不再叫第二次 `plutil -extract`
+>       （那种写法在本机验不了，少一个没验过的调用就少一个把绿 job 演红的地方）。
+>     - **Windows** `scripts/verify-windows-package.ps1` 用 `msiexec /a`（管理员解包：只解到临时目录，
+>       不写注册表、不装程序）解 `.msi`，`scripts/check-windows-package.mjs` 断"解得开 + 有
+>       `notera-desktop.exe` + 有 `WebView2Loader.dll`（缺了它，没装 Runtime 的机器上壳起不来）+
+>       四个版本字段都以这一版开头 + 三个体积都 > 1 MiB"，并且**报告里的文件名必须含这一版版本号**：
+>       挑包写成 `Select -First 1` 时本机量到它拿到的是 `Notera_0.0.28`（bundle 目录留着历史包），
+>       那等于给上一版作保。步骤本体放在带 BOM 的仓库文件里，不放 YAML 的 run 体 ——
+>       GH 把 run 写成无 BOM 的临时 .ps1，中文会被当 ANSI 读，`字符串缺少终止符` 一步就红；
+>       而 `$LASTEXITCODE` 在 `& script.ps1` 之后**不代表那个脚本**，那条"失败就红"写出来永远为假。
+>     - 三处 `aapt`/`hdiutil`/`msiexec` 或产物读不到 ⇒ **全部按红算，不 skip**（§40）；三处 `收集产物`
+>       都写 `if: always()`：校验红不该把包一起带走，§4 的"可作为 Artifacts 下载"要有东西可下。
+>       三个门禁都先在本机证它会红再信它的绿：Android 5 种变异 + 2 种用法错、macOS 6 种、Windows 7 种，
+>       全红；其中 **Windows 那批是对真包跑的**（本机就是 Windows，0.0.41 的 .msi/.exe 都在盘上）。
+>       真机安装与首屏另算一格（§49，要用户的设备）。
 > - **`publish`** —— `needs: [meta, windows, macos, android]`，把三平台产物收拢、算 `SHA256SUMS.txt`、
 >   从 CHANGELOG 里取「版本 … → `<v>`」那一条当正文，**建的是 draft Release**（没签名就公开发布 = 替用户做决定）。
 > - **打 tag 的唯一入口是 `scripts/tag-release.mjs`**（preflight：版本单源一致 + CHANGELOG 里**恰好一条**
