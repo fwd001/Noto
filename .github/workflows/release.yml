@@ -114,7 +114,27 @@ jobs:
       - name: 出包（nsis + msi）
         run: pnpm --dir apps/desktop tauri build --target x86_64-pc-windows-gnu --bundles nsis,msi -v
 
+      # §4 "包可正常安装/启动"里不依赖用户手动装就能核的那半（CI-CD.md L6）。
+      # 步骤本体放在 `scripts/verify-windows-package.ps1`（带 BOM 的仓库文件），本机复演教了三件事：
+      #   ① run 体里的中文会写成临时 .ps1 再喂给 PowerShell，那条路上没 BOM ⇒ 当 ANSI 读 ⇒
+      #      "字符串缺少终止符"，整步还没执行就红；
+      #   ② `$LASTEXITCODE` 在 `& script.ps1` 之后**不代表那个脚本**（只由原生命令设置），
+      #      所以"生成器失败就红"那句写出来永远为假 —— 判据换成"报告文件真在且有内容"；
+      #   ③ `Select -First 1` 挑包会挑到**最旧**那个（本机 bundle 目录里留着 0.0.28~0.0.41 一整排），
+      #      那等于给上一版的包作保 ⇒ 改成按文件名里的版本号挑，并在断言里再查一遍报告是不是这一版。
+      # `/a` 是管理员解包：只解到指定目录，不写注册表、不装程序。
+      - name: 结构校验这两个安装包（解包 + 主程序 + WebView2 加载器 + 包内版本号）
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-windows-package.ps1 `
+            -BundleDir target/x86_64-pc-windows-gnu/release/bundle `
+            -Version '${{ needs.meta.outputs.version }}' `
+            -TempDir $env:RUNNER_TEMP `
+            -StepSummary $env:GITHUB_STEP_SUMMARY
+          if ($LASTEXITCODE -ne 0) { throw "Windows 产物结构校验没过（退出 $LASTEXITCODE）" }
+
       - name: 收集产物
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: windows-x64
