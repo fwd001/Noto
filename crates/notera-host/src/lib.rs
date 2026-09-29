@@ -2682,6 +2682,21 @@ impl App {
         let now = SystemClock.now().to_string();
         self.set_sync(|v| {
             v.in_flight = false;
+            // ADR-0021 D3：这一轮有被**本机** apply 拒收的条目 → 徽标不许报"已同步"。
+            // 引擎以前用 `.unwrap_or_default()` 把这些拒绝吞掉：界面说正常，库里少一条，
+            // 谁都不知道是哪一条、为什么。现在拒绝有两个去处 —— 界面上的具名文案
+            // （`sync.applyRejected`，走 BusEvent::Sync 的 errorCode）与日志里的原因原文。
+            if st.rejections > 0 {
+                v.badge = Badge::Failed;
+                v.message_key = Some("sync.applyRejected".into());
+                v.retryable = true;
+                tracing::warn!(
+                    rejections = st.rejections,
+                    reason = ?st.last_rejection,
+                    "本地 apply 拒收了远端的条目：这一条没落进本机库"
+                );
+                return;
+            }
             match st.outcome {
                 notera_sync::RoundOutcome::Failed => {
                     v.badge = Badge::Failed;
@@ -3591,6 +3606,8 @@ mod tests {
             pushed,
             pulled,
             conflicts: 0,
+            rejections: 0,
+            last_rejection: None,
             cas_retries: 0,
             outcome,
         };
@@ -3649,6 +3666,34 @@ mod tests {
 
     fn doc(text: &str) -> serde_json::Value {
         json!({ "v": 1, "content": [{ "id": "b1", "type": "paragraph", "content": [{ "text": text }] }] })
+    }
+
+    /// ADR-0021 D3 的**界面那一半**：本地 apply 拒收了一条远端版本时，这一轮不许被折成"已同步"，
+    /// 而且要带一个具名文案键（前端查 `i18n.ts`，查不到就只剩一句通用兜底 —— 那是又一次静默）。
+    /// 故意把 `outcome` 填成 `Converged`：拒收必须**盖过**这个乐观值才算数。
+    #[test]
+    fn a_round_with_a_rejected_local_apply_is_reported_not_claimed_synced() {
+        let app = boot("apply-rejected-fold");
+        let st = notera_sync::RoundStats {
+            requests: 3,
+            bytes_up: 0,
+            bytes_down: 120,
+            pushed: 0,
+            pulled: 0,
+            conflicts: 0,
+            rejections: 1,
+            last_rejection: Some("注入：同 rev 不同内容".into()),
+            cas_retries: 0,
+            outcome: notera_sync::RoundOutcome::Converged,
+        };
+        app.apply_round_stats(&st, false);
+        let dto = app.sync_status().expect("读状态");
+        assert_ne!(dto.badge, "synced", "有拒收的一轮不许报成已同步：{dto:?}");
+        assert_eq!(dto.message_key.as_deref(), Some("sync.applyRejected"));
+        assert!(
+            dto.retryable,
+            "这一类拒绝是可重试的（对面抬号或本机改动重推）"
+        );
     }
 
     fn keys(v: &serde_json::Value) -> Vec<String> {

@@ -190,6 +190,9 @@ struct FakeLocal {
     cached_etag: Arc<Mutex<Option<String>>>,
     /// §11.4：引擎贴完租约后有没有把状态记到本地
     leases: Arc<Mutex<Vec<(String, String)>>>,
+    /// 注入用：让本机对 `Upsert` **拒收**（真实世界里对应 `apply` 的"同 rev 不同内容"/I6/I2 那道闸门）。
+    /// ADR-0021 D3 要验的正是"拒绝有没有去处"，所以这里必须能造出一次真的拒绝。
+    reject_upserts: Arc<AtomicBool>,
 }
 
 impl LocalPort for FakeLocal {
@@ -229,6 +232,13 @@ impl LocalPort for FakeLocal {
     }
     fn apply(&self, ops: Vec<ApplyOp>) -> Result<ApplyReport, LocalError> {
         let n = ops.len();
+        if self.reject_upserts.load(Ordering::SeqCst)
+            && ops.iter().any(|o| matches!(o, ApplyOp::Upsert { .. }))
+        {
+            return Err(LocalError::Storage(
+                "注入：本机拒收这一版（同 rev 不同内容）".into(),
+            ));
+        }
         for o in &ops {
             // 引擎提交成功后写回缓存清单，下一轮 304 才有的可回落
             if let ApplyOp::StoreManifest { wire, etag, .. } = o {
@@ -821,4 +831,46 @@ async fn a_failed_manifest_commit_leaves_the_edit_pending_so_the_next_round_repl
         "公告没成功也不该缓存一份新清单"
     );
     assert_eq!(st.outcome, RoundOutcome::Partial, "本轮得如实报『没做完』");
+}
+
+/// ADR-0021 D3 的**计数那一半**：本机 apply 拒收一条远端版本时，以前这里是
+/// `.unwrap_or_default()` —— 一轮跑完 `st` 全零、界面"已同步"，而库里就是没有这一条。
+/// 现在拒绝要有名字：进 `rejections`、留下原因原文，而且不许算成已拉取/已同步。
+#[tokio::test]
+async fn a_rejected_local_apply_is_counted_and_not_claimed_as_pulled() {
+    let l = FakeLocal::default();
+    l.reject_upserts.store(true, Ordering::SeqCst);
+    let r = FakeRemote::default();
+    let mut m = base_manifest();
+    m.window = Window {
+        since_seq: 1,
+        complete: true,
+        entries: vec![ent("rej1", 7, "bbbbbbbbbbbb")],
+    };
+    m.refresh_checksum();
+    r.seed(m);
+    r.records
+        .lock()
+        .unwrap()
+        .insert(path("n", "rej1"), b"{\"rev\":7}".to_vec());
+
+    let (st, _evs) = run(l.clone(), r, None).await;
+    assert_eq!(st.rejections, 1, "本地拒收必须记一笔：{st:?}");
+    assert_eq!(st.pulled, 0, "被拒收的那条不许算成已拉取");
+    assert!(
+        st.last_rejection
+            .as_deref()
+            .unwrap_or_default()
+            .contains("注入"),
+        "拒绝的原因要留得下来，不然红了也没地方查：{:?}",
+        st.last_rejection
+    );
+    assert!(
+        !l.applied
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|o| matches!(o, ApplyOp::MarkSynced { .. })),
+        "拒收的那条不许被标成已同步"
+    );
 }

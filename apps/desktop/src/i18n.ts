@@ -321,6 +321,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'sync.probeDeferred': '这次没能完成服务器能力探测，已按最保守的方式继续同步（不会覆盖你的数据），下次启动会再试一次。',
   // §11.4：让路不是错误，但也不能不说 —— "安静地不下公告"就是安静地不同步。
   'sync.leaseHeld': '另一台设备正在写入，这一轮先让它。你的改动仍在待同步队列里，稍后会自动继续。',
+  'sync.applyRejected': '服务器上有一版内容没能落进这台设备（它和本机这一版撞在了同一个版本号上）。你的改动没有丢，也不会被覆盖；这一版需要下一次同步或人工处理后才能对上。',
   // 以下 8 条是核心的错误词表（`notera-core` 的 `ErrorCode::message_key()`）会发出去的键。
   // 它们原先没登记，于是这些提示全部退化成一句"操作没有成功" —— `arch-check` 的
   // hygiene:rust-message-keys-registered 现在守着这条边，漏一个就红。

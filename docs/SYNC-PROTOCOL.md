@@ -444,6 +444,7 @@ GET records/note/<id>.json → 404
 | 5xx | `ServerUnavailable` | 指数退避 | `! 同步失败` | 否 |
 | 跨源重定向带凭据 | `RedirectCrossOrigin` | **拒绝跟随** | `! 服务器地址异常` | 否 |
 | checksum / 信封校验失败 | `Protocol` | 丢弃响应，不写库 | `! 服务器数据异常，已保护本地数据` | 否 |
+| **本机 apply 拒收**（同 rev 不同内容、I2 回退、I6 哈希不符、purged 防复活） | `ApplyRejected` | 该条**不落库**，其余条目照做；本轮不许被折成"已同步"（ADR-0021 D3：拒绝必须有去处 —— 界面看 `sync.applyRejected`，日志带原因原文） | `! 服务器上有一版内容没能落进这台设备` | 否（本机一字不改） |
 | 取消（切后台/退出/新一轮） | `Cancelled` | 静默中止，不计失败 | 无 | 否 |
 
 退避：`delay = min(15min, 2s × 1.85^n) × (1 ± 0.2 jitter)`；`Retry-After` 存在则优先服从。连续失败只影响重试节奏，**永不**清空或降级 outbox。

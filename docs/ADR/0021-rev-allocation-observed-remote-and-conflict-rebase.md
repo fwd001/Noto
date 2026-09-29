@@ -2,7 +2,7 @@
 
 ## 状态
 日期：2026-09-29
-状态：Accepted。**D1 = 0.0.35 已落地并验通；D2（含按实新增的 P14）= 0.0.36 已落地并验通；D3 仍未做**（见"按实落地"一节）
+状态：Accepted。**D1 = 0.0.35 已落地并验通；D2（含按实新增的 P14）= 0.0.36 已落地并验通；D3 = 0.0.37 已落地并验通**（见"按实落地"一节）
 关联缺陷：`PRODUCTION-READINESS` §7 的 **G17**（两侧 rev 撞车那一行永远追不平）与 **G18**（同名本地副本一篇一篇累积）
 判据：`TEST-PLAN` 的 **P11-SR-01**（两台真设备）、新增 **SY-REV-01**
 
@@ -131,6 +131,14 @@ A 那台**仍然是已删除**（这条由既有的 `conflict_payload_e2e` 钉�
    永不命中的规则。改为在 `apply_note` 一侧先把"静默改写删除状态"这件事拒掉（`rep.skipped`，
    不报错也不覆盖）。**剩下的缺口记为 G19**（删除那一台没被问第二遍），它的解除条件要动
    §11 的 304 快路径或公告侧的可见记录，两者都属 §9 那类变更，须另批评审。
+
+**D3 = 0.0.37 已落地**：`RoundStats` 加了 `rejections` / `last_rejection`，拉取与冲突采纳两处 apply 不再
+`.unwrap_or_default()`；host 折叠状态时**先看拒收再看 `outcome`**（测试里 `outcome` 故意填 `Converged`，
+证明拒收盖过乐观值），界面得到具名键 `sync.applyRejected`（`i18n.ts` 登记，arch-check 的
+`hygiene:rust-message-keys-registered` 守），原因原文进日志（`notera-sync` 没有日志依赖，所以"记下来"
+只能经 host）。`SYNC-PROTOCOL` §12 表新增 `ApplyRejected` 一行。判据 **SY-REJ-01**，变异 **M83**
+（折叠短路 → 实测值就是修复前的 `badge: "synced"`）与 **M84**（不再计数 → 红在 `rejections: 0`）。
+至此本 ADR 的三条决定全部落地；§7 里剩下的只有只能交给用户的实测项。
 
 ## 验证方式
 

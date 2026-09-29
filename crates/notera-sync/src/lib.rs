@@ -315,6 +315,12 @@ pub struct RoundStats {
     pub pushed: usize,
     pub pulled: usize,
     pub conflicts: usize,
+    /// 本轮被**本机** apply 拒收的条数（ADR-0021 D3）。以前这些拒绝走
+    /// `.unwrap_or_default()`，界面上一个字都不剩 —— 用户看到的是"同步正常"而库里少一条。
+    pub rejections: usize,
+    /// 最后一次拒收的原因文本。只交给 host 的日志（本 crate 不引 tracing），
+    /// 界面上看的是 `message_key = sync.applyRejected`。
+    pub last_rejection: Option<String>,
     pub cas_retries: u8,
     pub outcome: RoundOutcome,
 }
@@ -409,6 +415,8 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             pushed: 0,
             pulled: 0,
             conflicts: 0,
+            rejections: 0,
+            last_rejection: None,
             cas_retries: 0,
             outcome: RoundOutcome::NoOp,
         };
@@ -755,14 +763,19 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 Ok(Some(wire)) => {
                     st.requests += 1;
                     st.bytes_down += wire.len() as u64;
-                    let rep = self
-                        .local
-                        .apply(vec![ApplyOp::Upsert { kind, id, wire }])
-                        .unwrap_or_default();
-                    if rep.applied == 1 {
-                        st.pulled += 1;
-                    } else {
-                        st.conflicts += 0; // 校验失败已在 store 侧丢弃（I6）
+                    // ADR-0021 D3：本地 apply 的拒绝**不许没有去处**。
+                    // 以前这里是 `.unwrap_or_default()` —— 一条被拒的远端版本（同 rev 不同内容、
+                    // 哈希不符 I6、rev 回退 I2…）连一行痕迹都不留，界面上是"同步正常"而库里少一条。
+                    match self.local.apply(vec![ApplyOp::Upsert { kind, id, wire }]) {
+                        Ok(rep) => {
+                            if rep.applied == 1 {
+                                st.pulled += 1;
+                            }
+                        }
+                        Err(e) => {
+                            st.rejections += 1;
+                            st.last_rejection = Some(e.to_string());
+                        }
                     }
                 }
                 Ok(None) => {
@@ -835,18 +848,24 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                                     id: l.id.clone(),
                                     wire: wire.clone(),
                                 };
-                                let rep = self
-                                    .local
-                                    .apply(vec![ApplyOp::AdoptConflict {
-                                        kind: l.kind.clone(),
-                                        id: l.id.clone(),
-                                        wire,
-                                    }])
-                                    .unwrap_or_default();
-                                let _ = self.local.apply(vec![payload]);
-                                if rep.applied == 1 {
-                                    st.pulled += 1;
+                                // 同上（D3）：采纳对面那一版本身失败，必须有痕迹 ——
+                                // 用户按了「用服务器这一版替换」而这一条被拒，那是能看见的事。
+                                match self.local.apply(vec![ApplyOp::AdoptConflict {
+                                    kind: l.kind.clone(),
+                                    id: l.id.clone(),
+                                    wire,
+                                }]) {
+                                    Ok(rep) => {
+                                        if rep.applied == 1 {
+                                            st.pulled += 1;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        st.rejections += 1;
+                                        st.last_rejection = Some(e.to_string());
+                                    }
                                 }
+                                let _ = self.local.apply(vec![payload]);
                             }
                         }
                         // P11（删除 vs 修改，双向）：引擎**不许**替用户选，可用户必须看得见
