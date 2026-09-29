@@ -270,24 +270,26 @@ jobs:
           mkdir -p /tmp/diag
           # 先把 ANSI 颜色码洗掉再摘行：日志里带 `\x1b[…m`，它们既吃字又让"这一行到哪结束"看不出来。
           sed -e 's/\x1b\[[0-9;]*m//g' /tmp/apk.log > /tmp/apk.clean.log 2>/dev/null || cp /tmp/apk.log /tmp/apk.clean.log
-          # run #6 的教训：关键那句 "Cannot find module '…/tauri-" 被**按字符**切三段是白切 ——
-          # Node 的答案不在同一行后面，而在**接下来那两行**（`Require stack:` 会点名是谁 require 的）。
-          # 所以 K1/K2/K3 = 命中行 + 后两行（`grep -A2`），每行各占一个 87 字的槽。
-          KEY=$(grep -A2 -E "Cannot find module|Execution failed for task" /tmp/apk.clean.log | head -3)
+          # run #6/#7/#8 三轮各教一件事：#6 说通道位置错了会静默不触发；#7 说"只取整行"不够 ——
+          # 那条 module 路径**比一个槽（90 字）长**，后半截正是文件名；#8 说"只取命中行的下一行"也不够 ——
+          # 那两行是 Node 的 stack frame，答案还在那条被截断的路径里。所以两条一起上：
+          # K1/K2/K3 = 命中行的三段切片（拼起来就是完整路径），R1 = Require stack 里"是谁 require 的"那一行。
+          KEY=$(grep -E "Cannot find module" /tmp/apk.clean.log | head -1)
+          [ -z "$KEY" ] && KEY=$(grep -E -i 'error|FAILURE|Caused by' /tmp/apk.clean.log | tail -1)
+          REQ=$(grep -A6 "Cannot find module" /tmp/apk.clean.log | grep -m1 -E '^- ' || true)
           {
             echo "F|gen-mobile=$(test -d "$GITHUB_WORKSPACE/apps/mobile/src-tauri/gen/android" && echo yes || echo no)"
             echo "F|crate-in-log=$(grep -o 'could not compile [^ ]*' /tmp/apk.clean.log | head -1 | tr ' ' '_')"
-            echo "K1|placeholder"; echo "K2|placeholder"; echo "K3|placeholder"
+            echo "K1|p"; echo "K2|p"; echo "K3|p"
             echo "F|task=$(grep -o 'Execution failed for task [^ ]*' /tmp/apk.clean.log | head -1 | tr ' ' '_')"
-            echo "F|gradle-rust=$(grep -h -o 'executable[^,)]*' "$GITHUB_WORKSPACE"/apps/mobile/src-tauri/gen/android/app/build.gradle.kts 2>/dev/null | head -1 | cut -c1-60)"
-            grep -E -i 'error|FAILURE|Caused by|panicked|not found|No such|denied|cannot|failed|task|Require' /tmp/apk.clean.log | tail -5 | sed 's/^/E|/'
+            echo "R1|p"
+            grep -E -i 'error|FAILURE|Caused by|panicked|not found|No such|denied|cannot|failed|task|Require' /tmp/apk.clean.log | tail -4 | sed 's/^/E|/'
           } > /tmp/diag/index.txt
-          awk -v k="$KEY" '
-            BEGIN { n = split(k, part, "\n") }
-            NR < 3 { print; next }
-            NR == 3 { print "K1|" part[1]; next }
-            NR == 4 { print "K2|" part[2]; next }
-            NR == 5 { print "K3|" part[3]; next }
+          awk -v k="$KEY" -v r="$REQ" '
+            NR == 3 { print "K1|" substr(k, 1, 87);   next }
+            NR == 4 { print "K2|" substr(k, 88, 87);  next }
+            NR == 5 { print "K3|" substr(k, 175, 87); next }
+            NR == 7 { print "R1|" substr(r, 1, 87);   next }
             { print }
           ' /tmp/diag/index.txt > /tmp/diag/sliced.txt
           mv /tmp/diag/sliced.txt /tmp/diag/index.txt
