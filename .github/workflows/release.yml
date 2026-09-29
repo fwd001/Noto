@@ -248,14 +248,44 @@ jobs:
           # 在那个目录里 `pnpm exec` 直接找不到工程。CLI 是桌面那份依赖里的 shim，按路径叫它。
           TAURI="$GITHUB_WORKSPACE/apps/desktop/node_modules/.bin/tauri"
           test -x "$TAURI" || { echo "CLI 不在 Expected 位置：$TAURI"; exit 1; }
-          "$TAURI" android init --config src-tauri/tauri.conf.json
+          # **不传 `--config`**：apps/mobile 下默认就找 `src-tauri/tauri.conf.json`（run #13 证明这条路
+          # 是通的——它已经走到 gradle）。传了反而把一条**相对路径**记进生成的工程里：那份工程里
+          # `BuildTask.kt` 的 `workingDir = File(projectDir, rootDirRel)` = `src-tauri`，回头调用 CLI 时
+          # `src-tauri/src-tauri/tauri.conf.json` 是不存在的。
+          "$TAURI" android init
           ls -1 src-tauri/gen/android
+
+      # run #13 的整段日志（走 commit 评论那条通道拿到的）把根因钉死了：
+      # `Execution failed for task ':app:rustBuildArm64Debug' (registered by plugin 'rust')`
+      # → `Process 'command 'node'' finished with non-zero exit value 1`
+      # → `Error: Cannot find module '/…/apps/mobile/src-tauri/tauri'`（`requireStack: []`，栈顶是
+      # `Module.executeUserEntryPoint` ⇒ node 是**以 `tauri` 为主脚本**启动的）。
+      # 生成的 `buildSrc/.../BuildTask.kt` 里写着 `executable = """<记录下来的命令的头一节>"""` 和
+      # `args = listOf(<记录的其余各节>, …)`，而 `workingDir` 是 `<app>/src-tauri`（模板：
+      # tauri-cli/templates/mobile/android/buildSrc/src/main/kotlin/BuildTask.kt，本批照着仓库原文读过）。
+      # 也就是说：**gradle 会按"当初怎么启动 CLI 的那串字"回头再叫一次 CLI**，而那串字是相对启动目录的。
+      # 支持的叫法（`pnpm <脚本名> …`）记下来的是 `pnpm run <脚本>`，换目录也能解；我们按绝对路径叫 shim，
+      # 记下来的是相对那一节的 `tauri`，在 src-tauri 里就什么都不是。这里把两节钉成绝对路径。
+      - name: 把生成工程里"回头叫 CLI"那两行钉成绝对路径
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/diag
+          GEN="$GITHUB_WORKSPACE/apps/mobile/src-tauri/gen/android"
+          BT="$GEN/buildSrc/src/main/kotlin/BuildTask.kt"
+          test -f "$BT" || { echo "生成的工程里没有 $BT"; exit 1; }
+          node scripts/patch-android-buildtask.mjs "$BT" \
+            "$GITHUB_WORKSPACE/apps/desktop/node_modules/@tauri-apps/cli/tauri.js" 2>&1 | tee /tmp/diag/patch.txt
+          # 钉完自己复验一遍：补丁说成功不算数，要看文件里真的是绝对路径。
+          grep -q "val executable = \"\"\"node\"\"\"" "$BT" || { echo "executable 那行没钉上"; exit 1; }
+          grep -q "$GITHUB_WORKSPACE/apps/desktop/node_modules/@tauri-apps/cli/tauri.js" "$BT" || { echo "args 第一节没钉上"; exit 1; }
+          echo "钉完的两行：" >> /tmp/diag/patch.txt
+          grep -n -E "val executable|val args = listOf" "$BT" >> /tmp/diag/patch.txt
 
       - name: 出 APK（debug 签名 = Android SDK 自带的 debug keystore，不需要 secrets）
         working-directory: apps/mobile
         run: |
           set -euo pipefail
-          "$GITHUB_WORKSPACE/apps/desktop/node_modules/.bin/tauri" android build --config src-tauri/tauri.conf.json --apk --debug --target aarch64 2>&1 | tee /tmp/apk.log
+          "$GITHUB_WORKSPACE/apps/desktop/node_modules/.bin/tauri" android build --apk --debug --target aarch64 2>&1 | tee /tmp/apk.log
 
       # **两条读数通道**（都是本批实测出来的，不是推测）：
       # ① 未认证能读 `/actions/runs/{id}/artifacts` 的**名字**，读不到日志正文（job logs = 403），
@@ -271,18 +301,26 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -u
+          GEN="$GITHUB_WORKSPACE/apps/mobile/src-tauri/gen/android"
           mkdir -p /tmp/diag
+          # 清洗那步**必须在这一步里自己做**：`apk.clean.log` 是后面"编进产物名"那步的产物，
+          # 上一步在这里读它 = 读一个当时还不存在的文件 ⇒ "关键行"那一节整段是空的
+          # （run #13 就是空的，我还当"没有错误行"读了半天）。递证据的步骤不能依赖别人的顺序。
+          sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' -e 's#/home/runner/work/Noto/Noto/#~/#g' /tmp/apk.log 2>/dev/null \
+            | tr -d '\000' > /tmp/apk.clean.log || true
           {
             echo "### Android 出包失败的现场（诊断贴文，修好就删）"
             echo '```'
-            tail -c 40000 /tmp/apk.log
+            tail -c 30000 /tmp/apk.log
             echo ''
             echo '### 关键行（ANSI 与 NUL 已洗）'
-            grep -n -E "Cannot find module|Require stack|Execution failed|error:" /tmp/apk.clean.log | head -40
-            echo '### gen/android 里含 tauri- 的行（去掉路径前缀，保住 84 字预算之外的内容）'
-            grep -rh --include=*.kts --include=*.properties "tauri-" apps/mobile/src-tauri/gen/android 2>/dev/null | sed 's/^[[:space:]]*//' | head -12
-            echo '### app/tauri.build.gradle.kts 里所有含 projectDir/rootDir/File( 的行'
-            grep -n -E "projectDir|rootDir|File\(" apps/mobile/src-tauri/gen/android/app/tauri.build.gradle.kts 2>/dev/null | head -20
+            grep -n -E "Cannot find module|Require stack|Execution failed|error:|exited with code" /tmp/apk.clean.log | head -40
+            echo '### BuildTask.kt 里"回头叫 CLI"那几行（补丁到底在不在，看这里）'
+            grep -n -E "val executable|val args = listOf|workingDir|rootDirRel" "$GEN/buildSrc/src/main/kotlin/BuildTask.kt" 2>/dev/null | cut -c1-500
+            echo '### app/build.gradle.kts 的 rust 块（rootDirRel 决定回头调用的 cwd）'
+            grep -n -A3 "^rust" "$GEN/app/build.gradle.kts" 2>/dev/null | cut -c1-200
+            echo '### 补丁那一步自己的读数'
+            cat /tmp/diag/patch.txt 2>/dev/null
             echo '```'
           } > /tmp/diag/comment.md
           # JSON 转义交给 node（这个 job 里本来就有 node），不手搓引号。
