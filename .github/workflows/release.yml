@@ -279,25 +279,29 @@ jobs:
           # 所以 S1..S4 取命中行之后的四行：Node 的调用者文件就写在深一点的栈帧里。
           KEY=$(grep -E "Cannot find module" /tmp/apk.clean.log | head -1)
           [ -z "$KEY" ] && KEY=$(grep -E -i 'error|FAILURE|Caused by' /tmp/apk.clean.log | tail -1)
+          # run #10 的读数把一件事钉死了：那条 specifier **在日志里就以 "tauri-" 结尾**
+          # （NUL 已洗、前缀已折、K1 那一槽是空的）—— 也就是"要 require 的东西"是 `tauri-` 拼上一个**空值**。
+          # 栈帧那几行全是 node 内部的 loader，帮不上忙。所以这一轮改问"生成的 gradle 工程里到底写了什么"：
+          # G1/G2 = 工程里带 "tauri-" 的那两行（连文件名一起），G3 = 那个 `tauri.properties` 的全文摘要。
+          GEN="$GITHUB_WORKSPACE/apps/mobile/src-tauri/gen/android"
+          G1=$(grep -rn --include=*.kts --include=*.properties --include=*.json "tauri-" "$GEN" 2>/dev/null | head -1 | cut -c1-160)
+          G2=$(grep -rn --include=*.kts --include=*.properties --include=*.json "tauri-" "$GEN" 2>/dev/null | sed -n '2p' | cut -c1-160)
+          G3=$(find "$GEN" -name 'tauri.properties' -exec cat {} \; 2>/dev/null | head -6 | tr '\n' '|' | cut -c1-160)
           S1=$(grep -A1 -E "Cannot find module" /tmp/apk.clean.log | sed -n '2p')
-          S2=$(grep -A2 -E "Cannot find module" /tmp/apk.clean.log | sed -n '3p')
-          S3=$(grep -A3 -E "Cannot find module" /tmp/apk.clean.log | sed -n '4p')
-          S4=$(grep -A4 -E "Cannot find module" /tmp/apk.clean.log | sed -n '5p')
           {
-            echo "F|gen-mobile=$(test -d "$GITHUB_WORKSPACE/apps/mobile/src-tauri/gen/android" && echo yes || echo no)"
-            echo "K0|p"; echo "K1|p"
-            echo "S1|p"; echo "S2|p"; echo "S3|p"; echo "S4|p"
+            echo "F|gen-mobile=$(test -d "$GEN" && echo yes || echo no)"
+            echo "K0|p"
+            echo "G1|p"; echo "G2|p"; echo "G3|p"
             echo "F|task=$(grep -o 'Execution failed for task [^ ]*' /tmp/apk.clean.log | head -1 | tr ' ' '_')"
+            echo "S1|p"
             grep -E -i 'error|FAILURE|Caused by|panicked|not found|No such|denied|cannot|failed|task' /tmp/apk.clean.log | tail -4 | sed 's/^/E|/'
           } > /tmp/diag/index.txt
-          awk -v k0="$(printf '%s' "$KEY" | cut -c1-84)" -v k1="$(printf '%s' "$KEY" | cut -c85-168)" \
-              -v s1="$S1" -v s2="$S2" -v s3="$S3" -v s4="$S4" '
-            NR == 2 { print "K0|" k0; next }
-            NR == 3 { print "K1|" k1; next }
-            NR == 4 { print "S1|" substr(s1, 1, 84); next }
-            NR == 5 { print "S2|" substr(s2, 1, 84); next }
-            NR == 6 { print "S3|" substr(s3, 1, 84); next }
-            NR == 7 { print "S4|" substr(s4, 1, 84); next }
+          awk -v k0="$(printf '%s' "$KEY" | cut -c1-84)" -v g1="$G1" -v g2="$G2" -v g3="$G3" -v s1="$S1" '
+            NR == 2 { print "K0|" substr(k0, 1, 84);    next }
+            NR == 3 { print "G1|" substr(g1, 1, 84);    next }
+            NR == 4 { print "G2|" substr(g2, 1, 84);    next }
+            NR == 5 { print "G3|" substr(g3, 1, 84);    next }
+            NR == 7 { print "S1|" substr(s1, 1, 84);    next }
             { print }
           ' /tmp/diag/index.txt > /tmp/diag/sliced.txt
           mv /tmp/diag/sliced.txt /tmp/diag/index.txt
