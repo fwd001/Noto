@@ -186,6 +186,35 @@ await step('点「今天」→ 建出当天那一篇 → 打完字再按一次�
   return `${day} 一行，正文含「${marker}」`;
 });
 
+// 「备忘录」那一格此前只有**合并层**的判据（`merge_tests.rs` 的 m4：勾选取改动侧、
+// 冲突时保留证据），**没有任何一步真的在浏览器里点过那颗勾**。这条补的就是这一段：
+// 用 markdown 快捷法打出待办 → 点勾 → 刷新重开还是勾着的。判定只看屏幕上的 `aria-checked`。
+await step('备忘录那一格：打出待办 → 点一下勾 → 刷新重开还是勾着的', async () => {
+  const memo = `买牛奶 ${Date.now()}`;
+  await page.click('[data-testid="new-note"]');
+  await page.waitForTimeout(600);
+  await page.locator('[data-testid="editor-doc"]').click();
+  await page.keyboard.type(`[ ] ${memo}`);
+  await page.waitForTimeout(1400);
+  const box = page.locator('[role="checkbox"]').first();
+  await box.waitFor({ timeout: 6000 });
+  if ((await box.getAttribute('aria-checked')) === 'true') throw new Error('刚打出来的待办一开始就是勾着的，这条判据是空的');
+  await box.click();
+  await page.waitForTimeout(900);
+  if ((await box.getAttribute('aria-checked')) !== 'true') throw new Error('点了勾却没变成勾着（aria-checked 仍是 false）');
+  await page.waitForTimeout(1500);
+  await page.reload();
+  await page.locator('[data-testid="note-list"]').waitFor({ timeout: 8000 });
+  await page.waitForTimeout(1000);
+  await page.locator('[data-testid^="note-row-"]').filter({ hasText: memo }).first().click();
+  await page.waitForTimeout(1200);
+  const reopened = page.locator('[role="checkbox"]').first();
+  await reopened.waitFor({ timeout: 6000 });
+  const state = await reopened.getAttribute('aria-checked');
+  if (state !== 'true') throw new Error(`刷新重开之后勾丢了（aria-checked=${state}）`);
+  return '点勾生效，刷新之后仍是勾着';
+});
+
 await step('刷新（等价于重启 App）之后：列表和正文都还在', async () => {
   await page.reload();
   await page.locator('[data-testid="note-list"]').waitFor({ timeout: 8000 });
