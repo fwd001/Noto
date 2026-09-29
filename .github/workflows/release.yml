@@ -1,7 +1,8 @@
 name: 出包与发布（§4 / §5）
 
-# 触发：**打 tag**（`v*`）或手动 dispatch。这是总指令 §4 的"通过打 Tag 或发布 Release 自动触发构建"
-# 那一格，也是 §5 的"通过 Git Tag、GitHub Release 管理正式版本"那一格 —— 之前仓库里只有 `ci.yml`
+# 触发：**打 tag**（`v*`）、**在 Releases 页面 Publish**（`release: published`）、或手动 dispatch。
+# 这是总指令 §4 的"通过打 Tag 或发布 Release 自动触发构建"那一格（两种写法都接上了），
+# 也是 §5 的"通过 Git Tag、GitHub Release 管理正式版本"那一格 —— 之前仓库里只有 `ci.yml`
 # （PR 门禁），一份出包流程都没有，`git tag` 数量是 0，GitHub Release 也是 0 个。
 #
 # 为什么 Release 默认发**草稿**（`draft: true`）：产物没有代码签名与公证（§13 的 D3，本机无证书），
@@ -17,6 +18,15 @@ on:
   push:
     tags:
       - 'v*'
+  # §4 原文是"支持通过打 Tag **或发布 Release** 自动触发构建"。只挂 tag 推送的话，
+  # 在 Releases 页面上对**已有 tag** 点 Publish 是不会出包的（那条动作不产生 tag push 事件）。
+  # 这里挂 `published`：`GITHUB_REF_NAME` 在这类事件里就是 tag 名 ⇒ meta 的"tag 与版本一致"判据
+  # 原样适用；`publish` 那一步本来就是"Release 已存在就 `upload --clobber`，不存在才建草稿"，
+  # 所以用户 Publish 之后重跑只会把这一版产物贴到那个 Release 上，不会撞建。
+  # **不挂 `created`/`edited`**：草稿创建时用户往往还要改说明，那时候出一版三个小时的包是浪费；
+  # 只在 Publish 这个真动作上出包。
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       version:
