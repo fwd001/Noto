@@ -244,7 +244,128 @@ jobs:
         working-directory: apps/desktop
         run: |
           set -euo pipefail
-          pnpm exec tauri android build --config ../mobile/src-tauri/tauri.conf.json --apk --debug --target aarch64
+          # tee 到文件不是为了"留着看"，是因为下面那条递证据的步骤得从这份日志里摘出真错误。
+          # pipefail 保证退出码还是 tauri 的，不是 tee 的 —— 否则这一步会假绿。
+          pnpm exec tauri android build --config ../mobile/src-tauri/tauri.conf.json --apk --debug --target aarch64 2>&1 | tee /tmp/apk.log
+
+      # **证据通道只有一条**：未认证能读 `/actions/runs/{id}/artifacts` 的**名字**，读不到日志正文
+      # （job logs = 403）、也读不到产物字节（artifact zip 实测 **401 Requires authentication**，
+      # 所以"上传日志文件再下载"这条路是死的 —— 这条是当场量出来的，不是推测）。
+      # 于是把最要紧的几行**编进产物名字**：名字只允许 `[A-Za-z0-9._-]`，其余换成 `-`，每条 90 字，
+      # 12 条 = 约 1000 字的真实读数。前 4 条是"我看到了什么环境事实"，后 8 条是日志里的错误行。
+      - name: 摘出事实与错误行（编进产物名递出来）
+        if: failure()
+        id: smuggle
+        run: |
+          set -u
+          mkdir -p /tmp/diag
+          {
+            echo "F|gen-mobile=$(test -d ../mobile/src-tauri/gen/android && echo yes || echo no)"
+            echo "F|gen-desktop=$(test -d src-tauri/gen/android && echo yes || echo no)"
+            echo "F|ndk=$NDK_VER linker=$(ls "$NDK_HOME"/toolchains/llvm/prebuilt/*/bin/aarch64-linux-android2[14]-clang 2>/dev/null | head -1 || echo NONE)"
+            echo "F|apklog=$(wc -l < /tmp/apk.log) lines"
+            grep -E -i 'error|FAILURE|Caused by|panicked|not found|No such|denied|cannot|failed|task' /tmp/apk.log | tail -8 | sed 's/^/E|/'
+          } > /tmp/diag/index.txt
+          # 十二个槽位**总是**写满：产物名不能带非法字符，空名会撞 GitHub 的命名校验，
+          # 所以缺的行填 none —— "槽位是空的"本身也是读数。
+          awk -v want=12 '
+            { lines[NR] = $0 }
+            END { for (i = 1; i <= want; i++) print (i in lines ? lines[i] : "none") }
+          ' /tmp/diag/index.txt > /tmp/diag/padded.txt
+          i=0
+          while IFS= read -r line; do
+            i=$((i + 1))
+            mkdir -p "/tmp/diag/$i"
+            printf '%s\n' "$line" > "/tmp/diag/$i/line.txt"
+            sig=$(printf '%s' "$line" | tr -c 'A-Za-z0-9._-' '-' | cut -c1-90)
+            echo "sig$i=$sig" >> "$GITHUB_OUTPUT"
+          done < /tmp/diag/padded.txt
+          cat /tmp/diag/index.txt
+          echo "共递出 $i 条"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: apk-diag-01-${{ steps.smuggle.outputs.sig1 }}
+          path: /tmp/diag/1/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: apk-diag-02-${{ steps.smuggle.outputs.sig2 }}
+          path: /tmp/diag/2/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: apk-diag-03-${{ steps.smuggle.outputs.sig3 }}
+          path: /tmp/diag/3/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: apk-diag-04-${{ steps.smuggle.outputs.sig4 }}
+          path: /tmp/diag/4/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: apk-diag-05-${{ steps.smuggle.outputs.sig5 }}
+          path: /tmp/diag/5/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: apk-diag-06-${{ steps.smuggle.outputs.sig6 }}
+          path: /tmp/diag/6/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: apk-diag-07-${{ steps.smuggle.outputs.sig7 }}
+          path: /tmp/diag/7/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: apk-diag-08-${{ steps.smuggle.outputs.sig8 }}
+          path: /tmp/diag/8/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: apk-diag-09-${{ steps.smuggle.outputs.sig9 }}
+          path: /tmp/diag/9/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: apk-diag-10-${{ steps.smuggle.outputs.sig10 }}
+          path: /tmp/diag/10/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: apk-diag-11-${{ steps.smuggle.outputs.sig11 }}
+          path: /tmp/diag/11/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: apk-diag-12-${{ steps.smuggle.outputs.sig12 }}
+          path: /tmp/diag/12/
+          if-no-files-found: ignore
 
       - name: 收集产物
         uses: actions/upload-artifact@v4
