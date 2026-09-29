@@ -427,7 +427,35 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
     app path 由工作目录定，于是它拿**桌面壳**（`notera-desktop`：muda 菜单与托盘 API 在 Android 上根本不存在）去链 aarch64，
     移动壳 `notera-mobile`（`cdylib` + `#[tauri::mobile_entry_point]`）一次都没进编译。
     **改法**：`android init` 与 `android build` 都挪进 `apps/mobile` 跑，CLI 按绝对路径叫
-    （`pnpm exec` 在那个目录里没有 package.json，会直接找不到工程）。**这条改法还没被 run 验过，所以缺口不撤。**
+    （`pnpm exec` 在那个目录里没有 package.json，会直接找不到工程）。这条被 run #6~#13 验过：crate 对了，
+    红点往下走了一层。
+  - **run #6~#13 量出第二层根因**（读数来自"贴成 commit 评论"那条通道，整段 40 KB 日志都递回来了）：
+    `Execution failed for task ':app:rustBuildArm64Debug' (registered by plugin 'rust')`
+    → `Process 'command 'node'' finished with non-zero exit value 1`
+    → `Error: Cannot find module '/…/apps/mobile/src-tauri/tauri'`，且 `requireStack: []`、栈顶是
+    `Module.executeUserEntryPoint` —— 也就是**有人拿 `tauri` 当 node 的主脚本**启动了它。
+    照 tauri-cli 仓库原文读了生成物的模板（`crates/tauri-cli/templates/mobile/android/buildSrc/src/main/kotlin/BuildTask.kt`）：
+    那里面是 `executable = """{{tauri-binary}}"""` 与 `args = listOf({{tauri-binary-args}})`，
+    而 `workingDir = File(projectDir, rootDirRel)` 算出来正是 `<app>/src-tauri`。
+    **根因一句话**：**gradle 拿"当初怎么启动这个 CLI 的那串字"在另一个目录里重放一次**，而那串字是相对启动目录的 ——
+    我们按绝对路径叫 `.bin` 的 shim，记下来第一节是裸 `tauri`，在 `src-tauri` 里什么都解不出来。
+    官方支持的叫法（`pnpm <脚本名> …`）记的是 `pnpm run <脚本>`，换目录也能解 —— 但这条路对我们同样不通，
+    这条是量出来的不是推的：`apps/desktop/package.json` 的 `scripts` 里**没有 `tauri` 这一条**
+    （CI 里 `pnpm --dir apps/desktop tauri build` 走的是 pnpm 的隐式 exec），且本机在 `src-tauri` 里
+    `pnpm run tauri` 报的就是 `ERR_PNPM_NO_SCRIPT Missing script: tauri`。
+    **改法（本批提交，还没被 run 验过，所以缺口不撤）**：① `android init` 之后用
+    `scripts/patch-android-buildtask.mjs` 把 `BuildTask.kt` 那两节钉成绝对路径（`node` +
+    `…/@tauri-apps/cli/tauri.js`），钉完在 CI 里**自己复验**那两行；② `init`/`build` 都不再传
+    `--config src-tauri/tauri.conf.json` —— 那是默认位置，而传进去会把一条**相对路径**写进生成的工程，
+    重放时成了 `src-tauri/src-tauri/tauri.conf.json`。
+    补丁脚本本机照模板复演过 5 个用例：两种形状（裸 `tauri` / 带层级的相对路径）都钉对，
+    三种变异（模板里没有那两行 / args 是空的 / 传了相对 CLI 路径）全红。
+  - **工装账（递证据那台机器自己坏了三处，都是一轮量一处）**：① 贴评论那步读的 `apk.clean.log`
+    是**后面**那步才产出的 ⇒ "关键行"那一节整段是空的，我把"没有错误行"当读数读了半天；
+    ② 那步里两处 grep 用了相对路径而 cwd 是 `apps/mobile` ⇒ 扫到 0 项；③ 早一轮是 `POST` 的 URL 形状写错
+    （`/comments/{sha}` 是改/删某条评论，创建要 `/commits/{sha}/comments`）+ `|| echo` 吞掉 curl 的 22 ⇒
+    **递证据的步骤自己报 success 而实际什么都没递出去**（比没有证据更糟）。
+    现在那步自己洗日志、用绝对路径，并把 `BuildTask.kt` 那两行原样递出来 —— 万一补丁被 CLI 重新生成覆盖，一眼能看出来。
   - **为什么前三次定位不动（原因）**：未认证读不到 job 日志正文（`/actions/jobs/{id}/logs` = 403），
     **也读不到产物字节** —— 这条是当场量的：`/actions/artifacts/{id}/zip` = **401 Requires authentication**，
     所以"把日志当产物传上去再下载"这条路根本不存在。唯一还能递出读数的通道是**产物名字**
