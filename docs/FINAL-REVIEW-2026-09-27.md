@@ -583,4 +583,6 @@ CI 侧（未认证 REST 能看到 run 与 step 级结论，看不到日志正文
 复验数（同一份 HEAD 链，独占机器）：workspace **593/0/6**（第 6 条 ignored 是 G23 的量具）、clippy **0/0**、fmt **0**、arch-check **30/30**、
 check-versions 一致；release 产物 `Notera_0.0.39_x64_zh-CN.msi` **7.31 MiB** + `_setup.exe` **5.39 MiB**，
 同一个壳真窗口 **9/9**（`17323/health` = HTTP 000）；三条界面 lane **37/37 / 10/10 / 11/11**（本批未改界面代码，
-这三条是回归检查）。CI 的 tip run 记在 `CI-CD` 那侧，不在这里复述结论。
+这三条是回归检查）。**CI：tip run #77（`7529cf7`）= success**，step 级全绿（Rust 全量、clippy、arch-check、前端单测与类型、
+release 产物一致性都过）；中间的 **#74/#75/#76 = cancelled 是我自己连着 push 造出来的**（workflow 的 `concurrency` 组会取消
+in-flight 的 run），这条做法记在 `CI-CD`。
