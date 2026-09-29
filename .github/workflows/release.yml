@@ -270,13 +270,38 @@ jobs:
           mkdir -p /tmp/diag
           # 路径一律走绝对：这一步**没有** working-directory，跑在仓库根上，
           # 上一版拿相对路径去量 gen 目录，递回来的是两条没意义的 "no"（探针自己的账，记一条）。
+          # run #6 又递回来一条被**我自己的 90 字上限**截断的关键行
+          # （`Cannot find module '/…/apps/mobile/src-tauri/tauri…'` —— 后面那半截才是答案），
+          # 所以关键行改成三段切片各 90 字（产物名的长度上限就在这儿），其余槽位仍走通用错误行。
+          KEY=$(grep -E "Cannot find module|Error:|error\[E" /tmp/apk.log | head -1)
+          [ -z "$KEY" ] && KEY=$(grep -E -i 'error|FAILURE|Caused by' /tmp/apk.log | tail -1)
           {
             echo "F|gen-mobile=$(test -d "$GITHUB_WORKSPACE/apps/mobile/src-tauri/gen/android" && echo yes || echo no)"
-            echo "F|gen-desktop=$(test -d "$GITHUB_WORKSPACE/apps/desktop/src-tauri/gen/android" && echo yes || echo no)"
-            echo "F|ndk=$NDK_VER linker=$(ls "$NDK_HOME"/toolchains/llvm/prebuilt/*/bin/aarch64-linux-android2[14]-clang 2>/dev/null | head -1 || echo NONE)"
             echo "F|crate-in-log=$(grep -o 'could not compile [^ ]*' /tmp/apk.log | head -1 | tr ' ' '_')"
-            grep -E -i 'error|FAILURE|Caused by|panicked|not found|No such|denied|cannot|failed|task' /tmp/apk.log | tail -8 | sed 's/^/E|/'
+            echo "K1|${KEY}"
+            echo "K2|${KEY}"
+            echo "K3|${KEY}"
+            echo "F|task=$(grep -o 'Execution failed for task [^ ]*' /tmp/apk.log | head -1 | tr ' ' '_')"
+            echo "F|src-tauri-entries=$(ls -1 "$GITHUB_WORKSPACE/apps/mobile/src-tauri" | tr '\n' ',' | cut -c1-60)"
+            grep -E -i 'error|FAILURE|Caused by|panicked|not found|No such|denied|cannot|failed|task' /tmp/apk.log | tail -5 | sed 's/^/E|/'
           } > /tmp/diag/index.txt
+          # K2 / K3 取的是同一行的后两段（切片在下面单独做，因为 awk 的 substr 比 cut 更好读）。
+          # 每段 87 字：产物名还要留 3 字给 "K1|" 这个前缀（循环里那把 cut 只放行 90 字）。
+          awk -v k="$KEY" '
+            NR < 3 { print; next }
+            NR == 3 { print "K1|" substr(k, 1, 87); next }
+            NR == 4 { print "K2|" substr(k, 88, 87); next }
+            NR == 5 { print "K3|" substr(k, 175, 87); next }
+            { print }
+          ' /tmp/diag/index.txt > /tmp/diag/sliced.txt
+          mv /tmp/diag/sliced.txt /tmp/diag/index.txt
+          # 十二个槽位**总是**写满：产物名不能带非法字符，空名会撞 GitHub 的命名校验，
+          # 所以缺的行填 none —— "槽位是空的"本身也是读数。
+          awk -v want=12 '
+            { lines[NR] = $0 }
+            END { for (i = 1; i <= want; i++) print (i in lines ? lines[i] : "none") }
+          ' /tmp/diag/index.txt > /tmp/diag/padded.txt
+          mv /tmp/diag/padded.txt /tmp/diag/index.txt
           # 十二个槽位**总是**写满：产物名不能带非法字符，空名会撞 GitHub 的命名校验，
           # 所以缺的行填 none —— "槽位是空的"本身也是读数。
           awk -v want=12 '
