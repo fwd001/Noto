@@ -382,6 +382,27 @@ CI 必须运行的四类检查（映射到 job）：
 
 ### `release` job（只响应 tag `v*`）
 
+> **下面这段是当初的设计稿，没有照此实现**（§45 要求把这件事说破，不然读文档的人会以为仓库里跑的是那个形状）。
+> 实际落地的 `.github/workflows/release.yml`（名字是「出包与发布（§4 / §5）」）是这样的：
+>
+> - **`meta`** —— `node scripts/check-versions.mjs` + 比对 tag 与 `Cargo.toml` 的 workspace 版本，
+>   不一致就**在三个小时的构建开始之前**红（`workflow_dispatch` 留空版本号时只出 Artifacts 不动 tag）。
+> - **`windows`**（`windows-latest`，**GNU 工具链**：`RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu` +
+>   `tauri build --target x86_64-pc-windows-gnu --bundles nsis,msi`）与 **`macos`**（`macos-14`，`--bundles dmg,app`，
+>   **未签名未公证**）—— 这两条已经在真 runner 上绿过多次（run #4 起逐步骤读数）。
+> - **`android`**（`ubuntu-22.04`：rustup 加四个 Android 三元组 + JDK 17 + **runner 自带的 SDK/NDK**，
+>   在 **`apps/mobile`** 目录里 `tauri android init` 与 `android build --apk --debug --target aarch64`）——
+>   **这一条还是红的，缺口 G25**。debug keystore 签名，不需要 secrets；上架 Play 另说。
+> - **`publish`** —— `needs: [meta, windows, macos, android]`，把三平台产物收拢、算 `SHA256SUMS.txt`、
+>   从 CHANGELOG 里取「版本 … → `<v>`」那一条当正文，**建的是 draft Release**（没签名就公开发布 = 替用户做决定）。
+> - **打 tag 的唯一入口是 `scripts/tag-release.mjs`**（preflight：版本单源一致 + CHANGELOG 里**恰好一条**
+>   `→ <version>` + 工作树干净；默认只建本地 tag，`--push` 才推）。
+>
+> 还有一条**环境限制**必须记在这里，否则后来的人会重复踩：本仓库的 CI 在**没有令牌**的情况下
+> 读不到 job 日志正文（403）也读不到产物字节（artifact zip = 401），所以失败现场只有两条通道能递出来 ——
+> ① 把关键行编进**产物名字**（每条 90 字），② 用 job 里那份 `contents: write` 的 `GITHUB_TOKEN`
+> 把日志**贴成 commit 评论**（未认证可读）。这两步都写在 `release.yml` 里，并标了"修好就删"。
+
 ```yaml
 # 设计片段：.github/workflows/release.yml
 name: release
