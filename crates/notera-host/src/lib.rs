@@ -2866,8 +2866,25 @@ fn account_dto(a: &AccountConfig) -> AccountDto {
 ///
 /// `why` 里只放"哪一步、什么码、多长"，**绝不放口令本身** —— 这个结构体会被写进日志与
 /// 界面的错误详情，口令一旦进去就等于没进凭据库。
+///
+/// 三条分支把码**写成 `CmdError::of("…")` 的字面量**而不是 `e.code()` 那种算出来的值：
+/// 这些码是界面取文案的键，而 `arch-check` 的"错误码必须登记"那一条只认字面量。写成算出来的
+/// 码，漏登记既不编译报错也不测试失败 —— 0.0.29 就是那么漏过去的：非 Windows 配账号时拿到的
+/// 是那句通用兜底，而不是"这台设备的凭据库还没接上"这句能照着办事的话（现在由第 30 条守着）。
 fn secret_err(e: credential_store::SecretError) -> CmdError {
-    CmdError::of(e.code(), false).with(serde_json::json!({ "why": e.to_string() }))
+    match e {
+        credential_store::SecretError::TooLong(units) => CmdError::of("credential_too_long", false)
+            .with(serde_json::json!({
+                "why": format!("口令 {units} 个 UTF-16 单元，超过系统凭据 blob 的上限（256 单元）")
+            })),
+        credential_store::SecretError::Unavailable => CmdError::of("credential_unavailable", false)
+            .with(serde_json::json!({ "why": "这个平台还没有接入系统凭据库" })),
+        credential_store::SecretError::Store(code) => {
+            CmdError::of("credential_store_failed", false).with(
+                serde_json::json!({ "why": format!("系统凭据调用失败（Win32 错误码 {code}）") }),
+            )
+        }
+    }
 }
 
 /// 配置里的代理 → 出口层真正用的代理。
@@ -2880,7 +2897,7 @@ fn net_proxy(p: &ProxyProfile, account_id: &str) -> Result<notera_net::ProxyProf
     let (proxy_user, proxy_pass) = if p.username_ref.is_some() || p.password_ref.is_some() {
         match credential_store::get(&credential_store::proxy_target(account_id)) {
             Ok(Some((user, secret))) => (Some(user), Some(secret)),
-            Ok(None) | Err(_) => return Err(CmdError::of("proxy_credentials_pending", true)),
+            Ok(None) | Err(_) => return Err(CmdError::of("proxy_credential_missing", true)),
         }
     } else {
         (None, None)

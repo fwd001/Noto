@@ -286,7 +286,14 @@ const MESSAGES: Record<MessageKey, string> = {
   'error.net_config': '网络出口没有配置好，这一轮同步跳过。',
   'error.invalid_account': '这台同步服务器的地址或参数不可用，请在设置里检查。',
   'error.save_failed': '设置没能保存，改动还留在这台设备上。',
-  'error.proxy_credentials_pending': '代理需要账号与口令，当前版本还不能安全地保存它们。',
+  'error.proxy_credential_missing':
+    '这台设备读不到已保存的代理凭据（系统凭据库里那条可能已被删除，或这个平台还没接入）。这一轮同步不会带着凭据发出去 —— 请在设置里重配一次代理的用户名与口令。',
+  'error.credential_too_long':
+    '这条口令太长了，超出这台设备凭据库单条的上限（256 个字符）。请换一条短一些的口令。',
+  'error.credential_unavailable':
+    '这台设备的系统凭据库还没接上（当前只有 Windows 可用），所以口令存不进来，同步也用不了。本机笔记照常保存。',
+  'error.credential_store_failed':
+    '写进系统凭据库时失败了，口令没有保存、账户也没有生效。可以再试一次；若反复失败，请把这条提示与下方详情一起给我。',
   'sync.root_mismatch': '这个服务器上已经是另一个 Notera 库了，已停止同步以免把两个库混在一起。请改用该库原本的路径。',
   'sync.foreign_root': '这个目录里已有别的数据，但不是本库的目录，已停止同步。请换一个根路径。',
   'sync.protocol_unreadable': '暂时读不到服务器上的协议信息，这一轮不写入。请稍后重试。',

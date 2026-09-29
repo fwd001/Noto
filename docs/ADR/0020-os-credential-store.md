@@ -32,7 +32,9 @@
    `UserName` 存用户名、`CredentialBlob` 存口令的 **UTF-16 字节**。
    配置里的引用写成 `keychain:<账户 id>`，**其含义收紧为"系统里真有一条"** —— 只有 `put` 成功才写它。
    代理凭据同理共用这一条通道：目标名 `notera:proxy:<账户 id>`（`net_proxy` 以前一看到引用就报
-   `proxy_credentials_pending`，于是"填了代理口令"在出口层永远不成立）。
+   `proxy_credentials_pending`，于是"填了代理口令"在出口层永远不成立；0.0.31 把这个码改名为
+   `proxy_credential_missing` 并重写了文案 —— 0.0.29 起代理口令是真能存的，"当前版本还不能安全地保存它们"
+   那句已经说反，留着只是叫用户去查一件不存在的事）。
 2. **顺序是"先存凭据，再落配置"，失败要回滚**。反过来会留下"配置说有条凭据、系统里什么都没有"的
    账户 —— 那正是本次要消灭的形状。落配置的任何一步失败，就把刚存进去的那几条抹掉，
    不留"没人引用、也没界面能再删掉"的口令。
@@ -45,8 +47,24 @@
 5. **删账户连带删凭据**（`remove` 幂等，本来没有也算成功）。
 6. **非 Windows 不假装**：`credential_store::available() == false`，`put/get/remove` 一律返回
    `credential_unavailable`，行为退回今天的样子（徽标停在"需要凭据"）。
+   **这句从 0.0.31 起才有能照着办事的文案**：0.0.29 那批三条凭据码漏登记（原因见第 7 条），
+   那之前非 Windows 配账号看到的是通用兜底那句。
    PROXY.md §凭据里那句"钥匙串不可用时降级为本地加密文件（argon2id + AES-256-GCM-SIV）"**尚未实现**，
    在该文件里按 BLOCKED 标注，不当已完成。
+
+7. **错误码必须写成 `CmdError::of("字面量")`，不许从函数算出来**（0.0.31 补，起因是一条门禁盲区）。
+   当时 `App::secret_err` 写的是 `CmdError::of(e.code())`：码从枚举算出来，而门禁
+   `hygiene:rust-error-codes-registered` 只认 `CmdError::of("…")` 那个形状 —— 于是"漏登记文案"既不编译报错、
+   也不测试失败，界面安静退成通用兜底，没人知道少了哪一句能照着办事的说明。`credential_too_long` /
+   `credential_unavailable` / `credential_store_failed` 三条就是这么漏在表外的（非 Windows 配账号必踩；
+   Windows 上口令超过 256 个 UTF-16 单元也踩）。
+   **修法**：三个臂各写自己的字面量，`SecretError::code()` 那个逃逸口一并删掉；四条码（含改名后的
+   `proxy_credential_missing`）补进 `i18n.ts` 与 `i18n.spec.ts` 的 `COMMAND_CODES`；新增门禁
+   `hygiene:error-code-must-be-literal`（arch-check 第 30 条）把"算出来的码"这一形直接判红 ——
+   变异自证 **M65**：把一个臂换成 `let code = "…"; CmdError::of(code, …)` → 29/30 红在那一行
+   （打印出 `crates/notera-host/src/lib.rs → CmdError::of(code)`），还原 → 30/30。
+   判据登记在 TEST-PLAN 的 **FT-CRED-07**；那条也照实写着"没测过非 Windows 真机上这句话长什么样"——
+   本机没有那个平台，能证的只有"码有专属文案"与"这个形状不再被漏"。
 
 ## 后果
 

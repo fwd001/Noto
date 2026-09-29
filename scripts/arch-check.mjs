@@ -324,6 +324,25 @@ const unregisteredCodes = [...new Set(codeLines)].filter((c) => !errorKeys.has(c
 check('hygiene:rust-error-codes-registered', 'ARCHITECTURE-MAP §5（错误码 → 文案，一处不漏）', unregisteredCodes,
   `这些命令错误码没有对应的 error.* 文案（界面会退化成通用兜底）：${unregisteredCodes.join(', ')}`);
 
+// 错误码必须**写成字面量**。上一条只认 `CmdError::of("字面量")` 那个形状：码一旦是从函数
+// 算出来的（`CmdError::of(e.code())`），扫描就看不见它，于是"漏登记文案"既不编译报错、
+// 也不测试失败 —— 界面安静退成那句通用兜底，谁都不知道少了哪一条能照着办事的说明。
+// 0.0.29 的三条凭据码就是这么漏过去的（非 Windows 配账号时看到的是通用兜底，而不是
+// "这台设备的凭据库还没接上"），这一条把那个洞本身堵住：算出来的码一律判红。
+const computedCodes = [];
+for (const f of [
+  ...sources(join(ROOT, 'crates/notera-host/src'), ['.rs']),
+  ...sources(join(ROOT, 'crates/notera-store/src'), ['.rs']),
+]) {
+  for (const m of read(f).matchAll(/CmdError::of\(\s*([^,)\s][^,)]*)[,)]/g)) {
+    const arg = m[1].trim();
+    if (arg.startsWith('"')) continue;
+    computedCodes.push(`${rel(f)} → CmdError::of(${arg})`);
+  }
+}
+check('hygiene:error-code-must-be-literal', '§45（算出来的错误码扫不到，漏登记就是静默的）', computedCodes,
+  `这些命令错误码不是字面量，上一条"错误码必须登记"的门禁看不见它们：\n    ${computedCodes.join('\n    ')}`);
+
 // 前端声明的每一个命令名，核心 dispatch 里必须真有那条分支。
 // 缺席不会编译报错、也不会测试失败：调用时静默收到 unknown_command，而调用方普遍
 // 有"拿不到就退回已有内容"的兜底 —— 于是功能看着在，其实每次都没走到。

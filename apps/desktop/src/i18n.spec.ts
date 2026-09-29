@@ -27,7 +27,14 @@ const COMMAND_CODES = [
   'save_failed',
   'bad_device',
   'net_config',
-  'proxy_credentials_pending',
+  'proxy_credential_missing',
+  // 这三条凭据码是 0.0.31 补的：它们当时**不在 arch-check 的扫描结果里**，因为 Rust 侧写的是
+  // `CmdError::of(e.code())` —— 算出来的码那条门禁看不见，于是"漏登记文案"既不报错也不红，
+  // 用户只会看到那句通用兜底。现在码写成字面量（被第 12 条看见），并由第 30 条
+  // `hygiene:error-code-must-be-literal` 守住"不许再写算出来的码"这一形。
+  'credential_too_long',
+  'credential_unavailable',
+  'credential_store_failed',
   'serialize',
   'handler_panic',
   // 下面这批是新增门禁（arch-check `hygiene:rust-error-codes-registered`）从 Rust 侧

@@ -37,18 +37,11 @@ pub enum SecretError {
     Store(u32),
 }
 
-impl SecretError {
-    /// 给界面的文案键（错误码是稳定契约，细节走 `why`）。
-    pub fn code(&self) -> &'static str {
-        match self {
-            Self::TooLong(_) => "credential_too_long",
-            Self::Unavailable => "credential_unavailable",
-            Self::Store(_) => "credential_store_failed",
-        }
-    }
-}
-
 /// 日志用的写法（`tracing` 的 `%e`）。**不许带出口令本身**，只说哪一步、什么码。
+///
+/// 这里**不**再放一个 `code()`：错误码必须在 `CmdError::of("…")` 那个位置以字面量出现，
+/// 才会被"错误码必须登记文案"那条门禁看到（算出来的码它扫不到，漏登记就静默退成通用兜底）。
+/// 三条码现在住在 `App::secret_err` 的三个分支里。
 impl std::fmt::Display for SecretError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
