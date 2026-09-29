@@ -171,15 +171,19 @@ const NOTE_FIELDS: &[&str] = &[
 
 /// 标签名。ENEX 不带命名空间（Evernote 的 DTD 里没有前缀），所以整名即局部名。
 fn local(e: &quick_xml::name::QName) -> String {
-    String::from_utf8_lossy(e.as_ref()).into_owned()
+    e.as_ref().to_string()
 }
 
 fn attrs_of(e: &quick_xml::events::BytesStart) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     for a in e.attributes().flatten() {
-        let k = String::from_utf8_lossy(a.key.as_ref()).into_owned();
+        let k = a.key.as_ref().to_string();
+        // `normalized_value` 比旧那版 `unescape_value` 多做一件事：按 XML 的 AVNormalize
+        // 把属性值里的字面空白（制表/换行）折成空格。这一格只读 `encoding` 与 `hash`
+        // 这类单词值，所以这条差异没有受害者 —— 但它是一处**真实的语义差**，写下来免得
+        // 以后有人拿"升级没改行为"这句话去解释别的属性。
         let v = a
-            .unescape_value()
+            .normalized_value(quick_xml::XmlVersion::default())
             .map(|c| c.into_owned())
             .unwrap_or_default();
         out.insert(k, v);
@@ -187,16 +191,34 @@ fn attrs_of(e: &quick_xml::events::BytesStart) -> BTreeMap<String, String> {
     out
 }
 
-fn make_reader(text: &str) -> Reader<&[u8]> {
+fn make_reader<'a>(text: &'a str) -> Reader<&'a [u8]> {
     let mut r = Reader::from_str(text);
     // CDATA 要能拿回原文（第二遍的输入就是第一遍的 CDATA 内容）
     r.config_mut().check_end_names = true;
+    // 没分号的裸 `&`（`Tom & Jerry` 这种手写/第三方导出）按原文放行。
+    // 默认是整篇 IllFormed 报错 —— 那等于"一个字符让 500 条笔记一条都导不进来"。
+    // 摘掉这一行会红在 `a_lone_ampersand_survives_without_failing_the_import`。
+    r.config_mut().allow_dangling_amp = true;
     r
 }
 
-/// 普通文本节点：按 XML 规矩反转义（`&amp;` 就是 `&`）。
+/// 普通文本节点。0.42 起解析器**不再**顺手反转义，引用是另一个事件（见 `ref_text`），
+/// 这里只做行尾归一。
 fn text_of(e: &quick_xml::events::BytesText) -> String {
-    e.unescape().unwrap_or_default().into_owned()
+    e.xml10_content().into_owned()
+}
+
+/// 引用事件（`&amp;` / `&#65;`）→ 该进文本的那几个字符。
+///
+/// 为什么必须自己填这一格：换解析库版本之前，`&amp;` 是解析器在 Text 里就解好的；
+/// 现在它单独成一个事件，不接的话"粗 &amp; 斜"会变成"粗 斜"——**静默少字符**，
+/// 而不是任何报错。认不出的引用（ENML 里常见的 `&nbsp;`）原样留着：0.37 那版
+/// 是把整段文本变成空串，那是更坏的静默丢失。
+fn ref_text(r: &quick_xml::events::BytesRef) -> String {
+    let raw = format!("&{};", r.xml10_content());
+    quick_xml::escape::unescape(&raw)
+        .map(|c| c.into_owned())
+        .unwrap_or(raw)
 }
 
 /// 解析一份 `.enex`。`id_prefix` 参与块 id 生成：同一份字节两次导入必须得到同一批 id
@@ -299,14 +321,18 @@ fn read_envelope(text: &str) -> Result<Vec<RawNote>, ImportError> {
                 }
             }
             Ok(Event::Text(t)) => {
-                // 普通文本按 XML 反转义
+                // 普通文本：引用已经被拆成单独的 GeneralRef 事件（见 `ref_text`）
                 let raw = text_of(&t);
+                route_text(&slot, &mut cur, &mut res, &raw);
+            }
+            Ok(Event::GeneralRef(r)) => {
+                let raw = ref_text(&r);
                 route_text(&slot, &mut cur, &mut res, &raw);
             }
             Ok(Event::CData(t)) => {
                 // CDATA：正文那一段就是靠它装着的（`<![CDATA[<en-note>…</en-note>]]>`）。
                 // 这个变体不接就等于把整个正文丢掉 —— 第一版就是这么"导出 0 块还不报错"。
-                let raw = String::from_utf8_lossy(&t.into_inner()).into_owned();
+                let raw = t.into_inner().into_owned();
                 route_text(&slot, &mut cur, &mut res, &raw);
             }
             Ok(Event::End(e)) => {
@@ -652,9 +678,8 @@ fn parse_enml(text: &str, prefix: &str) -> Result<EnmlParse, ImportError> {
                 }
             }
             Ok(Event::Text(t)) => push(&mut runs, &text_of(&t), &marks),
-            Ok(Event::CData(t)) => {
-                push(&mut runs, &String::from_utf8_lossy(&t.into_inner()), &marks)
-            }
+            Ok(Event::GeneralRef(r)) => push(&mut runs, &ref_text(&r), &marks),
+            Ok(Event::CData(t)) => push(&mut runs, &t.into_inner(), &marks),
             Ok(Event::End(e)) => {
                 let name = local(&e.name());
                 match name.as_str() {
@@ -896,6 +921,59 @@ mod tests {
         assert!(!text.contains("<div>"), "CDATA 没被第二遍解析：{text}");
         assert!(!text.contains("en-media"), "附件标签当成文字了：{text}");
         assert!(text.contains('甲'));
+    }
+
+    /// 实体引用在两遍解析里都必须被解成字符 —— 这条是给 XML 解析器换版本时用的**行为锚**。
+    ///
+    /// 为什么单独钉：`parse_enex` 是两遍读（第一遍切信封，第二遍把 CDATA 里的 ENML 当 XML 再解一次），
+    /// 而"属性/文本里的 `&amp;`、`&#65;` 要不要解"正是 XML 解析器最容易出现版本差异的地方。
+    /// 解析库升级时这一条如果变了，必须能看出来 —— 它不是"顺手测一下"，是升级的对照组。
+    #[test]
+    fn entity_references_are_decoded_in_both_parse_passes() {
+        let enml =
+            "<?xml version=\"1.0\"?><en-note><div>粗 &amp; 斜 &#65; &lt;尖&gt;</div></en-note>";
+        let text = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <en-export export-date=\"20240101T000000Z\" version=\"6.5.1\">\n\
+             <note><title>A &amp; B &#65; &lt;C&gt;</title><content><![CDATA[{enml}]]></content></note>\n\
+             </en-export>"
+        );
+        let f = parse_enex(&text, "ent").expect("解析");
+        assert_eq!(
+            f.notes[0].title, "A & B A <C>",
+            "标题里的实体引用没被解成字符（或解过了头）"
+        );
+        let body = plain_text(&f.notes[0].doc);
+        assert!(
+            body.contains("粗 & 斜 A <尖>"),
+            "CDATA 里第二遍解析的实体没解：{body}"
+        );
+    }
+
+    /// 没有分号的裸 `&` 不许把整份导入打死，也不许把那个节点变成空。
+    ///
+    /// 钉的是 0.42 里 `allow_dangling_amp` 这一格：默认（false）会让解析器在这一个字符上
+    /// 报整篇 IllFormed —— 后果是"500 条笔记一条都导不进来"，而旧版本只是把这个节点
+    /// 变成空串（同样是错，但方向不同）。这里两个都要挡住：既不能整篇失败，也不能丢字。
+    #[test]
+    fn a_lone_ampersand_survives_without_failing_the_import() {
+        let text = concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+            "<en-export export-date=\"20240101T000000Z\" version=\"6.5.1\">\n",
+            "<note><title>Tom & Jerry</title>\n",
+            "<content><![CDATA[<?xml version=\"1.0\"?><en-note><div>a & b</div></en-note>]]></content>\n",
+            "</note>\n",
+            "<note><title>第二条</title>",
+            "<content><![CDATA[<?xml version=\"1.0\"?><en-note><div>还在</div></en-note>]]></content></note>\n",
+            "</en-export>",
+        );
+        let f = parse_enex(&text, "amp").expect("一个裸 & 不该让整份 .enex 导入失败");
+        assert_eq!(f.notes.len(), 2, "后面的笔记不许被前面那个字符带走");
+        assert_eq!(
+            f.notes[0].title, "Tom & Jerry",
+            "裸 & 要原样留着，不是变成空"
+        );
+        assert_eq!(plain_text(&f.notes[0].doc), "a & b");
     }
 
     #[test]

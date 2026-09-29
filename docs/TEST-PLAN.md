@@ -679,3 +679,18 @@ BB-02 抓到过一个只有黑盒才能抓到的缺陷（详见 CHANGELOG）：*
 | IMP-06 | 新格式不许绕开任何一道入口闸门（8 MiB 体积上限对 `.enex` 同样生效） | `enex_goes_through_the_same_size_gate_as_other_sources` | L3 | P1 | **已实现并通过**。⚠️ 代价：真实带图导出可能超限 → 表现为一条看得见的失败（不是静默截断）；要支持大文件得改成按 `<note>` 流式读盘，动 `ImportSource` 形状 → §9 |
 | IMP-07 | 从**命令面**进来（`import_files`）而不是只有库内 API；空路径列表要报错而不是"成功导入 0 条" | `notera-host/tests/enex_import.rs::import_files_command_...` | L3 | P1 | **已实现并通过** |
 | IMP-08 | 浏览器里点得到、看得见 notices | `scripts/verify-app.mjs` 第 35 步（重载到桌面视口 → 点侧栏「设置」→ 填 `.enex` 路径 → 点「导入这个文件」→ 读屏幕上的报告与逐条说明 → 回列表确认两条笔记真在） | L4 | P1 | **已实现并通过**（36/36）。变异自证：把 dispatch 里的命令名改成 `import_files_MUTATED` 重新起桥 → 这一步红，并且"零失败请求"那步点名 `POST /cmd/import_files → HTTP 400`。**踩到的坑记一笔**：清空数据目录后必须等桥 `{"ok":true}` 再跑，用固定 `sleep 8` 会出现 4 条与改动无关的红（"刷新后笔记消失"那种），差点被误判成产品回归 |
+
+## XML 解析行为锚（quick-xml 0.37.5 → 0.42，2026-09-29）
+
+这三族锚不是为了覆盖功能，是为了**换 XML 解析库版本时能看见语义漂移**。
+0.42 的实测漂移不是编译错误而是**静默少字符**：解析器不再顺手反转义文本，
+`&amp;` / `&#65;` 单独成 `Event::GeneralRef`。只接 `Event::Text` 的话，
+导入的正文变成"粗  斜  尖"、租约路径变成 `/x/locks/ab.json`（别人的租约就此看不见）。
+
+| ID | 判据 | 落在哪 | 层级 | 优先级 | 状态 |
+|---|---|---|---|---|---|
+| XML-01 | `.enex` 两遍解析里，实体引用都必须解成字符：标题（第一遍）与 CDATA 内 ENML（第二遍）各自钉住，且不许解过了头 | `notera-importer::enex::tests::entity_references_are_decoded_in_both_parse_passes` | L1 | P1 | **已实现并通过**。升级前先在原版本上跑绿，升级后仍绿。变异自证两个方向各一次：摘掉第二遍那一格 → 红在 `粗  斜  尖`；摘掉第一遍那一格 → 红在标题那句（M66 / M67）。这两条**都是红的样子不同**，所以两遍各自有独立证据 |
+| XML-02 | 一个没分号的裸 `&`（`Tom & Jerry` 这种手写/第三方导出）既不许让整份 `.enex` 导入失败，也不许把那个文本节点变成空串 | `notera-importer::enex::tests::a_lone_ampersand_survives_without_failing_the_import`（断言 2 条笔记都在、标题原样、正文原样） | L1 | P1 | **已实现并通过**。这条钉的是 `allow_dangling_amp = true` 那一格 + 一条**旧行为缺陷**：旧代码遇到解不开的引用是 `unescape().unwrap_or_default()` ⇒ 整个节点变空（0.37.5 上这条是红的）。变异自证 M68：摘掉那一行 → 红，且其余 55 条不受影响（判据是特异的） |
+| XML-03 | PROPFIND 里的 `href` 必须①按局部名认（换前缀/大小写都算）②引用解成字符③**遇到解不开的引用也要留在列表里** | `notera-webdav::lease::parse_pins` 三条（`hrefs_are_matched_by_local_name_not_by_prefix`、`entity_references_inside_href_are_decoded`、`an_unrecognized_reference_keeps_the_lease`） | L1 | P0 | **已实现并通过**。第三条钉的是方向：这一层"少看一条租约"的后果是两台设备同时写同一条笔记，所以宁可路径里留着 `&nbsp;`。变异自证：摘掉引用那一格 → 两条红（路径被拆成 `/x/locks/ab.json`）；把"解不开就丢"（旧行为）写回去 → 第三条红在 `["", ""]`；摘掉 `allow_dangling_amp` → 第三条红在"第二条租约整个消失"（M69 / M70 / M71） |
+| XML-04 | 测试服务器读 PROPPATCH 属性值必须是**原文**（不替调用方反转义），且一个裸 `&` 不许让整条请求解析失败 | `notera-test-webdav::xml::tests::property_values_are_read_verbatim_and_a_lone_amp_does_not_kill_the_request` | L1 | P2 | **已实现并通过**。两个方向都验过会红：摘掉 `allow_dangling_amp` → 值变空串；顺手把值反转义 → `x &amp; y` 变 `x & y`（M73 / M74b）。**两条踩坑记录**：第一次变异改的是 PROPFIND 那个 reader，测试照常绿 —— 改错了地方，不算证据；而反转义那一版第一版夹具里同时带着裸 `&`，`unescape` 对它报错后回落到原文，把 `&amp;` 那半也一起放过了 —— 判据被自己的夹具糊过去，补了一条不含裸 `&` 的属性才有区分度 |
+

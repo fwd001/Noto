@@ -23,8 +23,8 @@ pub enum PropPatch {
     Remove(Vec<String>),
 }
 
-pub fn local_name(raw: &[u8]) -> String {
-    let s = String::from_utf8_lossy(raw);
+pub fn local_name(raw: &str) -> String {
+    let s = raw;
     match s.rsplit_once(':') {
         Some((_, l)) => l.to_string(),
         None => s.to_string(),
@@ -37,6 +37,10 @@ pub fn parse_propfind(body: &[u8]) -> PropFind {
         return PropFind::Empty;
     }
     let mut reader = Reader::from_reader(body);
+    // 0.42 默认对没有分号的裸 `&` 整篇报错；旧版本是把原文交给上层。
+    // 这台测试服务器不许因为解析器变严而改变它对请求的反应（那会把"客户端发了什么"
+    // 和"注入器怎么解读"两件事混在一起，故障注入的结论就不干净了）。
+    reader.config_mut().allow_dangling_amp = true;
     let mut props = Vec::new();
     let mut kind = PropFind::Empty;
     // depth 记录在头部，不在 body；这里只取 propfind 的子元素。
@@ -51,7 +55,11 @@ pub fn parse_propfind(body: &[u8]) -> PropFind {
                         in_propfind = true;
                         for a in e.attributes().flatten() {
                             if local_name(a.key.as_ref()) == "depth" {
-                                depth_attr = Some(String::from_utf8_lossy(&a.value).into_owned());
+                                depth_attr = Some(
+                                    a.normalized_value(quick_xml::XmlVersion::default())
+                                        .map(|c| c.into_owned())
+                                        .unwrap_or_default(),
+                                );
                             }
                         }
                     }
@@ -101,6 +109,7 @@ pub fn parse_proppatch(body: &[u8]) -> Vec<PropPatch> {
         return out;
     }
     let mut reader = Reader::from_reader(body);
+    reader.config_mut().allow_dangling_amp = true;
     let mut mode: Option<&'static str> = None;
     let mut set: Vec<(String, String)> = Vec::new();
     let mut remove: Vec<String> = Vec::new();
@@ -123,7 +132,10 @@ pub fn parse_proppatch(body: &[u8]) -> Vec<PropPatch> {
                             }
                             Ok(Event::Start(e2)) => {
                                 let n = local_name(e2.name().as_ref());
-                                let text = reader.read_text(e2.name()).unwrap_or_default();
+                                let text = reader
+                                    .read_text(e2.name())
+                                    .map(|t| t.into_inner().into_owned())
+                                    .unwrap_or_default();
                                 let text = text.trim().to_string();
                                 match mode {
                                     Some("set") => set.push((n, text)),
@@ -372,5 +384,23 @@ mod tests {
     #[test]
     fn escapes_bad_bytes() {
         assert_eq!(esc("<a&\">"), "&lt;a&amp;&quot;&gt;");
+    }
+
+    /// 注入器读 PROPPATCH 属性值是**原文**，而且一个没分号的裸 `&` 不许让整条请求失败。
+    ///
+    /// 这条是给 quick-xml 换版本用的对照组：0.42 默认对裸 `&` 整篇报错，而旧版本是把原文
+    /// 交给上层；这里两边都要钉住 —— 反向的变异（顺手把值反转义了）同样要红，
+    /// 否则"客户端到底发了什么字节"这件事就没证据了。
+    #[test]
+    fn property_values_are_read_verbatim_and_a_lone_amp_does_not_kill_the_request() {
+        let body = br#"<?xml version="1.0"?><D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><author>Tom & Jerry &amp; co</author><note-tag>x &amp; y</note-tag></D:prop></D:set></D:propertyupdate>"#;
+        assert_eq!(
+            parse_proppatch(body),
+            vec![PropPatch::Set(vec![
+                ("author".to_string(), "Tom & Jerry &amp; co".to_string()),
+                ("note-tag".to_string(), "x &amp; y".to_string()),
+            ])],
+            "值必须是原文（裸 & 留着、&amp; 也不解），且这条请求不许解析失败"
+        );
     }
 }

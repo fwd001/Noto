@@ -2727,7 +2727,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "notera-cli"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "clap",
@@ -2746,7 +2746,7 @@ dependencies = [
 
 [[package]]
 name = "notera-config"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "notera-core",
  "serde",
@@ -2757,7 +2757,7 @@ dependencies = [
 
 [[package]]
 name = "notera-core"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "chrono",
  "serde",
@@ -2770,7 +2770,7 @@ dependencies = [
 
 [[package]]
 name = "notera-crypto"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "aes-gcm-siv",
  "argon2",
@@ -2787,7 +2787,7 @@ dependencies = [
 
 [[package]]
 name = "notera-desktop"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "notera-core",
  "notera-host",
@@ -2805,7 +2805,7 @@ dependencies = [
 
 [[package]]
 name = "notera-host"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "notera-config",
@@ -2830,7 +2830,7 @@ dependencies = [
 
 [[package]]
 name = "notera-importer"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "base64 0.22.1",
  "notera-core",
@@ -2839,7 +2839,7 @@ dependencies = [
  "notera-store",
  "notera-sync",
  "notera-test-webdav",
- "quick-xml 0.37.5",
+ "quick-xml",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -2849,7 +2849,7 @@ dependencies = [
 
 [[package]]
 name = "notera-net"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2865,7 +2865,7 @@ dependencies = [
 
 [[package]]
 name = "notera-richtext"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "notera-core",
  "serde",
@@ -2876,7 +2876,7 @@ dependencies = [
 
 [[package]]
 name = "notera-store"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "chrono",
  "notera-core",
@@ -2892,7 +2892,7 @@ dependencies = [
 
 [[package]]
 name = "notera-sync"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "notera-core",
@@ -2904,13 +2904,13 @@ dependencies = [
 
 [[package]]
 name = "notera-test-webdav"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "bytes",
  "notera-core",
  "notera-test-webdav",
  "percent-encoding",
- "quick-xml 0.37.5",
+ "quick-xml",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -2921,7 +2921,7 @@ dependencies = [
 
 [[package]]
 name = "notera-webdav"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2931,7 +2931,7 @@ dependencies = [
  "notera-net",
  "notera-sync",
  "notera-test-webdav",
- "quick-xml 0.37.5",
+ "quick-xml",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -3416,7 +3416,7 @@ checksum = "2896bade328c13f7042a297ea5ac5b0951f6cf989dea5f32c2fd98da398195cb"
 dependencies = [
  "base64 0.23.1",
  "indexmap 2.14.2",
- "quick-xml 0.42.0",
+ "quick-xml",
  "serde",
  "time",
 ]
@@ -3577,15 +3577,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "quick-xml"
-version = "0.37.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "331e97a1af0bf59823e6eadffe373d7b27f485be8748f71471c662c1f269b7fb"
-dependencies = [
- "memchr",
 ]
 
 [[package]]

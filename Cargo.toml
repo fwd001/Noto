@@ -18,7 +18,7 @@ members = [
 exclude = ["tools/feasibility-probe"]
 
 [workspace.package]
-version = "0.0.31"
+version = "0.0.32"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
@@ -57,7 +57,21 @@ clap = { version = "4", features = ["derive"] }
 async-trait = "0.1"
 dashmap = "6"
 bytes = "1"
-quick-xml = "0.37"
+# 0.42：OSV/RustSec 对 0.37.5 报了两条可用性中断（RUSTSEC-2026-0194 重复属性名的二次方耗时、
+# RUSTSEC-2026-0195 `NsReader` 的命名空间声明无界增长），修于 0.41.0。我们这处用法是读用户
+# 丢进来的 .enex 与服务器返回的 PROPFIND —— 都是"别人给的字节"，所以这不是"顺手升依赖"。
+# 选 0.42 而不是 0.41：tauri → plist 已经在用 0.42，合流之后锁里少一个版本。
+# 换版本前先钉了三条行为锚（`notera-webdav/src/lease.rs::parse_pins` 前两条 +
+# `notera-importer/src/enex.rs::entity_references_are_decoded_in_both_parse_passes`），
+# 它们在 0.37.5 上全绿；升级之后必须仍然全绿，否则就是解析语义漂了，不是"编译过了就算对"。
+# 实测真的漂了：0.42 起解析器**不再顺手反转义文本**，`&amp;` / `&#65;` 单独成
+# `Event::GeneralRef`。只接 `Event::Text` 的后果不是报错，是**静默少字符**——
+# 导入的正文变成"粗  斜  尖"，租约路径变成 `/x/locks/ab.json`（别人的租约就此看不见）。
+# 三个消费点各自补了引用这一格，并各留了一条能红的锚（变异编号见 CHANGELOG 0.0.32）。
+# 另有三条新锚（lease 的第三条、enex 的裸 &、注入器的原文读值）钉的是**这次顺手改掉的
+# 两个旧行为**：0.37 上它们是红的 —— 旧代码遇到解不开的引用会把整条租约丢掉、
+# 把整个文本节点变成空串，两处都是"看不见的丢失"。
+quick-xml = "0.42"
 percent-encoding = "2"
 tempfile = "3"
 
