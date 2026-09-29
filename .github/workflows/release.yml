@@ -169,17 +169,48 @@ jobs:
           rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
           rustc -Vv
 
-      # JDK 17 是 AGP 8 的硬要求；NDK 由 sdkmanager 装（本机没有 JDK/SDK/NDK，
-      # 所以这一格**只能在 CI 上验** —— CI-CD §环境与网络限制里 Android 那行写的就是这个）。
+      # JDK 17 是 AGP 8 的硬要求。
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      # **为什么不用 android-actions/setup-android**：第一次跑就红在这一步，而未认证读不到
+      # 日志正文（`/actions/jobs/{id}/logs` = 403，见 CI-CD §环境与网络限制）—— 那等于只能靠猜改代码，
+      # 而猜出来的修法本身又是下一个假绿的来源。GitHub 的 ubuntu-22.04 runner **本身就带 Android SDK**，
+      # 所以这里只用自带的那份：NDK 版本从目录里读，读不到再用 sdkmanager 装，
+      # 并且把"我看到了什么"写成**产物名字**（产物名在未认证的 `/actions/runs/{id}/artifacts` 里可读）
+      # —— 这是当前权限下唯一能把环境事实递出来的通道。
+      - name: 定位 SDK 与 NDK（自带优先，缺了就装）
+        run: |
+          set -euo pipefail
+          : "${ANDROID_HOME:?runner 没给 ANDROID_HOME}"
+          echo "SDK=$ANDROID_HOME"
+          ndk=""
+          if [ -d "$ANDROID_HOME/ndk" ]; then ndk=$(ls -1 "$ANDROID_HOME/ndk" | tail -1 || true); fi
+          if [ -z "$ndk" ]; then
+            yes | sdkmanager --licenses > /tmp/lic.log 2>&1 || true
+            if sdkmanager --install "ndk;26.1.10909125" "cmake;3.22.1" > /tmp/ndk.log 2>&1; then
+              ndk=26.1.10909125
+            else
+              tail -5 /tmp/ndk.log
+              echo "sdkmanager 装 NDK 失败，末行摘要=$(tail -1 /tmp/ndk.log | tr -dc '[:print:]' | cut -c1-60)"
+              mkdir -p /tmp/diag && echo "no-ndk" > /tmp/diag/note.txt
+              cp /tmp/ndk.log /tmp/diag/ndk.log || true
+            fi
+          fi
+          test -n "$ndk"
+          echo "NDK_VER=$ndk" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$ndk" >> "$GITHUB_ENV"
+          echo "用 NDK：$ndk"
 
-      - name: 安装 NDK
-        run: sdkmanager --install "ndk;26.1.10909125" "cmake;3.22.1" | tail -3
+      - name: 装不上时把证据递出来（产物名就是摘要）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-sdk-failure-${{ needs.meta.outputs.version }}
+          path: /tmp/diag/
+          if-no-files-found: ignore
 
       - name: 准备 pnpm（版本取自 apps/desktop/package.json 的 packageManager）
         uses: pnpm/action-setup@v4
@@ -205,9 +236,7 @@ jobs:
         working-directory: apps/desktop
         run: |
           set -euo pipefail
-          # NDK_HOME 指到**具体版本目录**（Tauri 认这个变量；给 ANDROID_HOME 根目录它会报找不到 NDK）。
-          export NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
-          test -d "$NDK_HOME" || { echo "NDK 没装上：$NDK_HOME"; exit 1; }
+          test -d "$NDK_HOME" || { echo "NDK_HOME 指错了：$NDK_HOME"; exit 1; }
           pnpm exec tauri android init --config ../mobile/src-tauri/tauri.conf.json
           ls -1 ../mobile/src-tauri/gen/android 2>/dev/null || ls -1 src-tauri/gen/android
 
@@ -215,7 +244,6 @@ jobs:
         working-directory: apps/desktop
         run: |
           set -euo pipefail
-          export NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
           pnpm exec tauri android build --config ../mobile/src-tauri/tauri.conf.json --apk --debug --target aarch64
 
       - name: 收集产物
