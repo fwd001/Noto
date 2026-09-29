@@ -335,6 +335,10 @@ impl Store {
                     remote_rev_to: Some(env.rev),
                 };
                 self.commit_edit(tx, &cur, &edit, now)?;
+                // 对面那一版一落地，本机那些还没走完的上写待办就**推不出去了**（I2 会拒旧 rev），
+                // 却每轮重试一遍 —— 用户那边是"待处理任务永远不掉"。结掉它。
+                // 两台真设备实测：不结这一步，同内容收敛之后 B 仍是 `dirty=0 / outbox=1`。
+                rows::supersede_up_to(tx, now, EntityKind::Note, &env.id, env.rev)?;
                 rep.applied += 1;
                 rep.notes_written += 1;
             }
@@ -452,6 +456,9 @@ impl Store {
                         env.rev.get() as i64, hash, now, device, env.deleted_at
                     ],
                 )?;
+                // 同笔记那一支：对面那一版落地后，本机未完成的文件夹上写待办再也推不出去，
+                // 结掉才不会把"待处理任务"留成永久。
+                rows::supersede_up_to(tx, now, EntityKind::Folder, &env.id, env.rev)?;
             }
         }
         rep.applied += 1;

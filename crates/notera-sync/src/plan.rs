@@ -230,9 +230,27 @@ fn both_present(l: &LocalView, r: &RemoteView) -> Decision {
         _ => false,
     };
     if same {
+        // **`NoOp` 不是收敛。** §1.2 这句承诺的是"两侧最终内容相同就收敛"，而给 `NoOp` 的结果是
+        // 谁也不动这一行：两侧都还脏着。两台真设备实测（`notera-host/tests/same_content_convergence.rs`，
+        // 先跑是红的）—— A 连改两次（rev 3）、B 一次改成同一份（rev 2），六轮追平之后 B 仍然
+        // `dirty_notes=1 / outbox_pending=1`，也就是**设置页那句"待处理任务"永远不掉**，而且每轮白跑一次。
+        // 所以按 rev 高低退回两条已经验证过的路：高的一边把记录公告出去（Push），
+        // 低的一边把对面那一版拉下来（Pull —— 正文哈希相同，拉下来改变的只是 rev 与标量字段）。
+        // 两侧 rev 真相等时才是无事可做（那一条由引擎的 settle 收尾，见 sync/lib.rs 那段"崩在公告与结清之间"）。
+        //
+        // 为什么**不**用"直接标成已同步"来收这一行：`note.content_hash` 只覆盖正文，
+        // **不含 `pinned` / `color` / `folder_id`**（它们在打包时才加进 payload）。
+        // 正文相同而标量不同的那一格，"不上传就算完成"会**静默丢掉那条标量变更**。
+        let action = if l.rev > r.rev {
+            Action::Push
+        } else if l.rev < r.rev {
+            Action::Pull
+        } else {
+            Action::NoOp
+        };
         return Decision {
             key: l.key(),
-            action: Action::NoOp,
+            action,
             rule: "P7",
         };
     }
@@ -385,10 +403,33 @@ mod tests {
 
     #[test]
     fn p7_identical_content_is_not_a_conflict() {
-        // 两台设备各自打开又保存：rev 都变了，内容一样 → 收敛，不产冲突
+        // 两台设备各自打开又保存：rev 都变了，内容一样 → **不许发冲突卡片**。
+        // 这一条原来还顺带断言了 `NoOp`，而那个断言是错的（它让这一行永远留在待同步，
+        // 两台真设备实测 `dirty=1 / outbox=1`）—— 现在断言"高的一边推、低的一边拉"，
+        // 而"不许是冲突"这半边承诺一点没放松。
         let d = decide(Some(&l(7, 5, "same")), Some(&r(8, "same")));
-        assert_eq!(d.action, Action::NoOp, "内容相同必须判收敛");
+        assert_eq!(d.action, Action::Pull, "内容相同但不许是冲突，也不许是不动");
         assert_eq!(d.rule, "P7");
+        assert_ne!(
+            d.action,
+            Action::Conflict(ConflictKind::UpdateUpdate),
+            "同内容永远不该长成一张二选一的卡片"
+        );
+
+        // 反方向也要有数：本地那一版 rev 更高（还没公告出去）→ 该推，不是该拉。
+        let e = decide(Some(&l(9, 5, "same")), Some(&r(8, "same")));
+        assert_eq!(
+            e.action,
+            Action::Push,
+            "本地更高的一版不许被当成'已经同步过'"
+        );
+        // 两侧 rev 真相等才是无事可做。
+        let f = decide(Some(&l(8, 5, "same")), Some(&r(8, "same")));
+        assert_eq!(
+            f.action,
+            Action::NoOp,
+            "rev 相同、内容相同 —— 这一格才是真的没有事"
+        );
     }
 
     #[test]
@@ -410,8 +451,9 @@ mod tests {
         let d = decide(Some(&local), Some(&remote));
         assert_eq!(
             (d.action, d.rule),
-            (Action::NoOp, "P7"),
-            "短哈希与全哈希同值必须算收敛"
+            (Action::Pull, "P7"),
+            "短哈希与全哈希同值必须算收敛 —— 而收敛是**有动作的**收敛（本地 rev 低 → 拉），\
+             不是 `NoOp` 留一行永远待同步"
         );
 
         // 而真的不一样时不许因为"前 12 位相同"就收敛掉：短哈希只用于同一版判定，

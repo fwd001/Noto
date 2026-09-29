@@ -289,7 +289,7 @@ idle
 | P4 | `rev==sync_rev` | `R.rev==sync_rev` | 已收敛 | NoOp |
 | P5 | `rev!=sync_rev` | `R.rev==sync_rev` | 仅本地改 | `Push` |
 | P6 | `rev==sync_rev` | `R.rev!=sync_rev` | 仅远端改 | `Pull` |
-| P7 | 两侧都改 | `H(local)==H(remote)` | 内容相同（重复保存/回环） | 收敛：`rev=R.rev`，不产生冲突，不二次上传 |
+| P7 | 两侧都改 | `H(local)==H(remote)` | 内容相同（重复保存/回环） | 收敛，**不产生冲突**：rev 低的一边拉（`rev := R.rev`）、rev 高的一边推（那一版服务器还没收到，推它不算"二次上传"），rev 相等才 `NoOp`；对面那一版落地后，本机该实体未走完的上写待办标 `superseded`（I2 保证它们再也推不出去了）。判据 SY-CONV-01（两台真设备，实测过不结清就是"待处理任务永远不掉"） |
 | P8 | 两侧都改 | `H` 不同 | **真冲突** | 交 CONFLICT-RESOLUTION.md §3 |
 | P9 | 本地 `deleted_at!=—` 且脏 | 远端有 | 本地删除待传播 | `Push`（信封带 `deleted_at`） |
 | P10 | 本地有 | 远端 `deleted_at!=—` | 远端删除 | 本地软删（若本地更脏 → P11） |

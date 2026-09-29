@@ -411,6 +411,42 @@ pub(crate) fn supersede_pending(
     Ok(())
 }
 
+/// 对面那一版落地之后，本机**还没走完的上写动作**已经没有意义了。
+///
+/// 为什么这是必然的而不是"大概"：`apply` 那一支被 I2 挡住了（`env.rev ≥` 本地 head），
+/// 而待办的 `payload_rev` 永远 ≤ 它入队那一刻的 head —— 所以对面那一版一落地，这些待办
+/// **再也推不出去**（拿旧 rev 去 PUT 会被对面拒），却每轮都被重试一遍。用户那边看见的是
+/// 设置页"待处理任务"永远不掉（§18 要的正是这句话诚实）。
+///
+/// 只动 `op='up'`：删除/永久删除的动作各有自己的收口对账；也**不动 `failed`**
+/// （与 [`Store::outbox_settle`] 同一条规则 —— 失败的待办只有它自己那条路能结）。
+pub(crate) fn supersede_up_to(
+    conn: &Connection,
+    now: &str,
+    kind: EntityKind,
+    id: &EntityId,
+    rev: Rev,
+) -> Result<(), StoreError> {
+    // `op` 与 `entity_type` 都走各自的 `as_str()` / `kind_tag()` 传参，**不写字面量**：
+    // 这一列的词汇是 "upsert" 而不是 "up" —— 我第一版写了 `op = 'up'`，症状是
+    // "匹配 0 行、待办静静留着、其余一切照绿"，只有把 outbox 按状态打出来才看得见。
+    conn.execute(
+        "UPDATE sync_operations
+            SET state = 'superseded', updated_at = ?5
+          WHERE entity_type = ?1 AND entity_id = ?2 AND op = ?3
+            AND state IN ('pending','inflight')
+            AND (payload_rev IS NULL OR payload_rev <= ?4)",
+        params![
+            kind_tag(kind),
+            id.as_str(),
+            OpKind::Upsert.as_str(),
+            rev.get() as i64,
+            now
+        ],
+    )?;
+    Ok(())
+}
+
 // -------------------------------------------------------------- revisions --
 
 // 形参就是 `note_revisions` 的列：包一层结构体不会少一个字段，只会多一处搬运。

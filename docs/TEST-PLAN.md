@@ -706,4 +706,11 @@ BB-02 抓到过一个只有黑盒才能抓到的缺陷（详见 CHANGELOG）：*
 | CY-01 | 两台真设备 + 真 TCP WebDAV：A 把甲移到乙下面、B 把乙移到甲下面，各自追平之后 —— **两台盘上的父子关系都不许成环**；子树查询必须能返回且把两个子夹都算进来；追平之后本机移动文件夹仍要可用 | `notera-host/tests/folder_cycle.rs::two_devices_moving_two_folders_into_each_other_never_create_a_cycle`（环的判定不借道被测的那条 CTE，而是自己在内存里沿 parent 走并记 visited —— 否则"读侧也一起坏了"会被当成通过） | L3 | P0 | **先写出来是红的**：未修时第一次跑就红在"A 这台设备被同步写出了一个文件夹环"（0.3 s，不靠超时）。修法是 `apply_folder` 认对面那一版的**其余字段与 rev**、唯独**不写那个会成环的父**（保留本机现在的父），于是这一行照样 settle、不每轮重推。变异自证 **M75**：把那一支守卫短路掉 → 同一条红回原处。判据故意含"能返回"那一句：只断言"没有环"的话，读侧那条不收敛的 CTE 就没人守 |
 | CY-02 | 库上**已经**有环（老版本写坏的现场）时，子树查询不许卡死，也不许把错抛给界面 | `notera-store/tests/folders_and_fk.rs::a_folder_cycle_already_on_disk_never_eats_the_subtree_query` —— 环是直接改表搓出来的（产品写入路径现在已经会拒绝，模拟的正是旧版本留下的库），查询放进**线程 + 5 s 超时**里收 | L1 | P0 | **已实现并通过**。钉的是 `descendant_ids` 用 `UNION`（按 id 去重）而不是 `UNION ALL`。变异自证 **M76**：改回 `UNION ALL` → 这条在 5.11 s 处**红**（红话就是"这就是界面上的'点了没反应'"）；**为什么必须放线程里收**：直接在测试线程调，卡死的实现会把整个测试进程一起挂住 —— 那就不是判据而是超时。还原 → 该文件 8/8 全绿 |
 
+## 同内容收敛（§1.2，2026-09-29）
+
+| ID | 判据 | 落在哪 | 层级 | 优先级 | 状态 |
+|---|---|---|---|---|---|
+| SY-CONV-01 | 两台真设备把同一篇笔记各自改成**同一份内容**（A 连改两次 rev 3、B 改一次 rev 2）→ 不许发冲突卡片，且**追平几轮之后本机必须没有脏行、没有待发操作**（`rev == sync_rev`），否则设置页那句"待处理任务"永远不掉 | `notera-host/tests/same_content_convergence.rs::identical_final_content_on_both_sides_converges_and_leaves_nothing_pending`；规划层另两条：`plan.rs::p7_identical_content_is_not_a_conflict`（本地低 → Pull、本地高 → Push、rev 相等 → NoOp 三种形状都有数）、`p7_converges_with_the_hash_shapes_production_actually_uses` | L3+L1 | P1 | **先写出来是红的**：未修时六轮之后仍 `dirty_notes=1 / outbox_pending=1`（这条是拿真设备**问系统**问出来的，不是从代码推的 —— 清扫报告给的是推断，采信之前先做实验）。修法是 P7 按 rev 高低退回 Push/Pull，外加"对面那一版落地后结掉本机未走完的上写待办"。变异自证 **M77**（P7 退回 `NoOp` → 红在 `dirty=1 outbox=1`）与 **M78**（去掉那一支结清 → 红在 `dirty=0 outbox=1`）：**两种红话不同，所以两半各自有独立证据**。失败消息故意把 outbox 按状态拆开发（`Pending=… Inflight=… Failed=…`）—— 就是这么发现我自己写的 `op = 'up'`（真值 `'upsert'`）匹配了 0 行 |
+
+
 
