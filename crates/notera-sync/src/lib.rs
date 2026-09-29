@@ -457,12 +457,16 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 let backlog = cached
                     .as_ref()
                     .is_some_and(|m| self.local.seq_applied() < m.seq);
-                let dirty = self
+                // "本轮有没有活"看的不是"有没有脏行"：`local_views` 已经把"本机这一行干净、
+                // 而持久远端视图越过了本机确认点"的那些行一起补进来了 —— 它们不脏，却必须进
+                // 计划（对面的删除正是落在那样一行上，见 `Store::remote_moved_entities`）。
+                // 清单 304 因此不等于"无事可做"。
+                let local_has_work = self
                     .local
                     .local_views()
-                    .map(|v| v.iter().any(|l| l.dirty()))
+                    .map(|v| !v.is_empty())
                     .unwrap_or(false);
-                if !dirty && !backlog {
+                if !local_has_work && !backlog {
                     st.requests += 1;
                     return (st, vec![SyncEvent::Completed(RoundOutcome::NoOp)]);
                 }
@@ -830,8 +834,9 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                         //   2. 对面那台的编辑在本机不存在，用户按"用服务器那一版"替换是个空操作；
                         //   3. 最坏的一条：本机脏 head 还在，下一轮它带着更高的 rev 推上去，
                         //      把别人已确认的那一份**静默盖掉**。
-                        // 只有 UpdateUpdate 走这条路：删除 vs 修改（P11）该保留哪一边由用户决定，
-                        // 引擎不许替他选。取不到就照旧留卡片，下一轮再试。
+                        // 只有 UpdateUpdate 由**引擎**采纳：删除 vs 修改（P11/P20）该保留哪一边由用户
+                        // 决定，引擎不许替他选 —— 那两类卡片只登记载荷（见下面那一格）。取不到就照旧
+                        // 留卡片，下一轮再试。
                         if matches!(ck, ConflictKind::UpdateUpdate)
                             && l.kind == "n"
                             && st.requests < self.cfg.round_request_cap
@@ -892,7 +897,14 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             }
         }
         if !tombstone_ops.is_empty() {
-            let _ = self.local.apply(tombstone_ops);
+            // ADR-0021 D3 的同一个规矩也用在这一格：对面那条删除被**本机**拒收时不许无声。
+            // 这里以前是 `let _ =`，等于把"远端说删了、本机拒收、于是两台都不知道"这一整类
+            // 形状藏在看不见的地方。判据是引擎那侧的注入测试
+            // `a_rejected_remote_delete_is_counted_and_not_claimed_as_applied`。
+            if let Err(e) = self.local.apply(tombstone_ops) {
+                st.rejections += 1;
+                st.last_rejection = Some(e.to_string());
+            }
         }
 
         // ⑥ CAS 提交清单（本轮最后一步 —— R2）

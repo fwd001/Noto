@@ -318,6 +318,32 @@ impl Store {
         })
     }
 
+    /// P20「仍然删除」的那一半：本机这条是**已确认的删除**（`rev == sync_rev` 且带 `deleted_at`），
+    /// 而观测到的远端那一版更活（`remote_rev > rev`）—— 用户按「用我这一版」要的结果是删除赢，
+    /// 所以把墓碑抬到 `max(本地, 观测远端)+1` 重新公告。不抬号的形状是：服务器停在对面那一版，
+    /// 本机这一行"账上干净、实际与远端不一致"，卡片下一轮又算出来（判据 P20-* 钉的就是这个）。
+    /// 只认"干净墓碑 + 远端更活"，其它形状一律不动（`None`）—— 内容一个字都不改。
+    pub fn reassert_confirmed_delete(&self, id: &EntityId) -> Result<Option<Note>, StoreError> {
+        self.write_tx(|tx, now| {
+            let cur = Self::load_cur(tx, id)?;
+            let deleted_at = match cur.note.deleted_at.clone() {
+                Some(t) => t,
+                None => return Ok(None),
+            };
+            if cur.note.rev != cur.note.sync_rev || cur.note.remote_rev <= cur.note.rev {
+                return Ok(None);
+            }
+            let bumped = next_rev(cur.note.rev, cur.note.remote_rev);
+            let edit = Edit {
+                deleted_at: Some(Some(deleted_at)),
+                enqueue: true,
+                force_rev: Some(bumped),
+                ..Default::default()
+            };
+            Ok(Some(self.commit_edit(tx, &cur, &edit, now)?))
+        })
+    }
+
     pub fn set_note_folder(&self, id: &EntityId, folder: &EntityId) -> Result<Note, StoreError> {
         let target = folder.clone();
         self.write_tx(|tx, now| {

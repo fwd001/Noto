@@ -193,6 +193,9 @@ struct FakeLocal {
     /// 注入用：让本机对 `Upsert` **拒收**（真实世界里对应 `apply` 的"同 rev 不同内容"/I6/I2 那道闸门）。
     /// ADR-0021 D3 要验的正是"拒绝有没有去处"，所以这里必须能造出一次真的拒绝。
     reject_upserts: Arc<AtomicBool>,
+    /// 注入用：让本机对**远端删除的落库**（`Tombstone`）拒收。引擎里那一处以前是 `let _ =`，
+    /// 这条判据钉的就是"拒绝到底有没有去处"（ADR-0021 D3 的最后一格）。
+    reject_tombstones: Arc<AtomicBool>,
 }
 
 impl LocalPort for FakeLocal {
@@ -237,6 +240,13 @@ impl LocalPort for FakeLocal {
         {
             return Err(LocalError::Storage(
                 "注入：本机拒收这一版（同 rev 不同内容）".into(),
+            ));
+        }
+        if self.reject_tombstones.load(Ordering::SeqCst)
+            && ops.iter().any(|o| matches!(o, ApplyOp::Tombstone { .. }))
+        {
+            return Err(LocalError::Storage(
+                "注入：本机不接受这条删除（那一行在删除之后又被编辑过）".into(),
             ));
         }
         for o in &ops {
@@ -872,5 +882,50 @@ async fn a_rejected_local_apply_is_counted_and_not_claimed_as_pulled() {
             .iter()
             .any(|o| matches!(o, ApplyOp::MarkSynced { .. })),
         "拒收的那条不许被标成已同步"
+    );
+}
+
+/// 对面那条删除被**本机**拒收时也不许无声：引擎落墓碑那一处以前是 `let _ = self.local.apply(..)`，
+/// 正好把"远端说删了、本机拒收、于是两台都不知道"藏起来（ADR-0021 D3 在这一格的同款形状）。
+#[tokio::test]
+async fn a_rejected_remote_delete_is_counted_and_not_claimed_as_applied() {
+    let l = FakeLocal::default();
+    l.reject_tombstones.store(true, Ordering::SeqCst);
+    l.locals.lock().unwrap().push(local("d1", 7, 7, "aaaa")); // 干净的一行：rev == sync_rev
+    let r = FakeRemote::default();
+    let mut m = base_manifest();
+    m.window = Window {
+        since_seq: 1,
+        complete: true,
+        entries: vec![EntryRef {
+            i: "d1".into(),
+            t: "n".into(),
+            r: 9,
+            h: "bbbbbbbbbbbb".into(),
+            s: 40,
+            d: Some("2026-09-25T00:00:00.000Z".into()),
+            p: 0,
+        }],
+    };
+    m.refresh_checksum();
+    r.seed(m);
+
+    let (st, _evs) = run(l.clone(), r, None).await;
+    assert_eq!(st.rejections, 1, "远端删除被本机拒收必须记一笔：{st:?}");
+    assert!(
+        st.last_rejection
+            .as_deref()
+            .unwrap_or_default()
+            .contains("注入"),
+        "拒绝的原因要留得下来，不然红了也没地方查：{:?}",
+        st.last_rejection
+    );
+    assert!(
+        !l.applied
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|o| matches!(o, ApplyOp::Tombstone { .. })),
+        "被拒收的删除不许算作已经落进本机"
     );
 }

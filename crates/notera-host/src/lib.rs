@@ -855,8 +855,7 @@ impl App {
             // 所以这份内容在本机修订历史里根本没有）。取不到就是 None，面板退回说明。
             remote_preview: r.remote_wire.as_deref().and_then(|w| {
                 let env: serde_json::Value = serde_json::from_str(w).ok()?;
-                let payload = env.get("payload").or_else(|| env.get("doc"))?.clone();
-                let doc = notera_richtext::parse_from_value(&payload).ok()?;
+                let doc = notera_richtext::parse_from_value(&wire_doc(&env)?).ok()?;
                 Some(notera_richtext::extract(&doc).plain_text)
             }),
             created_at: r.created_at,
@@ -912,6 +911,71 @@ impl App {
             .open_conflicts()?
             .into_iter()
             .find(|r| r.conflict_id == c.id);
+        // P20：本机这一侧的"我这一版"是**已确认的删除**（干净墓碑）。通用分支对这种形状
+        // 三颗按钮全是错的：`swap_conflict_sides` 会把对面的正文写进一条墓碑里；通用 `remote`
+        // 那一支只问"对面是不是删除态"（这里不是）→ 按下去什么都不发生，是一颗死按钮；
+        // 而 §6 那份副本恰好是唯一不该造的（造出来就是靠同步复活）。所以按形状单独收口，收完就返回。
+        if let Some(r) = row
+            .as_ref()
+            .filter(|r| matches!(r.kind, notera_core::EntityKind::Note))
+        {
+            let tomb = self
+                .inner
+                .store
+                .get_note(&r.id)
+                .map_err(CmdError::from)?
+                .filter(|n| n.deleted_at.is_some() && n.rev == n.sync_rev);
+            if let Some(local) = tomb {
+                let keeps_delete = !matches!(resolution, "remote");
+                let payload = match r.remote_wire.as_deref() {
+                    Some(w) => Some(serde_json::from_str::<serde_json::Value>(w).map_err(|e| {
+                        CmdError::of("conflict_payload_missing", true)
+                            .with(serde_json::json!({ "id": c.id, "why": e.to_string() }))
+                    })?),
+                    None => None,
+                };
+                // 「用服务器那一版」与「保留两份」都得真拿到对面那一版才能算做到；
+                // 没载荷就不关卡片 —— 下一轮 P20 会重算，用户看得见它还在那儿。
+                if !keeps_delete && payload.is_none() {
+                    return Err(CmdError::of("conflict_payload_missing", true)
+                        .with(serde_json::json!({ "id": c.id })));
+                }
+                match resolution {
+                    // 采纳对面那一版：墓碑守卫本来就只对 `adopt` 放行（那是用户按过按钮的路径）。
+                    "remote" => {
+                        let ops = [StoreApplyOp::AdoptConflict {
+                            env: payload.expect("上面已挡过"),
+                        }];
+                        self.inner
+                            .store
+                            .apply_remote(&ops)
+                            .map_err(CmdError::from)?;
+                    }
+                    // 两份都在：对面那一版另存一篇（这才配叫"两份"），本机这条继续保持删除。
+                    "kept_both" | "merged" | "manual" => {
+                        let doc = copy_doc(
+                            r.id.as_str(),
+                            &local.title,
+                            wire_doc(payload.as_ref().expect("上面已挡过"))
+                                .unwrap_or_else(|| serde_json::json!({ "v": 1, "content": [] })),
+                        );
+                        self.inner
+                            .store
+                            .create_note(&local.folder_id, doc)
+                            .map_err(CmdError::from)?;
+                        self.inner.store.reassert_confirmed_delete(&r.id)?;
+                    }
+                    // 「用我这一版」= 维持删除，并把删除重新公告出去（不抬号的话服务器会停在
+                    // 对面那一版，本机这一行"账上干净、实际没追平"，卡片每轮又算出来）。
+                    _ => {
+                        self.inner.store.reassert_confirmed_delete(&r.id)?;
+                    }
+                }
+                self.inner.store.resolve_conflict(c.id, resolution)?;
+                self.emit(BusEvent::NotesChanged { ids: vec![] });
+                return Ok(());
+            }
+        }
         if resolution == "remote" {
             if let Some(r) = row.as_ref() {
                 let remote_deleted = matches!(r.kind, notera_core::EntityKind::Note)
@@ -2846,6 +2910,29 @@ fn store_err(e: StoreError) -> LocalError {
     }
 }
 
+/// CONFLICT-RESOLUTION §6 那份"保底副本"的写法：正文照抄，顶部另起一行「原标题（本地副本）」。
+/// 两个调用点共用（卡片登记时 / P20 的「保留两份」）—— 副本是同一件东西，标题规则不许有两份。
+/// 服务器信封里那份正文的键名口径（`payload`，回落 `doc`）—— 卡片右栏与 P20 的「保留两份」
+/// 都读它，两处各写一份字面量就是本仓踩过多次的那种漂移。
+fn wire_doc(env: &serde_json::Value) -> Option<serde_json::Value> {
+    env.get("payload").or_else(|| env.get("doc")).cloned()
+}
+
+/// CONFLICT-RESOLUTION §6 那份"保底副本"的写法：正文照抄，顶部另起一行「原标题（本地副本）」。
+/// 两个调用点共用（卡片登记时 / P20 的「保留两份」）—— 副本是同一件东西，标题规则不许有两份。
+fn copy_doc(seed: &str, title: &str, mut doc: serde_json::Value) -> serde_json::Value {
+    let head = serde_json::json!({
+        "id": format!("copy-{}", &seed[..seed.len().min(8)]),
+        "type": "heading",
+        "attrs": { "level": 1 },
+        "content": [{ "text": format!("{}（本地副本）", title) }],
+    });
+    if let Some(blocks) = doc.get_mut("content").and_then(|b| b.as_array_mut()) {
+        blocks.insert(0, head);
+    }
+    doc
+}
+
 /// 账户 → 下发给 UI 的视图（host 侧映射；字符串取值与 `api/types.ts` 的联合类型同名）。
 ///
 /// `has_credential` 看的是"有没有凭据引用"，而这个引用**只在口令真的存进系统凭据之后**才写
@@ -2994,12 +3081,22 @@ impl LocalPort for HostLocalPort {
     }
     fn local_views(&self) -> Result<Vec<LocalView>, LocalError> {
         let acct = self.account_id();
-        let rows = self
+        let mut rows = self
             .0
             .store()
             .dirty_entities(&acct)
             .map_err(|e| LocalError::Storage(e.to_string()))?;
-        // P14 的输入：这张表把"用户对哪一份分歧表过态"带到计划里（键用 kind_tag 生成，
+        // 第二组输入：**本机干净、而持久远端视图已经越过本机确认点**的那些行。
+        // 少了它们，"对面删了、我这台空闲"这一格在计划里就只有远端视图 ——
+        // `decide(None, 删除)` 答的是 P2b"本地没有这一条，无事可做"，可本地确实有这一条，
+        // 于是删除永远传不过来（判据 `a_delete_reaches_a_device_that_had_nothing_pending`）。
+        rows.extend(
+            self.0
+                .store()
+                .remote_moved_entities(&acct)
+                .map_err(|e| LocalError::Storage(e.to_string()))?,
+        );
+        // P19 的输入：这张表把"用户对哪一份分歧表过态"带到计划里（键用 kind_tag 生成，
         // 与读侧同一个函数 —— 两侧各写一份字面量是本仓踩过三次的词汇漂）。
         let (decided_rows, skipped) = self
             .0
@@ -3007,7 +3104,7 @@ impl LocalPort for HostLocalPort {
             .resolved_divergences()
             .map_err(|e| LocalError::Storage(e.to_string()))?;
         if skipped > 0 {
-            tracing::warn!(skipped, "已裁决冲突里有认不出的实体行，它们不参与 P14 让路");
+            tracing::warn!(skipped, "已裁决冲突里有认不出的实体行，它们不参与 P19 让路");
         }
         let decided: std::collections::HashMap<(String, String), u64> = decided_rows
             .into_iter()
@@ -3019,6 +3116,11 @@ impl LocalPort for HostLocalPort {
                 // 是哪一种（P8/P11/P13 的判据），所以这里回查一次实体行/墓碑。
                 let (deleted_at, purged_at) = match d.why {
                     notera_store::DirtyWhy::Deleted => (self.0.delete_time(d.kind, &d.id)?, None),
+                    // 干净候选行也要回查一次：它可能正是一条已确认的删除（P20 要看出来），
+                    // 也可能是对面的活版本落在本机一行干净的记录上。
+                    notera_store::DirtyWhy::RemoteMoved => {
+                        (self.0.delete_time(d.kind, &d.id)?, None)
+                    }
                     notera_store::DirtyWhy::Purged => {
                         let t = self.0.delete_time(d.kind, &d.id)?;
                         (t.clone(), t)
@@ -3300,19 +3402,15 @@ impl LocalPort for HostLocalPort {
         }
         // CONFLICT-RESOLUTION §6：进收件箱的**同一刻**先把本地未合并版本存一份副本。
         // 用户之后无论选哪一边，这一份都不会丢 —— 副本不是提醒，是保底。
+        // **例外**：本机这一侧是"已确认的删除"（干净行 + 带 `deleted_at`，也就是 P20 那张卡片）时
+        // 不造副本。§6 的
+        // 保底管的是"本机有一份没公告出去的编辑"，而这里本机那份是**删除** —— 按同一套代码
+        // 造副本等于把用户已经确认删掉的笔记又放回正常列表（实测形状：删除那一台多出一篇
+        // 「原标题（本地副本）」）。对面那一版不会因此丢：它以对面自己的副本落在这台机器上。
         let mut copy_note_id = None;
-        if kind == EntityKind::Note {
+        if kind == EntityKind::Note && !l.confirmed_delete() {
             if let Some(n) = self.0.store().get_note(&id).map_err(store_err)? {
-                let mut doc = n.doc.clone();
-                let head = serde_json::json!({
-                    "id": format!("copy-{}", &n.id.as_str()[..8]),
-                    "type": "heading",
-                    "attrs": { "level": 1 },
-                    "content": [{ "text": format!("{}（本地副本）", n.title) }],
-                });
-                if let Some(blocks) = doc.get_mut("content").and_then(|b| b.as_array_mut()) {
-                    blocks.insert(0, head);
-                }
+                let doc = copy_doc(n.id.as_str(), &n.title, n.doc.clone());
                 match self.0.store().create_note(&n.folder_id.clone(), doc) {
                     Ok(copy) => copy_note_id = Some(copy.id),
                     // 副本失败绝不升级为"丢掉冲突记录"：冲突仍然进箱，用户仍能看到双方 rev。
@@ -3344,7 +3442,7 @@ impl LocalPort for HostLocalPort {
             conflict_id,
             note_title: title,
         });
-        // 判定行号（P8/P10/P15…）只进日志：它是排障线索，不是 UI 词汇
+        // 判定行号（P8/P10/P12…）只进日志：它是排障线索，不是 UI 词汇
         tracing::debug!(rule = d.rule, action = ?d.action, id = %l.id, conflict_id, "冲突已记账");
         Ok(())
     }

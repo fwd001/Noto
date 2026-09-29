@@ -252,6 +252,9 @@ pub enum DirtyWhy {
     Edited,
     Deleted,
     Purged,
+    /// 本机这一行是**干净**的，而持久远端视图已经越过本机确认点（`Store::remote_moved_entities`）。
+    /// 它不是"脏"，但没有它本轮计划就看不见对面的删除（见那条查询的注释）。
+    RemoteMoved,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

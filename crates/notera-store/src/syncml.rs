@@ -10,7 +10,7 @@ use crate::types::*;
 use notera_core::{EntityId, EntityKind, Rev};
 use rusqlite::{params, Connection, OptionalExtension};
 
-/// `Store::resolved_divergences` 的一行：实体 + 用户当时看到的对面那一版编号（计划层 P14 的输入）。
+/// `Store::resolved_divergences` 的一行：实体 + 用户当时看到的对面那一版编号（计划层 P19 的输入）。
 pub type ResolvedDivergence = (EntityKind, EntityId, u64);
 
 /// 契约里的 `EntityId` 只装 UUID；附件是内容寻址（64hex），此时用 nil UUID 占位。
@@ -1456,7 +1456,56 @@ impl Store {
         conflicts_where(&conn, "state = 'open'")
     }
 
-    /// 用户**已经对哪一份分歧表过态**：实体 → 当时对面那一版的编号（P14 的输入）。
+    /// **本机干净、而持久远端视图已经越过本机确认点**的那些实体（计划层的第二组输入）。
+    ///
+    /// 为什么必须有这一条查询：脏集（`dirty_entities`）按定义只报 `rev <> sync_rev`，于是
+    /// "本机这一行已经追平、对面又往前走了一步"的那种行**根本进不了本轮计划** —— 计划里那一格
+    /// 就只有远端视图，`decide(None, 远端删除)` 于是答 P2b"本地没有这一条，无事可做"，
+    /// 可本地**确实有**这一条。实测形状（判据 `a_delete_reaches_a_device_that_had_nothing_pending`）：
+    /// A 删除并公告，B 空闲、`remote_rev` 已经是删除那一版，主行却仍活在正常列表、徽标"已同步"。
+    /// 编辑那一侧侥幸没坏，是因为 `decide(None, 活版本)` 走 P2 Pull，落库时按 id 更新到了既有行上。
+    ///
+    /// 口径：只要"干净行 + 远端视图 rev 严格大于本机确认点"就算候选，删除态/活版本都要
+    /// （谁更活、要不要问用户，由计划层看着 l/r 判，不在这儿预断）。
+    /// 已永久删除（`tombstones.purged=1`）的一律排除 —— 防复活优先。
+    pub fn remote_moved_entities(&self, account: &str) -> Result<Vec<DirtyEntity>, StoreError> {
+        let conn = self.read()?;
+        let mut out = Vec::new();
+        for (table, kind) in [("notes", EntityKind::Note), ("folders", EntityKind::Folder)] {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT e.id, e.rev, e.content_hash, e.sync_rev FROM {table} e
+                   JOIN sync_remote_index r
+                     ON r.account_id = ?1 AND r.kind = ?2 AND r.entity_id = e.id
+                  WHERE e.rev = e.sync_rev
+                    AND r.rev > e.sync_rev
+                    AND NOT EXISTS(SELECT 1 FROM tombstones t
+                                    WHERE t.entity_type = ?2 AND t.entity_id = e.id AND t.purged = 1)
+                  ORDER BY e.id"
+            ))?;
+            let rows = stmt.query_map(params![account, rows::kind_tag(kind)], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, rev, hash, sync_rev) = row?;
+                out.push(DirtyEntity {
+                    kind,
+                    id: rows::parse_id(&id)?,
+                    rev: Rev(rev.max(0) as u64),
+                    content_hash: hash,
+                    sync_rev: Rev(sync_rev.max(0) as u64),
+                    why: DirtyWhy::RemoteMoved,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// 用户**已经对哪一份分歧表过态**：实体 → 当时对面那一版的编号（P19 的输入）。
     ///
     /// 只数 `state='resolved'`：`dismissed` 是"现在不想决定"，不该换来让路。
     /// 每个实体取**最大**的那个已裁决远端编号 —— 对面再往前走（编号变了）就对不上，

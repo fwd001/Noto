@@ -261,6 +261,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'error.read_failed': '本地文件没能读出来，未改动任何数据。',
   'error.no_default_folder': '这台设备上找不到默认笔记本，已停止这一步 —— 免得把笔记放进一个说不清的位置。',
   'error.bad_action': '没看懂这个选择。冲突仍留在收件箱里，双方内容都没有被覆盖。',
+  'error.conflict_payload_missing': '这张卡片上"服务器那一版"的正文还没取回来，所以这一次没有替你决定。冲突仍留在收件箱里，两台的内容都没有被改动，下一轮会自动重试。',
   'error.sync_refused': '同步被暂时拒绝：本地数据处于需要保护的状态，这一轮没有做任何改动。',
   'error.sync_busy': '上一轮同步还没结束，这次不用重复点，它会自动继续。',
   'error.unknown_account': '设置里指向的服务器账户在本机没有记录。请在设置里重新保存一次服务器信息。',

@@ -16,7 +16,7 @@
 //! 实测结论（2026-09-29）：**第 1 步成立**（B 那一版在两台上都读得回来），
 //! 而"裁决之后账要结清"**早上还红过** —— 那条 rev 撞车的账停在 `dirty/outbox` 上推不出去，
 //! 当时记为缺口 **G17**、它的下游（同名副本一篇一篇累积）记为 **G18**。
-//! **0.0.36 起这两条都是真断言**（`ADR-0021` D1+D2 加上按实新增的计划层 P14：已裁决过的同一份
+//! **0.0.36 起这两条都是真断言**（`ADR-0021` D1+D2 加上按实新增的计划层 P19：已裁决过的同一份
 //! 分歧不再重算成冲突），本文件里保留的现场打印是给下次红的时候指路用的。
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -115,6 +115,221 @@ fn trash_with(app: &App, text: &str) -> usize {
         .into_iter()
         .filter(|r| r.title.contains(text))
         .count()
+}
+
+/// 走到"P20 卡片挂在删除那一台（A）的收件箱上"这一步的公共夹具。
+///
+/// 形状：A 删除、B 编辑，两侧撞在同一个 rev 上；B 按「保留两份」→ 抬号公告成功（G17 已修），
+/// 对面那一版以 B 的副本落到 A；补若干轮之后 A 那台必须被问一句（P20）。
+/// 返回 `(A, B, 笔记 id, A 的卡片 id, 两个临时目录)` —— 临时目录要让调用方持有，否则 Drop 就把库删了。
+async fn a_revival_card(tag: &str) -> (App, App, EntityId, i64, (Tmp, Tmp)) {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let (a, da) = boot(&format!("{tag}-a"), &url);
+    let (b, db) = boot(&format!("{tag}-b"), &url);
+    a.sync_once().await.expect("A 入伙");
+    b.sync_once().await.expect("B 入伙");
+    let folder = a.default_folder_id().unwrap();
+    let created = a.create_note(&folder, doc(BASE)).expect("建笔记");
+    let id = EntityId::parse(&created.id).expect("id");
+    settle(&a, 6).await;
+    settle(&b, 6).await;
+    let b_rev = b.store().get_note(&id).unwrap().unwrap().rev;
+    a.store().delete_note(&id).expect("A 删除");
+    b.edit_note(&id, doc(EDITED), b_rev).expect("B 编辑");
+    settle(&a, 8).await;
+    settle(&b, 8).await;
+    settle(&a, 8).await;
+    settle(&b, 8).await;
+    let card = b
+        .open_conflicts()
+        .expect("B 的卡片")
+        .into_iter()
+        .find(|c| c.note_id == id.to_string())
+        .expect("B 该有一张 P11 卡片");
+    b.resolve_conflict(notera_host::commands::ResolveConflictCmd {
+        id: card.id,
+        action: "keepBoth".into(),
+    })
+    .expect("B：保留两份");
+    settle(&b, 10).await;
+    settle(&a, 10).await;
+    for _ in 0..8 {
+        a.sync_once().await.expect("A 补一轮");
+        b.sync_once().await.expect("B 补一轮");
+    }
+    let a_card = a
+        .open_conflicts()
+        .expect("A 的卡片")
+        .into_iter()
+        .find(|c| c.note_id == id.to_string())
+        .expect("A（删除那一台）该被 P20 问一句");
+    // 卡片必须**自己带着对面那一版**：右栏读的是 `remote_preview`（载荷来自迁移 0008）。
+    // 引擎以前只为 `UpdateUpdate` 取载荷，P20 的卡片于是只能是"没取回来"，
+    // 而用户按「用服务器那一版」就没有东西可以采纳（判据见 M97）。
+    assert!(
+        a_card
+            .remote_preview
+            .as_deref()
+            .unwrap_or_default()
+            .contains(EDITED),
+        "P20 的卡片没把对面那一版带下来，右栏只能是空的：remote_preview={:?}",
+        a_card.remote_preview
+    );
+    let a_card = a_card.id;
+    (a, b, id, a_card, (da, db))
+}
+
+/// 若干轮，让"裁决之后卡片会不会又算出来"这件事问到底。
+async fn rounds(a: &App, b: &App, n: usize) {
+    for _ in 0..n {
+        a.sync_once().await.expect("A 一轮");
+        b.sync_once().await.expect("B 一轮");
+    }
+}
+
+fn cards_for(app: &App, id: &EntityId) -> usize {
+    app.open_conflicts()
+        .expect("收件箱")
+        .into_iter()
+        .filter(|c| c.note_id == id.to_string())
+        .count()
+}
+
+/// A 按「用我这一版」= 维持删除：删除必须真传播出去，卡片不许回来，账要结清。
+/// 不抬号重发的形状是"本机账上干净、服务器停在对面那一版"，于是卡片每轮重算（G17 的老形状）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_keeping_the_delete_after_a_revival_card_propagates_the_delete_and_stops_asking() {
+    let (a, b, id, card, _keep) = a_revival_card("keepdelete").await;
+    a.resolve_conflict(notera_host::commands::ResolveConflictCmd {
+        id: card,
+        action: "replaceWithLocal".into(),
+    })
+    .expect("A：维持删除");
+    rounds(&a, &b, 6).await;
+    let mut problems = Vec::new();
+    if a.store()
+        .get_note(&id)
+        .ok()
+        .flatten()
+        .and_then(|n| n.deleted_at)
+        .is_none()
+    {
+        problems.push("A 维持删除之后，那条笔记在 A 上不是删除态了".to_string());
+    }
+    let st = a.store().stats().expect("A 的统计");
+    if st.dirty_notes != 0 || st.outbox_pending != 0 {
+        problems.push(format!(
+            "A 重发删除之后账没结清：dirty={} outbox={}",
+            st.dirty_notes, st.outbox_pending
+        ));
+    }
+    if cards_for(&a, &id) != 0 {
+        problems.push(format!("A 答过的卡片又回来了：{} 张", cards_for(&a, &id)));
+    }
+    println!("A 维持删除之后 B 的现场：{}", rows_of(&b).join(" ｜ "));
+    // 对面那台：主行接受这次删除，但 B 那一版**不许丢**（它以 B 自己的副本活着）
+    if trash_with(&b, EDITED) == 0 {
+        problems.push("A 重发的删除没能在 B 上落地（B 的主行还活在正常列表）".to_string());
+    }
+    if live_with(&b, EDITED) == 0 {
+        problems.push("删除传播到 B 之后，B 那一版在 B 上不见了（副本也没保住）".to_string());
+    }
+    assert!(problems.is_empty(), "{}", problems.join(" ｜ "));
+}
+
+/// A 按「用服务器那一版替换」= 接受对面那一版：这条笔记回到 A 的正常列表，而且是**对面那一版**
+/// 的正文（不是 A 被删之前的旧正文）。通用分支在这一格是一颗空按钮，所以这条判据是给死按钮用的。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_taking_the_peer_version_after_a_revival_card_returns_the_newest_text() {
+    let (a, b, id, card, _keep) = a_revival_card("takepeer").await;
+    a.resolve_conflict(notera_host::commands::ResolveConflictCmd {
+        id: card,
+        action: "replaceWithRemote".into(),
+    })
+    .expect("A：用服务器那一版");
+    rounds(&a, &b, 6).await;
+    let note = a.store().get_note(&id).ok().flatten();
+    let mut problems = Vec::new();
+    match note {
+        None => problems.push("A 采纳对面那一版之后，这条笔记在 A 上读不到".to_string()),
+        Some(n) => {
+            if n.deleted_at.is_some() {
+                problems.push(format!("A 采纳了对面那一版，却还是删除态：rev={}", n.rev));
+            }
+            if !n.title.contains(EDITED) {
+                problems.push(format!(
+                    "A 采纳回来的不是对面那一版，而是本机被删的旧正文：「{}」",
+                    n.title
+                ));
+            }
+        }
+    }
+    if cards_for(&a, &id) != 0 {
+        problems.push("A 答过的卡片又回来了".to_string());
+    }
+    if live_with(&b, EDITED) == 0 {
+        problems.push("A 采纳对面那一版，反而把 B 那一版弄丢了".to_string());
+    }
+    assert!(problems.is_empty(), "{}", problems.join(" ｜ "));
+    println!("A 采纳之后 A 的现场：{}", rows_of(&a).join(" ｜ "));
+}
+
+/// A 按「保留两份」= 删除保持 + 对面那一版另存一篇。这一格要的是"两份"字面成立：
+/// 只关卡片、或只把本机那条放回正常列表，都不叫两份。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_keeping_both_after_a_revival_card_keeps_the_delete_and_a_copy_of_the_peer_version() {
+    let (a, b, id, card, _keep) = a_revival_card("keepboth2").await;
+    a.resolve_conflict(notera_host::commands::ResolveConflictCmd {
+        id: card,
+        action: "keepBoth".into(),
+    })
+    .expect("A：保留两份");
+    rounds(&a, &b, 6).await;
+    let mut problems = Vec::new();
+    if a.store()
+        .get_note(&id)
+        .ok()
+        .flatten()
+        .and_then(|n| n.deleted_at)
+        .is_none()
+    {
+        problems
+            .push("A 按『保留两份』之后，原来那条不再是删除态（那是复活，不是两份）".to_string());
+    }
+    // "两份"要字面成立：本机这一支保持删除，对面那一版另存一篇**带着对面正文**的副本。
+    // 只数"正常列表里有没有带 EDITED 的"是不够的 —— B 那台按保留两份时留下的副本早就同步过来了，
+    // 数它永远 ≥1（第一版就这么判过，变异 M96 抓不到）。要数就数 A 自己这一支。
+    let kept: Vec<_> = a
+        .store()
+        .list_notes(&NoteQuery::all())
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.title.starts_with(BASE) && r.title.contains("（本地副本）"))
+        .collect();
+    if kept.len() != 1 {
+        problems.push(format!(
+            "A 按『保留两份』之后，本机这一支该留下一份副本，实际 {} 份",
+            kept.len()
+        ));
+    }
+    if let Some(row) = kept.first() {
+        let body = a
+            .store()
+            .get_note(&row.id)
+            .ok()
+            .flatten()
+            .map(|n| n.plain_text)
+            .unwrap_or_default();
+        if !body.contains(EDITED) {
+            problems.push(format!("A 的那份副本里装的不是对面那一版：「{body}」"));
+        }
+    }
+    if cards_for(&a, &id) != 0 {
+        problems.push("A 答过的卡片又回来了".to_string());
+    }
+    assert!(problems.is_empty(), "{}", problems.join(" ｜ "));
+    println!("A 保留两份之后 A 的现场：{}", rows_of(&a).join(" ｜ "));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -231,22 +446,24 @@ async fn a_delete_and_an_edit_at_the_same_rev_keep_the_content_alive_on_both_dev
         a.sync_once().await.expect("A 补一轮");
         b.sync_once().await.expect("B 补一轮");
     }
-    // P15：删除那一台既**不许被静默改写**，也**不许悄悄错过那一版** —— 它得有一张问它的卡片。
-    // 只挡住落库而不生成卡片，用户看见的是"对面那次改动我永远不知道"，那是另一种静默。
-    let acct = a.config().active_account.unwrap_or_default();
-    println!(
-        "诊断：acct={acct} A 的已裁决分歧={:?}",
-        a.store().resolved_divergences().unwrap().0
+    // P20：删除那一台既**不许被静默改写**，也**不许悄悄错过那一版** —— 它得有一张问它的卡片。
+    // 挡而不问 = "对面那次改动我永远不知道"，是同一种静默换了个方向。空轮快路径（清单没变 + seq
+    // 已应用）以前正因为看不见这些干净的墓碑行而直接跳过规划，这一条断言就是钉住"它必须进规划"。
+    let a_cards = a.open_conflicts().expect("A 的卡片");
+    assert!(
+        a_cards.iter().any(|c| c.note_id == id.to_string()),
+        "A（删除那一台）没收到 P20 的询问卡片：收件箱是 {a_cards:?}"
     );
-    // G19（**只打印，不断言**）：删除那一台没被改写（下面那条断言钉着），但也没被问 ——
-    // "清单没变 + seq 已应用"的空轮快路径不会为本机一侧的状态变化重新规划，
-    // 所以 A 的收件箱里没有一张问它的卡片（对面那一版的内容 A 读得到：副本笔记是同步过去的）。
-    // 这条缺口的原因 / 影响 / 解除条件记在 `PRODUCTION-READINESS` §7 的 G19。
-    println!(
-        "G19 的形状：A 的收件箱 {} 张卡片 ｜ A 的现场 {}",
-        a.open_conflicts().expect("A 的卡片").len(),
-        rows_of(&a).join(" ｜ ")
+    // 而这张卡片**不许**顺手给 A 造一篇副本。§6 那份"进收件箱同一刻保底"针对的是"本机有一份
+    // 还没公告出去的编辑"，A 这一侧的本地版本是**删除** —— 照同一套代码造副本，等于用户删掉的
+    // 笔记靠同步回到正常列表（主指令明令禁止的那条）。修复前实测形状就是 A 多出一篇
+    // 「共同的第 7 版：报销单说明（本地副本）」（变异 M89 摘掉守卫即复现）。
+    assert_eq!(
+        live_with(&a, &format!("{BASE}（本地副本）")),
+        0,
+        "P20 的卡片在删除那一台造了副本 = 已确认的删除被复活成正常笔记"
     );
+    println!("P20 之后 A 的现场：{}", rows_of(&a).join(" ｜ "));
     assert!(
         a.store()
             .get_note(&id)

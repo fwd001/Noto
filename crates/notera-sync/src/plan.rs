@@ -19,7 +19,7 @@ pub struct LocalView {
     pub purged_at: Option<String>,
     /// 本地在删除之后又被编辑过（P11 判据之一）
     pub edited_after_delete: bool,
-    /// 用户**已经对这一份分歧表过态**时，记下当时对面那一版的编号（P14）。
+    /// 用户**已经对这一份分歧表过态**时，记下当时对面那一版的编号（P19）。
     /// 编号一模一样才让路；对面又往前走了就照旧算冲突 —— 卡片是按当前分叉每轮重算的，
     /// 少了这条判据就是"按了『保留两份』，它闪一下又回到收件箱"（G17 实测的第二半）。
     pub decided_remote: Option<u64>,
@@ -28,6 +28,12 @@ pub struct LocalView {
 impl LocalView {
     pub fn dirty(&self) -> bool {
         self.rev != self.sync_rev
+    }
+    /// 本机这一行是**已确认的删除**：干净（曾经与对面一致）且带着删除时间。
+    /// P20 的判据、"要不要造副本"、"要不要替用户把对面那一版取回来"三处都用这一个定义 ——
+    /// 同一条语义分三份写是本仓踩过多次的那类漂移。
+    pub fn confirmed_delete(&self) -> bool {
+        self.deleted_at.is_some() && !self.dirty()
     }
     pub fn key(&self) -> (String, String) {
         (self.kind.clone(), self.id.clone())
@@ -169,7 +175,7 @@ fn both_present(l: &LocalView, r: &RemoteView) -> Decision {
         };
     }
 
-    // P14 已经裁决过的同一份分歧：不再问第二遍，按编号高低走普通的一条路。
+    // P19 已经裁决过的同一份分歧：不再问第二遍，按编号高低走普通的一条路。
     // 裁决时那一条可发布的版本已经被抬到对面之上（ADR-0021 D2 的抬号），所以这里几乎都是 Push；
     // 编号相同（不可能同时又是已裁决的脏行）才 NoOp。对面若又往前走了，`decided_remote`
     // 就对不上 `r.rev`，下面的 P11/P11b/P8 照旧生效 —— 让路只针对"同一件事"，不是永久静音。
@@ -184,7 +190,19 @@ fn both_present(l: &LocalView, r: &RemoteView) -> Decision {
         return Decision {
             key: l.key(),
             action,
-            rule: "P14",
+            rule: "P19",
+        };
+    }
+
+    // P20 对面把**本机已经确认删掉**的那条写活了（本机干净、远端是更新的活版本）。
+    // 这台设备上必须问一句，不能默默让它回到正常列表 —— §5.1 与 P11 那句"绝不静默二选一"
+    // 管的是两侧，不只是发起编辑的那一侧。落库那一侧已经先挡住了（`apply_note` 的墓碑守卫），
+    // 所以这里不是在"防覆盖"，而是在**补上那一问**：没有这条规则，用户永远不知道对面动过它。
+    if l.confirmed_delete() && r.deleted_at.is_none() && remote_changed {
+        return Decision {
+            key: l.key(),
+            action: Action::Conflict(ConflictKind::DeleteUpdate),
+            rule: "P20",
         };
     }
 
@@ -388,11 +406,11 @@ mod tests {
         }
     }
 
-    /// P14：用户对**同一个远端 rev** 表过态之后，同一件事不许每轮再问一遍（G17 的第二半 ——
+    /// P19：用户对**同一个远端 rev** 表过态之后，同一件事不许每轮再问一遍（G17 的第二半 ——
     /// 卡片是按当前分叉重算的，裁决过又回来）。三个方向都要有数：没记决策 → 仍 P11（这条判据
     /// 不许把 P11 弱化）；记在别的编号上（对面又往前走了）→ 仍 P11；记在这一个编号上 → Push。
     #[test]
-    fn p14_a_decided_divergence_is_pushed_not_asked_again() {
+    fn p19_a_decided_divergence_is_pushed_not_asked_again() {
         let deleted = RemoteView {
             kind: "n".into(),
             id: "x".into(),
@@ -415,8 +433,57 @@ mod tests {
         );
         local.decided_remote = Some(2);
         let d = decide(Some(&local), Some(&deleted));
-        assert_eq!(d.rule, "P14");
+        assert_eq!(d.rule, "P19");
         assert_eq!(d.action, Action::Push, "裁决过的那一版要能公告出去");
+    }
+
+    /// P20：本机**已确认删掉**的一条，被对面写活了（`revival` 由 host 从库里标出来）。
+    /// 三个方向都要有数：没标 revival → 走 P6 的普通 Pull（这是过去行为，不许一律变成卡片）；
+    /// 标了 revival 且对面确实更新了 → 冲突，让本机这一台来决定；对面也还是删除态 → 不弹卡。
+    #[test]
+    fn p20_a_confirmed_delete_the_peer_revived_asks_this_device_instead_of_resurrecting() {
+        let alive = r(3, "cccc");
+        let mut tomb = l(2, 2, "aaaa"); // rev == sync_rev：干净，但"删除"已经公告过
+        tomb.deleted_at = Some("2026-09-29T00:00:00Z".into());
+        let d = decide(Some(&tomb), Some(&alive));
+        assert_eq!(d.rule, "P20");
+        assert_eq!(
+            d.action,
+            Action::Conflict(ConflictKind::DeleteUpdate),
+            "对面把我删掉的写活了 → 必须问这台，不许静默复活"
+        );
+        // 三个方向都不许误弹卡：对面也还是删除态、本机根本没删、本机是"删完又改"（脏墓碑）。
+        let still_deleted = RemoteView {
+            kind: "n".into(),
+            id: "x".into(),
+            rev: 3,
+            hash: Some("sha256:cccc".into()),
+            deleted_at: Some("2026-09-29T00:00:00Z".into()),
+            purged: false,
+        };
+        let both_deleted = decide(Some(&tomb), Some(&still_deleted));
+        assert_ne!(
+            both_deleted.rule, "P20",
+            "对面也还是删除态 → 不是分歧，不许弹卡"
+        );
+        assert_eq!(
+            both_deleted.action,
+            Action::ApplyRemoteDelete,
+            "两侧都删了就照远端把本地这一行收进回收站（P10）"
+        );
+        let clean_alive = l(2, 2, "aaaa");
+        assert_eq!(
+            decide(Some(&clean_alive), Some(&alive)).rule,
+            "P6",
+            "本机没删、只是对面往前走了一步 → 普通 Pull，不许变成卡片"
+        );
+        let mut dirty_tomb = tomb.clone();
+        dirty_tomb.rev = 3; // 删完之后本机又改过：该由 P11 那一族处理，不是 P20
+        assert_ne!(
+            decide(Some(&dirty_tomb), Some(&alive)).rule,
+            "P20",
+            "脏墓碑的本地内容是用户还没公告的编辑，判据不许和 P20 混在一起"
+        );
     }
 
     #[test]

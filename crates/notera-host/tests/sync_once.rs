@@ -835,3 +835,46 @@ async fn two_edits_before_one_round_leave_nothing_pending() {
     );
     srv.stop().await;
 }
+
+/// 一台删除，另一台**空闲**（这一行干净、没有待办）也必须接到这条删除。
+///
+/// 为什么单列一条：`dirty_entities` 按定义只报 `rev <> sync_rev`，空闲那一台的这一行**进不了
+/// 本轮计划**；计划里那一格就变成 `decide(None, 远端删除)` → P2b"本地没有这一条，无事可做"，
+/// 可它其实有这一条。两台真设备的形状是：A 删除并公告，B 几轮之后主行仍活在正常列表、
+/// 徽标还说"已同步"。
+#[tokio::test]
+async fn a_delete_reaches_a_device_that_had_nothing_pending() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let a = Device::boot("delidle-a", &url);
+    let folder = a.app.default_folder_id().unwrap();
+    let note = a.app.create_note(&folder, doc("要被删掉的一版")).unwrap();
+    let id = notera_core::EntityId::parse(&note.id).unwrap();
+    a.app.sync_once().await.expect("A 公告起点");
+    let b = Device::boot("delidle-b", &url);
+    b.app.sync_once().await.expect("B 拉到起点");
+    assert!(
+        b.app.store().get_note(&id).unwrap().is_some(),
+        "夹具没造对：B 该先有这一条"
+    );
+    a.app.store().delete_note(&id).expect("A 删除");
+    for _ in 0..3 {
+        a.app.sync_once().await.expect("A 公告删除");
+    }
+    for _ in 0..4 {
+        b.app.sync_once().await.expect("B 追删除");
+    }
+    let rows = b.app.store().list_notes(&NoteQuery::all()).unwrap();
+    let st = b.app.store().stats().unwrap();
+    assert!(
+        b.app
+            .store()
+            .get_note(&id)
+            .ok()
+            .flatten()
+            .and_then(|n| n.deleted_at)
+            .is_some(),
+        "A 删掉的那条在空闲的 B 上还活在正常列表：rows={rows:?} stats={st:?}"
+    );
+    srv.stop().await;
+}
