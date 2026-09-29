@@ -257,11 +257,43 @@ jobs:
           set -euo pipefail
           "$GITHUB_WORKSPACE/apps/desktop/node_modules/.bin/tauri" android build --config src-tauri/tauri.conf.json --apk --debug --target aarch64 2>&1 | tee /tmp/apk.log
 
-      # **证据通道只有一条**：未认证能读 `/actions/runs/{id}/artifacts` 的**名字**，读不到日志正文
-      # （job logs = 403）、也读不到产物字节（artifact zip 实测 **401 Requires authentication**，
-      # 所以"上传日志文件再下载"这条路是死的 —— 这条是当场量出来的，不是推测）。
-      # 于是把最要紧的几行**编进产物名字**：名字只允许 `[A-Za-z0-9._-]`，其余换成 `-`，每条 90 字，
-      # 12 条 = 约 1000 字的真实读数。前 4 条是"我看到了什么环境事实"，后 8 条是日志里的错误行。
+      # **两条读数通道**（都是本批实测出来的，不是推测）：
+      # ① 未认证能读 `/actions/runs/{id}/artifacts` 的**名字**，读不到日志正文（job logs = 403），
+      #    也读不到产物字节（artifact zip = **401 Requires authentication**）。于是把最要紧的几行
+      #    **编进产物名字**：名字只允许 `[A-Za-z0-9._-]`，其余换成 `-`，每条 90 字、12 条 ≈ 1000 字。
+      # ② 这个 workflow 本来就有 `contents: write` ⇒ job 里有 GITHUB_TOKEN ⇒ 可以把日志**贴成 commit 评论**，
+      #    而评论列表未认证可读（实测 `GET /repos/{owner}/{repo}/commits/{sha}/comments` = 200）。
+      #    一次就能递出整段 gradle 输出，比①强得多；①保留当兜底（万一评论被限流）。
+      # 修好 Android 之后这两步连同注释都该删掉 —— 它们是给"读不到日志"这个环境限制打的补丁，不是长期行为。
+      - name: 把失败日志贴成 commit 评论（有 token 就能全文递出来）
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -u
+          mkdir -p /tmp/diag
+          {
+            echo "### Android 出包失败的现场（诊断贴文，修好就删）"
+            echo '```'
+            tail -c 40000 /tmp/apk.log
+            echo ''
+            echo '### 关键行（ANSI 与 NUL 已洗）'
+            grep -n -E "Cannot find module|Require stack|Execution failed|error:" /tmp/apk.clean.log | head -40
+            echo '### gen/android 里含 tauri- 的行（去掉路径前缀，保住 84 字预算之外的内容）'
+            grep -rh --include=*.kts --include=*.properties "tauri-" apps/mobile/src-tauri/gen/android 2>/dev/null | sed 's/^[[:space:]]*//' | head -12
+            echo '### app/tauri.build.gradle.kts 里所有含 projectDir/rootDir/File( 的行'
+            grep -n -E "projectDir|rootDir|File\(" apps/mobile/src-tauri/gen/android/app/tauri.build.gradle.kts 2>/dev/null | head -20
+            echo '```'
+          } > /tmp/diag/comment.md
+          # JSON 转义交给 node（这个 job 里本来就有 node），不手搓引号。
+          node -e 'const fs=require("fs");const b=fs.readFileSync("/tmp/diag/comment.md","utf8").slice(0,60000);fs.writeFileSync("/tmp/diag/body.json",JSON.stringify({body:b}));'
+          curl -sf -X POST \
+            -H "authorization: Bearer $GH_TOKEN" \
+            -H "accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/comments/${GITHUB_SHA}" \
+            --data @/tmp/diag/body.json > /tmp/diag/comment-resp.json || echo "贴评论失败（不改变这一步之外的结论）"
+          head -c 200 /tmp/diag/comment-resp.json
+
       - name: 摘出事实与错误行（编进产物名递出来）
         if: failure()
         id: smuggle
