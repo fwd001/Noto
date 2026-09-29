@@ -529,6 +529,11 @@ READY FOR USER TEST
 clippy `-D warnings` 0/0、fmt `--check` 0、arch-check 30/30、check-versions 一致、前端 213/22 + `vue-tsc` 0 错、
 `verify-app` 37/37、`verify-blackbox` 10/10、P11 面板 11/11、契约图 59/59、真窗口 release 9/9。
 交付产物：`Notera_0.0.38_x64_zh-CN.msi` 7.31 MiB、`Notera_0.0.38_x64-setup.exe` 5.40 MiB。
+CI 侧（未认证 REST 能看到 run 与 step 级结论，看不到日志正文）：#64 `db3d9a2` success；
+**#65 `9a6123e` 红在前端 `pnpm test` 那一步（16 s）**，而 #67 `d87d7ed`（同一份前端代码）在同一步
+16 s 后 ✓ → 定性为 **runner 上的偶发**；本机四种口径（默认并行、`CI=true TZ=UTC`、
+`--no-file-parallelism`、连跑三遍）都是 213/22 绿。根因要那一步的日志才能定，
+这条边界与"下次再红先拿日志再动手"的规矩记在 `CI-CD` §环境与网络限制。
 
 ### 要你在真机上测的那几条（§49：这些我这边测不了）
 

@@ -472,7 +472,7 @@ jobs:
 | Apple 签名/公证、Android release keystore、updater 签名密钥 | **BLOCKED** | 无证书/无私钥/secrets 未配置（`[实测]` 本机无相关凭据文件） | 见 §13，secrets 落地后才能验证 |
 | Windows CI 首次绿灯、artifact 下载、release 上传、缓存命中、runner 矩阵行为、Actions 版本漂移 | **BLOCKED（全部）** | `[实测]` GitHub 不可达 → 本文任何 workflow 均 **未被执行过一次** | §12 交接协议首轮闭环 |
 | 读 Actions **日志正文**（未认证） | **BLOCKED** | `[实测 2026-09-29]` run/jobs/annotations 三类端点未认证可读（status、conclusion、每个 step 的 `started_at/completed_at` 都拿得到），但 `GET /actions/jobs/{id}/logs` 回 **403**；`gh` 不在本机 PATH | 用户贴一次那一步的日志，或给本机一个只读 PAT（`actions:read`）|
-| run #65（`9a6123e`，0.0.38 那一批）**红在 `pnpm test` 那一步** | **未闭环（本机复现不出来）** | `[实测]` 步骤时间线：clippy 185 s ✓、Rust 全树 473 s ✓、**前端 `pnpm test` 16 s 后 failure**、typecheck 因此 skipped。本机四种口径全绿：默认并行 213/22、`CI=true TZ=UTC`、`--no-file-parallelism`、连跑三遍 | 那一步的日志（上一条）→ 才能分清"这条树上确定性坏"还是"runner 上的偶发"；run #67（`d87d7ed`，只改文档）是同一份前端代码的第二次采样 |
+| run #65（`9a6123e`）**红在 `pnpm test` 那一步；run #67（`d87d7ed`，同一份前端代码）在同一步 16 s 后 ✓** → 定性为 **runner 上的偶发**，不是这条树上确定性坏 | **观察完毕，根因未定**（未认证读不到日志正文） | `[实测]` #65 步骤时间线：clippy 185 s ✓、Rust 全树 473 s ✓、**前端 `pnpm test` 16 s 后 failure**、typecheck 因此 skipped；#67 同一步 16 s ✓、typecheck 5 s ✓、audit ✓、契约图 ✓。本机四种口径全绿：默认并行 213/22、`CI=true TZ=UTC`、`--no-file-parallelism`、连跑三遍 | 两次采样时长一模一样（16 s），所以"测试压根没起来"不成立；剩下的候选是 runner 上的偶发。**下次再红要先拿那一步的日志再动手，不许凭猜测改代码** —— 拿日志要么用户贴一次，要么给本机一个只读 PAT（见上一条边界） |
 
 > **不得声称已验证**：这一句是 Phase 0 写的，**到今天已经过期** —— runs #3..#67 都被观察到过（#64 `db3d9a2` success、#65 `9a6123e` **failure 在前端那一步**、#66 被 #67 的并发组 cancel）。
 > 规矩不变，只是换了对象：**每条结论都要有 run 号 + step 级时间戳**，`[假设]` 条目要逐条转成「通过 / 失败」。
