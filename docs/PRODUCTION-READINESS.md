@@ -379,36 +379,42 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
   把"校验其实没在花"这种假修抓出来）。现在这条只做了一半：`sync_once.rs` 里新加的那条钉住了
   "不许丢内容 / 不许留永久待同步 / 轮次不许失败"，**没有**断言补传。
 
-- **G22 对面「永久删除」的笔记，在本机停成一条可以恢复的回收站记录（2026-09-29 实测；状态 = **BLOCKED，判据留在 `patches/`**）**：
+- **G22 对面「永久删除」的笔记，在本机停成一条可以恢复的回收站记录（2026-09-29 实测；状态 = **已修，0.0.39**）**：
   实测形状（两台真设备 + 真 TCP WebDAV，A 建一条并公告 → B 追平 → A `purge_note` 并公告 → B 连跑 5 轮）：
   ① A 侧正确：`tombstones_purged=1`；服务器上清单条目也写对了 —— B 的持久远端视图是
   `(rev=2, deleted=true, purged=true)`。② 但 B **把它当成一次软删**执行了：那一条落在回收站
   （`rev=2 / sync_rev=2 / 删=true`），`tombstones=1` 而 `tombstones_purged=**0**`。
   ③ 之后 B 的 4 轮全部 `outcome: NoOp`（requests=1，走 304），状态一动不动。
   影响：用户按了"永久删除"，**另一台设备上那条笔记还在回收站里可以一键恢复**，而且本机没有 purged 墓碑，
-  §8 与 I1/I3 那道"被永久删除过的 id 永不接受 upsert"的复活闸门在这台上**根本不成立** ——
-  以后任何一份旧视图或一次备份导入都能把它写回来。服务器上那份记录字节也还在（369 B）。
+  §8 与 I1/I3 那道"被永久删除过的 id 永不接受 upsert"的复活闸门在这台上**根本不成立**。
+  **根因（一句话）**：引擎的"永久删除"是借 `ApplyOp::Tombstone` 上的一个 `purged: bool` 传下去的，
+  而落库那一侧按 **op 的种类**读它 —— `host/lib.rs` 的映射那一格写的是
+  `ApplyOp::Delete{..} | ApplyOp::Tombstone{kind,id,rev,..}`，那个 `..` 把 `purged` 吞了，
+  于是 P13 到了对端只剩软删。`notera-sync::ApplyOp::Purge` 一直就有（store 侧 `apply_purge` 的语义本来就是对的：
+  写 `purged=1` 墓碑 + 删行 + C1 脏行拒绝），**只是引擎从来没发过它**，所以这条边界从来没被对端走过。
+  **修**：引擎对 `ApplyRemotePurge` 发 `ApplyOp::Purge`；`Tombstone` 上那个 `purged` 字段、以及
+  全仓库零个构造点的 `ApplyOp::Delete` 一并删掉 —— 一个意思只留一条 op，这条边界以后不可能再读错。
+  **上一版台账里那句"卡点在轮次的输入侧"是错的**，留在这里说明它错在哪、以及为什么会错：
+  `decide` 本来就有 `(None, Some(r)) if r.purged => P13` 那一格，第 0 轮就命中了，输入侧不缺；
+  那 4 轮 `NoOp` 是**结果**（第 0 轮已经把行软删并把 rev 结清，之后这一条再也不是候选）。
+  而我把这条错判写进台账的依据，是那条引擎探针"绿了" —— 它断言的是引擎**发了什么**
+  （`Tombstone{purged:true}`），不是对端**落成了什么**。教训还是那一条：**判据要打在调用边上**，
+  被调方自己绿不代表这条边界被走对（G17 就是同一个形状：`apply` 的返回值被 `unwrap_or_default()` 吞掉，
+  于是"落库被拒"这件事在两台设备上都不存在）。
+  **判据（两条都在主干）**：① `sync_once.rs::a_permanent_delete_reaches_a_device_that_had_nothing_pending`
+  （两设备 + 真 TCP 服务器，B 那台整条读不到、`tombstones_purged=1`、账结清，并且**直接读服务器盘上那个记录文件**：
+  `purged=true`、`payload=null`、正文读不到 —— 实测 `含正文=false`，于是 §8 那句"永久删除的记录是墓碑公告"
+  不再是推理；上一版这里写的"服务器上那份记录字节也还在（369 B）"因此**撤回**，那 369 B 就是这份公告本身，没有正文）。
+  ② `notera-sync/tests/engine.rs::a_purged_remote_view_purges_a_clean_local_row` 改成断 `ApplyOp::Purge`，
+  并加了反向的一半：**不许同时再落一条软删**（那就是这次的实际故障形状）。
+  **变异**：**M99**（引擎退回发 `Tombstone`）→ 两条都红；**M100**（host 把 `Purge` 映射成软删）→ 红在两设备那一条（实测），
+  而引擎那条**结构上看不见这一格**（它本地侧用的是 `FakeLocal`，不经过 host 的映射）—— 这一对比就是"L3 那条不能省"的理由；
+  **M101**（反方向升级：软删错发成 `Purge`）→
+  红在既有的 `a_delete_reaches_a_device_that_had_nothing_pending` 与 `a_keeping_the_delete_after_a_revival_card_…`
+  两条上，所以"对面只是删进回收站、本机却把行销毁"这一类已经有人看着，没为它新加判据。
   排除过的那半条（**别重复走**）：以为补上"远端说 purged 的干净行也算候选行"就能救 ——
   实测候选集确实收进了这一条（`候选=1，含这一条=true`），**可那几轮还是 `NoOp`**，
-  所以卡点在候选行**下游**（304 那一支的 `remotes` 来源与窗口/分段合并，见 `sync/lib.rs:550-552`），
-  不是输入集合。当时我改的候选查询因此被回退了：一条"改了但没修好"的规则不进主干。
-  **下一步最短的一跳已经量完了（2026-09-29 本批）**：引擎侧**没问题**。
-  `notera-sync/tests/engine.rs::a_purged_remote_view_purges_a_clean_local_row` 造的就是 B 那个形状
-  （本机一行 `rev == sync_rev` 且已软删 + 远端视图 `rev=2 / d=… / p=1`），引擎确实给出
-  `Tombstone { id, rev:2, purged:true }` —— 也就是说 P13 与落库那一支是对的。
-  顺带纠正一处会把人带偏的读法：**`outcome: NoOp` 不等于"这一轮什么都没做"** ——
-  落墓碑那一支（`sync/lib.rs` 的 `tombstone_ops`）既不动 `st.outcome` 也不加 `pulled`，
-  那条新判据自己就是 NoOp 却把 purge 落了库。
-  所以卡点在**轮次的输入侧**，最可疑的是那一格：`decide(None, Some(远端删除/永久删除))` 答的是
-  P2b「本地没有这一条，无事可做」，而它判断"有没有"的依据只是"这一行在不在本轮 `locals` 里" ——
-  本轮 `locals` 又是在读清单**之前**算的。下一批改的就是这一跳（`local_views()` 与清单读取的先后，
-  或者把 P2b 的"本地没有"换成真的问一次库里有没有），改完之后
-  `patches/g22-purge-propagation-gate.patch` 应当由红转绿。
-  解除条件：① 定位"locals 里有这一行、远端视图说 purged=1，而本轮仍判不到 P13"的那一跳；
-  ② 一并拍板永久删除要不要把服务器上的记录字节也抹掉（隐私口径，属 §8 的承诺范围）；
-  ③ 判据就是 `patches/g22-purge-propagation-gate.patch`（打上即红，红在
-  "B 那台还留着这一行的痕迹：正常 0 回收站 1 ｜ B 那台没落下 purged 墓碑"），
-  2026-09-29 已按"存补丁→`apply --check` 0→打上跑红→回退"走完一遍。
+  所以卡点不在输入集合。当时改的候选查询因此被回退了：一条"改了但没修好"的规则不进主干。
 
 三个平台产物、真实服务器矩阵、发布安装包与签名、后台同步的功耗与网络代价量化、大列表/搜索的性能上界、附件分片上传、以及第 4 节表格里每一项。这些在它们被实测之前，状态一律是 BLOCKED 或 PLANNED，不写"理论通过"。
 

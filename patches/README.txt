@@ -33,13 +33,20 @@ PARKED WORK — 已落地，留作证据（2026-09-27）。
 当天量到的实测数字：B 裁决后 `rev=3 / sync_rev=3 / 脏=false`、收件箱 0 张、同名副本 1 篇；
 下游缺口 G18（同名副本 1 → 2 → 3）随同关闭；新缺口 G19（删除那一台没被问第二遍）另记。
 
- —— G22 的判据留在 patches/g22-purge-propagation-gate.patch（2026-09-29，红测试不提交）——
-一条两设备判据：A 永久删除 → B 那台必须整个读不到、且留下 purged 墓碑。
-今天打上它就是红的（红在"B 的回收站里还留着这一条 / tombstones_purged=0"），
-而它顺带打出来的诊断行是三件事实：服务器清单说的确实是 purged=true、
-B 的行是 rev=2/sync_rev=2/删=true、B 后续四轮 outcome 全 NoOp。
-**别把这些打印删掉** —— 下一批要用的时候，这三件事实能省掉重新插桩。
-修完之后这条补丁整体进主干，然后按第 40 条把 G22 从 BLOCKED 改成已修。
+ —— G22 的判据已进主干（2026-09-29，0.0.39），补丁随之删除 ——
+`g22-purge-propagation-gate.patch` 存的是那条两设备判据：A 永久删除 → B 那台必须整个读不到、且留下 purged 墓碑。
+当时打上它就是红的（红在"B 的回收站里还留着这一条 / tombstones_purged=0"）。0.0.39 修好之后整体升进主干
+（`crates/notera-host/tests/sync_once.rs::a_permanent_delete_reaches_a_device_that_had_nothing_pending`），
+并把它顺手加强了一格：**直接读服务器盘上那条记录文件**，断它是 `purged:true / payload:null` 的墓碑公告、正文读不到。
+根因一句话：引擎把"永久"挂在 `ApplyOp::Tombstone` 的一个 bool 上，host 的映射按 **op 的种类**读、那个 `..` 把它吞了
+⇒ 换成独立的 `ApplyOp::Purge`，并删掉那个 bool 和零构造点的 `ApplyOp::Delete`（一个意思只留一条 op）。
+
+留在这一格的是教训，不是流水账：**那条引擎探针当时是绿的，而它骗了我一次。**
+它断言的是引擎**发了什么**（`Tombstone{purged:true}`），不是对端**落成了什么** —— 我就据此把"卡点在轮次的输入侧"
+写进了台账，那句话是错的（`decide` 本来就有 `(None, purged) => P13` 那一格，第 0 轮就命中了）。
+判据必须打在调用边上：变异 M100（只改 host 那一格映射）红在那条两设备判据上，而引擎那条**结构上红不了**（它本地侧是 FakeLocal，
+不经过 host 的映射）—— 这一对比就是"L3 那条不能省"的证据。修法、变异 M99/M100/M101 与纠正过的错判见 PRODUCTION-READINESS §7 G22。
+
 
  —— G19 的"P20 询问卡片"已进主干，不留补丁（2026-09-29，0.0.38）——
 本轮先把它存成 `patches/g19-revival-ask-card.patch` 当安全网（当时判断是"卡片做不出来、要按 §40 记 BLOCKED"），

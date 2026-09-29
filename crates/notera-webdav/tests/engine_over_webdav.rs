@@ -262,7 +262,6 @@ impl LocalPort for Device {
                     id,
                     rev,
                     deleted_at,
-                    purged,
                     ..
                 } => {
                     let mut notes = self.notes.lock().unwrap();
@@ -270,15 +269,11 @@ impl LocalPort for Device {
                         note.rev = rev;
                         note.sync_rev = rev;
                         note.deleted_at = deleted_at;
-                        if purged {
-                            note.purged_at = Some(AT.to_string());
-                        }
                     }
                 }
-                ApplyOp::Delete { id, .. } => {
-                    self.notes.lock().unwrap().remove(&id);
-                }
                 ApplyOp::Purge { id, .. } => {
+                    // 与 store 的 apply_purge 同一口径：行整个消失（本夹具没有墓碑表，
+                    // 真实库里那条 purged=1 墓碑就是"以后不许复活"的那道闸）。
                     self.notes.lock().unwrap().remove(&id);
                 }
             }

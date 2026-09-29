@@ -191,21 +191,20 @@ pub enum ApplyOp {
         id: String,
         rev: u64,
     },
-    Delete {
-        kind: String,
-        id: String,
-        rev: u64,
-    },
-    Purge {
-        kind: String,
-        id: String,
-    },
+    /// 远端**软删除**：本机那一行进回收站，以后还能恢复。
     Tombstone {
         kind: String,
         id: String,
         rev: u64,
         deleted_at: Option<String>,
-        purged: bool,
+    },
+    /// 远端**永久删除**：本机那一行连同正文一起消失，并留下 `purged=1` 墓碑（I1/I3 的复活闸门）。
+    ///
+    /// 它与 `Tombstone` 是两件事，因此是两条 op —— 以前"永久"这一层意思挂在 `Tombstone`
+    /// 的一个 bool 上，被落库侧的 `..` 吞掉过（G22：两台设备上那条笔记留在回收站里可恢复）。
+    Purge {
+        kind: String,
+        id: String,
     },
     /// 提交成功后把清单正文与 etag 缓存下来，供下一轮 304 路径使用
     StoreManifest {
@@ -803,8 +802,19 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
         let mut tombstone_ops = Vec::new();
         for d in &plan.decisions {
             match &d.action {
-                Action::ApplyRemoteDelete | Action::ApplyRemotePurge => {
-                    let purged = matches!(d.action, Action::ApplyRemotePurge);
+                Action::ApplyRemotePurge => {
+                    // 永久删除必须走**它自己那条 op**，不能借 `Tombstone` 上的一个 bool 传下去：
+                    // 落库那一侧（`notera-host` 的 LocalPort 映射）读的是 op 的种类，那个 bool 被
+                    // `Tombstone { .. }` 的 `..` 吞掉 —— 于是对端把"永久删除"落成了"进回收站"：
+                    // 行还能恢复、purged 墓碑却没有，I1/I3 那道防复活闸门在这台上根本不成立，
+                    // 而且这一行的 rev 被 SetRemote 结清后再也不会进计划，就此永远卡在回收站（G22，
+                    // 两台设备实测）。这里换成 `Purge`，与 §7 的 P13、store 的 apply_purge 同一口径。
+                    tombstone_ops.push(ApplyOp::Purge {
+                        kind: d.key.0.clone(),
+                        id: d.key.1.clone(),
+                    });
+                }
+                Action::ApplyRemoteDelete => {
                     let rev = remotes
                         .iter()
                         .find(|r| r.key() == d.key)
@@ -819,7 +829,6 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                         id: d.key.1.clone(),
                         rev,
                         deleted_at,
-                        purged,
                     });
                 }
                 Action::Conflict(ck) => {

@@ -193,8 +193,8 @@ struct FakeLocal {
     /// 注入用：让本机对 `Upsert` **拒收**（真实世界里对应 `apply` 的"同 rev 不同内容"/I6/I2 那道闸门）。
     /// ADR-0021 D3 要验的正是"拒绝有没有去处"，所以这里必须能造出一次真的拒绝。
     reject_upserts: Arc<AtomicBool>,
-    /// 注入用：让本机对**远端删除的落库**（`Tombstone`）拒收。引擎里那一处以前是 `let _ =`，
-    /// 这条判据钉的就是"拒绝到底有没有去处"（ADR-0021 D3 的最后一格）。
+    /// 注入用：让本机对**远端删除的落库**（`Tombstone` 软删 / `Purge` 永久删）拒收。
+    /// 引擎里那一处以前是 `let _ =`，这条判据钉的就是"拒绝到底有没有去处"（ADR-0021 D3 的最后一格）。
     reject_tombstones: Arc<AtomicBool>,
 }
 
@@ -243,7 +243,9 @@ impl LocalPort for FakeLocal {
             ));
         }
         if self.reject_tombstones.load(Ordering::SeqCst)
-            && ops.iter().any(|o| matches!(o, ApplyOp::Tombstone { .. }))
+            && ops
+                .iter()
+                .any(|o| matches!(o, ApplyOp::Tombstone { .. } | ApplyOp::Purge { .. }))
         {
             return Err(LocalError::Storage(
                 "注入：本机不接受这条删除（那一行在删除之后又被编辑过）".into(),
@@ -931,7 +933,7 @@ async fn a_rejected_remote_delete_is_counted_and_not_claimed_as_applied() {
 }
 
 /// G22 的定位探针（引擎侧那一半）：本机这一行是**干净**的（`rev == sync_rev`，已经软删过），
-/// 而远端视图说这一条 `purged=1` —— 引擎必须给出"永久删除"的落库（`Tombstone{purged:true}`），
+/// 而远端视图说这一条 `purged=1` —— 引擎必须给出"永久删除"那条**独立的**落库 op（`Purge`），
 /// 不能停在软删上。这一格今天真红的就是它：另一台设备上那条"永久删除"的笔记留在回收站里可恢复，
 /// 而本机没有 purged 墓碑，I1/I3 那道防复活闸门因此在这台上不成立。
 #[tokio::test]
@@ -963,10 +965,20 @@ async fn a_purged_remote_view_purges_a_clean_local_row() {
     let applied = l.applied.lock().unwrap().clone();
     let purged = applied
         .iter()
-        .any(|o| matches!(o, ApplyOp::Tombstone { id, purged: true, .. } if id == "g22"));
+        .any(|o| matches!(o, ApplyOp::Purge { id, .. } if id == "g22"));
+    // 另一半同样是判据：永久删除**不能顺带再落一条软删**。上一版这里看的是
+    // `Tombstone{purged:true}`，而落库那一侧读的是 op 的种类、那个 bool 被 `..` 吞了 ——
+    // 于是"引擎说了永久删除"这件事实实在在绿着，对端那条却进了回收站。
+    let also_soft = applied
+        .iter()
+        .any(|o| matches!(o, ApplyOp::Tombstone { id, .. } if id == "g22"));
     println!("G22 探针：st={st:?} 落库操作={applied:?}");
     assert!(
         purged,
-        "远端说 purged=1，引擎却没给出 ApplyRemotePurge：{st:?}"
+        "远端说 purged=1，引擎却没给出 ApplyOp::Purge：{st:?}"
+    );
+    assert!(
+        !also_soft,
+        "永久删除的那一条同时又落了软删除 op —— 对端会停在回收站里：{applied:?}"
     );
 }

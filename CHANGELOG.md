@@ -10,7 +10,7 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | **592 通过 / 0 失败 / 5 ignored**（591 → 592 = G22 的引擎侧判据 `a_purged_remote_view_purges_a_clean_local_row`，另附一次变异：把夹具的 `p` 改回 0 → 红）（15 个单元 + 44 个集成测试二进制 + 13 个 doc-test = 72 个 test result 行；2026-09-29 下午在 0.0.38 这棵树上**独占机器**重跑，此前那一次记数是在 0.0.28 那棵树（0.0.27 → 0.0.28 之间只动了 tauri 的打包配置，Rust 代码一个字没变，两棵树上都是 563/0/2），本日几批依次是 535 → 537 → 541 → 544 → 556 → 557 → 558 → 559 → 560 → 561 → 563 → 569 → 570 → 576 → 578 → 579 → 580 → 581 → **582**（+6 = XML-01 ~ XML-04 那六条"换 XML 解析库版本"的行为锚；+2 = CY-01 两台真设备的文件夹环、CY-02 已坏库的递归查询不许卡死；+1 = SY-CONV-01 同内容收敛不许留下永久待同步；+1 = P11-SR-01 两台设备从同一确认点各自推到同一个 rev；+1 = SY-REV-01 `remote_rev` 要真喂进实体行并且下一次编辑真的取大；+1 = P19 那条规划层单测"已裁决过的同一份分歧不许重问"（0.0.36 时编号是 P14）；582 → **584** = SY-REJ-01 的两条：引擎侧"拒收要计数并留下原因"、host 侧"有拒收就不许折成已同步"；**584 → 590**（0.0.38）= SY-DEL-01 一条（删除要传到空闲的那一台，G20）、SY-REJ-02 一条（引擎落墓碑那一处的拒收也要有去处）、P20 四条（规划层四方向单测 + 三颗按钮各自的两个真设备裁决分支）；**590 → 591** = SY-MISS-01 一条（服务器把记录弄丢时本机不许少东西、不许留永久待同步 —— 顺带量出缺口 **G21**：§10 那条 404→补传的路径今天不可达）。**这条数字有口径**：`cargo test` 默认遇到第一个失败的二进制就停，所以叠着别的套件跑出来的"passed=499 / failed=1"既不是全量也不是产品状态 —— 今天真就这么红过一次（`latency_injection_delays_responses` 是墙钟判据），单跑 16/16、整树独占跑就是下面这行。第一条 ignored 是 `conflict_payload_e2e.rs:519` 的**留档夹具**，由 `scripts/verify-p11-panel.mjs` 显式调用生成两台设备的现场；第二、三条是 **GC / 体检的规模基准**（同一个 `attachment_gc_scale.rs` 里的两条：GC 每轮代价 + 磁盘体检 100/1000 两档），第四条是 **30 分钟泄漏长跑** `leak_trend.rs`，第五条是 0.0.38 新加的**计划输入每轮代价**量具 `plan_input_scale.rs`（20000 行、release 口径：新加的那条 `remote_moved_entities` 稳态 best **9.42 ms** / 中位 10.27 ms，整库待追 25.50 ms；原有 `dirty_entities` 2.52 ms —— 轮间隔 25 s，占空比 ~0.04%，不动 PERF-05 的"空轮 1 请求 0 字节"） —— 五条都由 `-- --ignored --nocapture` 显式跑，都是刻意 `#[ignore]` 的，不是被跳过的测试：前两条会把 CI 变成"测这台机器的 SQLite 手感"，最后一条本身要 30 分钟。此前台账写的"0 ignored"是错的，2026-09-28 按实测更正） |
+| `cargo test --workspace` | **593 通过 / 0 失败 / 5 ignored**（592 → 593 = G22 修好之后那条两设备判据升进主干：`sync_once.rs::a_permanent_delete_reaches_a_device_that_had_nothing_pending`，变异 M99/M100 各红过一次；这一批的数是在 0.0.39 那棵树上**独占机器**重跑的，`TEST_EXIT=0`、72 个 test result 行、arch-check 30/30、clippy 0/0、fmt `FMTCHK=0`。上一格（591 → 592 = G22 的引擎侧判据 `a_purged_remote_view_purges_a_clean_local_row`）记的那次变异当时是**假绿**：它断言的是引擎发了 `Tombstone{purged:true}`，而落库那侧把这个 bool 吞了 —— 0.0.39 把它改成断 `ApplyOp::Purge`）（15 个单元 + 44 个集成测试二进制 + 13 个 doc-test = 72 个 test result 行；2026-09-29 下午在 0.0.38 这棵树上**独占机器**重跑，此前那一次记数是在 0.0.28 那棵树（0.0.27 → 0.0.28 之间只动了 tauri 的打包配置，Rust 代码一个字没变，两棵树上都是 563/0/2），本日几批依次是 535 → 537 → 541 → 544 → 556 → 557 → 558 → 559 → 560 → 561 → 563 → 569 → 570 → 576 → 578 → 579 → 580 → 581 → **582**（+6 = XML-01 ~ XML-04 那六条"换 XML 解析库版本"的行为锚；+2 = CY-01 两台真设备的文件夹环、CY-02 已坏库的递归查询不许卡死；+1 = SY-CONV-01 同内容收敛不许留下永久待同步；+1 = P11-SR-01 两台设备从同一确认点各自推到同一个 rev；+1 = SY-REV-01 `remote_rev` 要真喂进实体行并且下一次编辑真的取大；+1 = P19 那条规划层单测"已裁决过的同一份分歧不许重问"（0.0.36 时编号是 P14）；582 → **584** = SY-REJ-01 的两条：引擎侧"拒收要计数并留下原因"、host 侧"有拒收就不许折成已同步"；**584 → 590**（0.0.38）= SY-DEL-01 一条（删除要传到空闲的那一台，G20）、SY-REJ-02 一条（引擎落墓碑那一处的拒收也要有去处）、P20 四条（规划层四方向单测 + 三颗按钮各自的两个真设备裁决分支）；**590 → 591** = SY-MISS-01 一条（服务器把记录弄丢时本机不许少东西、不许留永久待同步 —— 顺带量出缺口 **G21**：§10 那条 404→补传的路径今天不可达）。**这条数字有口径**：`cargo test` 默认遇到第一个失败的二进制就停，所以叠着别的套件跑出来的"passed=499 / failed=1"既不是全量也不是产品状态 —— 今天真就这么红过一次（`latency_injection_delays_responses` 是墙钟判据），单跑 16/16、整树独占跑就是下面这行。第一条 ignored 是 `conflict_payload_e2e.rs:519` 的**留档夹具**，由 `scripts/verify-p11-panel.mjs` 显式调用生成两台设备的现场；第二、三条是 **GC / 体检的规模基准**（同一个 `attachment_gc_scale.rs` 里的两条：GC 每轮代价 + 磁盘体检 100/1000 两档），第四条是 **30 分钟泄漏长跑** `leak_trend.rs`，第五条是 0.0.38 新加的**计划输入每轮代价**量具 `plan_input_scale.rs`（20000 行、release 口径：新加的那条 `remote_moved_entities` 稳态 best **9.42 ms** / 中位 10.27 ms，整库待追 25.50 ms；原有 `dirty_entities` 2.52 ms —— 轮间隔 25 s，占空比 ~0.04%，不动 PERF-05 的"空轮 1 请求 0 字节"） —— 五条都由 `-- --ignored --nocapture` 显式跑，都是刻意 `#[ignore]` 的，不是被跳过的测试：前两条会把 CI 变成"测这台机器的 SQLite 手感"，最后一条本身要 30 分钟。此前台账写的"0 ignored"是错的，2026-09-28 按实测更正） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测）。**这一行的"0/0"从 2026-09-29 起要求两件事一起确认**：把退出码显式赋给变量并打印（`rc=$?; echo "CLIPPY_EXIT=$rc"`），加上输出里 0 条 `error`/`warning` —— 0.0.32 那一批这里假绿过一次（两条 `enex.rs` 的 lint 被"后台任务通知里那个属于最后一个进程的退出码"盖掉了，见下面 0.0.33 那条更正） |
 | L5 崩溃注入 `--test crash_recovery` | 小库矩阵 **8** 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零（名单一处在 `CRASH_POINTS`；另外三点各自要专门夹具，不在这一批里跑：`after_segment_write` 要大库 = `compaction_crash`，`after_quarantine_move` 要零引用 = `attachment_gc`，`after_corrupt_park` 要"本机被截断而服务器是好的" = `attachment_faults`，见 TEST-PLAN CI-CRASH-10/11/12） |
 | L5 压实崩溃注入 `--test compaction_crash` | 1/1（240 条大库真死在 `after_segment_write`，索引不引用不存在的分段） |
@@ -45,6 +45,39 @@
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
 ### 新增
+- **对面「永久删除」一条已同步的笔记，另一台却只把它放进回收站（缺口 G22，P0 级；判据 SY-DEL-02；版本 0.0.38 → 0.0.39）**
+  - **实测形状**（两台真设备 + 真 TCP WebDAV）：A 建一条并公告 → B 追平（`rev=1/sync_rev=1`，干净）→ A `purge_note` 并公告 → B 连跑 5 轮。
+    B 那台最后停在**回收站里可一键恢复**（`rev=2 / 删=true`），`tombstones=1` 而 `tombstones_purged=**0**`，之后 4 轮 `outcome` 全 `NoOp`。
+    服务器上清单说的确实是 `purged=true`（B 的持久远端视图 `(rev=2, deleted=true, purged=true)`），A 侧也是 `tombstones_purged=1` ——
+    **只有 B 这一台的落库是错的**。影响两条：① 用户按了"永久删除"，另一台上那条还回得来；② 这台没有 purged 墓碑，
+    SYNC-PROTOCOL §8 与 I1/I3 那道"被永久删除过的 id 永不接受 upsert"的复活闸门在这台上**根本不成立**。
+  - **根因在端口边界，不在计划层**（这一句值一条记录，因为上一版的台账把它写错了）：引擎把"永久"这一层意思挂在
+    `notera-sync::ApplyOp::Tombstone` 的 `purged: bool` 上，而 host 的映射那一格写的是
+    `ApplyOp::Delete{..} | ApplyOp::Tombstone{kind,id,rev,..}` —— **`..` 把那个 bool 吞了**，P13 到了落库侧只剩软删。
+    `ApplyOp::Purge` 一直存在（`Store::apply_purge` 的语义本来就是对的：写 `purged=1` 墓碑 + 删行 + C1 脏行拒绝），
+    只是**引擎从来没发过它**，所以这条边界从来没被对端走过。
+  - **修法 = 一个意思只留一条 op**：`ApplyRemotePurge` → `ApplyOp::Purge`；`Tombstone` 上那个 `purged` 字段、以及
+    全仓库**零个构造点**的 `ApplyOp::Delete` 一并删掉（留着就是下一次读错的入口）。`notera-webdav` 那个跨栈夹具跟着改：
+    `Purge` 那格现在按 store 的口径把行整个摘掉，而不是在行上记一个 `purged_at`。
+  - **上一版台账那句"卡点在轮次的输入侧"是错的，这里按实纠正并说明它为什么错**：`decide` 本来就有
+    `(None, Some(r)) if r.purged => P13` 那一格，第 0 轮就命中了；那 4 轮 `NoOp` 是**结果**（第 0 轮已经把行软删并把 rev 结清，
+    之后这一条再也不是候选）。我当时据以写下那句错判的证据，是引擎那条探针"绿了" —— 而它断言的是引擎**发了什么**
+    （`Tombstone{purged:true}`），不是对端**落成了什么**。同批把那条探针改成断 `ApplyOp::Purge`，并加了反向的一半：
+    **永久删除那一条不许同时再落一条软删**（后半句就是这个缺陷的真实形状）。
+  - **门禁与变异**：判据两条在主干（`sync_once.rs::a_permanent_delete_reaches_a_device_that_had_nothing_pending` 两设备 +
+    真服务器、`engine.rs::a_purged_remote_view_purges_a_clean_local_row` 引擎侧）。**M99**（引擎退回发 `Tombstone`）→ 两条都红；
+    **M100**（host 把 `Purge` 映射成软删）→ 红在两设备那一条，而引擎那条**结构上看不见这一格**（本地侧是 `FakeLocal`，
+    不经过 host 映射）—— 这一对比就是"L3 那条不能省"的证据；**M101**（反方向：软删错发成 `Purge`，也就是销毁过头）→
+    红在既有的 SY-DEL-01 与 P20-ASK-01 的「维持删除」两条上，所以那一类已有人看着，没为它新加判据。
+  - **顺带把 §8 那格从推理变成实测**：那条两设备判据改用 `Backend::Fs`，永久删除传播之后**直接读服务器盘上那个记录文件**，
+    断它 `purged=true`、`payload=null`、正文读不到（实测 `含正文=false`）。因此上一版台账里那句"服务器上那份记录字节也还在
+    （369 B）"**撤回** —— 那 369 B 就是这份墓碑公告，没有正文。**新的一格没量到、按 §40 记着**：一条带附件的笔记被永久删除之后，
+    服务器上那些按 sha256 寻址的 blob 有没有一起走（本机那侧有 GC，远端那侧没有判据）—— 见 SYNC-PROTOCOL §8.1 末尾。
+  - 文档同批：SYNC-PROTOCOL §7 P13 那一格补上"落库是独立一条 `ApplyOp::Purge`"、§8.1 补上这条实测与那格未量；
+    PRODUCTION-READINESS §7 的 G22 从 BLOCKED 改**已修**（含被推翻的错判与三次变异）；TEST-PLAN 的 `G22-P13（待补）`
+    升为 **SY-DEL-02**；FINAL-REVIEW §七 那一行同步；IMPLEMENTATION-STATUS 的"删除生命周期与防复活"那一行原来写着 DONE
+    而**没有这条判据** —— 那是过度声明，按实补上证据来源；`patches/g22-purge-propagation-gate.patch` 已整体进主干并删除，
+    教训留在 `patches/README.txt`。
 - **计划层那张 P 表的"这条规则有没有人看着"审计 + 0.0.38 那条新查询的每轮代价（判据 SY-RULE-AUDIT-01 / PERF-16；本批 = 一个量具 + 台账，**产品代码一个字没改，版本号不动**）**
   - 审计的做法：**一条一条把规则的守卫摘掉**，跑 `-p notera-host -p notera-sync`（124 s 一轮），看会不会红。
     摘掉的 8 条：P13（别处永久删除不落墓碑）、P12（本机永久删除不公告）、P9（删除待传播）、P3（清单无此条要补传）、

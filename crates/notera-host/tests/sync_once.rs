@@ -971,3 +971,120 @@ async fn a_vanished_remote_record_keeps_local_content_and_leaves_no_pending_stat
     assert!(problems.is_empty(), "{}", problems.join(" ｜ "));
     srv.stop().await;
 }
+
+/// P13（别处把这条**永久删除**了）此前只有一条规划层单测看着 —— 规则审计里它红在 1 条，就是那一格。
+/// 这一条补上两设备那一半：A 永久删除并公告之后，B（干净、空闲）那台这一条要**整个读不到**，
+/// 并留下一张 purged 墓碑 —— 于是它以后既不会被对面那一版写活，也不会从本机历史里被翻出来。
+/// 顺带把 §8 那句"永久删除的记录是 `purged:true, payload=null` 的墓碑公告"打在**服务器盘上那个文件本身**：
+/// 正文留在服务器上就等于没删（这一台删掉了，别人换个设备还能把它取回来）。
+#[tokio::test]
+async fn a_permanent_delete_reaches_a_device_that_had_nothing_pending() {
+    let dav = Tmp::new("purge-dav");
+    let srv = TestServer::start(Backend::Fs(dav.path().to_path_buf())).await;
+    let url = srv.base_url();
+    let a = Device::boot("purge-a", &url);
+    let folder = a.app.default_folder_id().unwrap();
+    let note = a
+        .app
+        .create_note(&folder, doc("要被永久删掉的一版"))
+        .unwrap();
+    let id = notera_core::EntityId::parse(&note.id).unwrap();
+    for _ in 0..3 {
+        a.app.sync_once().await.expect("A 公告起点");
+    }
+    let b = Device::boot("purge-b", &url);
+    for _ in 0..4 {
+        b.app.sync_once().await.expect("B 追平");
+    }
+    assert!(
+        b.app.store().get_note(&id).unwrap().is_some(),
+        "夹具没造对：B 该先有这一条"
+    );
+
+    a.app.store().purge_note(&id).expect("A 永久删除");
+    for _ in 0..4 {
+        a.app.sync_once().await.expect("A 公告永久删除");
+    }
+    for i in 0..5 {
+        let st = b.app.sync_once().await.expect("B 追永久删除");
+        println!(
+            "[diag4] B 第 {i} 轮：{:?} ｜ 本机这一行={}",
+            st,
+            b.app
+                .store()
+                .get_note(&id)
+                .unwrap()
+                .map(|n| format!(
+                    "rev={}/删={}/purged表={}",
+                    n.rev,
+                    n.deleted_at.is_some(),
+                    n.purged_at.is_some()
+                ))
+                .unwrap_or_else(|| "读不到".to_string())
+        );
+    }
+    let st = b.app.store().stats().unwrap();
+    let mut problems = Vec::new();
+    if b.app.store().get_note(&id).unwrap().is_some() {
+        problems.push("对面永久删除之后，B 那台还读得到这一条（回收站里也不许有）".to_string());
+    }
+    if st.notes != 0 || st.notes_trash != 0 {
+        problems.push(format!(
+            "B 那台还留着这一行的痕迹：正常 {} 回收站 {}",
+            st.notes, st.notes_trash
+        ));
+    }
+    if st.tombstones_purged == 0 {
+        problems.push("B 那台没落下 purged 墓碑 —— 以后任何一份旧视图都可能把它写活".to_string());
+    }
+    if st.dirty_notes != 0 || st.outbox_pending != 0 {
+        problems.push(format!(
+            "追平之后账没结清：dirty={} outbox={}",
+            st.dirty_notes, st.outbox_pending
+        ));
+    }
+    // 服务器盘上那一条记录本身：必须是"墓碑公告"，正文一个字都不许留下（§8）。
+    let rec = dav
+        .path()
+        .join(".notes")
+        .join("records")
+        .join("note")
+        .join(format!("{}.json", note.id));
+    let raw = std::fs::read_to_string(&rec).unwrap_or_default();
+    if raw.is_empty() {
+        problems.push(format!(
+            "服务器上没有那条记录文件（{}）—— 清单还指着它，D2 重建就没料",
+            rec.display()
+        ));
+    } else {
+        let env: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+        if env["purged"] != json!(true) {
+            problems.push(format!(
+                "服务器上那条记录不是永久删除公告：purged={} payload={}",
+                env["purged"],
+                if env["payload"].is_null() {
+                    "null"
+                } else {
+                    "非空"
+                }
+            ));
+        }
+        if !env["payload"].is_null() {
+            problems
+                .push("永久删除之后服务器上的记录还带着 payload（正文可被别人取回）".to_string());
+        }
+        if raw.contains("要被永久删掉的一版") {
+            problems.push("服务器那条记录里还读得到正文".to_string());
+        }
+    }
+    println!(
+        "诊断 G22：B 的 tombstones={}/purged={} ｜ A 的 purged={} ｜ 服务器记录文件={}（含正文={}）",
+        st.tombstones,
+        st.tombstones_purged,
+        a.app.store().stats().unwrap().tombstones_purged,
+        raw.chars().take(120).collect::<String>().replace('\n', ""),
+        raw.contains("要被永久删掉的一版")
+    );
+    assert!(problems.is_empty(), "{}", problems.join(" ｜ "));
+    srv.stop().await;
+}

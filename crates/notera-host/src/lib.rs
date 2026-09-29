@@ -3337,7 +3337,12 @@ impl LocalPort for HostLocalPort {
                         let _ = self.0.store().mark_synced(k, &i, Rev(rev), "");
                     }
                 }
-                ApplyOp::Delete { kind, id, rev } | ApplyOp::Tombstone { kind, id, rev, .. } => {
+                ApplyOp::Tombstone {
+                    kind,
+                    id,
+                    rev,
+                    deleted_at: _,
+                } => {
                     if let (Some(k), Ok(i)) = (EntityKind::from_tag(&kind), EntityId::parse(&id)) {
                         mapped.push(StoreApplyOp::Tombstone {
                             kind: k,

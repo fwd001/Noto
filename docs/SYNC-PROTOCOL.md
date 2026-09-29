@@ -297,7 +297,7 @@ idle
 | P10 | 本地有 | 远端 `deleted_at!=—` | 远端删除 | 本地软删（若本地更脏 → P11） |
 | P11 | 本地在删除后又被编辑（`rev>sync_rev` 且 `updated_at>deleted_at`） | 远端已删 | **删除 vs 修改** | 冲突：保留内容 + 提示，绝不静默二选一 |
 | P12 | 本地 `purged` 待传播 | 远端有 | 永久删除传播 | `Push`(`purged:true`) → 本地移入 `tombstones` |
-| P13 | `—` | 远端 `purged:true` | 别处已永久删除 | 写 `tombstones(purged=1)`，本地若有行则删除 |
+| P13 | `—` | 远端 `purged:true` | 别处已永久删除 | 写 `tombstones(purged=1)`，本地若有行则删除。落库是**独立一条** `ApplyOp::Purge`，不是 `Tombstone` 上的一个布尔位：0.0.38 及之前挂在布尔位上，host 的映射按 op 种类读、把它吞了，于是对端只落成软删（缺口 G22，判据 SY-DEL-02） |
 | P14 | 本地 `tombstones` 有 | 远端 `—` | 删除已生效或从未上传 | 若 `sync_rev` 曾 > 0 且无远端记录 → 补传墓碑 |
 | P15 | 文件夹 `parent_id` 指向不存在/已删文件夹 | 有 | 悬空父级 | 重挂到默认本 + 记诊断，不删笔记（§8.3） |
 | P16 | 记录 `doc.v` / `protocol` 高于本地支持 | 有 | 版本超前 | **只读**该实体，不改写、不降级（I7） |
@@ -321,6 +321,12 @@ idle
 | 正常 | `deleted_at=NULL` | `deleted_at=null` | `d=null` |
 | 回收站 | `deleted_at=T` | `deleted_at=T` | `d=T` |
 | 永久删除 | 行删除 + `tombstones(purged=1)` | `purged:true, payload=null` | `p=1` |
+
+「远端记录 = 墓碑公告」这一格现在有直接证据：`TEST-PLAN` 的 SY-DEL-02 在永久删除传播之后**读服务器盘上那个记录文件本身**，
+断它 `purged=true`、`payload=null`、正文读不到（此前只有"引擎 PUT 出去的那份公告"那条单测在钉，服务器上的文件没人打开过）。
+**还没量到的一格**（不是已知缺陷，是证据缺口）：一条带图片/附件的笔记被永久删除之后，**服务器上那些附件对象**（按 sha256 寻址的
+blob）有没有一起走 —— 本机那一侧有 GC（`ADR` 的 quarantine 那条），远端那一侧这条路径本轮没有判据。要补就在 SY-DEL-02 那条
+夹具上加"这条笔记带一个附件"，然后断服务器上那个 blob 的可见性；拍板口径 = 用户按"永久删除"时期望的是**内容整体消失**。
 
 ### 8.2 传播与反复活
 
