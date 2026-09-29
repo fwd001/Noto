@@ -878,3 +878,96 @@ async fn a_delete_reaches_a_device_that_had_nothing_pending() {
     );
     srv.stop().await;
 }
+
+/// §10 那一格（清单说有、记录 404）今天**只有一句注释**，全套门禁没测过它。
+/// 这一条钉的是"必须是真"的三半：本地内容一个字不许少、不许留下永久待同步、也不许因此把轮次跑失败。
+///
+/// **并且它顺手把缺口 G21 的机制拍成照片**：注入四轮之后，针对这条记录的 GET 次数由诊断行打出来
+/// （2026-09-29 实测 **0**）—— `synced_heads`（"已经有了的那一版别再花请求去要"）在 pull 循环里
+/// 先 `continue` 掉了，
+/// 于是 §10 那条"连续 404 → 标 dirty 走 P3 补传"在**已收敛的设备上永远不可达**：
+/// 服务器把记录文件弄丢之后，所有收敛过的设备都说"已同步"，谁也不会去补。
+/// 这不是"界面说谎"（每台设备本地确实有那一版），而是"数据在自己服务器上"这句承诺静默失真 ——
+/// 修法与代价记在 `PRODUCTION-READINESS` §7 G21（要做校验就得花请求，直接顶着 PERF-05 的空轮预算）。
+/// 这条判据因此**只钉现状里必须是真的那三样**，不钉"永远不补"：G21 修好之后它照样绿。
+#[tokio::test]
+async fn a_vanished_remote_record_keeps_local_content_and_leaves_no_pending_state() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let a = Device::boot("gone-a", &url);
+    let folder = a.app.default_folder_id().unwrap();
+    let note = a
+        .app
+        .create_note(&folder, doc("服务器后来把这份弄丢了"))
+        .unwrap();
+    let id = notera_core::EntityId::parse(&note.id).unwrap();
+    for _ in 0..3 {
+        a.app.sync_once().await.expect("A 公告");
+    }
+    let b = Device::boot("gone-b", &url);
+    for _ in 0..4 {
+        b.app.sync_once().await.expect("B 追平");
+    }
+    let before = b.app.store().get_note(&id).unwrap().expect("B 该有这一条");
+    assert_eq!(
+        before.rev, before.sync_rev,
+        "夹具没造对：B 该是干净的（追平之后）"
+    );
+
+    // 只挡 GET 记录，PUT 依旧通 —— 于是"补传"这条路上不留外部阻碍，能不能补才看得清
+    let log_before = srv.request_log().len();
+    srv.inject(notera_test_webdav::Injection::status(
+        format!("GET *{}", note.id),
+        404,
+    ))
+    .await;
+    let mut stats = None;
+    for _ in 0..4 {
+        b.app
+            .sync_once()
+            .await
+            .expect("注入 404 的几轮不许把轮次跑失败");
+        stats = Some(b.app.store().stats().unwrap());
+    }
+    srv.inject(notera_test_webdav::Injection::none()).await;
+
+    let after = b
+        .app
+        .store()
+        .get_note(&id)
+        .unwrap()
+        .expect("本地那条不许消失");
+    let st = stats.expect("跑过几轮");
+    let mut problems = Vec::new();
+    if after.content_hash != before.content_hash
+        || after.rev != before.rev
+        || after.deleted_at.is_some()
+    {
+        problems.push(format!(
+            "远端 404 之后本机那条被改了或进了回收站：rev {} → {} 删除={:?} 哈希 {} → {}",
+            before.rev, after.rev, after.deleted_at, before.content_hash, after.content_hash
+        ));
+    }
+    if st.dirty_notes != 0 || st.outbox_pending != 0 {
+        problems.push(format!(
+            "记录 404 之后留下永久待同步：dirty={} outbox={}",
+            st.dirty_notes, st.outbox_pending
+        ));
+    }
+    let hits: Vec<_> = srv
+        .request_log()
+        .into_iter()
+        .skip(log_before)
+        .filter(|r| r.method == "GET" && r.path.contains(&note.id))
+        .collect();
+    println!(
+        "诊断 G21：本机那条={} 脏={} 待办={} 注入这四轮里针对这条记录的 GET 次数={}（其中 404 的可见次数={}）",
+        if after.deleted_at.is_some() { "回收站" } else { "正常" },
+        st.dirty_notes,
+        st.outbox_pending,
+        hits.len(),
+        hits.iter().filter(|r| r.status == 404).count()
+    );
+    assert!(problems.is_empty(), "{}", problems.join(" ｜ "));
+    srv.stop().await;
+}
