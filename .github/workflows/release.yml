@@ -1,0 +1,220 @@
+name: 出包与发布（§4 / §5）
+
+# 触发：**打 tag**（`v*`）或手动 dispatch。这是总指令 §4 的"通过打 Tag 或发布 Release 自动触发构建"
+# 那一格，也是 §5 的"通过 Git Tag、GitHub Release 管理正式版本"那一格 —— 之前仓库里只有 `ci.yml`
+# （PR 门禁），一份出包流程都没有，`git tag` 数量是 0，GitHub Release 也是 0 个。
+#
+# 为什么 Release 默认发**草稿**（`draft: true`）：产物没有代码签名与公证（§13 的 D3，本机无证书），
+# 直接公开发布等于把"未经签名验证的安装包"摆到公众面前，也等于替用户做了"这版可以发"的决定。
+# 草稿状态下三平台的包都在 Actions 与 Release 草稿里可下载，用户看完再手动 Publish。
+# 要改成直接发布：把下面 `draft` 改掉，并在那之前补上签名（secrets 见 §13）。
+#
+# 每一条命令都是本仓库已经跑通过的形状：Windows 走 **GNU 工具链**（`RUSTUP_TOOLCHAIN=…-gnu`，
+# msvc host 在这个仓库编不出来 —— 见 CI-CD §环境与网络限制），pnpm 版本取自
+# `apps/desktop/package.json` 的 `packageManager`，依赖走 `--frozen-lockfile`。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '要出的版本号（留空 = 取 Cargo.toml 的 workspace 版本，只出 Artifacts 不动 tag）'
+        required: false
+        default: ''
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  meta:
+    name: 版本与 tag 对齐（不一致就别开始三个小时的构建）
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.ver.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 判据是"三者一致"：Cargo.toml 的 workspace.package.version、apps/desktop/package.json、
+      # tauri.conf.json。打 tag 时如果忘了 bump，就会出一个**版本号是上一版**的包 —— 那正是 §5
+      # 要防的事，所以这一步失败要早、要响。
+      - name: 版本单源（与 ci.yml 同一条命令）
+        run: node scripts/check-versions.mjs
+
+      - name: 算出版本号与 tag
+        id: ver
+        run: |
+          set -euo pipefail
+          cargo_v=$(grep -m1 -A2 '^\[workspace.package\]' Cargo.toml | grep -m1 '^version' | sed -E 's/.*"([^"]+)".*/\1/')
+          ref="${GITHUB_REF_NAME}"
+          if [ -n "${{ github.event.inputs.version }}" ]; then ref="v${{ github.event.inputs.version }}"; fi
+          if [ "${ref#v}" != "$cargo_v" ]; then
+            case "$ref" in
+              v*) echo "::error::tag=$ref 与 Cargo.toml 版本=$cargo_v 不一致：先 bump 或改 tag 再出包"; exit 1;;
+              *) echo "手动 dispatch 且没给版本号：只出 Artifacts，用 Cargo.toml 的 $cargo_v"; ref="v$cargo_v";;
+            esac
+          fi
+          echo "version=$cargo_v" >> "$GITHUB_OUTPUT"
+          echo "tag=${ref#v}" >> "$GITHUB_OUTPUT"
+          echo "### 出包版本：$cargo_v（tag $ref）" >> "$GITHUB_STEP_SUMMARY"
+
+  windows:
+    name: Windows（GNU 工具链：.msi + .exe）
+    needs: meta
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      RUST_TARGET: x86_64-pc-windows-gnu
+      RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 GNU 工具链（rustup）
+        run: |
+          rustup toolchain install stable-$env:RUST_TARGET --profile default --component rustfmt --component clippy
+          rustup default stable-$env:RUST_TARGET
+          rustc -Vv
+
+      - name: 准备 pnpm（版本取自 apps/desktop/package.json 的 packageManager）
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/desktop/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+
+      - name: 依赖安装（frozen lockfile）
+        run: pnpm --dir apps/desktop install --frozen-lockfile
+
+      # `RUSTUP_TOOLCHAIN` 必须在 env 里，不只靠 `--target`：build script 与 proc macro 永远按
+      # **host triple** 编，而镜像默认 host 是 msvc → 它去调被 Git Bash coreutils `link` 顶掉的
+      # `link.exe`，报一串"第三方 crate 编不过"。这条在本机踩过两次（CI-CD §环境与网络限制第 15 条）。
+      - name: 出包（nsis + msi）
+        run: pnpm --dir apps/desktop tauri build --target x86_64-pc-windows-gnu --bundles nsis,msi -v
+
+      - name: 收集产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: |
+            target/x86_64-pc-windows-gnu/release/bundle/nsis/*.exe
+            target/x86_64-pc-windows-gnu/release/bundle/msi/*.msi
+          if-no-files-found: error
+
+  macos:
+    name: macOS（.dmg + .app，未签名）
+    needs: meta
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust（stable）
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc -Vv
+
+      - name: 准备 pnpm（版本取自 apps/desktop/package.json 的 packageManager）
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/desktop/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+
+      - name: 依赖安装（frozen lockfile）
+        run: pnpm --dir apps/desktop install --frozen-lockfile
+
+      # 没配 APPLE_CERTIFICATES / notaryteam secrets（§13 D3）→ 出**未签名**包。
+      # `--no-sign` 那类开关不写：Tauri 在没有签名身份时本来就不签，但产物要用户手动"允许打开"，
+      # 这一条写进 Release 说明里，不留"macOS 包可直接安装"的错觉。
+      - name: 出包（dmg + app）
+        run: pnpm --dir apps/desktop tauri build --bundles dmg,app -v
+
+      - name: 收集产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: |
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/macos/*.app
+          if-no-files-found: error
+
+  publish:
+    name: 汇总到 GitHub Release（草稿）
+    needs: [meta, windows, macos]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 取回三平台产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+          merge-multiple: true
+
+      # 说明正文取自 CHANGELOG 里对应版本那一段。这一仓库的 CHANGELOG 不按 `## 0.0.40` 分段
+      # （它是"开发线 + 每批一条产品决定"的形状，见 §5 的说明），但每条产品批次的标题里带着
+      # **版本对**（`版本 0.0.39 → 0.0.40`）—— 那就是这一版的条目。取不到就明写缺项，
+      # 不留空说明：§5 要求"发布版本时应同步更新版本号、构建产物和更新说明"，缺东西要看得见。
+      - name: 组装修订说明
+        run: |
+          set -euo pipefail
+          v="${{ needs.meta.outputs.version }}"
+          {
+            echo "## Notera $v"
+            echo
+            echo "本 Release 由 tag \`v$v\` 的推送自动构建（\`.github/workflows/release.yml\`）。"
+            echo
+            echo "**产物状态**：Windows 安装包由 GNU 工具链产出（本机与 CI 同一条口径）；macOS 包**未经代码签名与公证**，"
+            "首次打开需要在系统设置里手动允许；Android 尚未进入出包矩阵（原因与解除条件见 CI-CD §13）。"
+            echo
+            echo "### CHANGELOG 里对应这一版的那一条"
+            echo
+            awk -v v="$v" '
+              BEGIN { hit = 0 }
+              /^- \*\*/ { if (hit) exit; if (index($0, "→ " v) > 0) hit = 1 }
+              hit { print }
+            ' CHANGELOG.md > /tmp/section.md
+            if [ -s /tmp/section.md ]; then
+              cat /tmp/section.md
+            else
+              echo "> ⚠ CHANGELOG.md 里找不到标着「版本 … → $v」的那一条 —— 发布说明缺项，补完再 Publish。"
+            fi
+          } > RELEASE-NOTES.md
+          cat RELEASE-NOTES.md
+
+      - name: 建 Release 草稿
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          v="${{ needs.meta.outputs.version }}"
+          shasum -a 256 dist-artifacts/* > dist-artifacts/SHA256SUMS.txt || true
+          if gh release view "v$v" >/dev/null 2>&1; then
+            gh release upload "v$v" dist-artifacts/* --clobber
+          else
+            gh release create "v$v" dist-artifacts/* \
+              --title "Notera $v" \
+              --notes-file RELEASE-NOTES.md \
+              --draft \
+              --target "$GITHUB_SHA"
+          fi
+          echo "Release 草稿已建好（draft）：https://github.com/${{ github.repository }}/releases —— 检查后手动 Publish" \
+            >> "$GITHUB_STEP_SUMMARY"
