@@ -268,30 +268,26 @@ jobs:
         run: |
           set -u
           mkdir -p /tmp/diag
-          # 路径一律走绝对：这一步**没有** working-directory，跑在仓库根上，
-          # 上一版拿相对路径去量 gen 目录，递回来的是两条没意义的 "no"（探针自己的账，记一条）。
-          # run #6 又递回来一条被**我自己的 90 字上限**截断的关键行
-          # （`Cannot find module '/…/apps/mobile/src-tauri/tauri…'` —— 后面那半截才是答案），
-          # 所以关键行改成三段切片各 90 字（产物名的长度上限就在这儿），其余槽位仍走通用错误行。
-          KEY=$(grep -E "Cannot find module|Error:|error\[E" /tmp/apk.log | head -1)
-          [ -z "$KEY" ] && KEY=$(grep -E -i 'error|FAILURE|Caused by' /tmp/apk.log | tail -1)
+          # 先把 ANSI 颜色码洗掉再摘行：日志里带 `\x1b[…m`，它们既吃字又让"这一行到哪结束"看不出来。
+          sed -e 's/\x1b\[[0-9;]*m//g' /tmp/apk.log > /tmp/apk.clean.log 2>/dev/null || cp /tmp/apk.log /tmp/apk.clean.log
+          # run #6 的教训：关键那句 "Cannot find module '…/tauri-" 被**按字符**切三段是白切 ——
+          # Node 的答案不在同一行后面，而在**接下来那两行**（`Require stack:` 会点名是谁 require 的）。
+          # 所以 K1/K2/K3 = 命中行 + 后两行（`grep -A2`），每行各占一个 87 字的槽。
+          KEY=$(grep -A2 -E "Cannot find module|Execution failed for task" /tmp/apk.clean.log | head -3)
           {
             echo "F|gen-mobile=$(test -d "$GITHUB_WORKSPACE/apps/mobile/src-tauri/gen/android" && echo yes || echo no)"
-            echo "F|crate-in-log=$(grep -o 'could not compile [^ ]*' /tmp/apk.log | head -1 | tr ' ' '_')"
-            echo "K1|${KEY}"
-            echo "K2|${KEY}"
-            echo "K3|${KEY}"
-            echo "F|task=$(grep -o 'Execution failed for task [^ ]*' /tmp/apk.log | head -1 | tr ' ' '_')"
-            echo "F|src-tauri-entries=$(ls -1 "$GITHUB_WORKSPACE/apps/mobile/src-tauri" | tr '\n' ',' | cut -c1-60)"
-            grep -E -i 'error|FAILURE|Caused by|panicked|not found|No such|denied|cannot|failed|task' /tmp/apk.log | tail -5 | sed 's/^/E|/'
+            echo "F|crate-in-log=$(grep -o 'could not compile [^ ]*' /tmp/apk.clean.log | head -1 | tr ' ' '_')"
+            echo "K1|placeholder"; echo "K2|placeholder"; echo "K3|placeholder"
+            echo "F|task=$(grep -o 'Execution failed for task [^ ]*' /tmp/apk.clean.log | head -1 | tr ' ' '_')"
+            echo "F|gradle-rust=$(grep -h -o 'executable[^,)]*' "$GITHUB_WORKSPACE"/apps/mobile/src-tauri/gen/android/app/build.gradle.kts 2>/dev/null | head -1 | cut -c1-60)"
+            grep -E -i 'error|FAILURE|Caused by|panicked|not found|No such|denied|cannot|failed|task|Require' /tmp/apk.clean.log | tail -5 | sed 's/^/E|/'
           } > /tmp/diag/index.txt
-          # K2 / K3 取的是同一行的后两段（切片在下面单独做，因为 awk 的 substr 比 cut 更好读）。
-          # 每段 87 字：产物名还要留 3 字给 "K1|" 这个前缀（循环里那把 cut 只放行 90 字）。
           awk -v k="$KEY" '
+            BEGIN { n = split(k, part, "\n") }
             NR < 3 { print; next }
-            NR == 3 { print "K1|" substr(k, 1, 87); next }
-            NR == 4 { print "K2|" substr(k, 88, 87); next }
-            NR == 5 { print "K3|" substr(k, 175, 87); next }
+            NR == 3 { print "K1|" part[1]; next }
+            NR == 4 { print "K2|" part[2]; next }
+            NR == 5 { print "K3|" part[3]; next }
             { print }
           ' /tmp/diag/index.txt > /tmp/diag/sliced.txt
           mv /tmp/diag/sliced.txt /tmp/diag/index.txt
