@@ -1179,3 +1179,172 @@ async fn probe_purge_and_remote_attachment_blobs() {
     );
     srv.stop().await;
 }
+
+/// §8.4 那一格：**本机把一条笔记从回收站里恢复出来，而服务器上那条已经被对面永久删除** ——
+/// 文档承诺"走冲突路径而非静默复活"。这一条钉的就是那两句：① **必须问用户**（B 上要出现一张卡片），
+/// ② **服务器上那条必须还是墓碑公告**（悄悄把正文 PUT 回去就是"用同步复活永久删除的数据"，总指令明令禁止）。
+#[tokio::test]
+async fn restoring_a_purged_note_from_the_trash_asks_instead_of_resurrecting_it() {
+    let dav = Tmp::new("revive-dav");
+    let srv = TestServer::start(Backend::Fs(dav.path().to_path_buf())).await;
+    let url = srv.base_url();
+    let a = Device::boot("rs-a", &url);
+    let folder = a.app.default_folder_id().unwrap();
+    let note = a.app.create_note(&folder, doc("要被恢复的这一版")).unwrap();
+    let id = notera_core::EntityId::parse(&note.id).unwrap();
+    for _ in 0..3 {
+        a.app.sync_once().await.expect("A 公告起点");
+    }
+    let b = Device::boot("rs-b", &url);
+    for _ in 0..4 {
+        b.app.sync_once().await.expect("B 追平");
+    }
+    // B 删（本机脏，还没公告），A 那边永久删除并公告
+    b.app.store().delete_note(&id).unwrap();
+    a.app.store().purge_note(&id).expect("A 永久删除");
+    for _ in 0..4 {
+        a.app.sync_once().await.expect("A 公告永久删除");
+    }
+    // 用户在 B 上明确点了"恢复到正常列表"
+    b.app.store().restore_note(&id).expect("B 恢复");
+    let mut rounds = Vec::new();
+    for _ in 0..4 {
+        let st = b.app.sync_once().await.expect("B 轮次");
+        rounds.push((st.conflicts, st.rejections, st.outcome));
+    }
+    let row = b.app.store().get_note(&id).unwrap();
+    let st = b.app.store().stats().unwrap();
+    let cards = b.app.open_conflicts().unwrap_or_default();
+    let mut problems = Vec::new();
+    if cards.is_empty() {
+        problems.push(
+            "B 那台没被问一句：对面永久删除、本机从回收站恢复，§8.4 承诺的是走冲突路径而不是静默二选一"
+                .to_string(),
+        );
+    }
+    if row.is_none() {
+        problems.push("本机用户明确恢复出来的那一版不见了（冲突期间必须留着等他决定）".to_string());
+    }
+    // 服务器上那条记录还是不是墓碑公告 —— 被 PUT 回正文就是"用同步复活永久删除的数据"。
+    let rec = dav
+        .path()
+        .join(".notes")
+        .join("records")
+        .join("note")
+        .join(format!("{}.json", note.id));
+    let raw = std::fs::read_to_string(&rec).unwrap_or_default();
+    let env: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+    if raw.is_empty() || env["purged"] != json!(true) || !env["payload"].is_null() {
+        problems.push(format!(
+            "服务器上那条被复活回来了：purged={} payload={} 含正文={}",
+            env["purged"],
+            if env["payload"].is_null() {
+                "null"
+            } else {
+                "非空"
+            },
+            raw.contains("要被恢复的这一版")
+        ));
+    }
+    println!(
+        "量具 §8.4：B 的轮次(冲突/拒收/结局)={rounds:?} ｜ 本机这一行={} ｜ 卡片={} 张 ｜ 未决账：脏={} 待办={} ｜ 服务器记录={} 字节、含正文={}",
+        row.as_ref()
+            .map(|n| format!("rev={}/sync_rev={}/删={}", n.rev, n.sync_rev, n.deleted_at.is_some()))
+            .unwrap_or_else(|| "读不到".to_string()),
+        cards.len(),
+        st.dirty_notes,
+        st.outbox_pending,
+        raw.len(),
+        raw.contains("要被恢复的这一版")
+    );
+    assert!(problems.is_empty(), "{}", problems.join(" ｜ "));
+    srv.stop().await;
+}
+
+/// 同一形状的**下一格**：卡片弹出来之后，用户按「用服务器那一版」（也就是接受对面那次永久删除）——
+/// 这一按必须真的把本机那条收掉（行消失 + purged 墓碑 + 账结清 + 卡片不再回来），
+/// 而不是报一个永远消不掉的错。G24 把"问一句"补上之后，这一格才成为"永久删除"这条链的下一跳。
+#[tokio::test]
+async fn accepting_the_peers_purge_after_a_restore_actually_purges_locally() {
+    let dav = Tmp::new("revive-accept-dav");
+    let srv = TestServer::start(Backend::Fs(dav.path().to_path_buf())).await;
+    let url = srv.base_url();
+    let a = Device::boot("ra-a", &url);
+    let folder = a.app.default_folder_id().unwrap();
+    let note = a
+        .app
+        .create_note(&folder, doc("按下去要真收掉的一版"))
+        .unwrap();
+    let id = notera_core::EntityId::parse(&note.id).unwrap();
+    for _ in 0..3 {
+        a.app.sync_once().await.expect("A 公告起点");
+    }
+    let b = Device::boot("ra-b", &url);
+    for _ in 0..4 {
+        b.app.sync_once().await.expect("B 追平");
+    }
+    b.app.store().delete_note(&id).unwrap();
+    a.app.store().purge_note(&id).expect("A 永久删除");
+    for _ in 0..4 {
+        a.app.sync_once().await.expect("A 公告永久删除");
+    }
+    b.app.store().restore_note(&id).expect("B 恢复");
+    for _ in 0..3 {
+        b.app.sync_once().await.expect("B 问出卡片");
+    }
+    let cards = b.app.open_conflicts().expect("收件箱");
+    let here: Vec<_> = cards
+        .iter()
+        .filter(|c| c.note_id == id.to_string())
+        .cloned()
+        .collect();
+    let mut problems = Vec::new();
+    if here.is_empty() {
+        problems.push("夹具没造对：B 上该有一张对面永久删除的卡片".to_string());
+    } else {
+        let card_id: i64 = serde_json::to_value(&here[0])
+            .expect("卡片可序列化")
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .expect("卡片带行号");
+        let res = b
+            .app
+            .resolve_conflict(notera_host::commands::ResolveConflictCmd {
+                id: card_id,
+                action: "replaceWithRemote".into(),
+            });
+        println!(
+            "量具 G24：B 按「用服务器那一版」的结果={:?}",
+            res.as_ref().err()
+        );
+        for _ in 0..6 {
+            b.app.sync_once().await.expect("B 收尾");
+        }
+        let st = b.app.store().stats().expect("B 的统计");
+        if b.app.store().get_note(&id).expect("读库").is_some() {
+            problems.push("按了对面那一版，本机这条却还在".to_string());
+        }
+        if st.tombstones_purged == 0 {
+            problems.push("按了对面那一版却没落下 purged 墓碑 —— 以后还能被写活".to_string());
+        }
+        if st.dirty_notes != 0 || st.outbox_pending != 0 {
+            problems.push(format!(
+                "裁决之后账没结清：dirty={} outbox={}",
+                st.dirty_notes, st.outbox_pending
+            ));
+        }
+        if !b
+            .app
+            .open_conflicts()
+            .expect("收件箱")
+            .iter()
+            .any(|c| c.note_id == id.to_string())
+        {
+            // 卡片消掉才算真收口（这一句是反着写的：消不掉就是还挂着）
+        } else {
+            problems.push("裁决过的卡片又回到收件箱".to_string());
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join(" ｜ "));
+    srv.stop().await;
+}

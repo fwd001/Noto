@@ -10,7 +10,7 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | **593 通过 / 0 失败 / 6 ignored**（592 → 593 = G22 修好之后那条两设备判据升进主干：`sync_once.rs::a_permanent_delete_reaches_a_device_that_had_nothing_pending`，变异 M99/M100 各红过一次；这一批的数是在 0.0.39 那棵树上**独占机器**重跑的，`TEST_EXIT=0`、72 个 test result 行、arch-check 30/30、clippy 0/0、fmt `FMTCHK=0`。上一格（591 → 592 = G22 的引擎侧判据 `a_purged_remote_view_purges_a_clean_local_row`）记的那次变异当时是**假绿**：它断言的是引擎发了 `Tombstone{purged:true}`，而落库那侧把这个 bool 吞了 —— 0.0.39 把它改成断 `ApplyOp::Purge`）（15 个单元 + 44 个集成测试二进制 + 13 个 doc-test = 72 个 test result 行；2026-09-29 下午在 0.0.38 这棵树上**独占机器**重跑，此前那一次记数是在 0.0.28 那棵树（0.0.27 → 0.0.28 之间只动了 tauri 的打包配置，Rust 代码一个字没变，两棵树上都是 563/0/2），本日几批依次是 535 → 537 → 541 → 544 → 556 → 557 → 558 → 559 → 560 → 561 → 563 → 569 → 570 → 576 → 578 → 579 → 580 → 581 → **582**（+6 = XML-01 ~ XML-04 那六条"换 XML 解析库版本"的行为锚；+2 = CY-01 两台真设备的文件夹环、CY-02 已坏库的递归查询不许卡死；+1 = SY-CONV-01 同内容收敛不许留下永久待同步；+1 = P11-SR-01 两台设备从同一确认点各自推到同一个 rev；+1 = SY-REV-01 `remote_rev` 要真喂进实体行并且下一次编辑真的取大；+1 = P19 那条规划层单测"已裁决过的同一份分歧不许重问"（0.0.36 时编号是 P14）；582 → **584** = SY-REJ-01 的两条：引擎侧"拒收要计数并留下原因"、host 侧"有拒收就不许折成已同步"；**584 → 590**（0.0.38）= SY-DEL-01 一条（删除要传到空闲的那一台，G20）、SY-REJ-02 一条（引擎落墓碑那一处的拒收也要有去处）、P20 四条（规划层四方向单测 + 三颗按钮各自的两个真设备裁决分支）；**590 → 591** = SY-MISS-01 一条（服务器把记录弄丢时本机不许少东西、不许留永久待同步 —— 顺带量出缺口 **G21**：§10 那条 404→补传的路径今天不可达）。**这条数字有口径**：`cargo test` 默认遇到第一个失败的二进制就停，所以叠着别的套件跑出来的"passed=499 / failed=1"既不是全量也不是产品状态 —— 今天真就这么红过一次（`latency_injection_delays_responses` 是墙钟判据），单跑 16/16、整树独占跑就是下面这行。第一条 ignored 是 `conflict_payload_e2e.rs:519` 的**留档夹具**，由 `scripts/verify-p11-panel.mjs` 显式调用生成两台设备的现场；第二、三条是 **GC / 体检的规模基准**（同一个 `attachment_gc_scale.rs` 里的两条：GC 每轮代价 + 磁盘体检 100/1000 两档），第四条是 **30 分钟泄漏长跑** `leak_trend.rs`，第五条是 0.0.38 新加的**计划输入每轮代价**量具 `plan_input_scale.rs`（20000 行、release 口径：新加的那条 `remote_moved_entities` 稳态 best **9.42 ms** / 中位 10.27 ms，整库待追 25.50 ms；原有 `dirty_entities` 2.52 ms —— 轮间隔 25 s，占空比 ~0.04%，不动 PERF-05 的"空轮 1 请求 0 字节"） —— 第六条是 0.0.39 为缺口 G23 补的**永久删除 × 远端附件**量具 `sync_once.rs::probe_purge_and_remote_attachment_blobs`（把一条带附件的笔记按产品路径挂好、追平、再永久删除，然后自己走一遍服务器目录打出清单 —— 只出数不判绿，因为"要不要连附件一起删"是 D8 那个待拍板的口径）—— 六条都由 `-- --ignored --nocapture` 显式跑，都是刻意 `#[ignore]` 的，不是被跳过的测试：前两条会把 CI 变成"测这台机器的 SQLite 手感"，最后一条本身要 30 分钟。此前台账写的"0 ignored"是错的，2026-09-28 按实测更正） |
+| `cargo test --workspace` | **595 通过 / 0 失败 / 6 ignored**（593 → 595 = G24 那两条两设备判据（SY-DEL-03），变异 M102/M103 各红过一次；592 → 593 = G22 修好之后那条两设备判据升进主干：`sync_once.rs::a_permanent_delete_reaches_a_device_that_had_nothing_pending`，变异 M99/M100 各红过一次；这一批的数是在 0.0.39 那棵树上**独占机器**重跑的，`TEST_EXIT=0`、72 个 test result 行、arch-check 30/30、clippy 0/0、fmt `FMTCHK=0`。上一格（591 → 592 = G22 的引擎侧判据 `a_purged_remote_view_purges_a_clean_local_row`）记的那次变异当时是**假绿**：它断言的是引擎发了 `Tombstone{purged:true}`，而落库那侧把这个 bool 吞了 —— 0.0.39 把它改成断 `ApplyOp::Purge`）（15 个单元 + 44 个集成测试二进制 + 13 个 doc-test = 72 个 test result 行；2026-09-29 下午在 0.0.38 这棵树上**独占机器**重跑，此前那一次记数是在 0.0.28 那棵树（0.0.27 → 0.0.28 之间只动了 tauri 的打包配置，Rust 代码一个字没变，两棵树上都是 563/0/2），本日几批依次是 535 → 537 → 541 → 544 → 556 → 557 → 558 → 559 → 560 → 561 → 563 → 569 → 570 → 576 → 578 → 579 → 580 → 581 → **582**（+6 = XML-01 ~ XML-04 那六条"换 XML 解析库版本"的行为锚；+2 = CY-01 两台真设备的文件夹环、CY-02 已坏库的递归查询不许卡死；+1 = SY-CONV-01 同内容收敛不许留下永久待同步；+1 = P11-SR-01 两台设备从同一确认点各自推到同一个 rev；+1 = SY-REV-01 `remote_rev` 要真喂进实体行并且下一次编辑真的取大；+1 = P19 那条规划层单测"已裁决过的同一份分歧不许重问"（0.0.36 时编号是 P14）；582 → **584** = SY-REJ-01 的两条：引擎侧"拒收要计数并留下原因"、host 侧"有拒收就不许折成已同步"；**584 → 590**（0.0.38）= SY-DEL-01 一条（删除要传到空闲的那一台，G20）、SY-REJ-02 一条（引擎落墓碑那一处的拒收也要有去处）、P20 四条（规划层四方向单测 + 三颗按钮各自的两个真设备裁决分支）；**590 → 591** = SY-MISS-01 一条（服务器把记录弄丢时本机不许少东西、不许留永久待同步 —— 顺带量出缺口 **G21**：§10 那条 404→补传的路径今天不可达）。**这条数字有口径**：`cargo test` 默认遇到第一个失败的二进制就停，所以叠着别的套件跑出来的"passed=499 / failed=1"既不是全量也不是产品状态 —— 今天真就这么红过一次（`latency_injection_delays_responses` 是墙钟判据），单跑 16/16、整树独占跑就是下面这行。第一条 ignored 是 `conflict_payload_e2e.rs:519` 的**留档夹具**，由 `scripts/verify-p11-panel.mjs` 显式调用生成两台设备的现场；第二、三条是 **GC / 体检的规模基准**（同一个 `attachment_gc_scale.rs` 里的两条：GC 每轮代价 + 磁盘体检 100/1000 两档），第四条是 **30 分钟泄漏长跑** `leak_trend.rs`，第五条是 0.0.38 新加的**计划输入每轮代价**量具 `plan_input_scale.rs`（20000 行、release 口径：新加的那条 `remote_moved_entities` 稳态 best **9.42 ms** / 中位 10.27 ms，整库待追 25.50 ms；原有 `dirty_entities` 2.52 ms —— 轮间隔 25 s，占空比 ~0.04%，不动 PERF-05 的"空轮 1 请求 0 字节"） —— 第六条是 0.0.39 为缺口 G23 补的**永久删除 × 远端附件**量具 `sync_once.rs::probe_purge_and_remote_attachment_blobs`（把一条带附件的笔记按产品路径挂好、追平、再永久删除，然后自己走一遍服务器目录打出清单 —— 只出数不判绿，因为"要不要连附件一起删"是 D8 那个待拍板的口径）—— 六条都由 `-- --ignored --nocapture` 显式跑，都是刻意 `#[ignore]` 的，不是被跳过的测试：前两条会把 CI 变成"测这台机器的 SQLite 手感"，最后一条本身要 30 分钟。此前台账写的"0 ignored"是错的，2026-09-28 按实测更正） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测）。**这一行的"0/0"从 2026-09-29 起要求两件事一起确认**：把退出码显式赋给变量并打印（`rc=$?; echo "CLIPPY_EXIT=$rc"`），加上输出里 0 条 `error`/`warning` —— 0.0.32 那一批这里假绿过一次（两条 `enex.rs` 的 lint 被"后台任务通知里那个属于最后一个进程的退出码"盖掉了，见下面 0.0.33 那条更正） |
 | L5 崩溃注入 `--test crash_recovery` | 小库矩阵 **8** 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零（名单一处在 `CRASH_POINTS`；另外三点各自要专门夹具，不在这一批里跑：`after_segment_write` 要大库 = `compaction_crash`，`after_quarantine_move` 要零引用 = `attachment_gc`，`after_corrupt_park` 要"本机被截断而服务器是好的" = `attachment_faults`，见 TEST-PLAN CI-CRASH-10/11/12） |
 | L5 压实崩溃注入 `--test compaction_crash` | 1/1（240 条大库真死在 `after_segment_write`，索引不引用不存在的分段） |
@@ -45,6 +45,29 @@
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
 ### 新增
+- **本机把一条笔记从回收站里恢复出来，而对面已经把它永久删除 —— 恢复被静默公告出去，等于用同步把永久删除的数据复活了（缺口 G24，P1 级；判据 SY-DEL-03；版本 0.0.39 → 0.0.40）**
+  - **实测形状**（两台真设备 + 真 TCP 服务器 + `Backend::Fs`）：A 建一条并公告 → B 追平 → **B 删（本机脏、还没公告）** →
+    A `purge_note` 并公告 → **B 把这条恢复** → B 连跑 4 轮。修之前的读数：`轮次(冲突/拒收/结局)=[(0,0,Converged),(0,0,NoOp)×3]`、
+    B 上 `rev=3 / sync_rev=3 / 删=false`、**卡片 0 张**，而服务器盘上那条记录变成 **`purged=false / payload 非空 / 含正文=true`（563 B）** ——
+    服务器和任何后接入的设备都会重新拿到那条"已被永久删除"的笔记，而两台界面都说"已同步"。
+    这撞的是主指令里的一条明令禁止（**不许靠同步复活已删除的数据**），所以档位是 P1（数据安全 + 同步正确性）。
+  - **根因两半**：① 永久删除的公告信封**仍然带着最后一版的 `hash`**（清单条目 `h` 就是它），而计划层 P11 那一格的条件写的是
+    "远端已删 **且不是永久删除**"（`&& !r.purged`）—— 于是这一对没进 P11，顺着 P7"内容相同即收敛"落进 `Push`（两侧正文哈希当然相同，
+    本来就是同一版；本机 rev 更高 ⇒ 把正文 PUT 回服务器）；② 卡片那一侧的「用服务器那一版」只问"对面是不是删除态"，
+    对墓碑只落**软删** —— 用户按的是"接受永久删除"，本机那条却留在回收站里可恢复（那是 G22 同一个形状的第二次出现）。
+  - **修两处**：① `P11` 判据改成 `local_changed && (r.deleted_at.is_some() || r.purged)` —— **永久删除也是一种"远端已删"**，
+    这一格从此走冲突路径（也就是 SYNC-PROTOCOL §8.4 那句话，现在另有 §8.5 把机制写清楚）；
+    ② `resolve_conflict` 的 `remote` 那一支按信封的 `purged` 分流：是墓碑就走 `Store::purge_note`（行连同正文消失 + purged 墓碑 + 结清账），
+    软删才走 `delete_note`。
+  - **判据两条，都是先红后绿**（红的读数就是上面那一串）：
+    `sync_once.rs::restoring_a_purged_note_from_the_trash_asks_instead_of_resurrecting_it`（必须出现卡片 + 服务器那条必须还是墓碑公告）、
+    `sync_once.rs::accepting_the_peers_purge_after_a_restore_actually_purges_locally`（按下去之后本机这条真消失、落下 purged 墓碑、卡片不回来、账结清）。
+    **变异 M102**（P11 还原成 `&& !r.purged`）→ 两条都红；**M103**（`purge_note` 换回 `delete_note`）→ **只红在第二条**、第一条照旧绿。
+    **两种红话不同 ⇒ 规划那一半与按钮那一半各自有独立证据**（这也是为什么第二条判据要单独存在：只看"有没有弹卡片"永远看不见按钮是死的）。
+  - **台账（2026-09-29 晚，0.0.40，独占机器）**：workspace **595 通过 / 0 失败 / 6 ignored**（593 → 595 = 这两条；`TEST_EXIT=0`、72 行 test result）、
+    clippy `-D warnings` **0/0**、fmt `--check` **0**、arch-check **30/30**、check-versions 一致（0.0.39 → 0.0.40）。
+    文档同批：SYNC-PROTOCOL §7 P11 那一行 + 新增 §8.5（墓碑的哈希不许被当成"已收敛"）、CONFLICT-RESOLUTION 那颗按钮的语义按 §8.1 三态分流、
+    PRODUCTION-READINESS §7 新增 **G24（已修）**、TEST-PLAN 新增 **SY-DEL-03**、FINAL-REVIEW §49 那条真机清单补上 B 侧这一跳。
 - **对面「永久删除」一条已同步的笔记，另一台却只把它放进回收站（缺口 G22，P0 级；判据 SY-DEL-02；版本 0.0.38 → 0.0.39）**
   - **实测形状**（两台真设备 + 真 TCP WebDAV）：A 建一条并公告 → B 追平（`rev=1/sync_rev=1`，干净）→ A `purge_note` 并公告 → B 连跑 5 轮。
     B 那台最后停在**回收站里可一键恢复**（`rev=2 / 删=true`），`tombstones=1` 而 `tombstones_purged=**0**`，之后 4 轮 `outcome` 全 `NoOp`。

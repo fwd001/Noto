@@ -295,7 +295,7 @@ idle
 | P8 | 两侧都改 | `H` 不同 | **真冲突** | 交 CONFLICT-RESOLUTION.md §3 |
 | P9 | 本地 `deleted_at!=—` 且脏 | 远端有 | 本地删除待传播 | `Push`（信封带 `deleted_at`） |
 | P10 | 本地有 | 远端 `deleted_at!=—` | 远端删除 | 本地软删（若本地更脏 → P11） |
-| P11 | 本地在删除后又被编辑（`rev>sync_rev` 且 `updated_at>deleted_at`） | 远端已删 | **删除 vs 修改** | 冲突：保留内容 + 提示，绝不静默二选一 |
+| P11 | 本地在删除后又被编辑（`rev>sync_rev` 且 `updated_at>deleted_at`）**或本机把这条恢复了** | 远端已删（**软删与永久删除都算**，见 §8.5） | **删除 vs 修改** | 冲突：保留内容 + 提示，绝不静默二选一 |
 | P12 | 本地 `purged` 待传播 | 远端有 | 永久删除传播 | `Push`(`purged:true`) → 本地移入 `tombstones` |
 | P13 | `—` | 远端 `purged:true` | 别处已永久删除 | 写 `tombstones(purged=1)`，本地若有行则删除。落库是**独立一条** `ApplyOp::Purge`，不是 `Tombstone` 上的一个布尔位：0.0.38 及之前挂在布尔位上，host 的映射按 op 种类读、把它吞了，于是对端只落成软删（缺口 G22，判据 SY-DEL-02） |
 | P14 | 本地 `tombstones` 有 | 远端 `—` | 删除已生效或从未上传 | 若 `sync_rev` 曾 > 0 且无远端记录 → 补传墓碑 |
@@ -349,6 +349,22 @@ idle
 ### 8.4 恢复
 
 从回收站恢复 = 一次 `deleted_at=NULL` 的 `Push`（`rev` +1）。若恢复时远端该 id 已被永久删除（P13），走冲突路径而非静默"复活"——用户明确恢复才允许重建。
+
+### 8.5 墓碑的哈希**不许**被当成"内容已收敛"（0.0.40，缺口 G24）
+
+永久删除公告（`purged=true, payload=null`）仍然带着**最后一版的 `hash`** —— 清单条目上的 `h` 就是这么写的。
+于是那一格：本机这条被用户从回收站**恢复**出来（脏，`local_changed`），对面那条已被永久删除，
+两侧内容哈希**当然相同**（同一份正文）。如果 P11 的判据写成"远端已删**且不是永久删除**才算冲突"，
+这一对就顺着 P7"内容相同即收敛"落进 `Push`，代价是 **本机把自己那一版 PUT 回服务器，把对面的永久删除复活了**：
+服务器上的记录重新变成 `purged=false / payload 非空`，第三台设备追平之后那条笔记又活了，
+而界面上**一张卡片都没有**（两台都说"已同步"）。这正是主指令明令禁止的"用同步复活已删除的数据"。
+
+- 判据：`P11` 的条件是 `local_changed && (r.deleted_at.is_some() || r.purged)` —— **永久删除也是一种"远端已删"**。
+- 后果的收口在卡片那一侧：这种形状弹的是 P11（删除 vs 修改）卡片，用户按「用服务器那一版」时
+  走的是 §8.1 那三种落库中的**永久删除**那一条（不是软删），本机那条连同正文一起消失。
+- 证据：`notera-host/tests/sync_once.rs::restoring_a_purged_note_from_the_trash_asks_instead_of_resurrecting_it`
+  （两设备 + 真 TCP 服务器 + `Backend::Fs`，直接读服务器盘上那条记录）与
+  `accepting_the_peers_purge_after_a_restore_actually_purges_locally`（按下去之后本机这条真消失、落下 purged 墓碑、账结清）。
 
 ---
 

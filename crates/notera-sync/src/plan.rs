@@ -207,7 +207,11 @@ fn both_present(l: &LocalView, r: &RemoteView) -> Decision {
     }
 
     // P11 删除 vs 修改（双向都算冲突，且本地内容必须先保留）
-    if local_changed && r.deleted_at.is_some() && !r.purged {
+    // **远端那一版是永久删除的墓碑时也算**：这里以前写着 `!r.purged`，于是"对面永久删除 + 本机把这条
+    // 从回收站里恢复了"那一格掉到 P7 的"内容相同即收敛"上 —— 墓碑公告带的 `hash` 就是最后一版的正文哈希，
+    // 两边一比就"相同"，本机那一版被静默 PUT 回服务器，**永久删除被同步复活了**（缺口 G24，两设备实测：
+    // 卡片 0 张、服务器上那条变成 `purged=false / payload 非空 / 含正文=true`）。§8.4 承诺的是走冲突路径。
+    if local_changed && (r.deleted_at.is_some() || r.purged) {
         return Decision {
             key: l.key(),
             action: Action::Conflict(ConflictKind::UpdateDelete),

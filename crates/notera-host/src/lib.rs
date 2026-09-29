@@ -978,24 +978,40 @@ impl App {
         }
         if resolution == "remote" {
             if let Some(r) = row.as_ref() {
-                let remote_deleted = matches!(r.kind, notera_core::EntityKind::Note)
-                    && r.remote_wire
+                // 对面那一版的**形状**从卡片自己带的原始信封读（不猜）。两种删除要分开放：
+                // `deleted_at` 是软删（进回收站，还能恢复），`purged` 是**永久删除**（行连同正文消失 +
+                // purged 墓碑）。以前这里只问"是不是删除态"，于是用户对着"对面已永久删除"那张卡片
+                // 按「用服务器那一版」，本机只落了个软删 —— 行还躺在回收站里可以一键恢复，
+                // 而用户以为自己是按了"永久删除那一版"（缺口 G24 的第二半，两设备实测）。
+                let envelope = match r.kind {
+                    notera_core::EntityKind::Note => r
+                        .remote_wire
                         .as_deref()
-                        .and_then(|w| {
-                            serde_json::from_str::<serde_json::Value>(w)
-                                .ok()
-                                .map(|env| match env.get("deleted_at") {
-                                    Some(v) if v.is_null() => false,
-                                    Some(v) => v.as_str().map(|s| !s.is_empty()).unwrap_or(true),
-                                    None => false,
-                                })
-                        })
-                        .unwrap_or(false);
+                        .and_then(|w| serde_json::from_str::<serde_json::Value>(w).ok()),
+                    _ => None,
+                };
+                let remote_deleted = envelope
+                    .as_ref()
+                    .map(|env| match env.get("deleted_at") {
+                        Some(v) if v.is_null() => false,
+                        Some(v) => v.as_str().map(|s| !s.is_empty()).unwrap_or(true),
+                        None => false,
+                    })
+                    .unwrap_or(false);
+                let remote_purged = envelope
+                    .as_ref()
+                    .and_then(|env| env.get("purged"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 if remote_deleted {
-                    self.inner
-                        .store
-                        .delete_note(&r.id)
-                        .map_err(CmdError::from)?;
+                    if remote_purged {
+                        self.inner.store.purge_note(&r.id).map_err(CmdError::from)?;
+                    } else {
+                        self.inner
+                            .store
+                            .delete_note(&r.id)
+                            .map_err(CmdError::from)?;
+                    }
                 }
             }
         }
