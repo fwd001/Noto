@@ -147,6 +147,38 @@ jobs:
       - name: 出包（dmg + app）
         run: pnpm --dir apps/desktop tauri build --bundles dmg,app -v
 
+      # §4 的"包可安装/可启动"在 macOS 这一腿上的结构校验（CI-CD.md L6）。
+      # 挂 .dmg 就是"安装"这一步的等价动作（拖进 Applications 不需要管理员权限），
+      # 读的是 bundle 自己的声明 —— 版本号有没有退回默认、主程序是不是真的 Mach-O，
+      # 这些在"打包成功"里都看不见。任何一环读不到就红，不 skip（§40）。
+      - name: 结构校验这个 .dmg（挂载 + bundle 声明 + 主程序是 Mach-O）
+        run: |
+          set -euo pipefail
+          DMG=$(ls -1 target/release/bundle/dmg/*.dmg | head -1)
+          test -n "$DMG" || { echo "没有 .dmg 产物"; exit 1; }
+          MNT=/Volumes/notera-check
+          hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$DMG" > /tmp/hdiutil.txt 2>&1
+          # 挂了就必须卸载：泄漏的挂载点会让这台 runner 后面的步骤读到旧卷
+          trap 'hdiutil detach "$MNT" -force >/dev/null 2>&1 || true' EXIT
+          APP=$(find "$MNT" -maxdepth 2 -name '*.app' -type d | head -1)
+          test -n "$APP" || { echo "卷里找不到 .app —— $(cat /tmp/hdiutil.txt)"; exit 1; }
+          plutil -p "$APP/Contents/Info.plist" > /tmp/infoplist.txt
+          # 主程序名从已经读出来的那份 plutil 文本里取，**不再叫第二次 plutil**：
+          # `-extract … raw -o -` 这种写法在不同 macOS 版本上的行为我没在这台机器上验得了，
+          # 少一个没验过的调用就少一个可能把这条绿 job 演成红的地方。
+          EXE=$(sed -n 's/.*"CFBundleExecutable" => "\(.*\)"/\1/p' /tmp/infoplist.txt | head -1)
+          test -n "$EXE" || { echo "Info.plist 里没有 CFBundleExecutable"; exit 1; }
+          file "$APP/Contents/MacOS/$EXE" > /tmp/macho.txt
+          node scripts/check-macos-bundle.mjs /tmp/infoplist.txt \
+            --version "${{ needs.meta.outputs.version }}" --file /tmp/macho.txt
+          {
+            echo "### macOS 产物核对（§4）"
+            echo "- 镜像：\`$(basename "$DMG")\`（$(wc -c <"$DMG") 字节），已挂载并读出 bundle"
+            echo "- SHA-256：\`$(shasum -a 256 "$DMG" | cut -c1-64)\`"
+            cat /tmp/macho.txt
+            grep -E 'CFBundle(ShortVersionString|Identifier|Executable|PackageType)' /tmp/infoplist.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: 收集产物
         uses: actions/upload-artifact@v4
         with:
