@@ -13,6 +13,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Windows 这条 job 原本没有"把现场递回来"的通道（日志正文未认证读不到 = 403、产物字节 = 401，
+# 两条都在 Android 那腿上实测过）。整段跑字进 transcript，失败时由 release.yml 里那条
+# `if: failure()` 的步骤贴成 commit 评论 —— 这台 job 是最慢的一条，瞎猜一轮就是十几分钟。
+try { Start-Transcript -Path (Join-Path $TempDir 'win-verify.log') -Force | Out-Null } catch { Write-Warning "开不了 transcript：$_" }
 
 function Resolve-Single($pattern, $what) {
     $all = @(Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue)
@@ -43,7 +47,10 @@ if ((Get-Item $report).Length -lt 40) { throw "报告文件只有 $((Get-Item $r
 Write-Output '--- 现场报告 ---'
 Get-Content $report
 
-node (Join-Path $here 'check-windows-package.mjs') $report --version $Version
+# 子进程（node）的 stdout **不进 transcript**（本机验出来的：transcript 里只有 PowerShell 自己写的字），
+# 所以把断言的输出接进变量再写一遍 —— 这样失败时评论里能看到到底是哪条判据不过。
+$check = node (Join-Path $here 'check-windows-package.mjs') $report --version $Version 2>&1 | Out-String
+Write-Output $check
 if ($LASTEXITCODE -ne 0) { throw "Windows 产物结构校验没过（退出 $LASTEXITCODE）" }
 
 if ($StepSummary -ne '') {

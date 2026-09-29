@@ -133,6 +133,17 @@ jobs:
             -StepSummary $env:GITHUB_STEP_SUMMARY
           if ($LASTEXITCODE -ne 0) { throw "Windows 产物结构校验没过（退出 $LASTEXITCODE）" }
 
+      # 与 macOS 那腿同一条通道：Windows 是三条里最慢的一条（release 构建十几分钟），
+      # 红了又读不到现场就等于白等一轮。整段 transcript 由 `verify-windows-package.ps1` 写盘，这里贴出去。
+      # 注意：node 子进程的 stdout 不进 PowerShell transcript（本机验出来的），所以脚本里把断言输出
+      # 接进变量再写一遍 —— 不然评论里只看得到现场报告、看不到哪条判据不过。
+      - name: 把校验现场贴成 commit 评论（诊断用，修好就删）
+        if: failure()
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/post-ci-diagnostic.mjs --file "$env:RUNNER_TEMP/win-verify.log" --label "Windows 产物结构校验的现场"
+
       - name: 收集产物
         if: always()
         uses: actions/upload-artifact@v4
