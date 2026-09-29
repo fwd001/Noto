@@ -3922,6 +3922,34 @@ mod tests {
     }
 
     #[test]
+    fn pressing_today_after_deleting_the_note_creates_a_fresh_one_instead_of_raising_it_from_the_trash(
+    ) {
+        // 删掉今天那一篇之后按「今天」：给的必须是一篇**新的空页**，而不是把回收站里那条拉回来。
+        // "不许复活已删除的数据"这条禁令不只管同步，也管界面上一颗看起来无害的按钮。
+        let app = boot("diary-trashed");
+        let first = app.daily_note().expect("先建出当天那一篇");
+        let id = notera_core::EntityId::parse(&first.note.id).unwrap();
+        app.store().delete_note(&id).expect("删进回收站");
+        let again = app.daily_note().expect("删掉之后再按「今天」");
+        assert!(again.created, "回收站里那条不许被这颗按钮抬回来：必须新建");
+        assert_ne!(
+            first.note.id, again.note.id,
+            "新建的那一篇与回收站里那一条不是同一条"
+        );
+        assert!(again.note.deleted_at.is_none(), "新建的这篇本身必须是活的");
+        assert_eq!(
+            app.store()
+                .list_notes(&notera_store::NoteQuery::all())
+                .unwrap()
+                .into_iter()
+                .filter(|n| n.title.starts_with(&first.day))
+                .count(),
+            1,
+            "正常列表里当天只留那一篇（回收站里的那条不算在列表里）"
+        );
+    }
+
+    #[test]
     fn drain_only_follows_real_progress() {
         let st = |outcome, pushed, pulled| notera_sync::RoundStats {
             requests: 200,

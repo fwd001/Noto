@@ -178,9 +178,17 @@ export const useNoteStore = defineStore('notes', () => {
         Commands.dailyNote,
         {},
       );
-      if (mode.value.kind === 'trash') await setMode({ kind: 'all' });
-      else await load();
-      selectedId.value = today.note.id;
+      // 「按了却看不见」不算做完：回收站视图、以及"日记落在默认本而当前看的是别的文件夹"，
+      // 都要把视图换到「全部」并直接选上那一篇 —— 否则编辑器开了，列表里却没有它。
+      const elsewhere =
+        mode.value.kind === 'trash' ||
+        (mode.value.kind === 'folder' && mode.value.folderId !== today.note.folderId);
+      if (elsewhere) {
+        await setMode({ kind: 'all' }, today.note.id);
+      } else {
+        await load();
+        selectedId.value = today.note.id;
+      }
       titles.value = { ...titles.value, [today.note.id]: today.note.title };
       // 与"新建笔记"同一件事：只选中不打开，用户看到的是一块空白面板（真窗口实测踩过）。
       await useEditorStore().open(today.note.id);

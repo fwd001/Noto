@@ -184,6 +184,26 @@ describe('「今天」这一格（日记）', () => {
     expect(service.callsOf('get_note').length).toBeGreaterThan(0);
   });
 
+  it('在别的文件夹视图里按「今天」：视图要换到看得见它的位置', async () => {
+    // 日记落在**默认本**，所以"当前正在看某个子文件夹"时，那一行不在眼前的列表里。
+    // 编辑器开了而列表里没有它 = 用户读到的是"这颗按钮没反应"，所以视图必须换。
+    const service = stubLocalService({
+      daily_note: () => ({
+        note: noteFixture({ id: 'd-1', title: '2026-09-29', folderId: 'f-default' }),
+        day: '2026-09-29',
+        created: true,
+      }),
+      list_notes: () => [row('d-1', '2026-09-29')],
+      get_note: () => noteFixture({ id: 'd-1', title: '2026-09-29', folderId: 'f-default' }),
+    });
+    const notes = useNoteStore();
+    await notes.setMode({ kind: 'folder', folderId: 'f-other' });
+    await notes.openToday();
+    expect(notes.mode.kind).toBe('all');
+    expect(notes.selectedId).toBe('d-1');
+    expect(service.callsOf('daily_note')).toHaveLength(1);
+  });
+
   it('核心报错时把具名文案交出去，并且不选中任何一篇', async () => {
     const service = stubLocalService({
       daily_note: () => {
