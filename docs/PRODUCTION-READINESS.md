@@ -392,14 +392,18 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
   实测候选集确实收进了这一条（`候选=1，含这一条=true`），**可那几轮还是 `NoOp`**，
   所以卡点在候选行**下游**（304 那一支的 `remotes` 来源与窗口/分段合并，见 `sync/lib.rs:550-552`），
   不是输入集合。当时我改的候选查询因此被回退了：一条"改了但没修好"的规则不进主干。
-  **下一步最短的一跳（先想清楚，别重新推）**：`outcome: NoOp` 这一格有歧义 —— 落墓碑那一支
-  （`sync/lib.rs` 里的 `tombstone_ops`）**既不动 `st.outcome` 也不加 `pulled`**，所以"这轮说 NoOp"
-  并不等于"这轮没规划"（实测第 0 轮就是 NoOp，而那次软删正是它落的）。下一批要做的不是继续读代码，
-  而是把两件事**分开量**：① 在引擎侧用 FakeLocal/FakeRemote 造一次"locals 里有这条干净行 +
-  远端视图 purged=true"的轮次（`crates/notera-sync/tests/engine.rs` 的 `local(...)` / `ent(...)` 把
-  `p` 置 1 就够），看引擎给不给 `ApplyRemotePurge`；② 若给，卡点就在 host 的输入侧 ——
-  `local_views()` 一旦报错会被快路径的 `unwrap_or(false)` 当成"没活"，这条路径要一并验掉。
-  两边各打一次读数之后再动手改：本批就是靠"先读"排除了候选集那一半的。
+  **下一步最短的一跳已经量完了（2026-09-29 本批）**：引擎侧**没问题**。
+  `notera-sync/tests/engine.rs::a_purged_remote_view_purges_a_clean_local_row` 造的就是 B 那个形状
+  （本机一行 `rev == sync_rev` 且已软删 + 远端视图 `rev=2 / d=… / p=1`），引擎确实给出
+  `Tombstone { id, rev:2, purged:true }` —— 也就是说 P13 与落库那一支是对的。
+  顺带纠正一处会把人带偏的读法：**`outcome: NoOp` 不等于"这一轮什么都没做"** ——
+  落墓碑那一支（`sync/lib.rs` 的 `tombstone_ops`）既不动 `st.outcome` 也不加 `pulled`，
+  那条新判据自己就是 NoOp 却把 purge 落了库。
+  所以卡点在**轮次的输入侧**，最可疑的是那一格：`decide(None, Some(远端删除/永久删除))` 答的是
+  P2b「本地没有这一条，无事可做」，而它判断"有没有"的依据只是"这一行在不在本轮 `locals` 里" ——
+  本轮 `locals` 又是在读清单**之前**算的。下一批改的就是这一跳（`local_views()` 与清单读取的先后，
+  或者把 P2b 的"本地没有"换成真的问一次库里有没有），改完之后
+  `patches/g22-purge-propagation-gate.patch` 应当由红转绿。
   解除条件：① 定位"locals 里有这一行、远端视图说 purged=1，而本轮仍判不到 P13"的那一跳；
   ② 一并拍板永久删除要不要把服务器上的记录字节也抹掉（隐私口径，属 §8 的承诺范围）；
   ③ 判据就是 `patches/g22-purge-propagation-gate.patch`（打上即红，红在

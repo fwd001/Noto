@@ -929,3 +929,44 @@ async fn a_rejected_remote_delete_is_counted_and_not_claimed_as_applied() {
         "被拒收的删除不许算作已经落进本机"
     );
 }
+
+/// G22 的定位探针（引擎侧那一半）：本机这一行是**干净**的（`rev == sync_rev`，已经软删过），
+/// 而远端视图说这一条 `purged=1` —— 引擎必须给出"永久删除"的落库（`Tombstone{purged:true}`），
+/// 不能停在软删上。这一格今天真红的就是它：另一台设备上那条"永久删除"的笔记留在回收站里可恢复，
+/// 而本机没有 purged 墓碑，I1/I3 那道防复活闸门因此在这台上不成立。
+#[tokio::test]
+async fn a_purged_remote_view_purges_a_clean_local_row() {
+    let l = FakeLocal::default();
+    // 本机：rev 与确认点一致（=已经追平过对面那一版），并且已经是删除态
+    let mut row = local("g22", 2, 2, "aaaa");
+    row.deleted_at = Some("2026-09-29T00:00:00Z".into());
+    l.locals.lock().unwrap().push(row);
+    let r = FakeRemote::default();
+    let mut m = base_manifest();
+    m.window = Window {
+        since_seq: 1,
+        complete: true,
+        entries: vec![EntryRef {
+            i: "g22".into(),
+            t: "n".into(),
+            r: 2,
+            h: "aaaaaaaaaaaa".into(),
+            s: 40,
+            d: Some("2026-09-29T00:00:00Z".into()),
+            p: 1,
+        }],
+    };
+    m.refresh_checksum();
+    r.seed(m);
+
+    let (st, _evs) = run(l.clone(), r, None).await;
+    let applied = l.applied.lock().unwrap().clone();
+    let purged = applied
+        .iter()
+        .any(|o| matches!(o, ApplyOp::Tombstone { id, purged: true, .. } if id == "g22"));
+    println!("G22 探针：st={st:?} 落库操作={applied:?}");
+    assert!(
+        purged,
+        "远端说 purged=1，引擎却没给出 ApplyRemotePurge：{st:?}"
+    );
+}
