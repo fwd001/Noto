@@ -306,6 +306,26 @@ jobs:
           set -euo pipefail
           "$GITHUB_WORKSPACE/apps/desktop/node_modules/.bin/tauri" android build --apk --debug --target aarch64 2>&1 | tee /tmp/apk.log
 
+      # §4 那句"确保各平台包可正常安装、启动和进行基础功能验证"在 Android 这一腿上，
+      # 不依赖设备能读出来的部分（CI-CD.md L6 承诺的结构校验）。**读不到就红，不许静默跳过**：
+      # 装上但一开就崩的 APK 在"job 绿"里是看不出来的（缺 native 库、versionName 退回 1.0 都属这一类）。
+      - name: 结构校验这份 APK（包名 / versionName / native 库 / 可启动入口）
+        run: |
+          set -euo pipefail
+          GEN="$GITHUB_WORKSPACE/apps/mobile/src-tauri/gen/android"
+          APK=$(find "$GEN" -path '*/outputs/apk/*.apk' -type f | head -1)
+          test -n "$APK" || { echo "找不到 APK —— 出包那步没产出任何 .apk"; exit 1; }
+          AAPT=$(ls -1 "$ANDROID_HOME"/build-tools/*/aapt 2>/dev/null | tail -1 || true)
+          test -n "$AAPT" || { echo "runner 里没有 aapt（build-tools 没装？）—— 无法校验，按红算"; exit 1; }
+          "$AAPT" dump badging "$APK" > /tmp/apk-badging.txt
+          node scripts/check-apk-badging.mjs /tmp/apk-badging.txt --version "${{ needs.meta.outputs.version }}"
+          {
+            echo "### Android 产物核对（§4）"
+            echo "- 文件：\`$(basename "$APK")\`（$(wc -c <"$APK") 字节）"
+            echo "- SHA-256：\`$(sha256sum "$APK" | cut -c1-64)\`"
+            grep -E "^package:|^sdkVersion:|^native-code:|^launchable-activity:" /tmp/apk-badging.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # **两条读数通道**（都是本批实测出来的，不是推测）：
       # ① 未认证能读 `/actions/runs/{id}/artifacts` 的**名字**，读不到日志正文（job logs = 403），
       #    也读不到产物字节（artifact zip = **401 Requires authentication**）。于是把最要紧的几行
