@@ -529,6 +529,8 @@ READY FOR USER TEST
 clippy `-D warnings` 0/0、fmt `--check` 0、arch-check 30/30、check-versions 一致、前端 213/22 + `vue-tsc` 0 错、
 `verify-app` 37/37、`verify-blackbox` 10/10、P11 面板 11/11、契约图 59/59、真窗口 release 9/9。
 交付产物：`Notera_0.0.38_x64_zh-CN.msi` 7.31 MiB、`Notera_0.0.38_x64-setup.exe` 5.40 MiB。
+同批还做了两件收尾：① **计划层 P 表的"摘掉一条会不会有人看见"审计**（SY-RULE-AUDIT-01）—— 摘掉 P13/P12/P9/P3/P2/P11/P6/P4 八条，各有 1~56 条判据红，全部有门禁看着；但口径要说清：这量的是"有没有人看着"，不是"走得到走不到"，G20/G21 都属于后者。 ② 我在 ADR-0021 D4 里留下的"新查询每轮代价未量"那条 §40 记账**已结**（PERF-16 量具，20000 行 / release：稳态 9.42 ms best、整库待追 25.50 ms；轮间隔 25 s ⇒ 占空比 ~0.04%，不动 PERF-05 的"空轮 1 请求 0 字节"）。
+
 CI 侧（未认证 REST 能看到 run 与 step 级结论，看不到日志正文）：#64 `db3d9a2` success；
 **#65 `9a6123e` 红在前端 `pnpm test` 那一步（16 s）**，而 #67 `d87d7ed`（同一份前端代码）在同一步
 16 s 后 ✓ → 定性为 **runner 上的偶发**；本机四种口径（默认并行、`CI=true TZ=UTC`、

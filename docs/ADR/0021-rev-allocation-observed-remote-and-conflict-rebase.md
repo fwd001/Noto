@@ -152,8 +152,7 @@ A 那台**仍然是已删除**（这条由既有的 `conflict_payload_e2e` 钉�
 M94/M95/M96（三颗按钮各自失效）、M98（载荷键名口径漂移）。**M97 是反向证据**：它要验"为 P20 另加
 一格取载荷"，改掉之后判据照样绿 —— 引擎里本来就有一格会为 `DeleteUpdate` 取载荷，我加的那一半是
 死重量，已删。
-残留代价（未量化，按 §40 记在这里）：每轮多一条 `notes`/`folders` × `sync_remote_index` 的连接查询；
-正常收敛后候选集为空，但这一条**没有**在 20000 那一档量过。
+残留代价（**已量，2026-09-29，PERF-16**）：每轮多一条 `notes`/`folders` × `sync_remote_index` 的连接查询。 20000 行 / DB 37.23 MiB、release 口径、与原有 `dirty_entities` **分开计时**：稳态（候选 0 行）新查询 **9.42 ms best / 10.27 中位**，原有那条 2.52 ms；最坏（整库待追，候选 20000 行）25.50 ms。轮间隔 25 s ⇒ 占空比 ~0.04%；不动 §11 的"空轮 1 请求 0 字节"（那是请求与字节预算，`sync_cost` 本批重跑仍绿），也不动 PERF-01 冷启动。量具是 `notera-store/tests/plan_input_scale.rs`（`#[ignore]`，只出数）。
 
 **D3 = 0.0.37 已落地**：`RoundStats` 加了 `rejections` / `last_rejection`，拉取与冲突采纳两处 apply 不再
 `.unwrap_or_default()`；host 折叠状态时**先看拒收再看 `outcome`**（测试里 `outcome` 故意填 `Converged`，
