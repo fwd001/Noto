@@ -163,31 +163,58 @@ jobs:
       # 这些在"打包成功"里都看不见。任何一环读不到就红，不 skip（§40）。
       - name: 结构校验这个 .dmg（挂载 + bundle 声明 + 主程序是 Mach-O）
         run: |
-          set -euo pipefail
-          DMG=$(ls -1 target/release/bundle/dmg/*.dmg | head -1)
-          test -n "$DMG" || { echo "没有 .dmg 产物"; exit 1; }
+          set -uo pipefail
+          mkdir -p /tmp/diag
+          DMG=$(ls -1 target/release/bundle/dmg/*.dmg 2>/dev/null | head -1 || true)
           MNT=/Volumes/notera-check
-          hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$DMG" > /tmp/hdiutil.txt 2>&1
+          # 不管过不过，整段现场（挂载结果、卷里有什么、plutil 全文、file 读数、门禁说了什么）
+          # 都写进 /tmp/diag/macos.txt —— 这一步是新加的，真 runner 上的形状我没法在本机复现，
+          # 红的时候必须能看见"到底哪儿不对"，不然就是一轮瞎猜。
+          # 用**子 shell**跑这一段：里面的 `exit 1` 只结束这段读数，外面的 rc / 卸载 / 摘要写入照常走
+          # （写成 `{ …; }` 的话 `exit` 会直接把整个步骤带走，`rc=$?` 与 detach 都轮不到执行）。
+          (
+            echo "DMG=[$DMG]"
+            [ -n "$DMG" ] || { echo "没有 .dmg 产物"; exit 1; }
+            hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$DMG"
+            APP=$(find "$MNT" -maxdepth 2 -name '*.app' -type d | head -1)
+            echo "APP=[$APP]"
+            [ -n "$APP" ] || { echo "卷里找不到 .app"; exit 1; }
+            plutil -p "$APP/Contents/Info.plist" > /tmp/infoplist.txt
+            # 主程序名从已经读出来的那份 plutil 文本里取，**不再叫第二次 plutil**：
+            # `-extract … raw -o -` 这种写法在不同 macOS 版本上的行为我没在这台机器上验得了，
+            # 少一个没验过的调用就少一个可能把这条绿 job 演成红的地方。
+            EXE=$(sed -n 's/.*"CFBundleExecutable" => "\(.*\)"/\1/p' /tmp/infoplist.txt | head -1)
+            echo "EXE=[$EXE]"
+            [ -n "$EXE" ] || { echo "Info.plist 里没有 CFBundleExecutable"; exit 1; }
+            file "$APP/Contents/MacOS/$EXE" > /tmp/macho.txt
+            echo '--- plutil 全文'; cat /tmp/infoplist.txt
+            echo '--- file 读数'; cat /tmp/macho.txt
+            echo '--- 门禁读数'
+            node scripts/check-macos-bundle.mjs /tmp/infoplist.txt \
+              --version "${{ needs.meta.outputs.version }}" --file /tmp/macho.txt
+          ) > /tmp/diag/macos.txt 2>&1
+          rc=$?
+          cat /tmp/diag/macos.txt
           # 挂了就必须卸载：泄漏的挂载点会让这台 runner 后面的步骤读到旧卷
-          trap 'hdiutil detach "$MNT" -force >/dev/null 2>&1 || true' EXIT
-          APP=$(find "$MNT" -maxdepth 2 -name '*.app' -type d | head -1)
-          test -n "$APP" || { echo "卷里找不到 .app —— $(cat /tmp/hdiutil.txt)"; exit 1; }
-          plutil -p "$APP/Contents/Info.plist" > /tmp/infoplist.txt
-          # 主程序名从已经读出来的那份 plutil 文本里取，**不再叫第二次 plutil**：
-          # `-extract … raw -o -` 这种写法在不同 macOS 版本上的行为我没在这台机器上验得了，
-          # 少一个没验过的调用就少一个可能把这条绿 job 演成红的地方。
-          EXE=$(sed -n 's/.*"CFBundleExecutable" => "\(.*\)"/\1/p' /tmp/infoplist.txt | head -1)
-          test -n "$EXE" || { echo "Info.plist 里没有 CFBundleExecutable"; exit 1; }
-          file "$APP/Contents/MacOS/$EXE" > /tmp/macho.txt
-          node scripts/check-macos-bundle.mjs /tmp/infoplist.txt \
-            --version "${{ needs.meta.outputs.version }}" --file /tmp/macho.txt
-          {
-            echo "### macOS 产物核对（§4）"
-            echo "- 镜像：\`$(basename "$DMG")\`（$(wc -c <"$DMG") 字节），已挂载并读出 bundle"
-            echo "- SHA-256：\`$(shasum -a 256 "$DMG" | cut -c1-64)\`"
-            cat /tmp/macho.txt
-            grep -E 'CFBundle(ShortVersionString|Identifier|Executable|PackageType)' /tmp/infoplist.txt
-          } >> "$GITHUB_STEP_SUMMARY"
+          hdiutil detach "$MNT" -force >/dev/null 2>&1 || true
+          if [ "$rc" -eq 0 ]; then
+            {
+              echo "### macOS 产物核对（§4）"
+              echo "- 镜像：\`$(basename "$DMG")\`（$(wc -c <"$DMG") 字节），已挂载并读出 bundle"
+              echo "- SHA-256：\`$(shasum -a 256 "$DMG" | cut -c1-64)\`"
+              cat /tmp/macho.txt
+              grep -E 'CFBundle(ShortVersionString|Identifier|Executable|PackageType)' /tmp/infoplist.txt
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $rc
+
+      # macOS 这条 job 原本没有"把现场递回来"的通道（未认证读不到 job 日志正文 = 403、
+      # 产物字节 = 401，这两条都在 Android 那腿上实测过）。红的时候靠这条评论通道读全文。
+      - name: 把结构校验的现场贴成 commit 评论（诊断用，修好就删）
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/post-ci-diagnostic.mjs --file /tmp/diag/macos.txt --label "macOS 产物结构校验的现场"
 
       - name: 收集产物
         uses: actions/upload-artifact@v4
@@ -354,23 +381,45 @@ jobs:
       # 装上但一开就崩的 APK 在"job 绿"里是看不出来的（缺 native 库、versionName 退回 1.0 都属这一类）。
       - name: 结构校验这份 APK（包名 / versionName / native 库 / 可启动入口）
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          mkdir -p /tmp/diag
           GEN="$GITHUB_WORKSPACE/apps/mobile/src-tauri/gen/android"
+          # run #16 的账：APK **已经出得来**（`出 APK` = success），红的是这一步，
+          # 而我在这一步外面看不到任何东西 —— 期望错了还是包真的缺东西，分不开。
+          # 所以不管过不过，都把 badging 与 `aapt list` 的**原文形状**留在 /tmp/diag/apkcheck.txt 里，
+          # 由下面那条贴评论的通道递出来。门禁本身不放松（该红就红）。
           APK=$(find "$GEN" -path '*/outputs/apk/*.apk' -type f | head -1)
-          test -n "$APK" || { echo "找不到 APK —— 出包那步没产出任何 .apk"; exit 1; }
           AAPT=$(ls -1 "$ANDROID_HOME"/build-tools/*/aapt 2>/dev/null | tail -1 || true)
-          test -n "$AAPT" || { echo "runner 里没有 aapt（build-tools 没装？）—— 无法校验，按红算"; exit 1; }
-          "$AAPT" dump badging "$APK" > /tmp/apk-badging.txt
-          "$AAPT" list "$APK" > /tmp/apk-list.txt
-          node scripts/check-apk-badging.mjs /tmp/apk-badging.txt \
-            --version "${{ needs.meta.outputs.version }}" --list /tmp/apk-list.txt
           {
-            echo "### Android 产物核对（§4）"
-            echo "- 文件：\`$(basename "$APK")\`（$(wc -c <"$APK") 字节）"
-            echo "- SHA-256：\`$(sha256sum "$APK" | cut -c1-64)\`"
-            echo "- 打进包里的 JS 资产：$(grep -c '^assets/.*\.js$' /tmp/apk-list.txt) 项"
-            grep -E "^package:|^sdkVersion:|^native-code:|^launchable-activity:" /tmp/apk-badging.txt
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "APK=[$APK]"
+            echo "AAPT=[$AAPT]"
+            echo "build-tools 目录=$(ls -1 "$ANDROID_HOME"/build-tools 2>/dev/null | tr '\n' ' ')"
+          } > /tmp/diag/apkcheck.txt
+          if [ -z "$APK" ]; then echo "APK 找不到" >> /tmp/diag/apkcheck.txt; cat /tmp/diag/apkcheck.txt; exit 1; fi
+          if [ -z "$AAPT" ]; then echo "runner 里没有 aapt —— 无法校验，按红算" >> /tmp/diag/apkcheck.txt; cat /tmp/diag/apkcheck.txt; exit 1; fi
+          "$AAPT" dump badging "$APK" > /tmp/apk-badging.txt 2>>/tmp/diag/apkcheck.txt
+          "$AAPT" list "$APK" > /tmp/apk-list.txt 2>>/tmp/diag/apkcheck.txt
+          {
+            echo "--- badging 全文（去掉进度控制符）"
+            sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' /tmp/apk-badging.txt | tr -d '\000' | head -25
+            echo "--- list 里与前端有关的行"
+            grep -Ei '\.js$|\.html$|^assets/|res/raw' /tmp/apk-list.txt | head -25
+            echo "--- 门禁读数"
+            node scripts/check-apk-badging.mjs /tmp/apk-badging.txt \
+              --version "${{ needs.meta.outputs.version }}" --list /tmp/apk-list.txt
+          } >> /tmp/diag/apkcheck.txt 2>&1
+          rc=$?
+          cat /tmp/diag/apkcheck.txt
+          if [ "$rc" -eq 0 ]; then
+            {
+              echo "### Android 产物核对（§4）"
+              echo "- 文件：\`$(basename "$APK")\`（$(wc -c <"$APK") 字节）"
+              echo "- SHA-256：\`$(sha256sum "$APK" | cut -c1-64)\`"
+              echo "- 打进包里的 JS 资产：$(grep -c -E '\.js$' /tmp/apk-list.txt) 项"
+              grep -E "^package:|^sdkVersion:|^native-code:|^launchable-activity:" /tmp/apk-badging.txt
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $rc
 
       # **两条读数通道**（都是本批实测出来的，不是推测）：
       # ① 未认证能读 `/actions/runs/{id}/artifacts` 的**名字**，读不到日志正文（job logs = 403），
@@ -411,6 +460,8 @@ jobs:
             grep -n -A3 "^rust" "$GEN/app/build.gradle.kts" 2>/dev/null | cut -c1-200
             echo '### 补丁那一步自己的读数'
             cat /tmp/diag/patch.txt 2>/dev/null
+            echo '### 结构校验那一步的完整读数（含 badging 与 aapt list 的原文形状）'
+            cat /tmp/diag/apkcheck.txt 2>/dev/null
             echo '```'
           } > /tmp/diag/comment.md
           # JSON 转义交给 node（这个 job 里本来就有 node），不手搓引号。
@@ -581,13 +632,18 @@ jobs:
           path: /tmp/diag/12/
           if-no-files-found: ignore
 
+      # `if: always()` 是这批改的必然结果：**产物先上传，校验后判**。
+      # run #16 里 APK 已经出得来了，但我那条新加的校验红在后面，于是"收集产物"被 skipped ——
+      # §4 要的"产物可作为 Actions Artifacts 下载"这一格就因为我自己的门禁而没东西可下。
+      # 校验该红还是要红（不许放松），但不该把包一起带走。
+      # 顺手去掉 `apps/desktop/…/gen/android/**` 那条 glob：移动壳从 run #6 起就固定在 apps/mobile，
+      # 桌面那个目录根本不会存在（§45：留一条永远不会命中的路径，等于写下"这里也许还会出包"的假话）。
       - name: 收集产物
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: |
-            apps/mobile/src-tauri/gen/android/app/build/outputs/apk/**/app*.apk
-            apps/desktop/src-tauri/gen/android/app/build/outputs/apk/**/app*.apk
+          path: apps/mobile/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
 
   publish:
