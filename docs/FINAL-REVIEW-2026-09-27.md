@@ -589,3 +589,25 @@ check-versions 一致；release 产物 `Notera_0.0.39_x64_zh-CN.msi` **7.31 MiB*
 这三条是回归检查）。**CI：tip run #77（`7529cf7`）= success**，step 级全绿（Rust 全量、clippy、arch-check、前端单测与类型、
 release 产物一致性都过）；中间的 **#74/#75/#76 = cancelled 是我自己连着 push 造出来的**（workflow 的 `concurrency` 组会取消
 in-flight 的 run），这条做法记在 `CI-CD`。
+
+## 九、0.0.40 追记（2026-09-29 晚，G24 那一格）
+
+**G24 已修**：本机把一条笔记从回收站**恢复**出来，而对面已经把它**永久删除** —— 修之前这一对没进 P11（那条写着"且不是永久删除"），
+顺着 P7"内容相同即收敛"落进 `Push`：**两台的界面一声不响，服务器那条被 PUT 回正文**（实测 `purged=false / payload 非空 / 含正文=true`），
+等于用同步复活永久删除的数据；而卡片那一侧的「用服务器那一版」对墓碑只落软删。现在两处都按**永久删除也是一种"远端已删"**走，
+判据两条（SY-DEL-03）先红后绿，变异 M102（还原 P11 条件 → 两条都红）与 M103（`purge_note` 换回 `delete_note` → 只红在第二条）
+分开钉住"规划那一半"与"按钮那一半"。机制写进 `SYNC-PROTOCOL` §8.5、按钮语义写进 `CONFLICT-RESOLUTION` §6.0.1。
+
+**同批还留着一格没验的（按 §40 记成推理，不当已验）**：这张卡片上按「用我这一版」之后，对面那台到底有没有真拒收一次 ——
+组成它的两格各自有判据（`sync_surface.rs` 的 I1 防复活、SY-REJ-02 的拒收计数），**这个组合形状没有两设备判据**。
+
+复验数（0.0.40，独占机器）：workspace **595/0/6**、clippy **0/0**、fmt **0**、arch-check **30/30**、check-versions 一致；
+release 产物 **`Notera_0.0.40_x64_zh-CN.msi` 7.31 MiB + `_setup.exe` 5.40 MiB**（`BUILD_EXIT=0`，前端在同一次构建里重编），
+同一个壳真窗口 **9/9**（同一次里 `17323/health` = HTTP 000），当批重编的 debug 桥 + 各自独立空库：**verify-app 37/37**、
+**verify-blackbox 10/10**。工装账一条：那条 lane 收尾时 `notera-desktop.exe` 没被 spawn 的那个 PID 带走，
+`rm -rf` 直接报 `Device or resource busy` —— **按持有文件的真实 PID 收口**，这一条进了记忆与 CHANGELOG。
+
+判定不变：**READY FOR USER TEST**（现在多了 §49 第 1 条里那一跳可测的）；生产使用仍是 **NOT READY**，
+挡着的是 G7/G8（两台真设备 + 真实 WebDAV）、G9 装移动作与 D3 签名、D5/G13 冷启动口径、D6 回收站过期、
+G11 读屏、G21（服务器记录丢了要不要花请求去核对）与 **D8/G23（永久删除要不要连服务器上的附件 blob 一起消失）** ——
+最后这两条是**产品决定**，其余都要真设备、证书、真实服务器或一次长跑。
