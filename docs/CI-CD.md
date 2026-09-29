@@ -471,48 +471,10 @@ jobs:
 | 真实 WebDAV 服务器兼容性测试（Nextcloud/坚果云/阿里 OSS WebDAV 等） | **BLOCKED** | 设计只有 `notera-test-webdav`（127.0.0.1）；真实服务器凭据按 §1 非目标禁止入 CI | 人工提供 **可访问的真实 WebDAV 服务器**，且只在 `workflow_dispatch` 的独立 job 跑（不进 PR 门禁，不写日志凭据） |
 | Apple 签名/公证、Android release keystore、updater 签名密钥 | **BLOCKED** | 无证书/无私钥/secrets 未配置（`[实测]` 本机无相关凭据文件） | 见 §13，secrets 落地后才能验证 |
 | Windows CI 首次绿灯、artifact 下载、release 上传、缓存命中、runner 矩阵行为、Actions 版本漂移 | **BLOCKED（全部）** | `[实测]` GitHub 不可达 → 本文任何 workflow 均 **未被执行过一次** | §12 交接协议首轮闭环 |
+| 读 Actions **日志正文**（未认证） | **BLOCKED** | `[实测 2026-09-29]` run/jobs/annotations 三类端点未认证可读（status、conclusion、每个 step 的 `started_at/completed_at` 都拿得到），但 `GET /actions/jobs/{id}/logs` 回 **403**；`gh` 不在本机 PATH | 用户贴一次那一步的日志，或给本机一个只读 PAT（`actions:read`）|
+| run #65（`9a6123e`，0.0.38 那一批）**红在 `pnpm test` 那一步** | **未闭环（本机复现不出来）** | `[实测]` 步骤时间线：clippy 185 s ✓、Rust 全树 473 s ✓、**前端 `pnpm test` 16 s 后 failure**、typecheck 因此 skipped。本机四种口径全绿：默认并行 213/22、`CI=true TZ=UTC`、`--no-file-parallelism`、连跑三遍 | 那一步的日志（上一条）→ 才能分清"这条树上确定性坏"还是"runner 上的偶发"；run #67（`d87d7ed`，只改文档）是同一份前端代码的第二次采样 |
 
-> **不得声称已验证**：截至本文写就，**没有一次流水线运行被任何人观察到**。`[假设]` 条目在 Phase 1
-> 首次真跑时必须逐条转为「通过 / 失败」并附 run URL，否则视为未闭环。
-
-## 交接协议
-
-前提：开发机无法访问 `github.com`/`api.github.com`，因此 **agent 永远看不到 Actions 结果**。
-
-| 步 | 谁 | 动作 | 产出 |
-| --- | --- | --- | --- |
-| 1 | agent | 写/改 workflow 与 `scripts/`，在本地跑 **能跑的** 部分（GNU host 的 `cargo check/test/clippy/fmt`、`pnpm` 检查），并列出「本机不可验证清单」 | commit（**不 push、不 `git` 由 agent 执行**，仓库所有者提交） |
-| 2 | 人工 | 在可访问 GitHub 的网络下 `git push` 并按需打 tag | push 结果 / PR 链接 |
-| 3 | 人工 | 打开 Actions 页面，回贴：**run URL + run id + commit sha + 失败 job 名 + 该 job 完整原始日志（或 `gh run view --log --job=<id>` 输出）** | 日志文本，存入 `docs/evidence/ci-<run-id>.md` |
-| 4 | agent | **以该日志为唯一证据源**定位（不许凭想象改 YAML），产出最小修复 commit + 更新本文 §3/§11 的状态列（`[假设]`→`[实测]`/失败） | commit + 文档回写 |
-| 5 | 人工 | 再 push，再回贴 | 循环，直到绿灯 |
-
-| 规定 | 内容 |
-| --- | --- |
-| 证据文件最小字段 | `# ci-<run-id>` / `run_url:` / `commit:` / `started_at:` / `conclusion:` / `jobs:`（每个 job 的 结果 + 耗时 + 缓存命中/miss 实测值） / `raw_log:`（粘贴失败段原文） |
-| 禁止的表述 | 拿到 §12 步骤 3 的证据前，任何文档、PR 描述、commit message、ADR 中 **不得出现**「CI 已通过 / 流水线绿灯 / 构建成功 / 缓存已验证」；只能写「设计完成，等待首次运行证据（BLOCKED）」 |
-| 禁止的替代 | 不得用「本地跑通了」推定 CI 跑通（本机 msvc 编不过 + runner 镜像不同构，两个方向都推不出来） |
-| 失败优先级 | 先修 `pr`→再 `integration`/`crash`→再 `build-*`→再 `e2e-desktop`→最后 `release`；每层绿灯前不启动下一层的排错 |
-| 版本漂移观测 | 每次 run 必须记录 runner 报告的 Node/Action 版本与 `rustc -vV`，写进证据文件——这是发现「镜像悄悄升级」的唯一手段 |
-| 缓存可观测 | 每个 Rust job 打印缓存命中/miss（`Swatinem/rust-cache` 的 `cache-hit` 输出 + 首步耗时对比）；预算表（§2）以实测均值替换设计值 |
-
-## 待人工决策
-
-| # | 决策 | 选项 | 影响 | 阻塞什么 |
-| --- | --- | --- | --- | --- |
-| D1 | **本机路线：MSVC vs GNU** | ①装 VS 2022 Build Tools + WebView2（与 CI 同构，上游支持，推荐）；②继续 windows-gnu（今天能跑，但 Tauri/COM/`aws-lc-rs`/`ring`/unwind 风险未评估，上游不支持）；③本机不出包（纯 C 纪律） | 决定开发者体验、反馈延迟、以及 L4 崩溃测试语义是否跨工具链一致 | 阻塞 `build-windows` 的本地预验证；阻塞是否投入 spike |
-| D2 | **Apple 证书** | ①买 Apple Developer ID（¥688/年量级）+ notarytool → 正式公证发布；②**自签/不签**：只发 `-adhoc` 包 + 文档写清「右键打开/`xattr` 去隔离」并明示风险 | macOS 用户首启体验、自动更新（updater 需签名密钥）能否成立 | 阻塞 `build-macos-android`(macos leg) 的签名步与 `release` 的 mac 资产 |
-| D3 | **Android release keystore 由谁保管** | ①人工保管、agent 永不见明文，CI 只读 secrets；②团队密钥库/密码管理器；③首发先出 `-unsigned`，正式版后补 | **签名密钥不可更换**：一旦丢失，已装用户无法覆盖升级 | 阻塞 `release` 的 android 资产与升级策略 |
-| D4 | **GitHub 推送通道** | ①人工 push（本协议）；②给 agent 一个可达 GitHub 的网络/代理；③自建 CI（Gitea/Forgejo）以绕开不可达 | 决定本文全部 `[BLOCKED]` 何时能清；也决定 §2 预算表能否回填实测值 | 阻塞 **所有** CI 验证，是当前第一优先级 |
-| D5 | **真实 WebDAV 兼容测试由谁提供服务器** | ①人工提供一台可公网访问的测试专用实例（Nextcloud/坚果云等），仅 `workflow_dispatch`；②本地容器化多个上游服务器（`notera-test-webdav` 加方言模式）覆盖兼容性；③暂不做真实兼容 | 决定 §1 非目标「不接触真实账号」的边界如何表述；L3 之外是否需要 L3b | 阻塞兼容性结论与首发「能同步」的可信度 |
-| D6 | **制品是否需内网镜像分发** | ①公开 GitHub Releases；②额外提供内网镜像/网盘 + 独立 WebView2 offlineInstaller 下载；③只走内网（则需私有 registry 镜像 crates/npm，CI 需自建） | 影响 WebView2 打包模式选择（禁 `downloadBootstrapper`）、依赖拉取源、以及 `deny.toml` 的 `unknown-registry` 策略 | 阻塞 `release` 的目标平台与镜像配置 |
-| D7 | Windows 安装包格式 | ①`.msi`（企业分发/静默安装友好）；②`.exe`(nsis) 单文件（个人下载友好）；③两者都出（构建时长 +约 40%） | 产物矩阵、`checksums.txt` 行数、文档安装指引 | 阻塞 §9 资产清单 |
-| D8 | `minSdk` / `targetSdk` 数值确认 | 见 §5 提案（24 / 35） | 覆盖机型范围、上架政策合规 | 阻塞 Android 构建参数固化 |
-| D9 | nightly 时长与硬件预算 | 3h 采样 vs 真 72h；是否需要 self-hosted runner 控成本 | 分钟数配额、泄漏曲线可信度 | 阻塞 `nightly-soak` 的 cron 设计 |
-| D10 | 豁免策略归属 | `cargo audit` 豁免、`deny` 的 `duplicates.allow` 由谁批准、issue 跟踪在哪 | 安全门禁是否会被静默拆掉 | 阻塞 `audit` 落地为硬门禁 |
-
-## 附录：Phase 1 骨架 / Phase 8 全量的边界
-
-| Phase 1（骨架，本次设计完成后第一件事） | Phase 8（全量） |
-| --- | --- |
-| `.github/workflows/{pr,integration,build,release}.yml` 四个文件成形；`rust-toolchain.toml`；`deny.toml` 最小可用；`scripts/check-versions`、`scripts/no-runtime-ddl`；`migrations` 的 M1/M5；`build-windows`(msvc) + `build-macos-android` 各出一条可下载产物（允许 `-adhoc`/`-unsigned` 后缀）；`docs` 的 markdownlint + `ARCHITECTURE-MAP` 检查 | `crash`(L4)、`e2e-desktop`(L5)、`audit` 全项、`nightly-soak`、M2/M3/M4 升级路径矩阵与校验和白名单、SBOM、`checksums.txt` 复算、三平台签名链、WebView2 缺失场景断言（需隔离环境）、门禁自审 grep、预算表用实测值替换 |
+> **不得声称已验证**：这一句是 Phase 0 写的，**到今天已经过期** —— runs #3..#67 都被观察到过（#64 `db3d9a2` success、#65 `9a6123e` **failure 在前端那一步**、#66 被 #67 的并发组 cancel）。
+> 规矩不变，只是换了对象：**每条结论都要有 run 号 + step 级时间戳**，`[假设]` 条目要逐条转成「通过 / 失败」。
+>
+> **2026-09-29 追记**：上面表里"GitHub 不可达 / workflow 均未被执行过一次"那两行是当时的实测事实、今天已经不成立，留着是为了让"这条当时是红的"本身可查。现状是：**CI 能跑、能观察到 run 与 step 级的结论，看不到的只有日志正文（403）**。所以 §12 交接协议要改的是"日志要人贴"，不是"结果要人看"。
