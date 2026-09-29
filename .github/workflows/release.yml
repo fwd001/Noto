@@ -266,20 +266,39 @@ jobs:
       # 也就是说：**gradle 会按"当初怎么启动 CLI 的那串字"回头再叫一次 CLI**，而那串字是相对启动目录的。
       # 支持的叫法（`pnpm <脚本名> …`）记下来的是 `pnpm run <脚本>`，换目录也能解；我们按绝对路径叫 shim，
       # 记下来的是相对那一节的 `tauri`，在 src-tauri 里就什么都不是。这里把两节钉成绝对路径。
+      # run #14 的账：这一步**自己红了，于是后面整段 gradle 日志一起没了**，而那一步才是我要的读数。
+      # 递证据的机器不能挡路 —— 改成"失败也继续"，读数全进 /tmp/diag/patch.txt，由贴评论那步递出去。
+      # 真正的门禁没有松开：补丁没钉上，gradle 一样会在同一个地方红。
       - name: 把生成工程里"回头叫 CLI"那两行钉成绝对路径
+        continue-on-error: true
         run: |
-          set -euo pipefail
+          set -u
           mkdir -p /tmp/diag
           GEN="$GITHUB_WORKSPACE/apps/mobile/src-tauri/gen/android"
           BT="$GEN/buildSrc/src/main/kotlin/BuildTask.kt"
-          test -f "$BT" || { echo "生成的工程里没有 $BT"; exit 1; }
-          node scripts/patch-android-buildtask.mjs "$BT" \
-            "$GITHUB_WORKSPACE/apps/desktop/node_modules/@tauri-apps/cli/tauri.js" 2>&1 | tee /tmp/diag/patch.txt
-          # 钉完自己复验一遍：补丁说成功不算数，要看文件里真的是绝对路径。
-          grep -q "val executable = \"\"\"node\"\"\"" "$BT" || { echo "executable 那行没钉上"; exit 1; }
-          grep -q "$GITHUB_WORKSPACE/apps/desktop/node_modules/@tauri-apps/cli/tauri.js" "$BT" || { echo "args 第一节没钉上"; exit 1; }
-          echo "钉完的两行：" >> /tmp/diag/patch.txt
-          grep -n -E "val executable|val args = listOf" "$BT" >> /tmp/diag/patch.txt
+          CLI="$GITHUB_WORKSPACE/apps/desktop/node_modules/@tauri-apps/cli/tauri.js"
+          {
+            echo "BT=$BT 存在吗：$(test -f "$BT" && echo yes || echo NO)"
+            echo "CLI=$CLI 存在吗：$(test -f "$CLI" && echo yes || echo NO)"
+            if [ -f "$BT" ]; then
+              echo '--- 钉之前的那三行（模板渲染成什么了，这是唯一能证明"补丁形状对不对"的读数）'
+              grep -n -E "val executable|val args = listOf|workingDir|rootDirRel" "$BT" | cut -c1-300
+              echo '--- 钉'
+              node scripts/patch-android-buildtask.mjs "$BT" "$CLI"
+              echo '--- 钉之后'
+              grep -n -E "val executable|val args = listOf" "$BT" | cut -c1-300
+            else
+              echo '--- 没有 BuildTask.kt，那就要问 gen/android 长什么样'
+              find "$GEN" -maxdepth 2 2>/dev/null | head -40
+              echo '--- 整个工程里叫 BuildTask.kt 的文件'
+              find "$GEN" -name 'BuildTask.kt' 2>/dev/null | head
+              echo '--- settings.gradle / build.gradle.kts 里 rust 插件的出处'
+              grep -rn "rust" "$GEN/settings.gradle" "$GEN/build.gradle.kts" 2>/dev/null | cut -c1-160 | head
+            fi
+          } > /tmp/diag/patch.txt 2>&1
+          head -40 /tmp/diag/patch.txt
+          # 钉成没钉成都要留一条**产物名**能带走的短读数（评论那条通道也可能坏）。
+          grep -m1 "val executable" "$BT" > /tmp/diag/exec-line.txt 2>/dev/null || true
 
       - name: 出 APK（debug 签名 = Android SDK 自带的 debug keystore，不需要 secrets）
         working-directory: apps/mobile
@@ -303,6 +322,10 @@ jobs:
           set -u
           GEN="$GITHUB_WORKSPACE/apps/mobile/src-tauri/gen/android"
           mkdir -p /tmp/diag
+          # run #14 的账（第三条）：这一步以前**假定红的是"出 APK"那一步** —— 那次红在前面的钉补丁那步，
+          # `/tmp/apk.log` 根本不存在 ⇒ 整条评论没建起来（我去读评论列表 = 0 条，什么读数都没有）。
+          # 递证据的步骤要在"前面任何一步坏了"时照样递得出东西，所以缺的日志先补一个空文件。
+          touch /tmp/apk.log /tmp/diag/patch.txt
           # 清洗那步**必须在这一步里自己做**：`apk.clean.log` 是后面"编进产物名"那步的产物，
           # 上一步在这里读它 = 读一个当时还不存在的文件 ⇒ "关键行"那一节整段是空的
           # （run #13 就是空的，我还当"没有错误行"读了半天）。递证据的步骤不能依赖别人的顺序。
@@ -354,14 +377,17 @@ jobs:
           # 所以 S1..S4 取命中行之后的四行：Node 的调用者文件就写在深一点的栈帧里。
           KEY=$(grep -E "Cannot find module" /tmp/apk.clean.log | head -1)
           [ -z "$KEY" ] && KEY=$(grep -E -i 'error|FAILURE|Caused by' /tmp/apk.clean.log | tail -1)
-          # run #10 的读数把一件事钉死了：那条 specifier **在日志里就以 "tauri-" 结尾**
-          # （NUL 已洗、前缀已折、K1 那一槽是空的）—— 也就是"要 require 的东西"是 `tauri-` 拼上一个**空值**。
-          # 栈帧那几行全是 node 内部的 loader，帮不上忙。所以这一轮改问"生成的 gradle 工程里到底写了什么"：
-          # G1/G2 = 工程里带 "tauri-" 的那两行（连文件名一起），G3 = 那个 `tauri.properties` 的全文摘要。
+          # run #14 之后最值钱的一格变成了"钉补丁那一步看到了什么"（那步已经不挡路了，读数在 patch.txt 里）。
+          # G1 = BuildTask.kt 里 `val executable` 那一行的**当前形状**（模板到底渲染成了什么），
+          # G2 = `val args = listOf` 那一行，G3 = patch.txt 的头两行结论（BT/CLI 存在吗）。
+          # 三格都先折掉 26 字的 runner 前缀，不然槽位预算全被路径吃掉。
           GEN="$GITHUB_WORKSPACE/apps/mobile/src-tauri/gen/android"
-          G1=$(grep -rn --include=*.kts --include=*.properties --include=*.json "tauri-" "$GEN" 2>/dev/null | head -1 | cut -c1-160)
-          G2=$(grep -rn --include=*.kts --include=*.properties --include=*.json "tauri-" "$GEN" 2>/dev/null | sed -n '2p' | cut -c1-160)
-          G3=$(find "$GEN" -name 'tauri.properties' -exec cat {} \; 2>/dev/null | head -6 | tr '\n' '|' | cut -c1-160)
+          BT="$GEN/buildSrc/src/main/kotlin/BuildTask.kt"
+          G1=$(grep -m1 "val executable" "$BT" 2>/dev/null | sed -e 's#/home/runner/work/Noto/Noto/#~/#g' | cut -c1-160)
+          G2=$(grep -m1 "val args = listOf" "$BT" 2>/dev/null | sed -e 's#/home/runner/work/Noto/Noto/#~/#g' | cut -c1-160)
+          # 这两格读的是**钉完之后**的文件；钉补丁那步若在中途抛错，文件保持原状 ⇒ 读到的就是模板原样，
+          # 两种情况都值钱。第三格读那步自己写的结论（BT/CLI 存不存在 + 它自己说了什么）。
+          G3=$(head -3 /tmp/diag/patch.txt 2>/dev/null | sed -e 's#/home/runner/work/Noto/Noto/#~/#g' | tr '\n' '|' | cut -c1-160)
           S1=$(grep -A1 -E "Cannot find module" /tmp/apk.clean.log | sed -n '2p')
           {
             echo "F|gen-mobile=$(test -d "$GEN" && echo yes || echo no)"
