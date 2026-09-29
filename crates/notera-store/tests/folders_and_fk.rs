@@ -268,3 +268,69 @@ fn folder_rename_and_move_bump_rev_via_next_rev_only() {
     assert_eq!(c.remote_rev, notera_core::Rev(41));
     assert!(store.verify().is_empty());
 }
+
+/// 库里**已经**有环（0.0.32 之前那一版从远端那一支写进去的）时，读侧不许卡死、也不许报错给界面。
+///
+/// 这条钉的是 `descendant_ids` 那条递归 CTE 用 UNION 而不是 UNION ALL：UNION ALL 不按 id
+/// 去重，环上永不收敛 —— 用户下一次移动文件夹（内部就是查后代）就是**无限等待，而且没有任何报错**。
+/// 实测过：把那一句改回 UNION ALL，这条查询在本机跑满 60 s 都没返回（不是报错，是卡住）。
+/// 写入侧现在拒绝造环，这一条管的是"修之前已经坏掉的那些库"：它们不许变成"打不开、动不了"，
+/// 只许位置分叉、可修。
+///
+/// 环是手搓的（直接改表），因为产品写入路径现在已经会拒绝 —— 要模拟的正是旧版本留下的现场。
+/// 查询放进**线程 + 超时**里收：如果在测试自己这一线程里调，卡死的实现会把整个测试进程一起挂住，
+/// 那就不是一个会红的判据（判据必须能红 —— 见 TEST-PLAN 的门禁纪律与变异自证）。
+#[test]
+fn a_folder_cycle_already_on_disk_never_eats_the_subtree_query() {
+    let fx = Fix::new();
+    let store = std::sync::Arc::new(fx.open());
+    let root = default_folder(&store);
+    let a = store.create_folder(Some(&root), "甲").unwrap();
+    let b = store.create_folder(Some(&a.id), "乙").unwrap();
+
+    let conn = rusqlite::Connection::open(fx.db_file()).unwrap();
+    let wrote = conn
+        .execute(
+            "UPDATE folders SET parent_id = ?1 WHERE id = ?2",
+            rusqlite::params![b.id.as_str(), a.id.as_str()],
+        )
+        .unwrap();
+    assert_eq!(wrote, 1, "甲的父要真的改成乙（此时 甲→乙→甲 成环）");
+    drop(conn);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let s = store.clone();
+    let a_id = a.id.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(s.folder_subtree(std::slice::from_ref(&a_id)));
+    });
+    let started = std::time::Instant::now();
+    let got = match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        Ok(res) => res,
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("子树查询那支线程崩了 —— 判据没跑到")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!(
+            "子树查询在有环的库上 5 s 都没返回 —— 这就是界面上的'点了没反应'。\
+             这条 CTE 必须按 id 去重（UNION），不许写回 UNION ALL"
+        ),
+    };
+    let cost = started.elapsed();
+    let set = got.unwrap_or_else(|e| {
+        panic!("有环时子树查询把错直接抛给上层（界面就是'移动不了文件夹'）：{e}")
+    });
+    assert!(
+        cost.as_millis() < 5_000,
+        "子树查询花了 {} ms，预算 5 s",
+        cost.as_millis()
+    );
+    // 成员算得出来：甲乙互指，两个都该被算到且不被吞掉（集合天然去重）。
+    assert!(
+        set.contains(a.id.as_str()) && set.contains(b.id.as_str()),
+        "环上的两个成员都要被算到：{set:?}"
+    );
+    assert!(
+        !set.contains(root.as_str()),
+        "从甲出发不该把祖先默认本也算进来：{set:?}"
+    );
+}

@@ -423,6 +423,22 @@ impl Store {
                         env.id, env.rev, cur.rev
                     )));
                 }
+                // **父不许把树弯成环。** 本机那一支（`move_folder`）一直查成环，远端这一支过去
+                // 只查"父存在不存在"—— 于是两台设备各做一次"单独看合法"的移动就能合出一个环：
+                // A 把甲移到乙下面，B 把乙移到甲下面，两边一追平，每台都收到对面那一支。
+                // 后果有两个，都不报错：① 这两个子夹从根走不到了（侧栏里没有，里面的笔记也看不见）；
+                // ② 用户下一次移动任何文件夹都要跑那条递归 CTE，有环时它不返回。
+                // 处置：认对面那一版的**其余字段**与 rev（保证这一行能 settle、不每轮重推），
+                // 唯独**不写父**，保留本机现在的父。两边因此会在"这两个夹子的位置"上各自保留
+                // 自己那一版 —— 这是有意的：位置分叉看得见、可修（用户再移一次），
+                // 环与卡死看不见、也修不了。
+                let parent = match &parent {
+                    Some(p) if *p == env.id || Self::descendant_ids(tx, &env.id)?.contains(p) => {
+                        cur.parent_id.clone()
+                    }
+                    other => other.clone(),
+                };
+                let hash = folder_hash(&name, &parent, &color, sort_order, &None);
                 if env.rev == cur.rev && hash == cur.content_hash {
                     rep.skipped += 1;
                     return Ok(());

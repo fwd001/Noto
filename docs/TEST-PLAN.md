@@ -694,3 +694,16 @@ BB-02 抓到过一个只有黑盒才能抓到的缺陷（详见 CHANGELOG）：*
 | XML-03 | PROPFIND 里的 `href` 必须①按局部名认（换前缀/大小写都算）②引用解成字符③**遇到解不开的引用也要留在列表里** | `notera-webdav::lease::parse_pins` 三条（`hrefs_are_matched_by_local_name_not_by_prefix`、`entity_references_inside_href_are_decoded`、`an_unrecognized_reference_keeps_the_lease`） | L1 | P0 | **已实现并通过**。第三条钉的是方向：这一层"少看一条租约"的后果是两台设备同时写同一条笔记，所以宁可路径里留着 `&nbsp;`。变异自证：摘掉引用那一格 → 两条红（路径被拆成 `/x/locks/ab.json`）；把"解不开就丢"（旧行为）写回去 → 第三条红在 `["", ""]`；摘掉 `allow_dangling_amp` → 第三条红在"第二条租约整个消失"（M69 / M70 / M71） |
 | XML-04 | 测试服务器读 PROPPATCH 属性值必须是**原文**（不替调用方反转义），且一个裸 `&` 不许让整条请求解析失败 | `notera-test-webdav::xml::tests::property_values_are_read_verbatim_and_a_lone_amp_does_not_kill_the_request` | L1 | P2 | **已实现并通过**。两个方向都验过会红：摘掉 `allow_dangling_amp` → 值变空串；顺手把值反转义 → `x &amp; y` 变 `x & y`（M73 / M74b）。**两条踩坑记录**：第一次变异改的是 PROPFIND 那个 reader，测试照常绿 —— 改错了地方，不算证据；而反转义那一版第一版夹具里同时带着裸 `&`，`unescape` 对它报错后回落到原文，把 `&amp;` 那半也一起放过了 —— 判据被自己的夹具糊过去，补了一条不含裸 `&` 的属性才有区分度 |
 
+## 文件夹树的环（§4 `parent_id`，2026-09-29 落地）
+
+这一族抓的是**两台设备各做一次"单独看合法"的移动**。本机那一支（`Store::move_folder`）一直有环检测，
+而远端那一支（`apply_folder`）过去只查"父存在不存在" —— 于是 甲的父=乙 与 乙的父=甲 能被同步写进同一台库。
+后果都不报错：① 这两个夹子从根走不到了（侧栏里没有，里面的笔记也看不见）；② 用户下一次移动任何文件夹
+都要跑那条递归 CTE，**有环时它永不返回**（实测：把那一句改回 `UNION ALL` 之后 60 s 都没回来）。
+
+| ID | 判据 | 落在哪 | 层级 | 优先级 | 状态 |
+|---|---|---|---|---|---|
+| CY-01 | 两台真设备 + 真 TCP WebDAV：A 把甲移到乙下面、B 把乙移到甲下面，各自追平之后 —— **两台盘上的父子关系都不许成环**；子树查询必须能返回且把两个子夹都算进来；追平之后本机移动文件夹仍要可用 | `notera-host/tests/folder_cycle.rs::two_devices_moving_two_folders_into_each_other_never_create_a_cycle`（环的判定不借道被测的那条 CTE，而是自己在内存里沿 parent 走并记 visited —— 否则"读侧也一起坏了"会被当成通过） | L3 | P0 | **先写出来是红的**：未修时第一次跑就红在"A 这台设备被同步写出了一个文件夹环"（0.3 s，不靠超时）。修法是 `apply_folder` 认对面那一版的**其余字段与 rev**、唯独**不写那个会成环的父**（保留本机现在的父），于是这一行照样 settle、不每轮重推。变异自证 **M75**：把那一支守卫短路掉 → 同一条红回原处。判据故意含"能返回"那一句：只断言"没有环"的话，读侧那条不收敛的 CTE 就没人守 |
+| CY-02 | 库上**已经**有环（老版本写坏的现场）时，子树查询不许卡死，也不许把错抛给界面 | `notera-store/tests/folders_and_fk.rs::a_folder_cycle_already_on_disk_never_eats_the_subtree_query` —— 环是直接改表搓出来的（产品写入路径现在已经会拒绝，模拟的正是旧版本留下的库），查询放进**线程 + 5 s 超时**里收 | L1 | P0 | **已实现并通过**。钉的是 `descendant_ids` 用 `UNION`（按 id 去重）而不是 `UNION ALL`。变异自证 **M76**：改回 `UNION ALL` → 这条在 5.11 s 处**红**（红话就是"这就是界面上的'点了没反应'"）；**为什么必须放线程里收**：直接在测试线程调，卡死的实现会把整个测试进程一起挂住 —— 那就不是判据而是超时。还原 → 该文件 8/8 全绿 |
+
+

@@ -191,7 +191,7 @@ fn attrs_of(e: &quick_xml::events::BytesStart) -> BTreeMap<String, String> {
     out
 }
 
-fn make_reader<'a>(text: &'a str) -> Reader<&'a [u8]> {
+fn make_reader(text: &str) -> Reader<&[u8]> {
     let mut r = Reader::from_str(text);
     // CDATA 要能拿回原文（第二遍的输入就是第一遍的 CDATA 内容）
     r.config_mut().check_end_names = true;
@@ -967,7 +967,7 @@ mod tests {
             "<content><![CDATA[<?xml version=\"1.0\"?><en-note><div>还在</div></en-note>]]></content></note>\n",
             "</en-export>",
         );
-        let f = parse_enex(&text, "amp").expect("一个裸 & 不该让整份 .enex 导入失败");
+        let f = parse_enex(text, "amp").expect("一个裸 & 不该让整份 .enex 导入失败");
         assert_eq!(f.notes.len(), 2, "后面的笔记不许被前面那个字符带走");
         assert_eq!(
             f.notes[0].title, "Tom & Jerry",

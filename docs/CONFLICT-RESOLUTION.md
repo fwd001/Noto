@@ -70,6 +70,17 @@ Notera 的冲突检测、合并与删除语义。规范性文档。
 
 第 ③ 步成功时**不产生任何用户可见的冲突提示**，只在 `sync_conflicts` 留一条 `auto_merged=1` 的记录供审计。这是"用户不该感知同步系统"（§2 产品目标）的落点。
 
+> **按实（2026-09-29，一次"把带编号的承诺逐条对代码"的清扫查出来的）**：这条流水线**只有 ①②⑤ 在产品里跑**。
+> ③ 那条块级三方合并（`notera-richtext::merge`，§3）**没有任何生产调用点** —— 全仓 `grep` 只命中它自己的
+> 定义、crate 的 re-export 与单元/属性测试（`crates/notera-richtext/src/merge.rs`、`merge_tests.rs`、
+> `tests/api_contract.rs`），同步侧一条路径都不经过它；`auto_merged` 这一列在库里**从来没有为真过**
+> （所有生产写入点都传 `false`）。④ 标量属性合并也不存在（`pinned` / `color` / `folder_id` 是"远端整行覆盖"）。
+> 于是两侧都改正文时的**实际**策略就是 ⑤：本机那一版整份另存一条副本、正文整篇采纳对面那一版
+> —— 内容不丢（副本读得回来，判据 `sync_once.rs::a_real_divergence_records_one_conflict_and_keeps_both_texts`），
+> 但不是"逐块自动合并、用户不感知"。这一格记为缺口 **G15**（原因：接入它要同时改同步的决策与 rev/hash 口径，
+> 属于总指令 §9 要求"先架构评审"的那类变更，本批没有擅自做）。§3 整节因此读作**设计与库能力**，
+> 不是已交付的同步行为。
+
 ---
 
 ## 3. 块级三方合并
@@ -129,7 +140,7 @@ M1–M4 都是"能证明无损"才做，不是"看起来差不多"。合并结�
 | `color` | 一侧为 null 取另一侧；都非 null 且不同 → 取 remote，local 值记入审计（不升级为冲突） |
 | `name`（文件夹） | 两侧都改且不同 → 取 remote，local 值记审计并提示；文件夹不做冲突副本（副本文件夹会污染侧栏） |
 | `folder_id`（笔记移动） | 一侧移动一侧未动 → 采纳移动；两侧移到不同文件夹 → 采纳 remote，记审计 |
-| 文件夹 `parent_id` | 两侧都改 → 采纳 remote，并检测环；成环则整体回退到 base 父级并记诊断 |
+| 文件夹 `parent_id` | 两侧都改 → 采纳 remote；**但落地会成环的那一支不写父**：其余字段与 rev 一起采纳（这一行照样 settle，不每轮重推），父保留本机现在的那个。于是两侧会在"这两个夹子摆在哪"上各自保留自己那一版 —— 有意为之：**位置分叉看得见、用户再移一次就能修，而环看不见也修不了**（这两个夹子从根走不到 → 侧栏里没有、里面的笔记也看不见；且下一次移动任何文件夹的递归查询永不返回）。判据 CY-01（两台真设备）/ CY-02（已有环的库不许卡死）。**目前不提示用户**这一格发生了 —— 那是一条记在 PRODUCTION-READINESS §7 的缺口，不是已实现的行为。旧文档这里写的"整体回退到 base 父级并记诊断"给不出来：文件夹没有存"共同祖先那一版的父"，实现不许承诺自己做不到的事 |
 | `deleted_at` | 见 §5 |
 | `attachments` 引用 | 并集（引用是内容的一部分，不因删除引用而丢 blob） |
 
@@ -311,8 +322,8 @@ M1–M4 都是"能证明无损"才做，不是"看起来差不多"。合并结�
 | 钩子 | 用途 |
 |---|---|
 | `notera-richtext::merge(base, local, remote)` 纯函数 | L0/L1 属性测试：任意三方输入 → 输出必通过 validate；且 `merged` 包含两侧所有非冲突块 |
-| `NOTERA_SYNC_FORCE_CONFLICT=1`（test feature） | 强制把远端 rev 视为已分叉，用于稳定复现冲突路径 |
-| `notera-cli sync-once --scenario <toml>` | L3 多设备 E2E 构造 A/B 并发编辑 |
+| ~~`NOTERA_SYNC_FORCE_CONFLICT=1`（test feature）~~ **未实现（2026-09-29 按实划掉）** | 全仓 `grep` 连一处 `env::var` 都没有。现在的做法是**真造分叉**：两台设备各写各的再各自同步（`conflict_payload_e2e.rs`、`sync_once.rs`），比开关可信 —— 开关会测到"我以为的分叉"，真设备测到"引擎真的这么判" |
+| ~~`notera-cli sync-once --scenario <toml>`~~ **未实现（同上）** | `SyncOnce` 只有 `--json`（`crates/notera-cli/src/main.rs`）。L3 多设备场景是 Rust 里手写 fixture，没有 TOML 场景语言。要成体系再说 §9 |
 | `sync_conflicts` 表 + `DUMP` 服务端快照 | 断言"两份内容都在"（内容哈希级，而非条数） |
 
 必须存在的用例（TEST-PLAN.md 同步矩阵已列）：同块并发、异块并发（应自动合并且**不**提示）、删除 vs 修改、修改 vs 删除、格式 vs 文本、checklist 并发、两侧移动、离线一周后汇合、三方（A/B/C 同时改）。

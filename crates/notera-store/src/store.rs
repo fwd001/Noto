@@ -1205,11 +1205,18 @@ impl Store {
     }
 
     /// 某文件夹的全部后代（递归 CTE）。成环检测的唯一依据。
-    fn descendant_ids(conn: &Connection, id: &EntityId) -> Result<Vec<EntityId>, StoreError> {
+    ///
+    /// 用 `UNION`（而不是 `UNION ALL`）是**有意的**：它按 id 去重，因此即使盘上已经有一个环
+    /// （老版本留下的 —— 远端那一支过去不查成环），这条查询也会停下来而不是永不返回。
+    /// 换句话说：写入侧现在拒绝制造环，而读取侧要保证**万一**库里已经有环，用户至少不会卡死。
+    pub(crate) fn descendant_ids(
+        conn: &Connection,
+        id: &EntityId,
+    ) -> Result<Vec<EntityId>, StoreError> {
         let mut stmt = conn.prepare(
             "WITH RECURSIVE sub(id) AS (
                SELECT id FROM folders WHERE parent_id = ?1
-               UNION ALL
+               UNION
                SELECT f.id FROM folders f JOIN sub s ON f.parent_id = s.id
              )
              SELECT id FROM sub",
