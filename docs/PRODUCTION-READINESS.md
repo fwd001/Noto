@@ -416,22 +416,33 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
   实测候选集确实收进了这一条（`候选=1，含这一条=true`），**可那几轮还是 `NoOp`**，
   所以卡点不在输入集合。当时改的候选查询因此被回退了：一条"改了但没修好"的规则不进主干。
 
-- **G25 总指令 §4 的三条出包腿里，Android 那一腿在 CI 上还是红的（2026-09-29 实测；状态 = **BLOCKED，缺的是读数不是代码**）**：
-  实测到现在的形状：`release.yml` 由 tag 触发，run #4（`v0.0.40`）的四个 job 是
+- **G25 总指令 §4 的三条出包腿里，Android 那一腿在 CI 上还是红的（2026-09-29 实测；状态 = **根因已量出、修法已提交，等下一次 run 的读数**）**：
+  实测到现在的形状：`release.yml` 由 tag 触发，run #4（`v0.0.40`）与 run #5（`v0.0.41`）都是
   **meta ✓ / Windows ✓ / macOS ✓ / Android ✗**，产物 `windows-x64`、`macos-universal` 两份都在，Android 一步没有。
   红的位置在 `tauri android build --apk --debug --target aarch64` 那一步（前面 SDK/NDK 定位、`android init` 都已过）。
-  - **为什么还没定位（原因）**：未认证读不到 job 日志正文（`/actions/jobs/{id}/logs` = 403），
+  - **run #5 把根因递回来了**（就是靠下面那条通道，12 个产物名）：
+    `could not compile notera-desktop (lib) due to 13 previous errors`，头两条是
+    `no method named 'on_menu_event' found for struct tauri::…` 与 `no method named 'tray_by_id' found for reference AppHandle`。
+    **根因**：那两条 `tauri android` 命令我跑在 `working-directory: apps/desktop` 下，而 **`--config` 只换配置文件、不换要编的那个 crate** ——
+    app path 由工作目录定，于是它拿**桌面壳**（`notera-desktop`：muda 菜单与托盘 API 在 Android 上根本不存在）去链 aarch64，
+    移动壳 `notera-mobile`（`cdylib` + `#[tauri::mobile_entry_point]`）一次都没进编译。
+    **改法**：`android init` 与 `android build` 都挪进 `apps/mobile` 跑，CLI 按绝对路径叫
+    （`pnpm exec` 在那个目录里没有 package.json，会直接找不到工程）。**这条改法还没被 run 验过，所以缺口不撤。**
+  - **为什么前三次定位不动（原因）**：未认证读不到 job 日志正文（`/actions/jobs/{id}/logs` = 403），
     **也读不到产物字节** —— 这条是当场量的：`/actions/artifacts/{id}/zip` = **401 Requires authentication**，
     所以"把日志当产物传上去再下载"这条路根本不存在。唯一还能递出读数的通道是**产物名字**
     （`/actions/runs/{id}/artifacts` 未认证可读）。本批把这条通道做出来了：失败时把环境事实 4 条 + 日志里的错误行 8 条
     各编成一个产物名（每条 90 字、非法字符换 `-`、槽位不足填 `none`）。
-    **工装账也记一条**：run #3/#4 之所以什么都没递出来，是我把"递证据"那一步写在了失败步骤**之前**
-    （`if: failure()` 只看它之前的步骤）—— 那个位置的步骤永远不会触发，本批已挪到后面并本机复演过一遍。
+    **工装账两条**：① run #3/#4 之所以什么都没递出来，是我把"递证据"那一步写在了失败步骤**之前**
+    （`if: failure()` 只看它之前的步骤）—— 那个位置的步骤永远不会触发，本批已挪到后面并本机复演过一遍；
+    ② run #5 递回来的 `gen-mobile=no / gen-desktop=no` 是**假读数** —— 递证据那一步没有 `working-directory`，
+    相对路径量到的是仓库根外面。同批改成绝对路径，并把那两格换成一条更值钱的读数：**日志里被编译的到底是哪个 crate**。
   - **影响**：交付验收标准里"GitHub Actions 可自动构建 Windows、macOS、Android 最新版本包"这一格**只满足 2/3**；
     `publish` 那个 job `needs: android`，所以 GitHub Release 草稿**还没建出来**（不是"发布失败"，是"还没走到发布"）。
     桌面产品与本地功能不受这条影响 —— 它红的是出包流水线，不是核心。
-  - **解除条件**：下一次 tag 的 run 里读回那 12 条产物名 → 按真错误行定位（一次只改一处）→ 出到一份 `.apk` 产物
-    → 再看到 `publish` job 真建出带三平台产物 + SHA256SUMS 的草稿 Release。这四步没走完之前，§52 终报里这一格按 BLOCKED 写，不写"理论通过"。
+  - **解除条件**（三条都要真读到）：① 下一次 tag 的 run 里 **Android job 绿**；② 产物里出现一份 **`.apk`**（并且它的 `versionName` 是这一版的 0.0.41，不是 1.0）；
+    ③ `publish` job 真建出带三平台产物 + SHA256SUMS 的**草稿 Release**。这三条没读到之前，§52 终报里这一格按 BLOCKED 写，不写"理论通过"。
+    装到真机上的启动与基础功能验证另算一格（§49：要用户的设备）。
 
 - **G24 本机把一条笔记从回收站里恢复出来，而对面已经把它永久删除 —— 恢复被静默公告出去，等于用同步把永久删除的数据复活了（2026-09-29 实测；状态 = **已修，0.0.40**）**：
   实测形状（两台真设备 + 真 TCP 服务器 + `Backend::Fs`）：A 建一条并公告 → B 追平 → **B 删（本机脏、还没公告）** →

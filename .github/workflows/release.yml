@@ -232,21 +232,30 @@ jobs:
       - name: 前端构建（移动壳用的就是这份 dist）
         run: pnpm --dir apps/desktop build
 
+      # **为什么必须在 apps/mobile 里跑**：run #5 的产物名把根因递回来了 ——
+      # `could not compile notera-desktop (lib) due to 13 previous errors`，头两条是
+      # `no method named 'on_menu_event'`、`no method named 'tray_by_id'`（桌面那套 muda/托盘 API
+      # 在 Android 上根本不存在）。`--config` 只换**配置文件**，不换**要编的那个 crate**：
+      # 工作目录留在 apps/desktop 时，CLI 的 app path 就是 `apps/desktop/src-tauri`，
+      # 于是它拿桌面壳去链 aarch64。换到移动壳的目录里跑，编的才是 `notera-mobile`
+      # （crate-type 带 cdylib + `#[mobile_entry_point]`，桌面壳那个 crate 是 rlib，本来就是两回事）。
       - name: 生成 Android 工程（tauri android init）
-        working-directory: apps/desktop
+        working-directory: apps/mobile
         run: |
           set -euo pipefail
           test -d "$NDK_HOME" || { echo "NDK_HOME 指错了：$NDK_HOME"; exit 1; }
-          pnpm exec tauri android init --config ../mobile/src-tauri/tauri.conf.json
-          ls -1 ../mobile/src-tauri/gen/android 2>/dev/null || ls -1 src-tauri/gen/android
+          # 不走 `pnpm exec`：pnpm 的 workspace 根在 apps/desktop，而 apps/mobile 里没有 package.json，
+          # 在那个目录里 `pnpm exec` 直接找不到工程。CLI 是桌面那份依赖里的 shim，按路径叫它。
+          TAURI="$GITHUB_WORKSPACE/apps/desktop/node_modules/.bin/tauri"
+          test -x "$TAURI" || { echo "CLI 不在 Expected 位置：$TAURI"; exit 1; }
+          "$TAURI" android init --config src-tauri/tauri.conf.json
+          ls -1 src-tauri/gen/android
 
       - name: 出 APK（debug 签名 = Android SDK 自带的 debug keystore，不需要 secrets）
-        working-directory: apps/desktop
+        working-directory: apps/mobile
         run: |
           set -euo pipefail
-          # tee 到文件不是为了"留着看"，是因为下面那条递证据的步骤得从这份日志里摘出真错误。
-          # pipefail 保证退出码还是 tauri 的，不是 tee 的 —— 否则这一步会假绿。
-          pnpm exec tauri android build --config ../mobile/src-tauri/tauri.conf.json --apk --debug --target aarch64 2>&1 | tee /tmp/apk.log
+          "$GITHUB_WORKSPACE/apps/desktop/node_modules/.bin/tauri" android build --config src-tauri/tauri.conf.json --apk --debug --target aarch64 2>&1 | tee /tmp/apk.log
 
       # **证据通道只有一条**：未认证能读 `/actions/runs/{id}/artifacts` 的**名字**，读不到日志正文
       # （job logs = 403）、也读不到产物字节（artifact zip 实测 **401 Requires authentication**，
@@ -259,11 +268,13 @@ jobs:
         run: |
           set -u
           mkdir -p /tmp/diag
+          # 路径一律走绝对：这一步**没有** working-directory，跑在仓库根上，
+          # 上一版拿相对路径去量 gen 目录，递回来的是两条没意义的 "no"（探针自己的账，记一条）。
           {
-            echo "F|gen-mobile=$(test -d ../mobile/src-tauri/gen/android && echo yes || echo no)"
-            echo "F|gen-desktop=$(test -d src-tauri/gen/android && echo yes || echo no)"
+            echo "F|gen-mobile=$(test -d "$GITHUB_WORKSPACE/apps/mobile/src-tauri/gen/android" && echo yes || echo no)"
+            echo "F|gen-desktop=$(test -d "$GITHUB_WORKSPACE/apps/desktop/src-tauri/gen/android" && echo yes || echo no)"
             echo "F|ndk=$NDK_VER linker=$(ls "$NDK_HOME"/toolchains/llvm/prebuilt/*/bin/aarch64-linux-android2[14]-clang 2>/dev/null | head -1 || echo NONE)"
-            echo "F|apklog=$(wc -l < /tmp/apk.log) lines"
+            echo "F|crate-in-log=$(grep -o 'could not compile [^ ]*' /tmp/apk.log | head -1 | tr ' ' '_')"
             grep -E -i 'error|FAILURE|Caused by|panicked|not found|No such|denied|cannot|failed|task' /tmp/apk.log | tail -8 | sed 's/^/E|/'
           } > /tmp/diag/index.txt
           # 十二个槽位**总是**写满：产物名不能带非法字符，空名会撞 GitHub 的命名校验，
