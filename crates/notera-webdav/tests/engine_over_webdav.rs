@@ -152,6 +152,7 @@ impl LocalPort for Device {
                 deleted_at: n.deleted_at.clone(),
                 purged_at: n.purged_at.clone(),
                 edited_after_delete: false,
+                decided_remote: None,
             })
             .collect())
     }

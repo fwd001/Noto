@@ -19,6 +19,10 @@ pub struct LocalView {
     pub purged_at: Option<String>,
     /// 本地在删除之后又被编辑过（P11 判据之一）
     pub edited_after_delete: bool,
+    /// 用户**已经对这一份分歧表过态**时，记下当时对面那一版的编号（P14）。
+    /// 编号一模一样才让路；对面又往前走了就照旧算冲突 —— 卡片是按当前分叉每轮重算的，
+    /// 少了这条判据就是"按了『保留两份』，它闪一下又回到收件箱"（G17 实测的第二半）。
+    pub decided_remote: Option<u64>,
 }
 
 impl LocalView {
@@ -162,6 +166,25 @@ fn both_present(l: &LocalView, r: &RemoteView) -> Decision {
             key: l.key(),
             action: Action::PushPurge,
             rule: "P12",
+        };
+    }
+
+    // P14 已经裁决过的同一份分歧：不再问第二遍，按编号高低走普通的一条路。
+    // 裁决时那一条可发布的版本已经被抬到对面之上（ADR-0021 D2 的抬号），所以这里几乎都是 Push；
+    // 编号相同（不可能同时又是已裁决的脏行）才 NoOp。对面若又往前走了，`decided_remote`
+    // 就对不上 `r.rev`，下面的 P11/P11b/P8 照旧生效 —— 让路只针对"同一件事"，不是永久静音。
+    if local_changed && l.decided_remote == Some(r.rev) {
+        let action = if l.rev > r.rev {
+            Action::Push
+        } else if l.rev < r.rev {
+            Action::Pull
+        } else {
+            Action::NoOp
+        };
+        return Decision {
+            key: l.key(),
+            action,
+            rule: "P14",
         };
     }
 
@@ -351,6 +374,7 @@ mod tests {
             deleted_at: None,
             purged_at: None,
             edited_after_delete: false,
+            decided_remote: None,
         }
     }
     fn r(rev: u64, hash: &str) -> RemoteView {
@@ -362,6 +386,37 @@ mod tests {
             deleted_at: None,
             purged: false,
         }
+    }
+
+    /// P14：用户对**同一个远端 rev** 表过态之后，同一件事不许每轮再问一遍（G17 的第二半 ——
+    /// 卡片是按当前分叉重算的，裁决过又回来）。三个方向都要有数：没记决策 → 仍 P11（这条判据
+    /// 不许把 P11 弱化）；记在别的编号上（对面又往前走了）→ 仍 P11；记在这一个编号上 → Push。
+    #[test]
+    fn p14_a_decided_divergence_is_pushed_not_asked_again() {
+        let deleted = RemoteView {
+            kind: "n".into(),
+            id: "x".into(),
+            rev: 2,
+            hash: Some("sha256:remote".into()),
+            deleted_at: Some("2026-09-29T00:00:00Z".into()),
+            purged: false,
+        };
+        let mut local = l(3, 1, "1111");
+        assert_eq!(
+            decide(Some(&local), Some(&deleted)).rule,
+            "P11",
+            "没表过态时删除 vs 修改必须仍然是冲突"
+        );
+        local.decided_remote = Some(9);
+        assert_eq!(
+            decide(Some(&local), Some(&deleted)).rule,
+            "P11",
+            "对面又往前走了就必须重开冲突 —— 让路只针对同一件事"
+        );
+        local.decided_remote = Some(2);
+        let d = decide(Some(&local), Some(&deleted));
+        assert_eq!(d.rule, "P14");
+        assert_eq!(d.action, Action::Push, "裁决过的那一版要能公告出去");
     }
 
     #[test]

@@ -292,6 +292,32 @@ impl Store {
         })
     }
 
+    /// 冲突裁决之后，把"编号撞在对面那一版上、永远推不出去"的那一行抬到对面之上（ADR-0021 D2）。
+    ///
+    /// 触发条件两条都要成立：本机有一个**尚未公告**的头部（`rev != sync_rev`），
+    /// 且服务器记录的编号**不低于**它（服务器的闸门是 `want.rev <= m.rev` 就拒，
+    /// 见 `notera-webdav/src/client.rs`）。这种行不抬号就永远停在"待处理任务"里 ——
+    /// 就是 P11-SR-01 实测到的 `rev=2 / sync_rev=1 / 脏=true`。
+    ///
+    /// 抬号只动编号，内容一个字节不改，而且**必须**走 `commit_edit` 那唯一一条出口：
+    /// 版本历史、outbox、FTS、引用登记都在那里，绕过它等于再造一台状态机（§39）。
+    /// 旧 `payload_rev` 那条待办由 `enqueue_key` 自己标 `superseded`，不在这儿手动结。
+    pub fn rebase_unpublishable_head(&self, id: &EntityId) -> Result<Option<Note>, StoreError> {
+        self.write_tx(|tx, now| {
+            let cur = Self::load_cur(tx, id)?;
+            if cur.note.rev == cur.note.sync_rev || cur.note.rev > cur.note.remote_rev {
+                return Ok(None);
+            }
+            let bumped = next_rev(cur.note.rev, cur.note.remote_rev);
+            let edit = Edit {
+                enqueue: true,
+                force_rev: Some(bumped),
+                ..Default::default()
+            };
+            Ok(Some(self.commit_edit(tx, &cur, &edit, now)?))
+        })
+    }
+
     pub fn set_note_folder(&self, id: &EntityId, folder: &EntityId) -> Result<Note, StoreError> {
         let target = folder.clone();
         self.write_tx(|tx, now| {

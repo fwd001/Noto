@@ -261,8 +261,10 @@ M1–M4 都是"能证明无损"才做，不是"看起来差不多"。合并结�
 ```text
 原笔记 (note X)
   ├─ 内容 := 三方合并中"可无损确定的部分" ⊕ remote 版本
-  ├─ rev := max(L.rev, R.rev) + 1     # 按实：**这一格今天没执行**（裁决只动卡片那一行）⇒ G17，
-  │                                   # 抬号再发是 ADR-0021 D2；已落的是 D1（观测远端头部进得了 next_rev）
+  ├─ rev := max(L.rev, R.rev) + 1     # 按实：**0.0.36 起真的执行**（`Store::rebase_unpublishable_head`
+  │                                   # 在裁决那一刻走 `commit_edit` 那唯一出口抬号），并由 P14 让
+  │                                   # "已裁决过的同一份分歧"不再重算成卡片。此前这里写的是一条
+  │                                   # 没人实现的规则，后果记在 G17（两台真设备实测）。
   └─ sync_conflicts 记录：base_rev, local_rev, remote_rev, local_hash, remote_hash,
                           conflicting_block_ids[], auto_merged=0, state='open'
 

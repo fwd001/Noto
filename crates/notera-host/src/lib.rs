@@ -906,14 +906,14 @@ impl App {
         // 判据不看猜的：冲突行上挂着服务器返回的原始信封（`remote_wire`，迁移 0008），
         // 它写着 `deleted_at` 就照它删；没带载荷（那一版没取回来）就不动内容，
         // 只关卡片 —— 由面板那句"没能从服务器取回那一版"负责说明（§39 不许替他猜）。
+        let row = self
+            .inner
+            .store
+            .open_conflicts()?
+            .into_iter()
+            .find(|r| r.conflict_id == c.id);
         if resolution == "remote" {
-            let row = self
-                .inner
-                .store
-                .open_conflicts()?
-                .into_iter()
-                .find(|r| r.conflict_id == c.id);
-            if let Some(r) = row {
+            if let Some(r) = row.as_ref() {
                 let remote_deleted = matches!(r.kind, notera_core::EntityKind::Note)
                     && r.remote_wire
                         .as_deref()
@@ -936,6 +936,18 @@ impl App {
             }
         }
         self.inner.store.resolve_conflict(c.id, resolution)?;
+        // ADR-0021 D2：决定已经记下，但那一行可能正好撞在对面**已经公告**的那个编号上
+        // （P11 实测形状：两侧都从 rev 1 各推一步，撞在 rev 2）。这种行推不出去 ——
+        // 服务器的闸门是 `want.rev <= m.rev` 就拒，于是设置页那句"待处理任务"永远 ≥1，
+        // 而收件箱的卡片每轮按当前分叉重算出来（G17 的第二半），每回来一张又按 §6 多保底
+        // 一篇同名副本（G18）。抬号只动编号、不动内容；`local` 那一支不需要 —— 它自己
+        // 走 `edit_note`，编号已经按 D1 的观测值取大了。
+        if let Some(r) = row
+            .as_ref()
+            .filter(|r| matches!(r.kind, notera_core::EntityKind::Note))
+        {
+            self.inner.store.rebase_unpublishable_head(&r.id)?;
+        }
         self.emit(BusEvent::NotesChanged { ids: vec![] });
         Ok(())
     }
@@ -2972,6 +2984,20 @@ impl LocalPort for HostLocalPort {
             .store()
             .dirty_entities(&acct)
             .map_err(|e| LocalError::Storage(e.to_string()))?;
+        // P14 的输入：这张表把"用户对哪一份分歧表过态"带到计划里（键用 kind_tag 生成，
+        // 与读侧同一个函数 —— 两侧各写一份字面量是本仓踩过三次的词汇漂）。
+        let (decided_rows, skipped) = self
+            .0
+            .store()
+            .resolved_divergences()
+            .map_err(|e| LocalError::Storage(e.to_string()))?;
+        if skipped > 0 {
+            tracing::warn!(skipped, "已裁决冲突里有认不出的实体行，它们不参与 P14 让路");
+        }
+        let decided: std::collections::HashMap<(String, String), u64> = decided_rows
+            .into_iter()
+            .map(|(k, i, r)| ((kind_tag(k).to_string(), i.to_string()), r))
+            .collect();
         rows.into_iter()
             .map(|d| {
                 // `DirtyEntity` 只带"为什么脏"，不带时间戳；删除/永久删除必须让引擎看得见
@@ -2994,6 +3020,9 @@ impl LocalPort for HostLocalPort {
                     deleted_at,
                     purged_at,
                     edited_after_delete: false,
+                    decided_remote: decided
+                        .get(&(kind_tag(d.kind).to_string(), d.id.to_string()))
+                        .copied(),
                 })
             })
             .collect()
@@ -4454,6 +4483,7 @@ mod tests {
             deleted_at: None,
             purged_at: None,
             edited_after_delete: false,
+            decided_remote: None,
         };
         let r = RemoteView {
             kind: "n".into(),

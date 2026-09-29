@@ -14,9 +14,10 @@
 //! 跑法：`cargo test -p notera-host --test p11_same_rev`
 //!
 //! 实测结论（2026-09-29）：**第 1 步成立**（B 那一版在两台上都读得回来），
-//! 而"裁决之后账要结清"**今天不成立** —— 那一条 rev 撞车的账停在 `dirty/outbox` 上推不出去，
-//! 记为缺口 **G17**，它的下游（同名副本一篇一篇累积）记为 **G18**（会红的那两条断言留在
-//! `patches/p11-same-rev-stall.patch`，本文件里只打印形状）。
+//! 而"裁决之后账要结清"**早上还红过** —— 那条 rev 撞车的账停在 `dirty/outbox` 上推不出去，
+//! 当时记为缺口 **G17**、它的下游（同名副本一篇一篇累积）记为 **G18**。
+//! **0.0.36 起这两条都是真断言**（`ADR-0021` D1+D2 加上按实新增的计划层 P14：已裁决过的同一份
+//! 分歧不再重算成冲突），本文件里保留的现场打印是给下次红的时候指路用的。
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -191,17 +192,69 @@ async fn a_delete_and_an_edit_at_the_same_rev_keep_the_content_alive_on_both_dev
     settle(&b, 10).await;
     println!("裁决后现场 A：{}", rows_of(&a).join(" ｜ "));
     println!("裁决后现场 B：{}", rows_of(&b).join(" ｜ "));
-    // ③ 这一条**只打印、不断言** —— 因为实测它今天不成立，而它坏的方式不是数据丢失，
-    //    是"账永远结不掉"：B 的主行停在 `rev=2 / sync_rev=1 / 脏=true`，outbox 里那条
-    //    `payload_rev=2` 的上写动作**永远推不出去**（对面那条记录的 rev 也是 2 而内容不同，
-    //    `apply` 明令拒绝"同 rev 不同内容"）。两条 rev 撞在同一个数上时谁都不能发布 ——
-    //    这是 rev 口径的设计级问题，要 §9 的架构评审才能改，不在这里顺手改。
-    //    证据与那条会红的断言留在 `patches/p11-same-rev-stall.patch`，缺口记在
-    //    `PRODUCTION-READINESS` §7 的 G17（原因 / 影响 / 解除条件都写在那一格）。
-    let st = b.store().stats().unwrap();
+    // ③ 裁决之后账必须结清。这一组今天**是绿的**（0.0.35 的 D1 + ADR-0021 D2 之后）：
+    //    抬号让 B 那一版重新可发布，分叉一消失，卡片也就没有下一轮可重算（G17 的两半同源）。
+    //    三样收在**一次**断言里：逐条 assert 的话第一条 panic 就把进程带走，
+    //    一次跑只见得到一个，而这几样是同一条链条上的。
+    let mut problems = Vec::new();
+    for (who, d) in [("B", &b), ("A", &a)] {
+        let st = d.store().stats().unwrap();
+        if st.dirty_notes != 0 || st.outbox_pending != 0 {
+            problems.push(format!(
+                "G17 裁决之后 {who} 仍追不平：dirty={} outbox={} —— 这才是「永远待同步」",
+                st.dirty_notes, st.outbox_pending
+            ));
+        }
+    }
+    let cards = b.open_conflicts().expect("再读卡片").len();
+    if cards != 0 {
+        problems.push(format!("G17 裁决过的卡片又回到收件箱：{cards} 张"));
+    }
+    let copies = b
+        .store()
+        .list_notes(&NoteQuery::all())
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.title.ends_with("（本地副本）"))
+        .count();
+    if copies > 1 {
+        problems.push(format!(
+            "G18 同名副本累积到 {copies} 篇（§6 只该有一篇保底）"
+        ));
+    }
+    assert!(problems.is_empty(), "{}", problems.join(" ｜ "));
+    // `settle` 在"两台都干净"时会提前退出，而**已确认删除的那一行本来就是干净的** ——
+    // 于是 A 只跑了一轮：那一轮的计划用的还是上一轮的远端视图（rev 2 的删除），
+    // 它根本没机会看见 B 抬号后的 rev 3。真实调度器 25 秒一轮，不会停在这里，
+    // 所以这里显式再补几轮，把"询问卡片该不该出现"这件事问到底。
+    for _ in 0..8 {
+        a.sync_once().await.expect("A 补一轮");
+        b.sync_once().await.expect("B 补一轮");
+    }
+    // P15：删除那一台既**不许被静默改写**，也**不许悄悄错过那一版** —— 它得有一张问它的卡片。
+    // 只挡住落库而不生成卡片，用户看见的是"对面那次改动我永远不知道"，那是另一种静默。
+    let acct = a.config().active_account.unwrap_or_default();
     println!(
-        "已知缺口 G17 的形状：B 裁决之后 dirty={} outbox={}（内容不丢 —— 下面那条存活断言钉着；卡片会不会回来只看最后那行打印）",
-        st.dirty_notes, st.outbox_pending
+        "诊断：acct={acct} A 的已裁决分歧={:?}",
+        a.store().resolved_divergences().unwrap().0
+    );
+    // G19（**只打印，不断言**）：删除那一台没被改写（下面那条断言钉着），但也没被问 ——
+    // "清单没变 + seq 已应用"的空轮快路径不会为本机一侧的状态变化重新规划，
+    // 所以 A 的收件箱里没有一张问它的卡片（对面那一版的内容 A 读得到：副本笔记是同步过去的）。
+    // 这条缺口的原因 / 影响 / 解除条件记在 `PRODUCTION-READINESS` §7 的 G19。
+    println!(
+        "G19 的形状：A 的收件箱 {} 张卡片 ｜ A 的现场 {}",
+        a.open_conflicts().expect("A 的卡片").len(),
+        rows_of(&a).join(" ｜ ")
+    );
+    assert!(
+        a.store()
+            .get_note(&id)
+            .ok()
+            .flatten()
+            .and_then(|n| n.deleted_at)
+            .is_some(),
+        "A 那台的删除状态被改写了 —— §5.1「绝不静默二选一」管两侧，不只发起编辑那一侧"
     );
     assert!(
         live_with(&a, EDITED) >= 1 && live_with(&b, EDITED) >= 1,
@@ -209,30 +262,4 @@ async fn a_delete_and_an_edit_at_the_same_rev_keep_the_content_alive_on_both_dev
         live_with(&a, EDITED),
         live_with(&b, EDITED)
     );
-    // G17 的第二半（同样只打印）：**裁决过的卡片又回来了**。用户看得见的形状是
-    // "按了『保留两份』，卡片消失一下，下一轮它又出现在收件箱里"。
-    println!(
-        "G17 的第二半：裁决并追平之后 B 的收件箱还有 {} 张卡片",
-        b.open_conflicts().expect("再读卡片").len()
-    );
-    // G17 的下游（也只打印）：既然卡片回来了，用户再按一次『保留两份』会发生什么？
-    // §6 那句"进收件箱的同一刻留一份本地副本"是按**卡片**去重的，所以每张新卡片都会再保底一份
-    // —— 这一问要的是"副本会不会一份一份地累积"，实测数打在下一行。
-    let again = b.open_conflicts().expect("再读卡片");
-    if let Some(second) = again.iter().find(|c| c.note_id == id.to_string()) {
-        b.resolve_conflict(notera_host::commands::ResolveConflictCmd {
-            id: second.id,
-            action: "keepBoth".into(),
-        })
-        .expect("第二次裁决");
-        settle(&b, 6).await;
-        let copies = b
-            .store()
-            .list_notes(&NoteQuery::all())
-            .unwrap()
-            .into_iter()
-            .filter(|r| r.title.ends_with("（本地副本）"))
-            .count();
-        println!("再按一次『保留两份』之后 B 的同名副本数：{copies}");
-    }
 }

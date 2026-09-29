@@ -305,6 +305,20 @@ impl Store {
                         env.id, env.rev, cur.note.rev
                     )));
                 }
+                // **不静默撤销本机的删除**（§5.1 / P11 那句"绝不静默二选一"管两侧）：
+                // 对面把这条"已确认删掉"（`rev == sync_rev` 且带 `deleted_at`）的笔记写成活的，
+                // 这一支先把落库挡住。真正"问一句"由 `resurrected_tombstones` + 计划层 P15 生成卡片 ——
+                // 缓存的远端视图晚一轮，所以这里必须先把写拦住，否则会出现"用户没同意过，
+                // 回收站里的东西自己回到正常列表"那种形状（本条被 `conflict_payload_e2e` 钉着）。
+                // `adopt`（冲突采纳）不在拦阻范围：那是用户已经按过按钮的路径。
+                if !adopt
+                    && env.deleted_at.is_none()
+                    && cur.note.deleted_at.is_some()
+                    && cur.note.rev == cur.note.sync_rev
+                {
+                    rep.skipped += 1;
+                    return Ok(());
+                }
                 if env.rev == cur.note.rev {
                     if env.hash == cur.note.content_hash {
                         rep.skipped += 1; // 幂等重放

@@ -10,6 +10,9 @@ use crate::types::*;
 use notera_core::{EntityId, EntityKind, Rev};
 use rusqlite::{params, Connection, OptionalExtension};
 
+/// `Store::resolved_divergences` 的一行：实体 + 用户当时看到的对面那一版编号（计划层 P14 的输入）。
+pub type ResolvedDivergence = (EntityKind, EntityId, u64);
+
 /// 契约里的 `EntityId` 只装 UUID；附件是内容寻址（64hex），此时用 nil UUID 占位。
 const NIL_ID: &str = "00000000-0000-0000-0000-000000000000";
 
@@ -1451,6 +1454,35 @@ impl Store {
     pub fn open_conflicts(&self) -> Result<Vec<ConflictRow>, StoreError> {
         let conn = self.read()?;
         conflicts_where(&conn, "state = 'open'")
+    }
+
+    /// 用户**已经对哪一份分歧表过态**：实体 → 当时对面那一版的编号（P14 的输入）。
+    ///
+    /// 只数 `state='resolved'`：`dismissed` 是"现在不想决定"，不该换来让路。
+    /// 每个实体取**最大**的那个已裁决远端编号 —— 对面再往前走（编号变了）就对不上，
+    /// 冲突照旧重开，所以这条判据不会变成"永久静音"。
+    /// 词汇一律走 `kind_tag` / `kind_from_tag` 这一对，两侧都不写字面量。
+    /// 返回 `(已理解的清单, 看不懂而被跳过的行数)` —— 本 crate 没有日志依赖，
+    /// 所以"跳过"这件事交给调用方说出来，绝不允许静默少算（那正是本仓踩过三次的形状）。
+    pub fn resolved_divergences(&self) -> Result<(Vec<ResolvedDivergence>, usize), StoreError> {
+        let conn = self.read()?;
+        let mut stmt = conn.prepare(
+            "SELECT entity_type, entity_id, MAX(remote_rev) FROM sync_conflicts
+              WHERE state = 'resolved' GROUP BY entity_type, entity_id",
+        )?;
+        let raw: Vec<(String, String, i64)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .filter_map(|x| x.ok())
+            .collect();
+        let mut out = Vec::with_capacity(raw.len());
+        let mut skipped = 0usize;
+        for (tag, id, rev) in raw {
+            match (rows::kind_from_tag(&tag), EntityId::parse(&id)) {
+                (Ok(kind), Ok(id)) => out.push((kind, id, rev.max(0) as u64)),
+                _ => skipped += 1,
+            }
+        }
+        Ok((out, skipped))
     }
 
     /// 用户/引擎裁决后关闭一条冲突（`resolution` ∈ kept_both|local|remote|merged|manual）。

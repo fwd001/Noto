@@ -285,6 +285,7 @@ fn local(id: &str, rev: u64, sync_rev: u64, hash: &str) -> LocalView {
         deleted_at: None,
         purged_at: None,
         edited_after_delete: false,
+        decided_remote: None,
     }
 }
 
