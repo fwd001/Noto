@@ -202,7 +202,9 @@ trait SystemTheme    { fn current(&self) -> Theme; fn changes(&self) -> Stream<T
 > 一律报 false —— 界面因此不会显示"这台有托盘"却找不到它（那是 §5 能力声明那一格反复防的假）。
 >
 > **还欠的**：返回手势、Material 涟漪/底部弹层、`adjustResize`、SAF、`ACTION_SEND` 收件、通知渠道分级
-> 都**没有实现**，也没有判据；出包那一腿在 CI 上还是红的（缺口 **G25**，见 `PRODUCTION-READINESS` §7）；
+> 都**没有实现**，也没有判据；出包那一腿**APK 已经出得来**（run #16 起 `出 APK = success`），
+> 但整条 Android job 还没绿 —— 红在本批新加的"产物结构门禁"上（#17 证明包本身是好的，
+> 判据写错了、已改，等 #18 复跑），所以缺口 **G25** 不撤（见 `PRODUCTION-READINESS` §7）；
 > 跨零点的"今天"在没有真设备之前按 §40 记成未验，不写"理论通过"。
 
 ---
