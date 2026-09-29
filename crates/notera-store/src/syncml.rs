@@ -637,6 +637,18 @@ impl Store {
                 return Err(StoreError::Constraint(format!("账户不存在: {account}")));
             }
             tx.execute("DELETE FROM sync_remote_index WHERE account_id = ?1", [account.as_str()])?;
+            // I2 那一档"已观测到的远端头部"就地跟着视图更新（ADR-0021 D1）。
+            // 这一列此前在生产里**永远是 0**：引擎只发 `SetRemote{kind:"manifest"/"seq"}`，
+            // 实体那一档零调用点，于是 `next_rev(local, remote_rev)` 恒等于 `local + 1`，
+            // 而 DATA-MODEL §0 与 `next_rev` 的注释都写着"取大者 +1，编号不会相等"。
+            // 单调 `MAX`：这一列的语义是"本机见过的对面最高编号"，回退它等于取消那条不变式。
+            // 只动 `remote_rev`，**不动 `updated_at`**（"删后又改"的判据要看它），也不动 `sync_rev`（那是三方合并的 base）。
+            let mut bump_note = tx.prepare(
+                "UPDATE notes SET remote_rev = MAX(remote_rev, ?2) WHERE id = ?1",
+            )?;
+            let mut bump_folder = tx.prepare(
+                "UPDATE folders SET remote_rev = MAX(remote_rev, ?2) WHERE id = ?1",
+            )?;
             let mut stmt = tx.prepare(
                 "INSERT INTO sync_remote_index (account_id, kind, entity_id, rev, hash12, size, deleted, purged, seg, deleted_at, updated_at)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
@@ -648,6 +660,16 @@ impl Store {
                     })?,
                     _ => e.id.as_str().to_string(),
                 };
+                match e.kind {
+                    EntityKind::Note => {
+                        bump_note.execute(params![key, e.rev.get() as i64])?;
+                    }
+                    EntityKind::Folder => {
+                        bump_folder.execute(params![key, e.rev.get() as i64])?;
+                    }
+                    // 附件以 sha256 寻址，实体行上没有 remote_rev 这一档（见 set_remote_rev_tx）
+                    EntityKind::Attachment => {}
+                }
                 stmt.execute(params![
                     account.as_str(),
                     rows::kind_tag(e.kind),

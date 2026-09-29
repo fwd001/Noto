@@ -932,3 +932,93 @@ fn settle_locates_a_row_by_entity_and_rev_and_touches_nothing_else() {
         )
         .unwrap());
 }
+
+/// SY-REV-01：远端视图落盘的同时必须把"已观测到的远端头部"写进实体行 —— I2 那条
+/// `rev = max(rev, remote_rev) + 1` 才有东西可取大（ADR-0021 D1）。
+/// 判据打在**调用边**上：不只是"那一列被写了"，而是"下一次本地编辑真的用了它"。
+#[test]
+fn remote_index_also_observes_remote_heads_for_rev_allocation() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    let acct = notera_store::LOCAL_ACCOUNT_ID;
+    let n = create(&store, &folder, "对面已经改到第 5 版");
+
+    let note_view = |rev: i64| RemoteIndexEntry {
+        kind: EntityKind::Note,
+        id: n.id.clone(),
+        rev: Rev(rev as u64),
+        hash12: Some("a1b2c3d4e5f6".into()),
+        size: Some(120),
+        deleted: false,
+        purged: false,
+        seg: None,
+        sha256: None,
+        deleted_at: None,
+    };
+    let folder_view = RemoteIndexEntry {
+        kind: EntityKind::Folder,
+        id: folder.clone(),
+        rev: Rev(4),
+        hash12: Some("ffee00001111".into()),
+        size: Some(64),
+        deleted: false,
+        purged: false,
+        seg: None,
+        sha256: None,
+        deleted_at: None,
+    };
+
+    // ① 视图里对面是 5 → 实体行必须看得见 5（这一列此前在生产里永远是 0）
+    store
+        .remote_index_replace(acct, &[note_view(5), folder_view.clone()])
+        .unwrap();
+    let cur = store.get_note(&n.id).unwrap().unwrap();
+    assert_eq!(cur.remote_rev, Rev(5), "远端视图没有喂到 notes.remote_rev");
+    assert_eq!(
+        store.get_folder(&folder).unwrap().unwrap().remote_rev,
+        Rev(4),
+        "folders.remote_rev 同样要喂"
+    );
+    assert_eq!(cur.rev, Rev(1), "观测远端不许推进本地头部");
+
+    // ② 调用边：下一次本地编辑必须是 max(1, 5) + 1 = 6，而不是 local + 1 = 2。
+    //    差这一格就是"编号撞在对面已占用的号上、那一行永远推不出去"（G17 的根因形状）。
+    let next = store
+        .edit_note(&n.id, doc_text("本机接着写"), cur.rev)
+        .unwrap();
+    assert_eq!(
+        next.rev,
+        Rev(6),
+        "next_rev 没吃到观测到的远端头部：拿到了 {rev}（对面已经在 5，这个号推不上去）",
+        rev = next.rev
+    );
+
+    // ③ 单调：后面到达的一份**更旧**的视图（重放 / 清单回退）不许把观测值拉回去
+    store
+        .remote_index_replace(acct, &[note_view(2), folder_view.clone()])
+        .unwrap();
+    let after = store.get_note(&n.id).unwrap().unwrap();
+    assert_eq!(
+        after.remote_rev,
+        Rev(5),
+        "旧视图把已观测头部改回了 {} —— I2 的取大者会重新失效",
+        after.remote_rev
+    );
+    assert_eq!(after.rev, Rev(6), "观测这一列不许动本地内容或头部");
+
+    // ④ 附件那一档没有 remote_rev 可写（sha256 寻址），整批替换不许因此报错
+    let att = RemoteIndexEntry {
+        kind: EntityKind::Attachment,
+        id: notera_core::EntityId::parse(&n.id.to_string()).unwrap(),
+        rev: Rev(1),
+        hash12: None,
+        size: Some(9),
+        deleted: false,
+        purged: false,
+        seg: None,
+        sha256: Some("b".repeat(64)),
+        deleted_at: None,
+    };
+    store.remote_index_replace(acct, &[att]).unwrap();
+}

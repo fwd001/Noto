@@ -80,7 +80,7 @@ Phase 1 落地文件：`0001_init` `0002_sync` `0003_search` `0004_indexes` `000
 rev          本地/远端已知的最新修订号（权威头部）
 sync_rev     本地与远端**最后一次确认一致**的 rev —— 即三方合并的 base
 sync_hash    该一致点的内容哈希
-remote_rev   清单中记录的服务器当前 rev
+remote_rev   清单中记录的服务器当前 rev（**按实**：每轮远端视图落盘时单调写回，见 ADR-0021 D1）
 content_hash 当前 doc 的 sha256（权威）
 ```
 
