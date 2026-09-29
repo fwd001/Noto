@@ -113,6 +113,19 @@ await step('真窗口里点这条笔记 → 正文显示（选中即打开）', 
   if ((await page.locator('.editor-blank').count()) > 0) throw new Error('选中后落在空面板上：编辑器没跟着 selectedId 打开');
   const field = page.locator('[data-testid="editor-doc"] [contenteditable="true"]').first();
   await field.waitFor({ timeout: 5000 });
+  // **条件等待而不是睡固定时长**：把正文填进 contenteditable 是渲染层的异步动作。
+  // 0.0.36 那次 release 真窗口跑成 8/9 就是读早了 —— 失败消息里的"预期正文"只剩一个换行。
+  // 超时仍然要失败：点了没显示、或显示的是另一条笔记，都必须红；不许用重试把问题掩盖掉。
+  await page.waitForFunction(
+    ([sel, want]) => {
+      const el = document.querySelector(sel);
+      if (!el) return false;
+      const nbsp = String.fromCharCode(160);
+      return (el.innerText || '').split(nbsp).join(' ').includes(want);
+    },
+    ['[data-testid="editor-doc"] [contenteditable="true"]', title],
+    { timeout: 8000, polling: 150 },
+  );
   // 渲染层把空格写成 U+00A0 以保持连续空格，读回时折回 U+0020（dom.ts:104）
   const text = (await field.innerText()).replace(/ /g, ' ');
   if (!text.includes(title)) throw new Error(`正文不含预期：${JSON.stringify(text.slice(0, 60))}`);
