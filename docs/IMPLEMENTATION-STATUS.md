@@ -19,7 +19,7 @@
 | 依赖漏洞审计（两半） | **Rust**：`node scripts/audit-rust-deps.mjs` → **PASS · 620 个依赖里 0 条未豁免**（3 条豁免逐条写理由与回看时机：glib 两条只在 Linux/gtk 那半张图上、proc-macro-error 是构建期宏不进产物）。不装 `cargo audit`/`cargo deny`，改为一批量 POST `api.osv.dev/v1/querybatch`；判据先自证（`--self-test` 混查已知有漏洞与已知干净的包：前者必须报、后者必须不报），任何链路异常（非 2xx、结果数 ≠ 查询数、lockfile 解析出 0 个包）**硬失败而不判干净**。**前端**：`pnpm audit --audit-level=high --registry=https://registry.npmjs.org` → 0 条（`--json` 的 metadata 证明它看了 275 个依赖，不是空扫；同一条命令拿已知有漏洞的隔离工程验过它会红 = 26 条）。**两边共同的边界要披露**：这一跑会把依赖的名字与版本号发到外部服务（不含代码、不含路径）；它也不看我们自己的代码，更不看 rustc/cargo/node 本体 | 本机 + CI（前端那一步阻断） |
 | `node scripts/verify-diagram.mjs` | 59/59，交互后无运行时错误 | 本机 |
 | `node scripts/verify-app.mjs` | **37/37**（真 Rust 核心，非 mock）—— 2026-09-28 修掉那条竞态之后连跑六轮全新数据目录全绿；0.0.27 这批用新编的桥 + 全新数据目录重跑仍 37/37。此前这条在**同一步**偶发红（「重排落到库里了 —— 加粗没落库」）：带 0.0.22 的修复 **2/7 红**、撤掉修复回 HEAD 仍 **1/5 红** ⇒ 既有缺陷、非那批引入；根因是 `open()` 的"先 flush 再回读"里 `flush` 只等待发的 debounce、放过已在飞的那支保存，回读拿到"这次写之前"的快照并盖掉本地，那支写落地时又照被盖掉的版本再写一次 —— 吃掉的是已提交的用户编辑。修法一句 `await saveChain`，判据 FT-SAVE-04，变异自证 M47。另有 1 轮整条假红（33/37）—— 起桥后没等够就开跑，属 lane 的 readiness 而不是产品。其余三十六步全绿，含"坏图占位上两颗自救按钮"那一步 | 本机 |
-| `node scripts/verify-tauri-window.mjs` | debug **9/9 —— 2026-09-28 在当前 HEAD 上重跑**（真 `invoke`、内嵌资源、控制台零 error）；release 那 9/9 **沿用上一批**（本批没重编 release 壳）。本表此前写的 8/8 是更早一批的数 | 本机 |
+| `node scripts/verify-tauri-window.mjs` | debug **9/9 —— 2026-09-28 在当前 HEAD 上重跑**（真 `invoke`、内嵌资源、控制台零 error）；release 那 9/9 **在 0.0.32 与 0.0.33 这两批都重编了 release 壳并重跑过**（2026-09-29 凌晨；两次都核过 exe 的 mtime 属于当批，并且起壳后 `17323/health` **连接被拒** —— "dev 桥只关在 debug 构建里"在新包上成立）。debug 那一档 0.0.32 / 0.0.33 都没重编，仍属 0.0.31 之前那批 —— 两档分开写，不混成一个数。本表此前写的 8/8 是更早一批的数 | 本机 |
 | `cargo fmt --check` | **已解除**（组件已装）：第一次跑就发现 92 个文件漂移，已纯格式化提交并复验 487/0 + clippy 0/0 | 本机 |
 
 ## 分领域状态
