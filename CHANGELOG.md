@@ -120,11 +120,13 @@
     "恢复只排期并留下可核对的标记"两步 —— 那两步按 `DATA_DIR` 的**默认值**（`.logs/e2e-data`）去盘上找 blob 与
     `restore-pending.json`，而我这次把桥起在另一个目录里，等于让它们去敲别人家的门；桥起回默认目录 + 显式带 `DATA_DIR` 就是 37/37。
     这条 lane 的头部一直写着"前置由调用方起"，这次就是调用方（我）没起对。
-  - **§4/§5 的出包流水线本批补的三件（纯工装，不动产品行为）**：
+  - **§4/§5 的出包流水线本批补的四件（纯工装，不动产品行为）**：
     ① **两条产物结构校验门禁**（CI-CD.md L6 早就承诺、流水线里一条都没有，按 §45 那是文档说一套）——
     `scripts/check-apk-badging.mjs` 读 `aapt dump badging` + `aapt list` 断包名 / `versionName` /
-    `native-code: arm64-v8a` / `launchable-activity` / **assets 里真的有 JS**（缺界面的 APK 装上能起
-    Activity、开起来白屏，job 状态看不出来）；`scripts/check-macos-bundle.mjs` 挂 `.dmg` 后读
+    `native-code: arm64-v8a` / `launchable-activity` / **`lib/arm64-v8a/*.so` 在 `aapt list` 里**（"界面进没进去"
+    这一格后来改由嵌之前的 `scripts/check-frontend-dist.mjs` 看 —— run #17 的读数证明 tauri 把前端资源
+    嵌进 `.so`，`assets/` 里根本不会有 JS，写在 APK 上断言的那版判据是错的，见下面的更正）；
+    `scripts/check-macos-bundle.mjs` 挂 `.dmg` 后读
     `plutil -p Info.plist` + `file` 断 `CFBundleShortVersionString` / bundle id / 主程序名 /
     `CFBundlePackageType == APPL` / 主程序真是 Mach-O。两份 `--list`、`--file` 都做成**必需参数**，
     CI 里 `aapt`/`hdiutil`/卷里找不到东西一律红，不 skip。**两个门禁都先证它会红再信它的绿**：
@@ -142,6 +144,18 @@
     没继承 working-directory、URL 形状写错 + `|| echo` 吞掉 curl 的 22、假定红在哪一步），
     每条都记进 §48 的账；修法 `scripts/patch-android-buildtask.mjs` 把 `BuildTask.kt` 那两节钉成绝对路径，
     按文件名找而不是猜路径（真身在 `buildSrc/src/main/java/app/notera/kotlin/`，猜错过一轮）。
+    ④ **`publish` 那一步（run #18 红在最后这一格）**：三条出包腿全绿之后，`gh release create` 被
+    "产物里有一个**目录**"挡下 —— macOS 那条腿上传的是裸的 `Notera.app/`，而 `gh` 的附件只收 regular file。
+    这不是"CI 形状不合我意"，是**文档承诺过两件交付物却没实现**：CI-CD §5 的 macOS 那行一直写着
+    `.dmg` + `.app.zip`，产物表也写了 zip 用于 updater 与"右键打开"。所以修法是 macOS 腿用
+    `ditto -c -k --sequesterRsrc --keepParent` 压成 `Notera_<v>_universal.app.zip`（`zip -r` 会丢 bundle 的
+    权限位与符号链接），并 `unzip -l` 断 zip 里真有 `Contents/MacOS/<exe>` 再上传。
+    收拢那一步挪进 `scripts/collect-release-assets.mjs`：递归摊平 + 生成与 `sha256sum -c` 兼容的
+    `SHA256SUMS.txt`（两空格分隔，§产物表那条）+ 断五种交付物齐备且安装器名字里含 `_<这一版>_`。
+    **先证它会红**：本机 14 条断言全对（缺 MSI/NSIS/DMG/app.zip/APK 各一条、旧版本的包、裸 `.app` 目录、
+    同名不同字节撞车、假包体积、三种用法错退 2），同名**同**字节那一条按预期仍绿并报"跳过重复"；
+    清单本身用真 `sha256sum -c` 复算过 5/5 OK。最后一步 `gh release view --json assets` 打服务端真实的
+    附件清单 —— "命令返回 0"不等于"用户下得到包"。
 - **本机把一条笔记从回收站里恢复出来，而对面已经把它永久删除 —— 恢复被静默公告出去，等于用同步把永久删除的数据复活了（缺口 G24，P1 级；判据 SY-DEL-03；版本 0.0.39 → 0.0.40）**
   - **实测形状**（两台真设备 + 真 TCP 服务器 + `Backend::Fs`）：A 建一条并公告 → B 追平 → **B 删（本机脏、还没公告）** →
     A `purge_note` 并公告 → **B 把这条恢复** → B 连跑 4 轮。修之前的读数：`轮次(冲突/拒收/结局)=[(0,0,Converged),(0,0,NoOp)×3]`、

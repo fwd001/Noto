@@ -247,13 +247,37 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/post-ci-diagnostic.mjs --file /tmp/diag/macos.txt --label "macOS 产物结构校验的现场"
 
+      # CI-CD §5 早写了 macOS 的交付物是 **两件**：`.dmg`（人肉安装）+ `.app.zip`（updater / 右键打开）。
+      # 之前只上传裸的 `Notera.app` 目录 ⇒ run #18 的 publish 被 `gh release` 挡下（它只收 regular file），
+      # 而"产物是目录"这件事在出包那条腿的绿灯里根本看不见。这里按承诺压成 zip，不是在绕开门禁。
+      # `ditto -k --keepParent` 是 macOS 上保留 bundle 权限位/符号链接/xattr 的唯一正解（`zip -r` 会丢）。
+      - name: 把 .app 压成 .app.zip（§5 承诺的第二件交付物）
+        run: |
+          set -uo pipefail
+          v="${{ needs.meta.outputs.version }}"
+          APP=$(ls -1d target/release/bundle/macos/*.app 2>/dev/null | head -1 || true)
+          if [ -z "$APP" ]; then echo "bundle/macos 下没有 .app，压不了 zip"; exit 1; fi
+          ZIP="target/release/bundle/macos/Notera_${v}_universal.app.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+          rc=$?
+          if [ "$rc" -ne 0 ] || [ ! -f "$ZIP" ]; then echo "ditto 退出码 $rc，zip=$ZIP 不在"; exit 1; fi
+          # 压完得能读回来：zip 里真的有 Contents/MacOS/<可执行名> 才算 bundle 完整，
+          # 只断"文件在、有体积"的话，一个空的 zip 也能过。
+          # 捕获组第一位不许是 `/`：`unzip -l` 也会列目录行（`…/Contents/MacOS/`），
+          # 那种行按 `[^[:space:]]*$` 会匹配成空串，`head -1` 拿到空行就把好包判成红。
+          LIST=$(unzip -l "$ZIP")
+          EXE=$(sed -n 's#.*/Contents/MacOS/\([^[:space:]/][^[:space:]]*\)$#\1#p' <<<"$LIST" | head -1)
+          if [ -z "$EXE" ]; then echo "zip 里没有 Contents/MacOS/* ⇒ $LIST"; exit 1; fi
+          echo "### macOS 的第二件交付物（§5）" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`$(basename "$ZIP")\`：$(wc -c <"$ZIP") 字节，内含 \`Contents/MacOS/$EXE\`" >> "$GITHUB_STEP_SUMMARY"
+
       - name: 收集产物
         uses: actions/upload-artifact@v4
         with:
           name: macos-universal
           path: |
             target/release/bundle/dmg/*.dmg
-            target/release/bundle/macos/*.app
+            target/release/bundle/macos/Notera_*.app.zip
           if-no-files-found: error
 
   android:
@@ -732,17 +756,51 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          v="${{ needs.meta.outputs.version }}"
-          shasum -a 256 dist-artifacts/* > dist-artifacts/SHA256SUMS.txt || true
-          if gh release view "v$v" >/dev/null 2>&1; then
-            gh release upload "v$v" dist-artifacts/* --clobber
-          else
-            gh release create "v$v" dist-artifacts/* \
-              --title "Notera $v" \
-              --notes-file RELEASE-NOTES.md \
-              --draft \
-              --target "$GITHUB_SHA"
-          fi
-          echo "Release 草稿已建好（draft）：https://github.com/${{ github.repository }}/releases —— 检查后手动 Publish" \
-            >> "$GITHUB_STEP_SUMMARY"
+          set -uo pipefail
+          mkdir -p /tmp/diag
+          # run #18 的读数：三条出包腿全绿（Windows 那条连新加的 `msiexec /a` 解包校验都过了），
+          # 红的是这一步。根因是 `macos-universal` 产物里摊出来一个**目录** `Notera.app/`，
+          # 而 `gh release` 只收 regular file —— CI-CD §5 本来就把 macOS 的交付物写成 .dmg + .app.zip 两件，
+          # 所以目录现在由 macOS 那条腿压成 zip（见上），这里不再自己 zip。
+          # "三平台的包真的都在、且是这一版"交给 scripts/collect-release-assets.mjs 断言：
+          # 缺任一平台 / 安装器名字里没这一版 / 还有裸的 .app 目录 / 同名撞车 / 包小得不像产物，
+          # 这五种在本地都变异测试过会红（.logs/rehearse-collect-release-assets.mjs，14/14）。
+          # 整段现场落盘，失败时由下一步贴成 commit 评论（这条 job 没有别的读数通道）。
+          (
+            set -euo pipefail
+            v="${{ needs.meta.outputs.version }}"
+            rm -rf release-assets
+            echo "--- download-artifact 摊出来的原始形状"
+            find dist-artifacts -mindepth 1 -maxdepth 2 -printf '%y %p  %s bytes\n' | sort -k2
+            echo "--- 摊平 + 三平台齐备断言"
+            node scripts/collect-release-assets.mjs --src dist-artifacts --out release-assets --version "$v"
+            if gh release view "v$v" >/dev/null 2>&1; then
+              echo "--- Release v$v 已存在 ⇒ 只把产物贴上去（--clobber）"
+              gh release upload "v$v" release-assets/* --clobber
+            else
+              echo "--- 建草稿 Release v$v"
+              gh release create "v$v" release-assets/* \
+                --title "Notera $v" \
+                --notes-file RELEASE-NOTES.md \
+                --draft \
+                --target "$GITHUB_SHA"
+            fi
+            # 贴完再读一次服务端的样子：§52 要的是"Release 上有用户能下的包"，
+            # 不是"gh 命令返回 0"。这一步会把真实的附件清单打出来。
+            echo "--- 服务端读数"
+            gh release view "v$v" --json isDraft,tagName,name,assets \
+              --jq '{tag: .tagName, title: .name, draft: .isDraft, assets: [.assets[].name]}'
+          ) > /tmp/diag/publish.txt 2>&1
+          rc=$?
+          cat /tmp/diag/publish.txt
+          {
+            if [ "$rc" -eq 0 ]; then echo "### 建 Release 草稿（§4/§5）"; else echo "### 建 Release 草稿失败（rc=$rc，全文走诊断评论通道）"; fi
+            tail -n 30 /tmp/diag/publish.txt | sed 's/^/> /'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: 把建 Release 的现场贴成 commit 评论（诊断用，修好就删）
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/post-ci-diagnostic.mjs --file /tmp/diag/publish.txt --label "建 Release 草稿这一步的现场"

@@ -416,7 +416,7 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
   实测候选集确实收进了这一条（`候选=1，含这一条=true`），**可那几轮还是 `NoOp`**，
   所以卡点不在输入集合。当时改的候选查询因此被回退了：一条"改了但没修好"的规则不进主干。
 
-- **G25 总指令 §4 的三条出包腿里，Android 那一腿在 CI 上还是红的（2026-09-29 实测；状态 = **出包本身已通（run #16 起 `出 APK = success`），红的是本批新加的产物门禁写错了判据，判据已改、等 run #18 的读数**）**：
+- **G25 总指令 §4 的三条出包腿里，Android 那一腿在 CI 上还是红的（2026-09-29 实测；状态 = **三条腿全绿（run #18：Android / macOS / Windows 各 `completed success`，产物 .apk 34 870 610 B 与 .dmg+.app 11 254 004 B 都在），只剩 ③「publish 建草稿 Release」—— 根因（产物里是裸的 `.app` 目录）已修，等 run #19 的读数**）**：
   实测到现在的形状：`release.yml` 由 tag 触发，run #4（`v0.0.40`）与 run #5（`v0.0.41`）都是
   **meta ✓ / Windows ✓ / macOS ✓ / Android ✗**，产物 `windows-x64`、`macos-universal` 两份都在，Android 一步没有。
   红的位置在 `tauri android build --apk --debug --target aarch64` 那一步（前面 SDK/NDK 定位、`android init` 都已过）。
@@ -504,6 +504,20 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
     前端产物"断言也都绿）。剩 **③ `publish` 建出带三平台产物 + SHA256SUMS 的草稿 Release**，
     等 Windows 那腿收尾（它是三条里最慢的：release 构建 + 新加的 `msiexec /a` 解包校验）。
     **G25 在 ③ 读到之前不撤。**
+  - **run #18 的最后一格读到了：Windows 也 `completed success`（含那条新加的解包校验），红的是 `publish`
+    的「建 Release 草稿」**。根因不是签名、不是 `gh` 的用法，而是**产物里有一个目录** ——
+    macOS 那条腿上传的是裸的 `Notera.app/`，`gh release` 的附件只收 regular file。
+    按 §45 对了一遍文档：CI-CD §5 与产物表**本来就承诺** macOS 交两件（`.dmg` + `.app.zip`），
+    所以这不是"CI 形状不合我意"，是**承诺过第二件却没实现**。修法两步：
+    ① macOS 腿加 `ditto -c -k --sequesterRsrc --keepParent` 压成 `Notera_<v>_universal.app.zip`，
+    并 `unzip -l` 断 zip 里真有 `Contents/MacOS/<exe>`（只断"文件在、有体积"的话，一个空 zip 也能过）；
+    ② 收拢那一步挪进 `scripts/collect-release-assets.mjs`（递归摊平 + `sha256sum -c` 兼容的清单 +
+    五种交付物齐备 + 安装器名字里含 `_<这一版>_`），跑完再用 `gh release view --json assets`
+    把服务端真实的附件清单打出来。
+    **新门禁先证它会红**：本机 14 条断言全对（缺 MSI / NSIS / DMG / app.zip / APK 各一条、贴旧版本、
+    裸 `.app` 目录、同名不同字节、假包体积、三种用法错退 2；同名**同**字节按预期仍绿并报"跳过重复"），
+    清单用真 `sha256sum -c` 复算 5/5 OK。
+    **③ 仍等 run #19 的读数**（tag 已挪到含这两步修法的树上），读到之前 G25 不撤。
   - **解除条件**（三条都要真读到）：① 下一次 tag 的 run 里 **Android job 绿**；② 产物里出现一份 **`.apk`**（并且它的 `versionName` 是这一版的 0.0.41，不是 1.0）；
     ③ `publish` job 真建出带三平台产物 + SHA256SUMS 的**草稿 Release**。这三条没读到之前，§52 终报里这一格按 BLOCKED 写，不写"理论通过"。
     装到真机上的启动与基础功能验证另算一格（§49：要用户的设备）。

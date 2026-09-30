@@ -405,10 +405,13 @@ CI 必须运行的四类检查（映射到 job）：
 >     这条路能不能走通要等 run 的读数，没读到之前 G25 不撤。
 >   - **产物的结构校验（L6 那一格，三平台都有）**：
 >     - **Android** `scripts/check-apk-badging.mjs` 读 `aapt dump badging` **加 `aapt list`** 的原文，断
->       包名 `app.notera`、`versionName` 等于这一版（**不是** tauri 在 Android 上退回的 `1.0`）、
->       `native-code` 含 `arm64-v8a`（Rust 库真打进去了）、有 `launchable-activity`（装上点得着）、
->       **`assets/` 里真的有 JS** —— badging 只说"这包是什么"，不说"界面进没进去"，缺界面的 APK 装上能起
->       Activity、开起来是白屏，那种形状在 job 状态里和正常一模一样。`--list` 是**必需参数**。
+>       包名 `app.notera`、`versionCode` 是正整数、`versionName` 等于这一版（**不是** tauri 在 Android 上退回的 `1.0`）、
+>       `sdkVersion` 等于 `24`（脚本 `--min-sdk` 的默认值，调用方没覆盖过）、`native-code` 含 `arm64-v8a`（Rust 库真打进去了）、有
+>       `launchable-activity`（装上点得着）、**`lib/arm64-v8a/*.so` 真的在 `aapt list` 里**。
+>       "界面进没进去"这一格**不在 APK 里看**：tauri v2 把前端资源嵌进那份 `.so`，`assets/` 里根本不会有 `.js`
+>       （run #17 的 `aapt list` 读数：`assets/` 只有 `tauri.conf.json`）—— 所以改由嵌之前的
+>       `scripts/check-frontend-dist.mjs` 断（`index.html` 在、有 `.js`、入口真的引用了某个 chunk、总体积有下限）。
+>       `--list` 是**必需参数**。
 >     - **macOS** `hdiutil attach` 挂上 `.dmg`（这平台的"安装"等价动作，不要管理员），
 >       `scripts/check-macos-bundle.mjs` 读 `plutil -p Info.plist` + `file`，断 `CFBundleShortVersionString` /
 >       bundle id / 主程序名 / `CFBundlePackageType == APPL`（不是那种没有主程序的壳）/ 主程序真是 Mach-O。
@@ -429,6 +432,15 @@ CI 必须运行的四类检查（映射到 job）：
 >       真机安装与首屏另算一格（§49，要用户的设备）。
 > - **`publish`** —— `needs: [meta, windows, macos, android]`，把三平台产物收拢、算 `SHA256SUMS.txt`、
 >   从 CHANGELOG 里取「版本 … → `<v>`」那一条当正文，**建的是 draft Release**（没签名就公开发布 = 替用户做决定）。
+>   收拢那一步交给 `scripts/collect-release-assets.mjs`：把 Artifacts **递归摊平**成一批 regular file、
+>   生成与 `sha256sum -c` 兼容的 `SHA256SUMS.txt`（两空格分隔，见 §产物表），再断五种交付物齐备
+>   （MSI / NSIS / .dmg / **.app.zip** / APK）且安装器类文件名里含 `_<这一版>_`。
+>   它会红的五种形状（本机 14/14 变异测试）：缺任一平台、贴了别的版本的包、还有裸的 `.app` 目录、
+>   同名不同字节的产物撞车、产物小得不像包（默认下限 1 MiB）。
+>   跑完再用 `gh release view --json assets` 把**服务端真实的附件清单**打出来 —— §52 要的是
+>   "Release 上有用户能下的包"，不是"gh 命令返回 0"。
+>   macOS 那条腿因此多一步 `ditto -c -k --keepParent` 把 `Notera.app` 压成 `Notera_<v>_universal.app.zip`
+>   并 `unzip -l` 断 zip 里真有 `Contents/MacOS/<exe>`（run #18 就是红在把**目录**递给 `gh release`）。
 > - **打 tag 的唯一入口是 `scripts/tag-release.mjs`**（preflight：版本单源一致 + CHANGELOG 里**恰好一条**
 >   `→ <version>` + 工作树干净；默认只建本地 tag，`--push` 才推）。
 >
