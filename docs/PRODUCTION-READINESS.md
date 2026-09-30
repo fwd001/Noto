@@ -526,6 +526,31 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
   的注释与门禁）—— `--ignored` 那本账因此从 7 条回到 **6** 条。
 
 
+- **G38 同步在 macOS / Linux / Android 上根本配不出来：口令只允许进 OS 凭据库，而那三个平台没接（2026-09-30 按 §45 扫"文档承诺 ↔ 代码"时对出来；状态 = 未修，等口径拍板）**
+  - **事实链全在代码里，不是推测**：`credential_store::available()` 就是 `cfg!(windows)`；`put()` 在非 Windows 直接
+    `Err(SecretError::Unavailable)`；而 `App::configure_account` 那一格写的是 `credential_store::put(...).map_err(secret_err)?`
+    ⇒ **任何非空口令都让整次保存失败**（码 `credential_unavailable`，`secret_err` 那条映射）。
+  - **用户侧的表现**：macOS / Android 的包装得上、界面开得了、本地记录与搜索一切正常，但设置页填完地址 + 账号 + 口令
+    点「保存」只得到一句"这个平台还没有接入系统凭据库"（i18n 里 `error.credential_unavailable` 有文案，所以不是裸错误）。
+    也就是说**验收标准第 2 条"WebDAV 同步可用"在那两个平台上不成立**，而第 4 条要求三平台的包都过基础功能验证。
+  - **台账此前欠的是三件事，不是"没写后果"**（这句要先说清楚，免得把我的发现说大）：后果本身**写在 ADR-0020 里**
+    （"影响 = macOS / Linux 上发布版仍不能同步、`PlatformCaps.keychain` 报 `none`"，第 59 行还明写"非 Windows 配账号必踩"）。
+    欠的三件是：① 那份 ADR 的平台清单里**没有 Android**，而 Android 恰恰是验收标准第 4 条那三个平台里的第三个
+    （移动壳与桌面壳共用同一份 `credential_store`，所以后果一模一样）；② 这一格从来没进过 §7 的**编号缺口清单**，
+    于是 §47 那次"有没有 P0/P1 已知缺陷"的扫看不到它；③ `caps.keychain` 一路报到了前端（`platform/caps.ts` 有类型、
+    兜底值也写对了 `none`），但**界面里没有任何一处读它** —— 用户在点「保存」之前得不到任何提示，
+    只能撞上一次失败才知道这台设备配不了同步（`available()` 那句旧注释承诺的"照它显示的开关"就是没实现的那一件）。
+  - **三条出路，各自动的是不同层的取舍，所以要拍板**：
+    **A** 接 macOS Keychain（`security-framework`）+ Android Keystore（密文落 SQLite）—— 最贵，而且 **Android 那一半本机没法验**
+    （§40：没有真机就没有绿灯，只有"代码写完了"）；macOS 那一半可以在 CI 的 macos runner 上放一条真 put/get/remove 的门禁，
+    但 runner 的 login keychain 每次是否可解锁要先量，不然会得到一条比缺陷更烦的 flaky 门禁。
+    **B** 口令只留在本次会话的内存里（不落盘），保存不再被拒，设置页在输入前就明写"这台设备不会记住口令，每次启动要重填"
+    —— 数据安全那一侧不变（不写明文），代价在体验。
+    **C** 首发只承诺 Windows 同步可用，macOS / Android 只承诺本地功能，并在发布说明里明写 —— 最省事，但要用户接受验收标准少一格。
+  - **解除条件**：用户选定 A/B/C；选 A 还要给一台真 Android 设备做验收（与 G7/G8 那两条真设备项同批）。
+  - **同批顺手改的一条 §45 分叉**：`available()` 的注释写着"界面的『记住口令』那颗开关要照它显示"，而界面里**从来没有那颗开关**
+    （全仓搜 `rememberPassword` / "记住口令" 零命中）—— 注释承诺了一个不存在的控制，注释已按现状改回来。
+
 - **G34 产品出口的退避与重试次数不是 PROXY.md §7 写的那一套（2026-09-30 实测；状态 = **未修，等 §9 级取舍拍板**）**：
   `WebDavRemote::new` 把政策硬编成 `RetryPolicy::deterministic(40, 1)`（base 40 ms、预算 **1**、jitter **0**），
   而 §7 写的是 `min(15min, 2s × 1.85^n) × (1±0.2 jitter)` 与"一轮内重试预算 3 次"。

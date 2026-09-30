@@ -1200,6 +1200,20 @@
 - `Tauri` 壳配置里 `bundle.targets` 含协议外的取值，构建脚本直接失败
 
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
+- **G38 同步在 macOS / Linux / Android 上配不出来：口令只允许进 OS 凭据库，而那三个平台没接**（2026-09-30 按 §45 扫出来；状态 = **未修，等口径拍板**；三条出路写在 PRODUCTION-READINESS §7）
+  - 事实链：`credential_store::available()` 就是 `cfg!(windows)`，`put()` 在非 Windows 直接 `Unavailable`，而
+    `configure_account` 那一格是 `put(...)?` ⇒ **填了口令的账户保存当场被拒**（码 `credential_unavailable`，界面有文案所以不是裸错误）。
+    本地功能（新建/编辑/搜索/删除）不受影响 —— 坏的只有同步那一格，而它正是验收标准第 2 条。
+  - **验收影响要说准**：三平台出包（第 4 条）里 macOS 与 Android 那两个包**过不了"基础功能验证 = 能同步"**。
+    这一条此前只在 ADR-0020 里以"macOS / Linux 仍不能同步"的形式存在：**Android 漏在平台清单外**（移动壳与桌面壳共用同一份
+    `credential_store`），而且 §7 的编号缺口清单里没有它，于是 §47 那次 P0/P1 扫看不到。
+  - **还有一条同根的**：`caps.keychain` 一路报到了前端（`platform/caps.ts` 类型齐全、兜底 `none`），但**界面没有任何一处读它**
+    ⇒ 用户在点「保存」之前得不到任何提示，只能撞一次失败才知道这台设备配不了；`available()` 那句旧注释承诺的
+    "照它显示的『记住口令』开关"从来没被实现（全仓零命中），注释已按现状改回。
+  - 三条出路的取舍各不相同，所以不代用户决定：**A** 接 macOS Keychain + Android Keystore（Android 那一半本机没法验，§40 不给绿灯；
+    macOS 那一半可在 CI 的 macos runner 上放真 put/get/remove 门禁，但要先量 runner 的 login keychain 是否每次可解锁）；
+    **B** 口令只留本次会话内存、不落盘、保存不再被拒（数据安全不变，代价是每次启动重填）；**C** 首发只承诺 Windows 同步可用，
+    发布说明里明写另两个平台只有本地功能。
 - **G34 产品出口的退避与重试次数不是 PROXY.md §7 写的那一套**（2026-09-30 实测；状态 = **未修，等 §9 级取舍拍板**；
   原因/影响/解除条件在 `PRODUCTION-READINESS`）：`WebDavRemote::new` 硬编 `RetryPolicy::deterministic(40, 1)`
   （40 ms、预算 **1**、jitter **0**），而 §7 写的是 `2s × 1.85^n × (1±0.2)`、预算 3。

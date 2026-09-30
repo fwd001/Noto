@@ -76,7 +76,13 @@ pub fn account_of(reference: &str) -> Option<&str> {
     reference.strip_prefix(REF_PREFIX)
 }
 
-/// 这个平台上到底有没有凭据库。界面的"记住口令"那颗开关要照它显示，不能照"填没填"显示。
+/// 这个平台上到底有没有系统凭据库。**只有 Windows 接了**（`put`/`get` 在非 Windows 直接 `Unavailable`），
+/// 而 `App::configure_account` 里口令那一格是 `put(...)?` —— 于是填了口令的账户在 macOS / Android 上
+/// **保存就会被拒**，也就是那两个平台目前配不出可用的同步。用户侧后果与三条出路记在
+/// PRODUCTION-READINESS §7 的 **G38**（等口径拍板）。
+///
+/// 这里以前写着"界面的『记住口令』那颗开关要照它显示"，而界面里从来没有那颗开关（全仓零命中）——
+/// 注释承诺了一个不存在的控制，按现状改回来。
 pub fn available() -> bool {
     cfg!(windows)
 }
