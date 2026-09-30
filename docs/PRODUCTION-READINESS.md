@@ -35,7 +35,7 @@
 | 链路抖动收敛（§53 主循环） | 1/1（六轮各坏一次：停监听 / 建连就掐 / 读清单 500） | `cargo test -p notera-host --test reconnect` | L3 |
 | 空轮代价（PERF-05/14） | 1/1（≤2 请求、≤2 KiB、清单必走 304、PROPFIND ≤1） | `cargo test -p notera-host --test sync_cost` | L3 |
 | 契约图 | 59/59，交互后无运行时错误 | `node scripts/verify-diagram.mjs` | L2 |
-| 浏览器端到端（真 Rust 核心，非 mock） | **37/37**（2026-09-28 修掉那条竞态之后连跑**六轮**全新数据目录全绿；0.0.27 这批用新编的桥 + 全新数据目录重跑仍 37/37）。**这条曾经只写"35/35 / 37/37"而没人数过复现率**：同一个 0.0.22 树七轮里两轮红在「重排落到库里了 —— 加粗没落库」，把那批 GC 修复撤掉回 HEAD 仍五轮里一轮红在**同一步** ⇒ 既有缺陷、非那批引入（那处修复对没有附件的笔记是空转）。红法是同一篇笔记连着两支写：`rev=N bold=1 → 200`，25 ms 后 `rev=N+1 bold=0 → 200` —— **吃掉的是已提交的用户编辑**。根因：`open()` 是"先 `flush()` 再回读"，而 `flush()` 原来只等"待发的那支 debounce"、放过"已经在飞的那支"，回读于是拿到"这次写之前"的快照盖掉本地（`dirty` 那时是 false，既有的本地优先守卫管不到），那支在飞的写落地时按设计发现"正文又变了"，就照被盖掉的版本再写一次。修法一句 `await saveChain`；判据 FT-SAVE-04；变异自证 **M47**（改回修之前的行为 → 红在"标记还在"）。另见过一次整条 33/37 的假红（lane 自己的 readiness：健康检查一返回就开跑；起桥后等满 3 秒未再复现） | `notera-cli serve` + `pnpm dev` + `node scripts/verify-app.mjs` | L4 |
+| 浏览器端到端（真 Rust 核心，非 mock） | **38/38**（0.0.42 起多一步：侧栏文件夹的名字要**渲染出来**看得见 —— 断几何，不断 `allInnerTexts()`；见缺口 G26。2026-09-28 修掉那条竞态之后连跑**六轮**全新数据目录全绿；0.0.27 这批用新编的桥 + 全新数据目录重跑仍 37/37）。**这条曾经只写"35/35 / 37/37"而没人数过复现率**：同一个 0.0.22 树七轮里两轮红在「重排落到库里了 —— 加粗没落库」，把那批 GC 修复撤掉回 HEAD 仍五轮里一轮红在**同一步** ⇒ 既有缺陷、非那批引入（那处修复对没有附件的笔记是空转）。红法是同一篇笔记连着两支写：`rev=N bold=1 → 200`，25 ms 后 `rev=N+1 bold=0 → 200` —— **吃掉的是已提交的用户编辑**。根因：`open()` 是"先 `flush()` 再回读"，而 `flush()` 原来只等"待发的那支 debounce"、放过"已经在飞的那支"，回读于是拿到"这次写之前"的快照盖掉本地（`dirty` 那时是 false，既有的本地优先守卫管不到），那支在飞的写落地时按设计发现"正文又变了"，就照被盖掉的版本再写一次。修法一句 `await saveChain`；判据 FT-SAVE-04；变异自证 **M47**（改回修之前的行为 → 红在"标记还在"）。另见过一次整条 33/37 的假红（lane 自己的 readiness：健康检查一返回就开跑；起桥后等满 3 秒未再复现） | `notera-cli serve` + `pnpm dev` + `node scripts/verify-app.mjs` | L4 |
 | 纯黑盒 UAT（§23：只用界面） | **10/10** —— 修好第 3 节那条竞态之后**连跑十一轮全绿**（每轮独立空库；其中六轮是冷 vite 缓存的稳定性加测） | `node scripts/verify-blackbox.mjs` | L4 |
 | 真窗口（走真 `invoke`） | debug **9/9 —— 2026-09-28 在当前 HEAD（`d5cf2ef`）上重跑**（真 `invoke`、内嵌资源 `http://tauri.localhost/`、第 3 步读 `platform_caps` 断言托盘 / 全局快捷键 / 原生菜单 / 通知四项**真的注册上了**、建笔记真落 SQLite 且列表读回、截图 + 控制台零 error）。**release 那 9/9 沿用上一批**，本批没重编 release 壳。<br>踩到一次**假红并记在这里**：第一次跑 6 步红在"`__TAURI_INTERNALS__` 不存在"，根因是**上一次启动残留的 notera-desktop/WebView2 进程还占着调试端口**，lane 连到的是那份残留（`about:blank`）而不是新起的壳；清掉残留 + 换端口后同一条命令 9/9。lane 的第 2 步正是为这种情况准备的，它起作用了 | `cargo build -p notera-desktop` + `NOTERA_DATA_DIR=<空目录>` + `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=…` + `node scripts/verify-tauri-window.mjs` | L4 |
 | `cargo fmt --all --check` | **退出码 0** —— 代理到位后装了 `rustfmt` 组件（B5 解除）。装上后第一次 `--check` 就报出 **92 个文件**格式漂移，已按纯机械格式化单独提交并复验（tests 487/0、clippy 0/0） | `cargo fmt --all --check` |
@@ -416,7 +416,24 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
   实测候选集确实收进了这一条（`候选=1，含这一条=true`），**可那几轮还是 `NoOp`**，
   所以卡点不在输入集合。当时改的候选查询因此被回退了：一条"改了但没修好"的规则不进主干。
 
-- **G25 总指令 §4 的三条出包腿里，Android 那一腿在 CI 上还是红的（2026-09-29 实测；状态 = **三条腿全绿（run #18：Android / macOS / Windows 各 `completed success`，产物 .apk 34 870 610 B 与 .dmg+.app 11 254 004 B 都在），只剩 ③「publish 建草稿 Release」—— 根因（产物里是裸的 `.app` 目录）已修，等 run #19 的读数**）**：
+- **G26 侧栏文件夹的名字被裁到只剩一个字符 —— 三条 lane 全绿着让它躺在证据图里（2026-09-30 实测；状态 = **已修，0.0.42**）**：
+  - **读数**：一行 246 px，hover 才露面的动作簇用 `opacity: 0` 藏着却照样占 **176 px**（四颗 44×44 = A11Y-04 的下限），
+    名字只剩 18~50 px ⇒ 「默认」可见 20 / 需要 30、「子」可见 **0**、14 字长名可见 4。**六行全裁**。
+  - **为什么没人看见**：那条"子文件夹在界面上是看得见的"判据读的是 `allInnerTexts()` —— **未渲染**的文本，
+    DOM 里在就算看见。这条盲区不是第一次咬人（同一步的注释里记着上一次"子文件夹整个隐形"）。
+    缺陷本身就在**提交进仓库的证据图**里，是读 run #18 产物时顺手看到的。
+  - **修法与判据**（细节、差分变异读数在 CHANGELOG 0.0.42 那一条）：动作簇静止态 `width: 0`、
+    `:hover` / `:focus-within` 才展开；`display:none` 那版会把四颗按钮摘出 Tab 序列（键盘够不着），
+    "钉右缘的浮层"那版会让行的正中间命中「移动到」而不是打开文件夹（§6 的误触）—— 两版都被真读数打回。
+    L5 新增一步断**渲染后的几何**（短名不许裁、四颗按钮 ≥44 且中心命中自己、hover 不让行宽跳），
+    并把 CSS 还原成坏形状验过它红（同一次里老的那步仍绿）。
+  - **仍开着的一格**：同一类"占位式隐藏"在 `NoteList.vue` 的 `.row-item__actions` 里也有（32×32，
+    列表栏宽，暂未量出可见损害），以及那两颗按钮**低于 A11Y-04 的 44px 下限** —— 这条按待查记在这里，
+    不在本批动（避免顺手改产品）。
+- **G25 总指令 §4 的三条出包腿里，Android 那一腿在 CI 上还是红的（2026-09-29 实测；状态 = **已解除：GitHub 上 release.yml 的 run #18（tag `v0.0.41` → commit `60a9d5e`）五个 job 全 `completed success`，含「建 Release 草稿」**）**：
+  - **先纠一条台账编号（§45）**：我之前在案子里写的"run #16/#17/#18"比 GitHub 的 per-workflow 编号**大 1**。
+    按 API 的真实读数：`#16`/`#17` 是"三条腿绿、publish 红"那两次，**`#18` 才是这次全绿的**
+    （`https://github.com/fwd001/Noto/actions/runs/36660275341`）。下面引用一律用 GitHub 的号。
   实测到现在的形状：`release.yml` 由 tag 触发，run #4（`v0.0.40`）与 run #5（`v0.0.41`）都是
   **meta ✓ / Windows ✓ / macOS ✓ / Android ✗**，产物 `windows-x64`、`macos-universal` 两份都在，Android 一步没有。
   红的位置在 `tauri android build --apk --debug --target aarch64` 那一步（前面 SDK/NDK 定位、`android init` 都已过）。
@@ -518,6 +535,19 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
     裸 `.app` 目录、同名不同字节、假包体积、三种用法错退 2；同名**同**字节按预期仍绿并报"跳过重复"），
     清单用真 `sha256sum -c` 复算 5/5 OK。
     **③ 仍等 run #19 的读数**（tag 已挪到含这两步修法的树上），读到之前 G25 不撤。
+  - **③ 读到了（GitHub 的 run #18，tag `v0.0.41` → `60a9d5e`，2026-09-30 02:31Z 触发）**：五个 job 全
+    `completed success`，其中 `汇总到 GitHub Release（草稿）` 的 `建 Release 草稿` 那一步是 `success`，
+    三条腿的 `收集产物` 也都在。Artifacts 的真实字节：`windows-x64` 13 121 897 /
+    `android-apk` 34 870 611 / `macos-universal` 11 070 466（dmg + `.app.zip` 两件都在里面）。
+    **推理链写清楚，别当成"我看见 Release 了"**：那一步的最后一条命令是 `gh release view "v$v" --json assets`，
+    整段跑在 `set -euo pipefail` 下 —— Release 不存在或附件没贴上去，这一步就红。它绿 ⇒ 服务端有这份 Release。
+    但**草稿在未认证的读数里看不见**（`GET /releases/tags/v0.0.41` = 404，draft 只对协作者可见），
+    所以"打开 Releases 页面亲眼看到 6 个附件 + SHA256SUMS.txt"这一格**留给用户 10 秒钟核对**（§49），
+    我不替它写"已验证"。三条解除条件至此读齐：① Android job 绿（#16 起）② 产物里有 `.apk` 且
+    `versionName` 是这一版（#16/#17 的门禁读数）③ publish 建出带三平台产物 + SHA256SUMS 的草稿（#18）。
+    **G25 撤。** 同批标了"修好就删"的四条诊断通道（`post-ci-diagnostic.mjs` 的三处调用 + 产物名递证据那步）
+    留到 0.0.42 那次 tag run 读完数再删 —— 那一批里产品代码动了（G26 的界面修法），万一红了我还想看得见现场。
+
   - **解除条件**（三条都要真读到）：① 下一次 tag 的 run 里 **Android job 绿**；② 产物里出现一份 **`.apk`**（并且它的 `versionName` 是这一版的 0.0.41，不是 1.0）；
     ③ `publish` job 真建出带三平台产物 + SHA256SUMS 的**草稿 Release**。这三条没读到之前，§52 终报里这一格按 BLOCKED 写，不写"理论通过"。
     装到真机上的启动与基础功能验证另算一格（§49：要用户的设备）。

@@ -750,6 +750,67 @@ await step('子文件夹在界面上是看得见的：侧栏有它，"移动到"
   return `侧栏与下拉都认得「${name}」（路径 ${options.find((o) => o.includes(name))}）`;
 });
 
+await step('侧栏那一行的名字是**渲染出来**看得见的（不是 innerText 里在）', async () => {
+  // 上一条用 allInnerTexts() 断"侧栏有它" —— 那拿的是**未渲染**的文本。真实读数是：
+  // 246px 的一行里，hover 才露面的动作簇（4 × 44px）用 opacity: 0 藏在流里**照样占 176px**，
+  // 名字只剩 18~50px，连"默认"两个字都被裁掉半个字、单字名的可见宽度是 0。
+  // 所以这条断言必须打在几何上：短名不许被裁、hover 时按钮点得着且不小于 44px、hover 不许让行宽跳。
+  await page.locator('[data-testid="nav-all"]').click();
+  await page.waitForTimeout(500);
+  const name = `短名 ${Date.now() % 100000}`;
+  const root = (await callBridge('list_folders', {}))[0];
+  await page.locator(`[data-testid="folder-${root.id}"]`).hover();
+  await page.locator(`[data-testid="folder-new-sub-${root.id}"]`).click();
+  await page.fill('[data-testid="folder-create-input"]', name);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(900);
+  const row = page.locator('.tree__row', { hasText: name }).first();
+  if ((await row.count()) === 0) throw new Error(`侧栏没有刚建的「${name}」`);
+  const rest = await row.evaluate((r) => {
+    const label = r.querySelector('.tree__label');
+    const tools = r.querySelector('.tree__tools');
+    return {
+      text: label.textContent.trim(),
+      labelWidth: Math.round(label.getBoundingClientRect().width),
+      clipped: label.scrollWidth > label.clientWidth + 1,
+      rowWidth: Math.round(r.getBoundingClientRect().width),
+      toolsOpacity: getComputedStyle(tools).opacity,
+    };
+  });
+  const fails = [];
+  if (rest.text !== name) fails.push(`标签文本是「${rest.text}」，要「${name}」`);
+  if (rest.clipped) fails.push(`静止态名字就被裁了：可见 ${rest.labelWidth}px / 需要更多（行宽 ${rest.rowWidth}px）`);
+  // hover：动作簇露面，且**画在哪儿就点得着哪儿**（浮层不能被子元素压住，也不能小于 44px）
+  await row.hover();
+  await page.waitForTimeout(150);
+  const hov = await row.evaluate((r) => {
+    const tools = r.querySelector('.tree__tools');
+    const btns = [...tools.querySelectorAll('.btn')];
+    const hitOne = btns.map((b) => {
+      const q = b.getBoundingClientRect();
+      const hit = document.elementFromPoint(q.x + q.width / 2, q.y + q.height / 2);
+      return b === hit || b.contains(hit);
+    });
+    return {
+      opacity: getComputedStyle(tools).opacity,
+      sizes: btns.map((b) => {
+        const q = b.getBoundingClientRect();
+        return [Math.round(q.width), Math.round(q.height)];
+      }),
+      hitOne,
+      rowWidth: Math.round(r.getBoundingClientRect().width),
+    };
+  });
+  if (hov.opacity !== '1') fails.push(`hover 时动作簇的 opacity 是 ${hov.opacity}，没露面`);
+  if (hov.rowWidth !== rest.rowWidth) fails.push(`hover 让行宽从 ${rest.rowWidth}px 变成 ${hov.rowWidth}px ⇒ 鼠标扫过列表字会跳`);
+  hov.sizes.forEach(([w, h], i) => {
+    if (w < 44 || h < 44) fails.push(`第 ${i + 1} 颗动作按钮 ${w}×${h}，小于 A11Y-04 的 44×44`);
+    if (!hov.hitOne[i]) fails.push(`第 ${i + 1} 颗按钮中心命中的不是它自己（点不着）`);
+  });
+  if (fails.length > 0) throw new Error(fails.join('；'));
+  return `「${name}」静止态可见宽 ${rest.labelWidth}px 未被裁；hover 后 ${hov.sizes.length} 颗动作按钮都可点、行宽仍 ${hov.rowWidth}px`;
+});
+
 await step('桌面视口无横向溢出', async () => {
   const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
   if (m.sw > m.cw + 1) throw new Error(`scrollWidth ${m.sw} > clientWidth ${m.cw}`);

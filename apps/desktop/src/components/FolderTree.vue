@@ -108,7 +108,7 @@ function isActive(id: string | null): boolean {
     <li v-for="node in visibleNodes" :key="node.id" class="tree__item">
       <div class="tree__row" :data-active="isActive(node.id) ? 'true' : 'false'" :style="{ paddingLeft: padLeft }">
         <button type="button" class="tree__name" :data-testid="`folder-${node.id}`" @click="openFolder(node.id)">
-          <span class="tree__label">{{ node.name }}</span>
+          <span class="tree__label" :title="node.name">{{ node.name }}</span>
           <span v-if="typeof node.noteCount === 'number'" class="tree__count">{{ node.noteCount }}</span>
         </button>
 
@@ -249,13 +249,20 @@ function isActive(id: string | null): boolean {
 }
 
 .tree__tools {
+  /* 静止态不占宽：以前靠 opacity: 0 藏起来却仍在流里占 176 px（4 × 44，A11Y-04 的下限），
+     246 px 的一行只剩 18~50 px 给名字，连"默认"都被裁掉半个字。
+     用 width: 0 而不是 display/visibility: hidden —— 后两种会把四颗按钮摘出 Tab 序列，
+     键盘就再也够不着这些动作了；留着焦点可达，:focus-within 才掀得开它。 */
   display: flex;
   align-items: center;
+  width: 0;
+  overflow: hidden;
   opacity: 0;
 }
 
 .tree__row:hover .tree__tools,
 .tree__row:focus-within .tree__tools {
+  width: auto;
   opacity: 1;
 }
 
