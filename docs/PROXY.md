@@ -113,14 +113,14 @@ bypass 命中判定需要目标主机信息：对 `*.domain` 形式的 bypass �
 | 档 | 含义 | 允许场景 |
 |---|---|---|
 | `strict` | 系统信任库校验（默认） | 公网正规证书 |
-| `ca_bundle` | 追加/替换为指定 CA（PEM，内网根证书） | **内网自签主路径**，推荐 |
+| `ca_bundle` | 在系统信任库之上**追加**指定 CA（PEM，内网根证书；一份 PEM 可含多张） | **内网自签主路径**，推荐 |
 | `pin` | 校验叶/中间证书指纹白名单 | 无可用 CA、又要求强校验 |
 | `insecure_local` | 跳过校验 | **仅** localhost 与显式勾选的内网 HTTP；UI 必须红字告警 |
 
 实现要点：
 
-* 根证书优先使用**系统信任库**（`rustls-platform-verifier`，实测在 windows-gnu 可编译），这样企业把内网根 CA 装进系统后 Notera 自动可信 —— 与公安网/企业网运维现实一致。
-* `ca_bundle` 通过 `rustls` 的根存储追加实现，PEM 内容存 `settings`，不落明文路径引用。
+* 根证书优先使用**系统信任库**（`strict` 档：`rustls-platform-verifier`，实测在 windows-gnu 可编译），这样企业把内网根 CA 装进系统后 Notera 自动可信 —— 与公安网/企业网运维现实一致。
+* `ca_bundle` 的信任锚 = **系统信任库 ∪ 用户这份 PEM**，两边由我们自己拼好再交给 rustls 校验（`ClientBuilder::tls_certs_only`）。为什么不走"顺手"的那条路：reqwest 0.13 只要见到用户加的根（`add_root_certificate`，已废弃），就把**整条校验**推给 `rustls_platform_verifier` —— Windows 上它不肯用用户递进来的那份根验签，报的是 `NTE_BAD_SIGNATURE` 而不是 `UnknownIssuer`，表现即"CA 明明填对了却连不上自签端点"（缺口 **G35**，0.0.47 修）。反过来只交用户那一份也不行：那一档会从"追加"悄悄变成"替换"，所以系统根由 `rustls-native-certs` 读进来一起交；读不到（Android 上是常态）只告警不失败，窄在哪一边日志里看得见。判据：`notera-net/tests/tls_policies.rs` 的 `ca_bundle_trusts_exactly_the_pem_it_was_given`（两种链形状各自握成 + 源站数到真请求 + **递错 CA 必须被拒**）与 `client.rs` 里那条"锚集合 = 用户那份 + 系统根"的单测。PEM 内容存 `settings`，不落明文路径引用。
 * **纯 HTTP（非 TLS）默认拒绝**，仅当主机是 loopback 或用户显式选择 `insecure_local` 时允许，并在每次同步完成后在状态区保留"未加密传输"标记（不弹窗骚扰，但不隐藏）。
 * 证书错误必须与"网络不可达"给出不同文案 —— 用户看到"连不上"会去查网线，看到"证书不受信任"才会去找运维。
 
@@ -169,7 +169,7 @@ round         20 s      一轮同步预算，超时则本轮收敛为部分完�
 | 代理认证失败(407) | 停轮、这一轮不写入：`map_status(407) → RemoteError::Auth →` 错误码 `sync_auth_failed`；待办留在 outbox（`Pending`/`Failed` 两态，**没有** "blocked" 这个状态），改对凭据后重试即可 | **无**（照常读写） | `! 服务器或代理不认这组凭据…`（文案键 `sync.auth_failed` 与 `error.sync_auth_failed`）。**0.0.46 之前这一格是假的**：`negotiate` 把所有远端错误折成 `sync.protocol_unreadable`（"暂时读不到…请稍后重试"），凭据问题被说成"等一会儿" —— 缺口 G33，现在由 `notera-host/tests/proxy_account_407.rs` 两条门禁钉住 |
 | 代理中途挂 | 请求超时 → 重试 | 无 | `↻ 正在同步`→`!` |
 | DNS 失败 | `Dns` 分类（与 `Connect` 区分） | 无 | `! 无法解析服务器地址` |
-| TLS 校验失败 | `Tls` 分类，**不降级重试** | 无 | `! 证书不受信任` + 指向 §6 配置。**2026-09-30 第一次有门禁**（`notera-net/tests/tls_policies.rs`，新工装 `TlsOrigin`：每次运行现造一张自签 CA + 叶证书，盘上不落密钥）：自签链在 `Strict` 下必须拒且**一个字节的应用数据都不交换**（源站两本账 `accepted≥1 / handled==0`）；`Tls` 不算可重试形态 —— 配预算 3 也只上一次连接（`accepted` 数出来的）。变异 M13（`InsecureLocal` 放行任意主机）、M14（把 `Tls` 当可重试）各红在对应的门禁上。**同批量出缺口 G35**：`CaBundle`（本节写的"内网自签主路径"）在 Windows 上走不通，见 §6 的说明 |
+| TLS 校验失败 | `Tls` 分类，**不降级重试** | 无 | `! 证书不受信任` + 指向 §6 配置。**2026-09-30 第一次有门禁**（`notera-net/tests/tls_policies.rs`，新工装 `TlsOrigin`：每次运行现造一张自签 CA + 叶证书，盘上不落密钥）：自签链在 `Strict` 下必须拒且**一个字节的应用数据都不交换**（源站两本账 `accepted≥1 / handled==0`）；`Tls` 不算可重试形态 —— 配预算 3 也只上一次连接（`accepted` 数出来的）。变异 M13（`InsecureLocal` 放行任意主机）、M14（把 `Tls` 当可重试）各红在对应的门禁上。**同批量出缺口 G35，0.0.47 已修**：`CaBundle` 原先走 reqwest 已废弃的 `add_root_certificate`，校验被整条推给平台校验器 ⇒ Windows 上填对 CA 也连不上自签端点；现在锚集合由我们拼（系统根 ∪ 用户 PEM）、校验留在 rustls，正腿与反腿都有门禁（见 §6） |
 | 从 System 切到 Direct 后恢复 | 立即触发一轮（网络变化事件） | 无 | `↻` |
 | 配置写坏（非法 host/port） | 保存前校验拒绝；已存在的坏配置 → 回退 Direct 并告警 | 无 | `! 代理配置无效` |
 

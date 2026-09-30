@@ -13,6 +13,14 @@
 //!   （见 `reqwest-0.13.5/Cargo.toml`：`rustls = ["dep:rustls-platform-verifier", ...]`），
 //!   因此默认就是**系统信任库**，企业把内网根 CA 装进系统后自动可信。
 //!   若将来换掉该 feature，这里必须显式接入 verifier，否则要退回 webpki-roots 并注释说明。
+//! * `CaBundle`：**校验留在 rustls 内**，锚集合由我们自己拼 —— `系统信任库 ∪ 用户这份 PEM`。
+//!   为的是走 `ClientBuilder::tls_certs_only`：reqwest 0.13 只要见到用户加的根
+//!   （已废弃的 `add_root_certificate`），就把整条校验推给 `rustls_platform_verifier`，
+//!   Windows 上那份根它不肯用来验签（`NTE_BAD_SIGNATURE`，不是 `UnknownIssuer`）——
+//!   表现是"CA 填对了也连不上自签端点"，即缺口 G35（0.0.47 修）。
+//!   反过来只交用户那一份也不行：§6 写的是"追加"，那样企业装了内网根的部署会连不上，
+//!   所以系统根由 `rustls-native-certs` 读进来一起交；读不到（Android 上是常态）只告警，
+//!   日志里看得见窄了哪一边。见 `client.rs` 的 `ca_bundle_roots` 与它的两条单测。
 //! * `Pin`：证书链校验交由 rustls，**握手之后再比对叶证书 DER 的 sha256**
 //!   （`ClientBuilder::tls_info(true)` + `Response::extensions()` 里的
 //!   `reqwest::tls::TlsInfo::peer_certificate()`）。不匹配即 `NetError::Tls`，

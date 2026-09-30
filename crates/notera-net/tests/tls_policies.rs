@@ -17,13 +17,12 @@
 //!
 //! 跑法：`cargo test -p notera-net --test tls_policies`
 //!
-//! **这批量出一条产品侧缺口 G35**：`TlsPolicy::CaBundle`（§6 写的是"内网自签主路径"）在
-//! Windows 上拿一份现造的自签 CA 走不通 —— 握手以 `invalid peer certificate: 无法验证证书的签名
-//! (os error -2146869244)` 失败（NTE_BAD_SIGNATURE，来自系统校验器）。三个工装假设都已排除：
-//! ECDSA P-256 与 RSA 同样失败；CA 补上 `keyCertSign` 后仍失败；链里带不带 CA 也同。
-//! 报的是签名校验错而**不是** `UnknownIssuer` ⇒ 我加的根确实被 Consulted 了，问题在系统校验器
-//! 不接这份根。所以 CaBundle 的正腿没有门禁，改成下面那条 `#[ignore]` 探针（只出数不判绿）。
-//! 这一条对用户有实际影响：内网/警务网常见自签或私有 CA 的 WebDAV，按 §6 的说法应该能同步。
+//! **这批把缺口 G35 修掉了**（0.0.47）：`TlsPolicy::CaBundle` 原先走 reqwest 已废弃的
+//! `add_root_certificate`，而 reqwest 0.13 只要见到用户加的根就把**整条校验**推给
+//! `rustls_platform_verifier`（Windows 上报 `NTE_BAD_SIGNATURE` 而不是 `UnknownIssuer`）
+//! ⇒ 内网自签端点填对 CA 也连不上。改走 `tls_certs_only` 之后校验留在 rustls 内，而"系统根"
+//! 要我们自己读进来一起交（否则 §6 那句"追加"会变成"替换"）。根因、两侧判据与实测读数见
+//! `client.rs` 的 `ca_bundle_roots` 与 `docs/PRODUCTION-READINESS.md` 的 G35 那一格。
 
 use std::time::Duration;
 
@@ -226,57 +225,58 @@ async fn a_tls_failure_is_not_retried_even_with_a_full_budget() {
     assert_eq!(srv.handled(), 0, "重试期间真的交换过应用数据");
 }
 
-/// G35 的复现探针（**只出数，不判绿**，按 §40 记在 PRODUCTION-READINESS）。
+/// ③ `CaBundle` 的**正腿**：这一档只认我递给它的那一份 CA，两种链形状都要真完成握手。
 ///
-/// 为什么它不是门禁：这一档此刻在本机就是走不通，把"走不通"写成绿灯等于把缺陷固定成期望。
-/// 它的作用是让消费者不必重新推一遍，并且**一次跑就同时给出两种链形状**的答案 ——
-/// 因为"是只有自签根不行，还是任何用户加的根都不行"这个差别直接决定 G35 的严重程度：
-/// 前者只是"形状受限"，后者是"§6 的整条内网主路径不存在"。
+/// 为什么这条值一次改动：§6 把 `CaBundle` 写成"内网/警务网自签或私有 CA 的主路径"，而在此之前
+/// 这一档在本机**从没握成过一次手**（缺口 G35）—— 也就是验收标准那句"WebDAV 同步可用"对
+/// 自签端点是空的。判据两半，少一半都能撒谎：
 ///
-/// 跑：`cargo test -p notera-net --test tls_policies -- --ignored --nocapture`
+/// * 递对 CA ⇒ 200 **并且源站数到 `handled == 1`**（客户端自述成功不算数）；
+/// * 递**另一台**的 CA ⇒ 必须 `Tls` 且那台源站一条请求都收不到 —— 这一半守的是
+///   "只要用户填了点什么就一律放行"那种退化（把校验关掉最容易写成这样）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "G35 的复现量具：只打印握手错误链，不判绿（见 PRODUCTION-READINESS）"]
-async fn probe_ca_bundle_handshake_error_chain() {
+async fn ca_bundle_trusts_exactly_the_pem_it_was_given() {
     for (label, srv) in [
+        ("自签根", TlsOrigin::start().await.expect("起自签根源站")),
         (
-            "self-signed-root",
-            TlsOrigin::start().await.expect("起自签根源站"),
-        ),
-        (
-            "two-level-private-ca",
+            "两级私有 CA",
             TlsOrigin::start_two_level().await.expect("起两级 CA 源站"),
         ),
     ] {
+        let other = TlsOrigin::start().await.expect("起第二台（另一张 CA）");
         let url = format!("{}/protocol.json", srv.base_url());
-        let raw = reqwest::Client::builder()
-            .timeout(Duration::from_secs(8))
-            .use_rustls_tls()
-            .add_root_certificate(
-                reqwest::tls::Certificate::from_pem(srv.ca_pem().as_bytes())
-                    .expect("CA PEM 要能被 reqwest 认下来"),
-            )
-            .build()
-            .expect("client");
-        match raw.get(&url).send().await {
-            Ok(resp) => println!("G35 {label}: CaBundle OK status={}", resp.status()),
-            Err(e) => {
-                let mut chain = Vec::new();
-                let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(&e);
-                while let Some(x) = cur {
-                    chain.push(format!("{x}"));
-                    cur = x.source();
-                }
-                println!("G35 {label}: CaBundle ERR {}", chain.join(" <- "));
-            }
-        }
-        println!(
-            "G35 {label}: origin accepted={} handled={}",
-            srv.accepted(),
-            srv.handled()
+
+        let status = get(&TlsPolicy::CaBundle(srv.ca_pem().to_string()), &url)
+            .await
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{label}：递给 CaBundle 的就是这台源站的 CA，仍然握不成手（{e}）—— \
+                     这一条就是缺口 G35 本身，§6 那条内网主路径是空的"
+                )
+            });
+        assert_eq!(status, 200, "{label}：握手成了却没拿到 200");
+        assert_eq!(
+            srv.handled(),
+            1,
+            "{label}：客户端说成功，可源站一条请求都没数到 —— 那这个 200 不是从这台机器来的"
+        );
+
+        let Err(err) = get(&TlsPolicy::CaBundle(other.ca_pem().to_string()), &url).await else {
+            panic!("{label}：递进去的是**另一台**的 CA 却仍然放行 —— 这一档变成了填了就信");
+        };
+        assert!(
+            matches!(err, NetError::Tls),
+            "{label}：错链的拒因不对（{err:?}）—— §8 那一行写的是 `Tls` 分类"
+        );
+        assert_eq!(
+            other.handled(),
+            0,
+            "{label}：CA 不对的那台源站居然服务过请求 —— 信任锚没生效"
+        );
+        assert_eq!(
+            srv.handled(),
+            1,
+            "{label}：换成错 CA 之后仍然拿到了服务 —— 校验被绕开"
         );
     }
-    println!(
-        "G35 判读：两条都报签名校验错(NTE_BAD_SIGNATURE)而不是 UnknownIssuer ⇒ 加的根被 Consulted 了，\
-         但系统校验器不肯用它验签；ECDSA/RSA、CA 有无 keyCertSign、链里带不带 CA 都已实测排除。"
-    );
 }

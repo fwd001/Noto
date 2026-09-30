@@ -490,6 +490,68 @@ fn is_tls_error(e: &reqwest::Error) -> bool {
         || chain.contains("illegal sodium")
 }
 
+/// `CaBundle` 一档要交给 rustls 的信任锚：**系统信任库 ∪ 用户这份 PEM**（§6 那句"追加"）。
+///
+/// 为什么这一层要自己读系统根：reqwest 0.13 只要见到用户加的根（`add_root_certificate`，已废弃），
+/// 就把**整条校验**推给 `rustls_platform_verifier::Verifier::new_with_extra_roots` —— Windows 上
+/// 它不肯用用户递进来的那份根验签，报的是 `NTE_BAD_SIGNATURE`（"无法验证证书的签名"）而**不是**
+/// `UnknownIssuer`，表现就是"CA 明明填对了却连不上"（缺口 G35）。`tls_certs_only` 才是
+/// "锚由调用方给、校验留在 rustls 内"那条路，可它的字面语义是"只用这些" —— 所以系统根必须由
+/// 我们自己读进来一起交出去，否则这一档会从"追加"悄悄变成"替换"：企业把内网根 CA 装进系统
+/// 那类部署（§6 明确写了要支持）就此连不上。
+///
+/// 三个数一起返回不是为了好看：`from_user == 0` 是配置错误，**当场失败**（不许退化成"只信系统根"，
+/// 那正是"用户填了东西而程序什么都没做"的静默吞）。`from_system == 0` 只告警不失败：Android 上
+/// 这个 crate 走 unix 路径、只看 `SSL_CERT_FILE`/`SSL_CERT_DIR`，那里读不到是常态，而用户那份 CA
+/// 仍然生效 —— 这一档只是暂时窄一点，窄了要能在日志里看见。
+struct CaBundleRoots {
+    certs: Vec<reqwest::tls::Certificate>,
+    from_user: usize,
+    from_system: usize,
+}
+
+fn ca_bundle_roots(pem: &str) -> Result<CaBundleRoots, NetError> {
+    let user = reqwest::tls::Certificate::from_pem_bundle(pem.as_bytes())
+        .map_err(|e| NetError::Protocol(format!("CA bundle PEM 非法: {e}")))?;
+    if user.is_empty() {
+        return Err(NetError::Protocol(
+            "CA bundle 里一张证书都没有：这一档不许退化成\"只信系统根\"".into(),
+        ));
+    }
+    let loaded = rustls_native_certs::load_native_certs();
+    if !loaded.errors.is_empty() {
+        tracing::warn!(
+            count = loaded.errors.len(),
+            "系统信任库有部分条目读失败：CaBundle 这一档的锚会少这些"
+        );
+    }
+    let system: Vec<reqwest::tls::Certificate> = loaded
+        .certs
+        .iter()
+        .filter_map(|der| reqwest::tls::Certificate::from_der(der.as_ref()).ok())
+        .collect();
+    // 读到了却转不出来的那些也要留痕，不然"系统根"被吞掉一半是看不见的。
+    if system.len() < loaded.certs.len() {
+        tracing::warn!(
+            read = loaded.certs.len(),
+            kept = system.len(),
+            "系统信任库有根转不成 reqwest 的锚格式，CaBundle 这一档少掉了这些"
+        );
+    }
+    let from_user = user.len();
+    let from_system = system.len();
+    if from_system == 0 {
+        tracing::warn!("读不到系统信任库的根：CaBundle 现在只认用户递进来的那一份 PEM");
+    }
+    let mut certs = user;
+    certs.extend(system);
+    Ok(CaBundleRoots {
+        certs,
+        from_user,
+        from_system,
+    })
+}
+
 /// 组装 reqwest 客户端。`force_direct` = true 时构造"绕过一切代理"的池。
 fn configure(
     mut b: reqwest::ClientBuilder,
@@ -508,9 +570,14 @@ fn configure(
         // 系统信任库：reqwest 的 `rustls` feature 已带 rustls-platform-verifier。
         TlsPolicy::Strict => b.use_rustls_tls(),
         TlsPolicy::CaBundle(pem) => {
-            let cert = reqwest::tls::Certificate::from_pem(pem.as_bytes())
-                .map_err(|e| NetError::Protocol(format!("CA bundle PEM 非法: {e}")))?;
-            b.use_rustls_tls().add_root_certificate(cert)
+            let roots = ca_bundle_roots(pem)?;
+            // 这一行不是装饰：这一档最容易坏在"锚少了一半"而界面上只看得到"证书不受信任"。
+            tracing::debug!(
+                from_user = roots.from_user,
+                from_system = roots.from_system,
+                "CaBundle 一档交给 rustls 的信任锚"
+            );
+            b.use_rustls_tls().tls_certs_only(roots.certs)
         }
         TlsPolicy::Pin(pins) => {
             if pins.is_empty() {
@@ -556,4 +623,56 @@ fn configure(
 
 fn build_err(e: reqwest::Error) -> NetError {
     NetError::Protocol(format!("客户端构造失败: {e}"))
+}
+
+#[cfg(test)]
+mod ca_bundle_anchors {
+    use super::{ca_bundle_roots, NetError};
+
+    /// §6 那句"追加"到底做没做：交出去的锚必须**同时**含用户这份 PEM 与系统库里的根。
+    ///
+    /// 两个方向都得钉：只剩用户那份 = "替换"（企业把内网根装进系统的部署就此连不上，
+    /// 而这正是 §6 明说要支持的），只剩系统那份 = 用户填的 CA 被吞了。
+    /// `from_system ≥ 1` 只在**有可读系统库**的机器上成立（本机 Windows 与 CI 的 windows-latest 都是）；
+    /// Android 真机上这个 crate 走 unix 路径读不到，那条路是**告警不失败**，由
+    /// `tls_policies.rs` 的握手门禁与日志覆盖，不在这里判。
+    #[tokio::test]
+    async fn the_given_pem_is_appended_to_the_system_store_not_replacing_it() {
+        let srv = notera_test_webdav::TlsOrigin::start()
+            .await
+            .expect("起 TLS 源站");
+        let roots = ca_bundle_roots(srv.ca_pem()).expect("现造的 CA 要能被收下");
+        assert_eq!(
+            roots.from_user, 1,
+            "一份 PEM 里应当认出 1 张根；多了少了都说明解析与预期不是一套"
+        );
+        assert!(
+            roots.from_system >= 1,
+            "系统信任库读到 0 张根：CaBundle 这一档已经退化成\"只认用户这一份\""
+        );
+        assert_eq!(
+            roots.certs.len(),
+            roots.from_user + roots.from_system,
+            "交出去的锚数量与两边的计数对不上"
+        );
+    }
+
+    /// 空 PEM / 不是证书的 PEM 是**配置错误**，要在建客户端那一刻红，不许退化成"只信系统根"。
+    #[test]
+    fn an_empty_or_bogus_pem_fails_rather_than_silently_dropping_the_user_ca() {
+        for bad in [
+            "",
+            "   \n",
+            "not a certificate at all",
+            "-----BEGIN CERTIFICATE-----\n",
+        ] {
+            let e = ca_bundle_roots(bad)
+                .err()
+                .unwrap_or_else(|| panic!("坏 CA（{bad:?}）被静默收下了"));
+            assert!(
+                matches!(e, NetError::Protocol(_)),
+                "坏 CA（{bad:?}）的拒因不对：{e}"
+            );
+        }
+    }
 }

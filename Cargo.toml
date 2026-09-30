@@ -19,7 +19,7 @@ members = [
 exclude = ["tools/feasibility-probe"]
 
 [workspace.package]
-version = "0.0.46"
+version = "0.0.47"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
@@ -78,6 +78,11 @@ quick-xml = "0.42"
 # 以前所有测试都是 Strict 档打在明文 loopback 上，四档策略里没有一档被真握手验过。
 rcgen = { version = "0.13", default-features = false, features = ["pem", "aws_lc_rs"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs", "logging", "tls12"] }
+# 产品侧（缺口 G35 的修法）：`CaBundle` 要在**我们这一层**把"系统根 ∪ 用户这份 PEM"合起来
+# 再交给 rustls 校验 —— reqwest 0.13 的 `add_root_certificate` 会把整条校验推给平台校验器，
+# 而 Windows 上它不肯用用户递进来的根验签（NTE_BAD_SIGNATURE），表现就是"填对 CA 也连不上自签端点"。
+# 这个 crate 锁里本来就有（0.8.4，由 rustls-platform-verifier 带进来），这里只多一条直接依赖边，不动版本。
+rustls-native-certs = "0.8"
 percent-encoding = "2"
 tempfile = "3"
 
