@@ -133,16 +133,6 @@ jobs:
             -StepSummary $env:GITHUB_STEP_SUMMARY
           if ($LASTEXITCODE -ne 0) { throw "Windows 产物结构校验没过（退出 $LASTEXITCODE）" }
 
-      # 与 macOS 那腿同一条通道：Windows 是三条里最慢的一条（release 构建十几分钟），
-      # 红了又读不到现场就等于白等一轮。整段 transcript 由 `verify-windows-package.ps1` 写盘，这里贴出去。
-      # 注意：node 子进程的 stdout 不进 PowerShell transcript（本机验出来的），所以脚本里把断言输出
-      # 接进变量再写一遍 —— 不然评论里只看得到现场报告、看不到哪条判据不过。
-      - name: 把校验现场贴成 commit 评论（诊断用，修好就删）
-        if: failure()
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/post-ci-diagnostic.mjs --file "$env:RUNNER_TEMP/win-verify.log" --label "Windows 产物结构校验的现场"
 
       - name: 收集产物
         if: always()
@@ -239,18 +229,6 @@ jobs:
           fi
           exit $rc
 
-      # macOS 这条 job 原本没有"把现场递回来"的通道（未认证读不到 job 日志正文 = 403、
-      # 产物字节 = 401，这两条都在 Android 那腿上实测过）。红的时候靠这条评论通道读全文。
-      - name: 把结构校验的现场贴成 commit 评论（诊断用，修好就删）
-        if: failure()
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/post-ci-diagnostic.mjs --file /tmp/diag/macos.txt --label "macOS 产物结构校验的现场"
-
-      # CI-CD §5 早写了 macOS 的交付物是 **两件**：`.dmg`（人肉安装）+ `.app.zip`（updater / 右键打开）。
-      # 之前只上传裸的 `Notera.app` 目录 ⇒ run #18 的 publish 被 `gh release` 挡下（它只收 regular file），
-      # 而"产物是目录"这件事在出包那条腿的绿灯里根本看不见。这里按承诺压成 zip，不是在绕开门禁。
-      # `ditto -k --keepParent` 是 macOS 上保留 bundle 权限位/符号链接/xattr 的唯一正解（`zip -r` 会丢）。
       - name: 把 .app 压成 .app.zip（§5 承诺的第二件交付物）
         run: |
           set -uo pipefail
@@ -299,12 +277,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # **为什么不用 android-actions/setup-android**：第一次跑就红在这一步，而未认证读不到
-      # 日志正文（`/actions/jobs/{id}/logs` = 403，见 CI-CD §环境与网络限制）—— 那等于只能靠猜改代码，
-      # 而猜出来的修法本身又是下一个假绿的来源。GitHub 的 ubuntu-22.04 runner **本身就带 Android SDK**，
-      # 所以这里只用自带的那份：NDK 版本从目录里读，读不到再用 sdkmanager 装，
-      # 并且把"我看到了什么"写成**产物名字**（产物名在未认证的 `/actions/runs/{id}/artifacts` 里可读）
-      # —— 这是当前权限下唯一能把环境事实递出来的通道。
+      # **为什么不用 android-actions/setup-android**：第一次跑就红在那一步，而未认证读不到日志正文
+      # （`/actions/jobs/{id}/logs` = 403，见 CI-CD §环境与网络限制）。GitHub 的 ubuntu-22.04 runner
+      # **本身就带 Android SDK**，所以这里只用自带的那份：NDK 版本从目录里读，读不到再用 sdkmanager 装；
+      # 装失败就把末行打进本步日志并 `test -n "$ndk"` 报红（不再往外递证据 —— 那条临时通道
+      # 在 run #18/#19 全绿之后已经拆掉，要看现场用你自己的 token 读这一步的日志就行）。
       - name: 定位 SDK 与 NDK（自带优先，缺了就装）
         run: |
           set -euo pipefail
@@ -317,24 +294,13 @@ jobs:
             if sdkmanager --install "ndk;26.1.10909125" "cmake;3.22.1" > /tmp/ndk.log 2>&1; then
               ndk=26.1.10909125
             else
-              tail -5 /tmp/ndk.log
-              echo "sdkmanager 装 NDK 失败，末行摘要=$(tail -1 /tmp/ndk.log | tr -dc '[:print:]' | cut -c1-60)"
-              mkdir -p /tmp/diag && echo "no-ndk" > /tmp/diag/note.txt
-              cp /tmp/ndk.log /tmp/diag/ndk.log || true
+              tail -20 /tmp/ndk.log
             fi
           fi
           test -n "$ndk"
           echo "NDK_VER=$ndk" >> "$GITHUB_ENV"
           echo "NDK_HOME=$ANDROID_HOME/ndk/$ndk" >> "$GITHUB_ENV"
           echo "用 NDK：$ndk"
-
-      - name: 装不上时把证据递出来（产物名就是摘要）
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-sdk-failure-${{ needs.meta.outputs.version }}
-          path: /tmp/diag/
-          if-no-files-found: ignore
 
       - name: 准备 pnpm（版本取自 apps/desktop/package.json 的 packageManager）
         uses: pnpm/action-setup@v4
@@ -450,7 +416,7 @@ jobs:
           # run #16 的账：APK **已经出得来**（`出 APK` = success），红的是这一步，
           # 而我在这一步外面看不到任何东西 —— 期望错了还是包真的缺东西，分不开。
           # 所以不管过不过，都把 badging 与 `aapt list` 的**原文形状**留在 /tmp/diag/apkcheck.txt 里，
-          # 由下面那条贴评论的通道递出来。门禁本身不放松（该红就红）。
+          # 红的时候这一步的日志里就有完整现场（未认证读不到日志正文，你自己有 token）。门禁本身不放松。
           APK=$(find "$GEN" -path '*/outputs/apk/*.apk' -type f | head -1)
           AAPT=$(ls -1 "$ANDROID_HOME"/build-tools/*/aapt 2>/dev/null | tail -1 || true)
           {
@@ -483,217 +449,6 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit $rc
-
-      # **两条读数通道**（都是本批实测出来的，不是推测）：
-      # ① 未认证能读 `/actions/runs/{id}/artifacts` 的**名字**，读不到日志正文（job logs = 403），
-      #    也读不到产物字节（artifact zip = **401 Requires authentication**）。于是把最要紧的几行
-      #    **编进产物名字**：名字只允许 `[A-Za-z0-9._-]`，其余换成 `-`，每条 90 字、12 条 ≈ 1000 字。
-      # ② 这个 workflow 本来就有 `contents: write` ⇒ job 里有 GITHUB_TOKEN ⇒ 可以把日志**贴成 commit 评论**，
-      #    而评论列表未认证可读（实测 `GET /repos/{owner}/{repo}/commits/{sha}/comments` = 200）。
-      #    一次就能递出整段 gradle 输出，比①强得多；①保留当兜底（万一评论被限流）。
-      # 修好 Android 之后这两步连同注释都该删掉 —— 它们是给"读不到日志"这个环境限制打的补丁，不是长期行为。
-      - name: 把失败日志贴成 commit 评论（有 token 就能全文递出来）
-        if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -u
-          GEN="$GITHUB_WORKSPACE/apps/mobile/src-tauri/gen/android"
-          mkdir -p /tmp/diag
-          # run #14 的账（第三条）：这一步以前**假定红的是"出 APK"那一步** —— 那次红在前面的钉补丁那步，
-          # `/tmp/apk.log` 根本不存在 ⇒ 整条评论没建起来（我去读评论列表 = 0 条，什么读数都没有）。
-          # 递证据的步骤要在"前面任何一步坏了"时照样递得出东西，所以缺的日志先补一个空文件。
-          touch /tmp/apk.log /tmp/diag/patch.txt
-          # 清洗那步**必须在这一步里自己做**：`apk.clean.log` 是后面"编进产物名"那步的产物，
-          # 上一步在这里读它 = 读一个当时还不存在的文件 ⇒ "关键行"那一节整段是空的
-          # （run #13 就是空的，我还当"没有错误行"读了半天）。递证据的步骤不能依赖别人的顺序。
-          sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' -e 's#/home/runner/work/Noto/Noto/#~/#g' /tmp/apk.log 2>/dev/null \
-            | tr -d '\000' > /tmp/apk.clean.log || true
-          {
-            echo "### Android 出包失败的现场（诊断贴文，修好就删）"
-            echo '```'
-            tail -c 30000 /tmp/apk.log
-            echo ''
-            echo '### 关键行（ANSI 与 NUL 已洗）'
-            grep -n -E "Cannot find module|Require stack|Execution failed|error:|exited with code" /tmp/apk.clean.log | head -40
-            echo '### BuildTask.kt 里"回头叫 CLI"那几行（补丁到底在不在，看这里）'
-            # 同样**按名字找**，不猜路径（run #15 的教训：真身在 buildSrc/src/main/java/app/<包名>/kotlin/ 下）
-            find "$GEN" -type f -name BuildTask.kt -exec grep -n -E "val executable|val args = listOf|workingDir" {} \; 2>/dev/null | cut -c1-500
-            echo '### app/build.gradle.kts 的 rust 块（rootDirRel 决定回头调用的 cwd）'
-            grep -n -A3 "^rust" "$GEN/app/build.gradle.kts" 2>/dev/null | cut -c1-200
-            echo '### 补丁那一步自己的读数'
-            cat /tmp/diag/patch.txt 2>/dev/null
-            echo '### 结构校验那一步的完整读数（含 badging 与 aapt list 的原文形状）'
-            cat /tmp/diag/apkcheck.txt 2>/dev/null
-            echo '```'
-          } > /tmp/diag/comment.md
-          # JSON 转义交给 node（这个 job 里本来就有 node），不手搓引号。
-          node -e 'const fs=require("fs");const b=fs.readFileSync("/tmp/diag/comment.md","utf8").slice(0,60000);fs.writeFileSync("/tmp/diag/body.json",JSON.stringify({body:b}));'
-          curl -sS -o /tmp/diag/comment-resp.json -w "HTTP=%{http_code}\n" -X POST \
-            -H "authorization: Bearer $GH_TOKEN" \
-            -H "accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/commits/${GITHUB_SHA}/comments" \
-            --data @/tmp/diag/body.json
-          # 上一条**不带 `|| echo`**：run #12 就是被 `|| echo` 骗过的 —— 那次 URL 写错（POST 到
-          # `/comments/{sha}` 那是"改/删某条评论"的形状，创建要 `/commits/{sha}/comments`），
-          # curl `-f` 退出 22，被 `|| echo` 吞掉之后这一步报的是 success。**递证据的步骤自己假绿，
-          # 比没有证据更糟** —— 它会让人以为已经拿到读数。失败要响。
-          head -c 300 /tmp/diag/comment-resp.json
-          grep -q '"html_url"' /tmp/diag/comment-resp.json || { echo "评论没建起来（见上面的 HTTP 与响应头）"; exit 1; }
-
-      - name: 摘出事实与错误行（编进产物名递出来）
-        if: failure()
-        id: smuggle
-        run: |
-          set -u
-          mkdir -p /tmp/diag
-          # 先把 ANSI 颜色码与 **NUL 字节** 一起洗掉：`KEY=$(grep …)` 在 bash 里会在 NUL 处截断，
-          # run #9 那条"Cannot find module '…/tauri-"**引号都没闭合**就是这件事的形状
-          # （83 字整、后面全没了）—— 命令行进度条爱写控制字符，这里连 NUL 一起丢。
-          # 再把 `/home/runner/work/Noto/Noto/` 这个 26 字前缀折成 `~/` —— **一个槽只有 84 字**，
-          # 不折的话栈帧里"到底是哪个文件 require 的"正好被挤到槽外面（本机复演时就是这么暴露的）。
-          sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' -e 's#/home/runner/work/Noto/Noto/#~/#g' /tmp/apk.log | tr -d '\000' > /tmp/apk.clean.log 2>/dev/null || cp /tmp/apk.log /tmp/apk.clean.log
-          # run #6~#9 四轮教的东西：位置要在失败之后（#6）、工作目录不继承会量到外面（#7 之前那次）、
-          # 一个槽装不下整行要切片（#8）、而**下一行往往是 stack frame 不是答案**（#9）——
-          # 所以 S1..S4 取命中行之后的四行：Node 的调用者文件就写在深一点的栈帧里。
-          KEY=$(grep -E "Cannot find module" /tmp/apk.clean.log | head -1)
-          [ -z "$KEY" ] && KEY=$(grep -E -i 'error|FAILURE|Caused by' /tmp/apk.clean.log | tail -1)
-          # run #14 之后最值钱的一格变成了"钉补丁那一步看到了什么"（那步已经不挡路了，读数在 patch.txt 里）。
-          # G1 = BuildTask.kt 里 `val executable` 那一行的**当前形状**（模板到底渲染成了什么），
-          # G2 = `val args = listOf` 那一行，G3 = patch.txt 的头两行结论（BT/CLI 存在吗）。
-          # 三格都先折掉 26 字的 runner 前缀，不然槽位预算全被路径吃掉。
-          GEN="$GITHUB_WORKSPACE/apps/mobile/src-tauri/gen/android"
-          BT=$(find "$GEN" -type f -name BuildTask.kt | head -1)
-          G1=$(grep -m1 "val executable" "$BT" 2>/dev/null | sed -e 's#/home/runner/work/Noto/Noto/#~/#g' | cut -c1-160)
-          G2=$(grep -m1 "val args = listOf" "$BT" 2>/dev/null | sed -e 's#/home/runner/work/Noto/Noto/#~/#g' | cut -c1-160)
-          # 这两格读的是**钉完之后**的文件；钉补丁那步若在中途抛错，文件保持原状 ⇒ 读到的就是模板原样，
-          # 两种情况都值钱。第三格读那步自己写的结论（BT/CLI 存不存在 + 它自己说了什么）。
-          G3=$(head -3 /tmp/diag/patch.txt 2>/dev/null | sed -e 's#/home/runner/work/Noto/Noto/#~/#g' | tr '\n' '|' | cut -c1-160)
-          S1=$(grep -A1 -E "Cannot find module" /tmp/apk.clean.log | sed -n '2p')
-          {
-            echo "F|gen-mobile=$(test -d "$GEN" && echo yes || echo no)"
-            echo "K0|p"
-            echo "G1|p"; echo "G2|p"; echo "G3|p"
-            echo "F|task=$(grep -o 'Execution failed for task [^ ]*' /tmp/apk.clean.log | head -1 | tr ' ' '_')"
-            echo "S1|p"
-            grep -E -i 'error|FAILURE|Caused by|panicked|not found|No such|denied|cannot|failed|task' /tmp/apk.clean.log | tail -4 | sed 's/^/E|/'
-          } > /tmp/diag/index.txt
-          awk -v k0="$(printf '%s' "$KEY" | cut -c1-84)" -v g1="$G1" -v g2="$G2" -v g3="$G3" -v s1="$S1" '
-            NR == 2 { print "K0|" substr(k0, 1, 84);    next }
-            NR == 3 { print "G1|" substr(g1, 1, 84);    next }
-            NR == 4 { print "G2|" substr(g2, 1, 84);    next }
-            NR == 5 { print "G3|" substr(g3, 1, 84);    next }
-            NR == 7 { print "S1|" substr(s1, 1, 84);    next }
-            { print }
-          ' /tmp/diag/index.txt > /tmp/diag/sliced.txt
-          mv /tmp/diag/sliced.txt /tmp/diag/index.txt
-          # 十二个槽位**总是**写满：产物名不能带非法字符，空名会撞 GitHub 的命名校验，
-          # 所以缺的行填 none —— "槽位是空的"本身也是读数。
-          awk -v want=12 '
-            { lines[NR] = $0 }
-            END { for (i = 1; i <= want; i++) print (i in lines ? lines[i] : "none") }
-          ' /tmp/diag/index.txt > /tmp/diag/padded.txt
-          mv /tmp/diag/padded.txt /tmp/diag/index.txt
-          # 十二个槽位**总是**写满：产物名不能带非法字符，空名会撞 GitHub 的命名校验，
-          # 所以缺的行填 none —— "槽位是空的"本身也是读数。
-          awk -v want=12 '
-            { lines[NR] = $0 }
-            END { for (i = 1; i <= want; i++) print (i in lines ? lines[i] : "none") }
-          ' /tmp/diag/index.txt > /tmp/diag/padded.txt
-          i=0
-          while IFS= read -r line; do
-            i=$((i + 1))
-            mkdir -p "/tmp/diag/$i"
-            printf '%s\n' "$line" > "/tmp/diag/$i/line.txt"
-            sig=$(printf '%s' "$line" | tr -c 'A-Za-z0-9._-' '-' | cut -c1-90)
-            echo "sig$i=$sig" >> "$GITHUB_OUTPUT"
-          done < /tmp/diag/padded.txt
-          cat /tmp/diag/index.txt
-          echo "共递出 $i 条"
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: apk-diag-01-${{ steps.smuggle.outputs.sig1 }}
-          path: /tmp/diag/1/
-          if-no-files-found: ignore
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: apk-diag-02-${{ steps.smuggle.outputs.sig2 }}
-          path: /tmp/diag/2/
-          if-no-files-found: ignore
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: apk-diag-03-${{ steps.smuggle.outputs.sig3 }}
-          path: /tmp/diag/3/
-          if-no-files-found: ignore
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: apk-diag-04-${{ steps.smuggle.outputs.sig4 }}
-          path: /tmp/diag/4/
-          if-no-files-found: ignore
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: apk-diag-05-${{ steps.smuggle.outputs.sig5 }}
-          path: /tmp/diag/5/
-          if-no-files-found: ignore
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: apk-diag-06-${{ steps.smuggle.outputs.sig6 }}
-          path: /tmp/diag/6/
-          if-no-files-found: ignore
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: apk-diag-07-${{ steps.smuggle.outputs.sig7 }}
-          path: /tmp/diag/7/
-          if-no-files-found: ignore
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: apk-diag-08-${{ steps.smuggle.outputs.sig8 }}
-          path: /tmp/diag/8/
-          if-no-files-found: ignore
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: apk-diag-09-${{ steps.smuggle.outputs.sig9 }}
-          path: /tmp/diag/9/
-          if-no-files-found: ignore
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: apk-diag-10-${{ steps.smuggle.outputs.sig10 }}
-          path: /tmp/diag/10/
-          if-no-files-found: ignore
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: apk-diag-11-${{ steps.smuggle.outputs.sig11 }}
-          path: /tmp/diag/11/
-          if-no-files-found: ignore
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: apk-diag-12-${{ steps.smuggle.outputs.sig12 }}
-          path: /tmp/diag/12/
-          if-no-files-found: ignore
 
       # `if: always()` 是这批改的必然结果：**产物先上传，校验后判**。
       # run #16 里 APK 已经出得来了，但我那条新加的校验红在后面，于是"收集产物"被 skipped ——
@@ -765,7 +520,7 @@ jobs:
           # "三平台的包真的都在、且是这一版"交给 scripts/collect-release-assets.mjs 断言：
           # 缺任一平台 / 安装器名字里没这一版 / 还有裸的 .app 目录 / 同名撞车 / 包小得不像产物，
           # 这五种在本地都变异测试过会红（.logs/rehearse-collect-release-assets.mjs，14/14）。
-          # 整段现场落盘，失败时由下一步贴成 commit 评论（这条 job 没有别的读数通道）。
+          # 整段现场落盘并 cat 出来：这一步的日志就是读数（贴评论那条临时通道已随 run #18/#19 全绿拆掉）。
           (
             set -euo pipefail
             v="${{ needs.meta.outputs.version }}"
@@ -794,13 +549,8 @@ jobs:
           rc=$?
           cat /tmp/diag/publish.txt
           {
-            if [ "$rc" -eq 0 ]; then echo "### 建 Release 草稿（§4/§5）"; else echo "### 建 Release 草稿失败（rc=$rc，全文走诊断评论通道）"; fi
+            if [ "$rc" -eq 0 ]; then echo "### 建 Release 草稿（§4/§5）"; else echo "### 建 Release 草稿失败（rc=$rc，完整现场在本步日志里）"; fi
             tail -n 30 /tmp/diag/publish.txt | sed 's/^/> /'
           } >> "$GITHUB_STEP_SUMMARY"
           exit $rc
 
-      - name: 把建 Release 的现场贴成 commit 评论（诊断用，修好就删）
-        if: failure()
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/post-ci-diagnostic.mjs --file /tmp/diag/publish.txt --label "建 Release 草稿这一步的现场"
