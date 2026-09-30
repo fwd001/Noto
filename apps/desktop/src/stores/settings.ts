@@ -107,6 +107,12 @@ export const useSettingsStore = defineStore('settings', () => {
   const resolvedTheme = computed<ThemeMode>(() => (prefs.value.theme === 'system' ? (systemDark.value ? 'dark' : 'light') : prefs.value.theme));
   const hasAccount = computed(() => account.value !== null && Boolean(account.value?.baseUrl));
   const passwordIsSet = computed(() => account.value?.hasCredential === true);
+  /**
+   * 根证书 PEM 本体核心不回传（一份 CA 证书几 KB，每次回填都端过去没意义），
+   * 传的是"存过没有"。界面上必须有这一位，否则选了 `ca_bundle` 的账户重开设置页时
+   * 那一格看着像空的 —— 而"留空 = 不改"的语义又会把它说成已配置，两件事对不上就是误导。
+   */
+  const caPemIsSet = computed(() => account.value?.hasCaPem === true);
   const fontScale = computed(() => prefs.value.fontScale);
   const usesPlainHttp = computed(() => /^http:\/\//i.test(draft.value.baseUrl ?? ''));
 
@@ -331,6 +337,7 @@ export const useSettingsStore = defineStore('settings', () => {
     accountErrorKey,
     hasAccount,
     passwordIsSet,
+    caPemIsSet,
     usesPlainHttp,
     fontScale,
     stats,

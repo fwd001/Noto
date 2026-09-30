@@ -179,8 +179,15 @@ export interface ProxyProfile {
 
 export interface TlsPolicy {
   kind?: TlsPolicyKind;
+  /** `pin` 档的指纹表（64 位十六进制，公钥证书 DER 的 sha256）。 */
   fingerprints?: string[];
+  /** 只在"这一次保存里要改"时带上；留空 = 保留核心里已存的那份（与口令同一套语义）。 */
   caBundlePem?: string;
+  /**
+   * 界面专用的一位：核心**不回传 PEM 本体**，只回传"存过没有"（`Account.hasCaPem`）。
+   * 没有它，重开设置页时那一格看着像空的，用户会以为自己的根证书被吞了。
+   */
+  hasStoredCaPem?: boolean;
 }
 
 /**
@@ -196,6 +203,10 @@ export interface Account {
   username?: string;
   authKind?: string;
   tlsPolicy?: string;
+  /** 根证书 PEM 本体不下发（可以有几 KB），只下发"存过没有"给表单当占位提示。 */
+  hasCaPem?: boolean;
+  /** 指纹不是秘密，原样下发才能编辑。 */
+  pinnedSha256?: string[];
   proxyMode?: string;
   proxyHost?: string;
   proxyPort?: number;

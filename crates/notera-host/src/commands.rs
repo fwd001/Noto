@@ -123,6 +123,13 @@ pub struct AccountDto {
     pub enabled: bool,
     /// 永不下发明文，只告诉 UI 有没有存过
     pub has_credential: bool,
+    /// 同上，针对 `ca_bundle` 那档的根证书 PEM：界面要能区分"没配"与"配了但不回显"，
+    /// 否则重开表单看着像空着，用户会以为自己的设置被吞了（口令那一格早有同样的先例）。
+    /// PEM 本体可以有几 KB，不该每次回填都端过去，所以这里只给布尔。
+    pub has_ca_pem: bool,
+    /// 而指纹**不是**秘密（就是服务器公钥证书的 sha256），原样回填才编辑得了 ——
+    /// 缺了它，选了 `pin` 档的账户每次保存都得重敲一遍 64 位十六进制。
+    pub pinned_sha256: Vec<String>,
     /// 用户名不是秘密，而且是表单回填的唯一依据 —— 没有它，用户改一次设置就得重填用户名，
     /// 少填一个字段还会让配置静默退回"需要凭据"。口令与 `credential_ref` 一律不下发。
     pub username: Option<String>,
@@ -346,6 +353,10 @@ pub struct AccountDraftCmd {
     pub tls_policy: Option<String>,
     #[serde(default)]
     pub ca_pem: Option<String>,
+    /// `pin` 档的指纹表。此前这个字段**根本不存在**，而保存路径把 `pinned_sha256` 硬编成
+    /// `None` —— 于是 §6 那一档在界面上永远配不出来（选它就只会在保存时撞到"至少需要一个指纹"）。
+    #[serde(default)]
+    pub pinned_sha256: Option<Vec<String>>,
     #[serde(default)]
     pub proxy_mode: Option<String>,
     #[serde(default)]

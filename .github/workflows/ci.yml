@@ -87,7 +87,7 @@ jobs:
       - name: Clippy（-D warnings，与本地同一条命令）
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Rust 全量（本机基线 636 通过 / 0 失败 / 6 ignored，84 个 result 行；串行跑，见下面那条注释）
+      - name: Rust 全量（本机基线 640 通过 / 0 失败 / 6 ignored，85 个 result 行；串行跑，见下面那条注释）
         # `--test-threads=1` 不是习惯，是判据：`notera-test-webdav` 的
         # `latency_injection_delays_responses` 量的是墙钟（"控制面必须即时"），
         # 同一个二进制里那十几条并发打服务器时，机器一忙就假红 —— 本机 2026-09-28
@@ -95,7 +95,7 @@ jobs:
         # 比 CI 多花两分钟贵。
         run: cargo test --workspace -- --test-threads=1
 
-      - name: 前端单测（本机基线 220 通过 / 23 文件）
+      - name: 前端单测（本机基线 222 通过 / 23 文件）
         working-directory: apps/desktop
         run: pnpm test
 

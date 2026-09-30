@@ -36,7 +36,22 @@ describe('toWire', () => {
     expect(toWire(draft({ tlsPolicy: { kind: 'pin' } })).tlsPolicy).toBe('pin');
   });
 
+  it('ca_bundle 与 pin 的两格：发得出去，留空也真的不发（留空 = 不改已存的）', () => {
+    const pem = '-----BEGIN CERTIFICATE-----\nZm9v\n-----END CERTIFICATE-----';
+    const pin = 'a'.repeat(64);
+    expect(toWire(draft({ tlsPolicy: { kind: 'caBundle', caBundlePem: pem } })).caPem).toBe(pem);
+    expect(
+      toWire(draft({ tlsPolicy: { kind: 'pin', fingerprints: [` ${pin} `, '  ', 'b'.repeat(64)] } })).pinnedSha256,
+    ).toEqual([pin, 'b'.repeat(64)]);
+
+    // 牙齿在两半：只发出去不算，"这一格留空"也不许变成"把存的那份擦掉"。
+    expect('caPem' in toWire(draft({ tlsPolicy: { kind: 'caBundle' } }))).toBe(false);
+    expect('pinnedSha256' in toWire(draft({ tlsPolicy: { kind: 'pin', fingerprints: [] } }))).toBe(false);
+    expect('pinnedSha256' in toWire(draft({ tlsPolicy: { kind: 'pin', fingerprints: ['', '   '] } }))).toBe(false);
+  });
+
   it('空口令不许把已存的凭据擦掉', () => {
+
     expect('password' in toWire(draft({ password: '' }))).toBe(false);
     expect(toWire(draft({ password: 'hunter2' })).password).toBe('hunter2');
   });
@@ -77,6 +92,22 @@ describe('draftFromWire', () => {
     expect(back.proxy.port).toBe(3128);
     expect(back.username).toBe('notera');
     expect(back.proxy.bypass).toEqual(['127.0.0.1']);
+  });
+
+  it('ca_bundle 与 pin 的回读：PEM 只回「配过没有」，指纹要原样回到表单再存得回去', () => {
+    const back = draftFromWire({ ...stored, tlsPolicy: 'ca_bundle', hasCaPem: true });
+    expect(back.tlsPolicy.kind).toBe('caBundle');
+    expect(back.tlsPolicy.hasStoredCaPem).toBe(true);
+    // 核心不发 PEM 本体：这一格必须是"空着但说已配置"，而不是看着像被吞了
+    expect(back.tlsPolicy.caBundlePem).toBeUndefined();
+
+    const pin = 'c'.repeat(64);
+    const withPins = draftFromWire({ ...stored, tlsPolicy: 'pin', pinnedSha256: [pin] });
+    expect(withPins.tlsPolicy.fingerprints).toEqual([pin]);
+    // 回填 → 再存出去这一圈不许把指纹丢掉（此前命令面压根没有那个字段）
+    expect(toWire(withPins).pinnedSha256).toEqual([pin]);
+
+    expect(draftFromWire({ ...stored, tlsPolicy: 'strict' }).tlsPolicy.hasStoredCaPem).toBe(false);
   });
 
   it('口令永远不从后端回来，回填后是空串（表示"不改"）', () => {

@@ -22,6 +22,8 @@ const folders = useFolderStore();
 const shell = useShellStore();
 
 const bypassText = ref('');
+/** `pin` 档的指纹输入（一行一条）。核心不回传 PEM 本体，所以那一格另说（见 caPemIsSet 提示）。 */
+const pinText = ref('');
 const savedAt = ref<number | null>(null);
 const dataPath = ref('');
 const outPath = ref('');
@@ -93,15 +95,25 @@ function onPortInput(event: Event): void {
 
 onMounted(async () => {
   bypassText.value = (settings.draft.proxy.bypass ?? []).join('\n');
+  pinText.value = (settings.draft.tlsPolicy.fingerprints ?? []).join('\n');
   await settings.loadAccount();
   await settings.loadStats();
   bypassText.value = (settings.draft.proxy.bypass ?? []).join('\n');
+  // 回填必须在 loadAccount 之后：那一步会用核心的 DTO 重建 draft，
+  // 早先设进去的值会被换掉（这条 lane 的"改一次设置就得重填"就是这个坑）。
+  pinText.value = (settings.draft.tlsPolicy.fingerprints ?? []).join('\n');
 });
 
 async function save(): Promise<void> {
   settings.draft.proxy.bypass = bypassText.value
     .split('\n')
     .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  // 指纹按"一行一条"收。全空 = 这一格没动 ⇒ 核心保留已存的那批（与口令同一套语义），
+  // 所以清空只能先把策略切回 strict —— 这是有意的，不许"点一下就静默失去指纹保护"。
+  settings.draft.tlsPolicy.fingerprints = pinText.value
+    .split('\n')
+    .map((line) => line.trim().replace(/[:\s-]+/g, ''))
     .filter((line) => line.length > 0);
   const ok = await settings.saveAccount();
   if (ok) {
@@ -222,6 +234,38 @@ function keyHint(): string {
               <option v-for="option in tlsOptions" :key="option.value" :value="option.value">{{ t(option.label) }}</option>
             </select>
             <span v-if="settings.draft.tlsPolicy.kind === 'insecureLocal'" class="field-hint field-hint--warn">{{ t('sync.insecureWarn') }}</span>
+          </label>
+
+          <!-- 选了 `ca_bundle` / `pin` 才出来的两格。此前这两档在下拉里能选到，却没有任何输入口
+               —— 于是"内网自签主路径"（PROXY.md §6）在界面上根本走不到，选它只会在保存时被
+               核心的配置校验顶回来。留空 = 不改已存的那份，与口令同一套语义，所以必须有 caPemIsSet
+               那位提示，否则重开表单看着像被吞了。 -->
+          <label v-if="settings.draft.tlsPolicy.kind === 'caBundle'" class="field">
+            <span>{{ t('settings.tlsCaPem') }}</span>
+            <textarea
+              v-model="settings.draft.tlsPolicy.caBundlePem"
+              class="textarea"
+              rows="4"
+              spellcheck="false"
+              autocomplete="off"
+              :placeholder="settings.caPemIsSet ? t('settings.tlsCaPemSet') : t('settings.tlsCaPemPlaceholder')"
+              data-testid="account-ca-pem"
+            />
+            <span class="field-hint">{{ t(settings.caPemIsSet ? 'settings.tlsCaPemHintKept' : 'settings.tlsCaPemHint') }}</span>
+          </label>
+
+          <label v-if="settings.draft.tlsPolicy.kind === 'pin'" class="field">
+            <span>{{ t('settings.tlsPinFingerprints') }}</span>
+            <textarea
+              v-model="pinText"
+              class="textarea"
+              rows="3"
+              spellcheck="false"
+              autocomplete="off"
+              :placeholder="t('settings.tlsPinPlaceholder')"
+              data-testid="account-pin"
+            />
+            <span class="field-hint">{{ t('settings.tlsPinHint') }}</span>
           </label>
 
           <label class="field">

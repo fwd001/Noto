@@ -21,6 +21,8 @@ export interface AccountDraftWire {
   password?: string;
   tlsPolicy: string;
   caPem?: string;
+  /** `pin` 档的指纹表。此前两侧都没这一格，所以 §6 那一档在界面上根本配不出来。 */
+  pinnedSha256?: string[];
   proxyMode: string;
   proxyHost?: string;
   proxyPort?: number;
@@ -76,6 +78,9 @@ export function toWire(draft: AccountDraft): AccountDraftWire {
   // 空串按"不修改"处理：绝不用空口令把已存的凭据擦掉
   if (draft.password) wire.password = draft.password;
   if (tls.caBundlePem) wire.caPem = tls.caBundlePem;
+  // 留空 = 不改（核心那侧按"这一格空着就保留已存的"处理，与口令同一套语义）。
+  const pins = (tls.fingerprints ?? []).map((p) => p.trim()).filter(Boolean);
+  if (pins.length) wire.pinnedSha256 = pins;
   if (mode !== 'direct' && mode !== 'system') {
     if (proxy.host) wire.proxyHost = proxy.host;
     if (typeof proxy.port === 'number' && proxy.port > 0) wire.proxyPort = proxy.port;
@@ -98,7 +103,13 @@ export function draftFromWire(account: Account | null | undefined): AccountDraft
     username: account.username ?? '',
     password: '',
     enabled: account.enabled !== false,
-    tlsPolicy: { kind: TLS_FROM_WIRE[account.tlsPolicy ?? 'strict'] ?? 'strict', fingerprints: [] },
+    tlsPolicy: {
+      kind: TLS_FROM_WIRE[account.tlsPolicy ?? 'strict'] ?? 'strict',
+      // 指纹不是秘密，回填得给全（不然每次编辑都要重敲 64 位十六进制）；
+      // PEM 本体核心不回传，只回传"存过没有"这一位，界面上据此区分"没配"与"配了但不回显"。
+      fingerprints: [...(account.pinnedSha256 ?? [])],
+      hasStoredCaPem: account.hasCaPem === true,
+    },
     proxy: {
       mode,
       host: account.proxyHost ?? '',

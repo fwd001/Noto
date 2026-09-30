@@ -120,7 +120,17 @@ bypass 命中判定需要目标主机信息：对 `*.domain` 形式的 bypass �
 实现要点：
 
 * 根证书优先使用**系统信任库**（`strict` 档：`rustls-platform-verifier`，实测在 windows-gnu 可编译），这样企业把内网根 CA 装进系统后 Notera 自动可信 —— 与公安网/企业网运维现实一致。
-* `ca_bundle` 的信任锚 = **系统信任库 ∪ 用户这份 PEM**，两边由我们自己拼好再交给 rustls 校验（`ClientBuilder::tls_certs_only`）。为什么不走"顺手"的那条路：reqwest 0.13 只要见到用户加的根（`add_root_certificate`，已废弃），就把**整条校验**推给 `rustls_platform_verifier` —— Windows 上它不肯用用户递进来的那份根验签，报的是 `NTE_BAD_SIGNATURE` 而不是 `UnknownIssuer`，表现即"CA 明明填对了却连不上自签端点"（缺口 **G35**，0.0.47 修）。反过来只交用户那一份也不行：那一档会从"追加"悄悄变成"替换"，所以系统根由 `rustls-native-certs` 读进来一起交；读不到（Android 上是常态）只告警不失败，窄在哪一边日志里看得见。判据：`notera-net/tests/tls_policies.rs` 的 `ca_bundle_trusts_exactly_the_pem_it_was_given`（两种链形状各自握成 + 源站数到真请求 + **递错 CA 必须被拒**）与 `client.rs` 里那条"锚集合 = 用户那份 + 系统根"的单测。PEM 内容存 `settings`，不落明文路径引用。
+* `ca_bundle` 的信任锚 = **系统信任库 ∪ 用户这份 PEM**，两边由我们自己拼好再交给 rustls 校验（`ClientBuilder::tls_certs_only`）。
+* **这两档在界面上到底进不进得来**（0.0.48 补的入口，缺口 **G37**）：设置页的"证书策略"下拉一直有 `ca_bundle` 与 `pin` 两项，
+  但此前**没有任何输入口**，而 `AccountDraftCmd` 连 `pinned_sha256` 字段都没有（保存路径把它硬编成 `None`）——
+  也就是"内网自签主路径"选得到、配不出来。现在：选 `ca_bundle` 出 PEM 文本框，选 `pin` 出"一行一条指纹"文本框；
+  **留空 = 不改已存的那一份**（与口令同一套语义，所以账户 DTO 回读 `hasCaPem` 让界面能说"已保存"而不是显示成空的；
+  指纹不是秘密，直接原样回读）。清空只能先把策略切回 `strict`。而**选了这两档却给不出内容**（`ca_bundle` 没有 PEM、`pin` 没有指纹）
+  是在**保存当场**被拒且指名是哪一格（实测串：`字段 ca_pem 无效: 选择「自定义 CA」时必须提供 PEM`），
+  并且不许留下一条半拉子账户 —— 读侧那句"没 PEM 就退回 strict"是安全的兜底，但它只能在读的时候兜，
+  写这一步放过去就会出现"档位显示 caBundle、实际按 strict 走"的分裂状态。判据：`crates/notera-host/tests/tls_ca_bundle_config.rs` 四条
+  （其中第一条是差分 + 源站两本账：同一台自签端点，`strict` 腿 `handled==0`、配上 PEM 之后 `handled≥1`；
+  四条各配变异 M-CA1..M-CA4，见 CHANGELOG），加前端 `accountWire.spec.ts` 两条（发得出去 / 留空真的不发）。为什么不走"顺手"的那条路：reqwest 0.13 只要见到用户加的根（`add_root_certificate`，已废弃），就把**整条校验**推给 `rustls_platform_verifier` —— Windows 上它不肯用用户递进来的那份根验签，报的是 `NTE_BAD_SIGNATURE` 而不是 `UnknownIssuer`，表现即"CA 明明填对了却连不上自签端点"（缺口 **G35**，0.0.47 修）。反过来只交用户那一份也不行：那一档会从"追加"悄悄变成"替换"，所以系统根由 `rustls-native-certs` 读进来一起交；读不到（Android 上是常态）只告警不失败，窄在哪一边日志里看得见。判据：`notera-net/tests/tls_policies.rs` 的 `ca_bundle_trusts_exactly_the_pem_it_was_given`（两种链形状各自握成 + 源站数到真请求 + **递错 CA 必须被拒**）与 `client.rs` 里那条"锚集合 = 用户那份 + 系统根"的单测。PEM 内容存 `settings`，不落明文路径引用。
 * **纯 HTTP（非 TLS）默认拒绝**，仅当主机是 loopback 或用户显式选择 `insecure_local` 时允许，并在每次同步完成后在状态区保留"未加密传输"标记（不弹窗骚扰，但不隐藏）。
 * 证书错误必须与"网络不可达"给出不同文案 —— 用户看到"连不上"会去查网线，看到"证书不受信任"才会去找运维。
 

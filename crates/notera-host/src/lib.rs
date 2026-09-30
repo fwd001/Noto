@@ -1548,8 +1548,22 @@ impl App {
                 Some("insecure_local") => TlsPolicyKind::InsecureLocal,
                 _ => TlsPolicyKind::Strict,
             },
-            ca_pem: draft.ca_pem,
-            pinned_sha256: None,
+            // 与口令同一套语义：**这一格留空 = 不改**（界面上给的是"已配置"的占位提示）。
+            // 少这一层会造出一条真缺陷：编辑账户的标签或代理时，没重填 PEM 就把存好的根证书洗掉，
+            // 而 `ca_bundle` 档的校验又要求 PEM 非空 —— 于是"改个名字"都会把保存顶成一次配置错误。
+            // 想清空只能先切回 `strict`（那一档不看 PEM），这是有意的：清空 ≠ 保留。
+            ca_pem: match draft.ca_pem.as_deref().filter(|s| !s.trim().is_empty()) {
+                Some(pem) => Some(pem.to_string()),
+                None => existing.and_then(|a| a.ca_pem.clone()),
+            },
+            pinned_sha256: match draft.pinned_sha256.clone().map(|v| {
+                v.into_iter()
+                    .filter(|s| !s.trim().is_empty())
+                    .collect::<Vec<_>>()
+            }) {
+                Some(v) if !v.is_empty() => Some(v),
+                _ => existing.and_then(|a| a.pinned_sha256.clone()),
+            },
             proxy: ProxyProfile {
                 mode: match draft.proxy_mode.as_deref() {
                     Some("system") => ProxyMode::System,
@@ -3074,6 +3088,8 @@ fn account_dto(a: &AccountConfig) -> AccountDto {
         bypass: a.proxy.bypass.clone(),
         enabled: a.enabled,
         has_credential: !a.credential_ref.is_empty(),
+        has_ca_pem: a.ca_pem.as_deref().is_some_and(|s| !s.trim().is_empty()),
+        pinned_sha256: a.pinned_sha256.clone().unwrap_or_default(),
         username: a.username.clone(),
         cap_mask: None,
         write_strategy: None,
@@ -5171,6 +5187,7 @@ mod tests {
             password: None,
             tls_policy: None,
             ca_pem: None,
+            pinned_sha256: None,
             proxy_mode: None,
             proxy_host: None,
             proxy_port: None,

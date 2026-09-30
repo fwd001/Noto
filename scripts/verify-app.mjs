@@ -657,6 +657,47 @@ await step('服务器能力块：刚配上时说的是"还没探过"，不是"�
   return `verdict=「${verdict.slice(0, 18)}…」 id=${String(acct.id).slice(0, 8)}（填表→保存→读回→清理）`;
 });
 
+await step('证书策略选到 ca_bundle / pin 要长出输入口，存下的那份要回读成"已保存"', async () => {
+  // 这一步存在的理由（缺口 G37）：下拉里一直有这两档，可**没有任何输入口**，
+  // 而 `pin` 的字段在命令里根本不存在 —— 于是 PROXY.md §6 的"内网自签主路径"选得到、配不出来。
+  // 判据不看"有没有渲染"这么轻：填进去 → 保存 → 从核心读回 → 界面那一格必须说"已保存"。
+  await page.fill('[data-testid="account-baseUrl"]', 'https://127.0.0.1:9/dav');
+  await page.fill('[data-testid="account-username"]', 'notera-e2e');
+  await page.fill('[data-testid="account-password"]', 'e2e-secret');
+  await page.selectOption('[data-testid="account-tls"]', 'caBundle');
+  const pem = page.locator('[data-testid="account-ca-pem"]');
+  if ((await pem.count()) === 0) throw new Error('选了「自定义 CA」却没出现 PEM 输入框（G37 原样复发）');
+  await pem.fill('-----BEGIN CERTIFICATE-----\nZm9v\n-----END CERTIFICATE-----');
+  await page.click('[data-testid="account-save"]');
+  await page.waitForTimeout(900);
+  let acct = await callBridge('account');
+  if (!acct || acct.hasCaPem !== true) {
+    throw new Error(`界面上填的 PEM 没存进核心（hasCaPem=${JSON.stringify(acct && acct.hasCaPem)}）`);
+  }
+  // 重开这一格时不许看着像空的：留空 = 不改，但那句话必须说出来
+  const ph = await pem.getAttribute('placeholder');
+  if (!ph || !ph.includes('已保存根证书')) throw new Error(`PEM 存下了却没说"已保存"，placeholder=「${ph}」`);
+
+  await page.selectOption('[data-testid="account-tls"]', 'pin');
+  const pins = page.locator('[data-testid="account-pin"]');
+  if ((await pins.count()) === 0) throw new Error('选了「指纹锁定」却没出现指纹输入框（G37 的另一半）');
+  const pin = 'a'.repeat(64);
+  await pins.fill(`${pin}\n  `);
+  await page.click('[data-testid="account-save"]');
+  await page.waitForTimeout(900);
+  acct = await callBridge('account');
+  if (acct.tlsPolicy !== 'pin') throw new Error(`档位没存住：${JSON.stringify(acct.tlsPolicy)}`);
+  if (!(Array.isArray(acct.pinnedSha256) && acct.pinnedSha256.includes(pin))) {
+    throw new Error(`界面上填的指纹没进配置（此前命令里压根没这个字段）：${JSON.stringify(acct.pinnedSha256)}`);
+  }
+  const backFromCore = await pins.inputValue();
+  if (!backFromCore.includes(pin.slice(0, 8))) throw new Error(`存住了却没回填到表单：「${backFromCore.slice(0, 40)}」`);
+  const leaked = await leakedKeys();
+  await callBridge('remove_account', { id: acct.id });
+  if (leaked.length > 0) throw new Error(`证书这块漏出键名：${leaked.join(', ')}`);
+  return `CA 已保存 + 指纹 ${pin.slice(0, 8)}… 存进→回读→回填三步都过`;
+});
+
 await step('导出：真产出一个能读回来的 ZIP，且不盖掉刚才的备份', async () => {
   const backup = (await page.locator('[data-testid="data-path"]').inputValue()).trim();
   const before = (await liveNotes()).length;
