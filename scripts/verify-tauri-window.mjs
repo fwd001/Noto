@@ -132,6 +132,39 @@ await step('真窗口里点这条笔记 → 正文显示（选中即打开）', 
   return text.slice(0, 30);
 });
 
+await step('真窗口里点「固定」→ 那一行的标记与键名一起翻面（走的是真 invoke，不是 dev 桥）', async () => {
+  // 缺口 G32 的另一半证据。坏的地方在 `dispatch` 的臂（`j(app.to_dto(x))` 少一个 `?`），
+  // 而两条通道共用一条契约 —— 所以壳里同样是 `{"Ok":…}`，同样是"点下去屏幕上什么都没动"。
+  // dev 桥那一步（verify-app 第 44 步）钉的是界面；这一格钉的是**真 invoke 回来的载荷前端读得到**。
+  const row = page.locator(`[data-testid^="note-row-"]:has-text(${JSON.stringify(needle)})`).first();
+  const testid = await row.evaluate((el) => el.getAttribute('data-testid'));
+  await row.hover();
+  const btn = page.locator(`[data-testid="${testid}"] .row-item__actions button`).first();
+  const labelBefore = await btn.getAttribute('aria-label');
+  const pinnedBefore = await row.evaluate((el) => !!el.querySelector('.row-item__pin'));
+  await btn.click();
+  // 条件等待而不是睡固定时长：这一支要一次真 invoke 往返 + 列表重排。
+  const flip = await page
+    .waitForFunction(
+      ([tid, prev]) => {
+        const r = document.querySelector(`[data-testid="${tid}"]`);
+        if (!r) return null;
+        const b = r.querySelector('.row-item__actions button');
+        const label = b ? b.getAttribute('aria-label') : null;
+        if (label === prev) return null;
+        return { label, pinned: !!r.querySelector('.row-item__pin') };
+      },
+      [testid, labelBefore],
+      { timeout: 8000, polling: 150 },
+    )
+    .then((h) => h.jsonValue());
+  if (!flip) throw new Error(`点了「${labelBefore}」之后 8 秒内那颗键的名字没翻面 ⇒ 真 invoke 通道的成功载荷前端读不到（G32 在壳里没修好）`);
+  if (flip.pinned === pinnedBefore) {
+    throw new Error(`键名翻了（${labelBefore} → ${flip.label}）但置顶标记没翻（仍 ${pinnedBefore ? '有' : '无'}）⇒ 那格和那颗键说的不是一件事`);
+  }
+  return `键名 ${labelBefore} → ${flip.label}，置顶标记${pinnedBefore ? '取消' : '出现'}（真 invoke + 真 SQLite）`;
+});
+
 await step('WebView 内截图', async () => {
   const buf = await page.screenshot({ path: OUT, fullPage: false });
   return `${(buf ?? Buffer.alloc(0)).length ?? 0} 字节 → app-tauri-window.png`;
