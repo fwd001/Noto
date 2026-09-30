@@ -1341,6 +1341,43 @@ await step('设置页导入 .enex：报告、说明、以及列表里真的出�
   return `列表两条都在；说明：${notices.slice(0, 60)}`;
 });
 
+await step('凭据库没接入的设备：口令那一格要在敲之前就说清楚（缺口 G38 欠的那句提示）', async () => {
+  // 本机是 Windows，核心报的永远是 `credentialManager`，这一支在真机上不会显示 —— 所以按这条 lane
+  // 已有的办法用 route 把 `platform_caps` 换成 `keychain:"none"` 的那一份（= macOS/Android 的真形态），
+  // 让那句话在浏览器里真的渲染一次。判据是**两条腿**：喂 none 要出现，撤掉之后不许还挂着
+  // —— 少了后一条，这一步就是一句恒真的装饰，抓不到任何东西。
+  const MATCH = '**/cmd/platform_caps';
+  try {
+    await page.route(MATCH, (route) =>
+      route.fulfill({
+        status: 200,
+        headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
+        body: JSON.stringify({ ok: true, payload: { keychain: 'none' } }),
+      }),
+    );
+    await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
+    await page.locator('[data-testid="nav-settings"]').scrollIntoViewIfNeeded();
+    await page.click('[data-testid="nav-settings"]', { timeout: 8000 });
+    const hint = page.locator('[data-testid="credential-store-none"]');
+    await hint.waitFor({ state: 'visible', timeout: 8000 });
+    const text = (await hint.innerText()).replace(/\s+/g, ' ');
+    if (!/口令不会被保存/.test(text)) throw new Error(`提示出现了，但没说清后果：「${text}」`);
+    if (!/配不了同步/.test(text)) throw new Error(`提示没点出"这台设备配不出同步"：「${text}」`);
+
+    await page.unroute(MATCH);
+    await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
+    await page.locator('[data-testid="nav-settings"]').scrollIntoViewIfNeeded();
+    await page.click('[data-testid="nav-settings"]', { timeout: 8000 });
+    if (await page.locator('[data-testid="credential-store-none"]').count() > 0) {
+      throw new Error('本机有凭据库（credentialManager）而那句话还挂着 ⇒ 它是恒真的装饰，不是能力判定');
+    }
+  } finally {
+    await page.unroute(MATCH).catch(() => {});
+    await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 }).catch(() => {});
+  }
+  return 'none ⇒ 那句话出现（含后果）；真 caps ⇒ 不出现，两条腿都验过';
+});
+
 await step('网络请求零失败', async () => {
   if (failedRequests.length > 0) throw new Error(`${failedRequests.length} 条：${failedRequests.slice(0, 5).join('; ')}`);
   return '0 failed';

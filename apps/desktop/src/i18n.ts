@@ -141,6 +141,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'settings.accountUser': '用户名',
   'settings.accountPassword': '口令',
   'settings.accountPasswordSet': '已保存口令（留空则不修改）',
+  'settings.credentialStoreNone': '这台设备的系统凭据库还没接入：口令不会被保存，带口令的保存会被拒绝，本平台暂时配不了同步。本地记录与搜索不受影响。',
   'settings.accountRootPrefix': '存储前缀',
   // §6 的 ca_bundle / pin 两档的输入格（此前下拉里选得到、却没有输入口）。
   'settings.tlsCaPem': '内网根证书（PEM）',

@@ -108,6 +108,12 @@ export const useSettingsStore = defineStore('settings', () => {
   const hasAccount = computed(() => account.value !== null && Boolean(account.value?.baseUrl));
   const passwordIsSet = computed(() => account.value?.hasCredential === true);
   /**
+   * 这台设备的系统凭据库到底有没有。核心那侧口令**只**允许进系统凭据库，
+   * 没有它的平台上一次带口令的保存会被当场拒掉（`credential_unavailable`）——
+   * 所以这句话必须在用户敲口令之前说出来，而不是让他撞一次失败才发现（缺口 G38）。
+   */
+  const credentialStoreUnavailable = computed(() => caps.value.keychain === 'none');
+  /**
    * 根证书 PEM 本体核心不回传（一份 CA 证书几 KB，每次回填都端过去没意义），
    * 传的是"存过没有"。界面上必须有这一位，否则选了 `ca_bundle` 的账户重开设置页时
    * 那一格看着像空的 —— 而"留空 = 不改"的语义又会把它说成已配置，两件事对不上就是误导。
@@ -337,6 +343,7 @@ export const useSettingsStore = defineStore('settings', () => {
     accountErrorKey,
     hasAccount,
     passwordIsSet,
+    credentialStoreUnavailable,
     caPemIsSet,
     usesPlainHttp,
     fontScale,
