@@ -6,8 +6,17 @@
 //! 被真证书验过。"证书不受信任"这句话要是坏了（例如哪天误开了 accept-invalid-certs），
 //! 表现是**中间人可以改用户的笔记而客户端照单全收** —— 那是数据安全层的事，不是观感问题。
 //!
-//! 证书是**每次运行现造**的（rcgen，内存里）：一张自签 CA + 一张签给它下面的叶证书，
-//! SAN 带 **IP** `127.0.0.1`（客户端连的是 IP，rustls 拿 DNS 名匹配不算数）；盘上不落任何密钥。
+//! 证书是**每次运行现造**的（rcgen，内存里），盘上不落任何密钥。链的形状有两种，因为
+//! 这两件事在真实部署里不一样、失败原因也可能不一样：
+//!
+//! * [`TlsOrigin::start`] —— **自签根**当 CA（一张证书既是根又是签发者）；
+//! * [`TlsOrigin::start_two_level`] —— **两级私有 CA**（根 CA → 中间 CA → 叶），服务器出示
+//!   leaf + 中间 CA，客户端该拿到的是**根**的 PEM。内网/警务网那种"自建一个 CA、
+//!   再发一张服务器证书"就是这一形。
+//!
+//! SAN 必带 **IP** `127.0.0.1`（客户端连的是 IP，rustls 拿 DNS 名匹配不算数），CA 必带
+//! `keyCertSign`（rcgen 默认可用密钥用途是叶子那一套；少了它 Windows 校验器报的是
+//! "无法验证证书的签名"而不是"issuer 不认" —— 第一版就撞在这里，差点把工装问题记成产品缺陷）。
 //!
 //! 这台源站**故意只做最小 HTTP/1.1**：握手完成后读掉请求、回一个固定 200，并分别数
 //! `accepted`（TCP 连上来过几条，**含**握手就死的）与 `handled`（握手成、且真读到一个请求
@@ -18,6 +27,10 @@
 //! crypto provider 是**显式指定**的（`builder_with_provider` + aws-lc-rs）：树里 rustls 的
 //! 可用 provider 不止一个，用 `builder()` 那条"取进程默认"的路会在运行时以
 //! "no process-level CryptoProvider available" 的形式炸 —— 那是工装坏，不是产品坏。
+//!
+//! **工装自检放在消费者那边**（`notera-net/tests/tls_policies.rs` 里那条"两种链形状都要能
+//! 在跳过校验时完成握手"），不写在本 crate：本 crate 是 notera-net 的 dev-dependency，
+//! 反向依赖会成环。
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,10 +43,97 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs
 use tokio_rustls::rustls::ServerConfig;
 use tokio_rustls::TlsAcceptor;
 
-/// 现造的一对证书 + 一台听在临时端口上的 TLS 源站。
+/// 一次生成出来的证书材料（只在内存里）。
+struct Certs {
+    /// 客户端该被交给的那份信任根 PEM（自签那形 = 那张 CA；两级那形 = **根** CA）。
+    root_pem: String,
+    /// 叶证书 PEM：不用于配策略，失败时人可拿它去 `openssl s_client` 复现。
+    leaf_pem: String,
+    /// 服务器出示的链（leaf 在前）。
+    chain: Vec<CertificateDer<'static>>,
+    /// 叶证书 DER 的 sha256（64 hex），给 `TlsPolicy::Pin`。
+    leaf_sha256: String,
+    /// 叶证书的私钥（PKCS#8 DER）。
+    leaf_key: Vec<u8>,
+}
+
+/// CA 该有而 rcgen 默认**不给**的那几样用途。
+fn ca_usages() -> Vec<rcgen::KeyUsagePurpose> {
+    vec![
+        rcgen::KeyUsagePurpose::KeyCertSign,
+        rcgen::KeyUsagePurpose::CrlSign,
+        rcgen::KeyUsagePurpose::DigitalSignature,
+    ]
+}
+
+/// 测试形状固定用 RSA：ECDSA/RSA 的差别已经实测过（两种在 Windows 校验器下同样失败），
+/// 才有资格把 G35 定性成"与算法无关"。
+fn ca_pair() -> Result<rcgen::KeyPair, String> {
+    rcgen::KeyPair::generate_for(&rcgen::PKCS_RSA_SHA256).map_err(|e| e.to_string())
+}
+
+fn ca_params(cn: &str) -> Result<rcgen::CertificateParams, String> {
+    let mut p = rcgen::CertificateParams::new(vec![cn.to_string()]).map_err(|e| e.to_string())?;
+    p.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    p.key_usages = ca_usages();
+    Ok(p)
+}
+
+fn leaf_params() -> Result<rcgen::CertificateParams, String> {
+    let mut p =
+        rcgen::CertificateParams::new(vec!["127.0.0.1".to_string(), "localhost".to_string()])
+            .map_err(|e| e.to_string())?;
+    p.is_ca = rcgen::IsCa::NoCa;
+    Ok(p)
+}
+
+/// 自签根那一形：CA 自己签自己。
+fn certs_self_signed() -> Result<Certs, String> {
+    let ca_key = ca_pair()?;
+    let ca = ca_params("notera-test-ca")?
+        .self_signed(&ca_key)
+        .map_err(|e| e.to_string())?;
+    let leaf_key = ca_pair()?;
+    let leaf = leaf_params()?
+        .signed_by(&leaf_key, &ca, &ca_key)
+        .map_err(|e| e.to_string())?;
+    Ok(Certs {
+        root_pem: ca.pem(),
+        leaf_pem: leaf.pem(),
+        chain: vec![leaf.der().clone(), ca.der().clone()],
+        leaf_sha256: hex_sha256(leaf.der().as_ref()),
+        leaf_key: leaf_key.serialize_der(),
+    })
+}
+
+/// 两级私有 CA 那一形：根 CA → 中间 CA → 叶。客户端拿到**根**的 PEM，
+/// 链里给 leaf + 中间 CA（根不放进链 —— 那是信任锚该在的地方）。
+fn certs_two_level() -> Result<Certs, String> {
+    let root_key = ca_pair()?;
+    let root = ca_params("notera-test-root")?
+        .self_signed(&root_key)
+        .map_err(|e| e.to_string())?;
+    let inter_key = ca_pair()?;
+    let inter = ca_params("notera-test-intermediate")?
+        .signed_by(&inter_key, &root, &root_key)
+        .map_err(|e| e.to_string())?;
+    let leaf_key = ca_pair()?;
+    let leaf = leaf_params()?
+        .signed_by(&leaf_key, &inter, &inter_key)
+        .map_err(|e| e.to_string())?;
+    Ok(Certs {
+        root_pem: root.pem(),
+        leaf_pem: leaf.pem(),
+        chain: vec![leaf.der().clone(), inter.der().clone()],
+        leaf_sha256: hex_sha256(leaf.der().as_ref()),
+        leaf_key: leaf_key.serialize_der(),
+    })
+}
+
+/// 现造的证书 + 一台听在临时端口上的 TLS 源站。
 pub struct TlsOrigin {
     addr: SocketAddr,
-    ca_pem: String,
+    root_pem: String,
     leaf_pem: String,
     leaf_sha256: String,
     accepted: Arc<AtomicU64>,
@@ -41,52 +141,24 @@ pub struct TlsOrigin {
 }
 
 impl TlsOrigin {
-    /// 起一台。**CA PEM 与叶指纹出自同一次生成**：`CaBundle` 与 `Pin` 两档要能互相指认，
-    /// 分开造就变成在测两个东西。
+    /// **自签根**那一形：`ca_pem()` 就是那张自签 CA 自己。
     pub async fn start() -> Result<TlsOrigin, String> {
-        let err = |e: rcgen::Error| e.to_string();
-        // 密钥算法：见下面 CA 那段注释里的实测——Windows 的平台校验器对这条测试链报
-        // `NTE_BAD_SIGNATURE`，先用 RSA 试出它到底是"不认 ECDSA 测试链"还是"不认任何用户加的根"。
-        let alg = &rcgen::PKCS_RSA_SHA256;
+        Self::serve(certs_self_signed()?).await
+    }
 
-        // ① 自签 CA。
-        //
-        // `key_cert_sign` 必须显式给：rcgen 的默认可用密钥用途是**叶子**那一套
-        // （digital_signature / key_encipherment），少了 keyCertSign，Windows 的平台校验器
-        // 会拒用这张 CA 去验签，报出来的不是" issuer 不认"而是 `无法验证证书的签名
-        // (os error -2146869244)` —— 第一版就是撞在这里，看起来像 `CaBundle` 没接线，
-        // 其实是我造的 CA 不合法。
-        let mut ca_params =
-            rcgen::CertificateParams::new(vec!["notera-test-ca".to_string()]).map_err(err)?;
-        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-        ca_params.key_usages = vec![
-            rcgen::KeyUsagePurpose::KeyCertSign,
-            rcgen::KeyUsagePurpose::CrlSign,
-            rcgen::KeyUsagePurpose::DigitalSignature,
-        ];
-        let ca_key = rcgen::KeyPair::generate_for(alg).map_err(err)?;
-        let ca = ca_params.self_signed(&ca_key).map_err(err)?;
+    /// **两级私有 CA**那一形：`ca_pem()` 是根 CA，链里是叶 + 中间 CA。
+    pub async fn start_two_level() -> Result<TlsOrigin, String> {
+        Self::serve(certs_two_level()?).await
+    }
 
-        // ② CA 签出的叶证书，SAN 必须带 IP `127.0.0.1`。
-        let mut leaf_params =
-            rcgen::CertificateParams::new(vec!["127.0.0.1".to_string(), "localhost".to_string()])
-                .map_err(err)?;
-        leaf_params.is_ca = rcgen::IsCa::NoCa;
-        let leaf_key = rcgen::KeyPair::generate_for(alg).map_err(err)?;
-        let leaf = leaf_params
-            .signed_by(&leaf_key, &ca, &ca_key)
-            .map_err(err)?;
-
-        let leaf_sha256 = hex_sha256(leaf.der().as_ref());
-
-        let certs: Vec<CertificateDer<'static>> = vec![leaf.der().clone(), ca.der().clone()];
-        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(leaf_key.serialize_der()));
+    async fn serve(certs: Certs) -> Result<TlsOrigin, String> {
+        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certs.leaf_key));
         let provider = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider();
         let mut cfg = ServerConfig::builder_with_provider(Arc::new(provider))
             .with_safe_default_protocol_versions()
             .map_err(|e| e.to_string())?
             .with_no_client_auth()
-            .with_single_cert(certs, key)
+            .with_single_cert(certs.chain, key)
             .map_err(|e| e.to_string())?;
         // 钉死 http/1.1：reqwest 开了 `http2` feature，让 ALPN 自己去选会把它带进 h2 前置序列，
         // 而这里要测的是**证书**，不是帧格式。
@@ -147,9 +219,9 @@ impl TlsOrigin {
 
         Ok(TlsOrigin {
             addr,
-            ca_pem: ca.pem(),
-            leaf_pem: leaf.pem(),
-            leaf_sha256,
+            root_pem: certs.root_pem,
+            leaf_pem: certs.leaf_pem,
+            leaf_sha256: certs.leaf_sha256,
             accepted,
             handled,
         })
@@ -164,14 +236,10 @@ impl TlsOrigin {
         format!("https://{}/.notes", self.addr)
     }
 
-    /// 协议方案（`https`），给要自己拼 URL 的测试用。
-    pub fn scheme(&self) -> &'static str {
-        "https"
-    }
-
-    /// 自签 CA 的 PEM：喂给 `TlsPolicy::CaBundle`，这就是 §6 说的"内网自签主路径"。
+    /// 信任根的 PEM：喂给 `TlsPolicy::CaBundle`，这就是 §6 说的"内网自签主路径"。
+    /// 自签那一形里它就是那张 CA 自己。
     pub fn ca_pem(&self) -> &str {
-        &self.ca_pem
+        &self.root_pem
     }
 
     /// 叶证书 PEM（不用于配策略；失败时人可拿它去 `openssl s_client` 复现）。

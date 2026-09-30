@@ -48,6 +48,38 @@ async fn get(tls: &TlsPolicy, url: &str) -> Result<u16, NetError> {
         .map(|r| r.status)
 }
 
+/// ⓪ **工装自检**：两种链形状（自签根 / 两级私有 CA）在"跳过校验"下都必须真完成握手。
+///
+/// 这条是给 G35 的读数兜底的：如果我的 TLS 源站本身就完不成握手，那"CaBundle 失败"这件事
+/// 一直在测我的生成器而不是产品的验证器 —— 那种结论会把用户往"换验证器"的方向带。
+/// 它同时是"两级链那套生成代码有没有写错"的唯一自动检查（G35 的定性靠的是那台两级源站）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn both_chain_shapes_handshake_when_verification_is_skipped() {
+    for (label, srv) in [
+        ("自签根", TlsOrigin::start().await.expect("起自签根源站")),
+        (
+            "两级私有 CA",
+            TlsOrigin::start_two_level().await.expect("起两级 CA 源站"),
+        ),
+    ] {
+        let url = format!("{}/protocol.json", srv.base_url());
+        let status = get(&TlsPolicy::InsecureLocal, &url)
+            .await
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{label}：这台源站连跳过校验都完不成握手（{e}）—— \
+                 那 G35 的所有读数测的都是工装，不是产品"
+                )
+            });
+        assert_eq!(status, 200, "{label}：握手成了却没拿到 200");
+        assert_eq!(
+            srv.handled(),
+            1,
+            "{label}：源站没数到那条真请求，那这个 200 是别处来的"
+        );
+    }
+}
+
 /// ① `Strict` 对自签链：必须拒绝，而且**什么都没交换**。
 ///
 /// 这一条守的是最坏的那种坏法：链校验被哪天不小心关掉（`danger_accept_invalid_certs` 之类），
@@ -196,28 +228,37 @@ async fn a_tls_failure_is_not_retried_even_with_a_full_budget() {
 
 /// G35 的复现探针（**只出数，不判绿**，按 §40 记在 PRODUCTION-READINESS）。
 ///
-/// 为什么它不是门禁：它断言不了任何"应该如此"的东西 —— CaBundle 此刻在本机就是走不通，
-/// 把"走不通"写成绿灯等于把缺陷固定成期望。它的作用是让下一个接手的人**不必重新推一遍**：
-/// 跑 `cargo test -p notera-net --test tls_policies -- --ignored --nocapture`
-/// 会打出 reqwest 的完整错误链、CA 的 PEM 头、以及源站两本账（accepted / handled）。
+/// 为什么它不是门禁：这一档此刻在本机就是走不通，把"走不通"写成绿灯等于把缺陷固定成期望。
+/// 它的作用是让消费者不必重新推一遍，并且**一次跑就同时给出两种链形状**的答案 ——
+/// 因为"是只有自签根不行，还是任何用户加的根都不行"这个差别直接决定 G35 的严重程度：
+/// 前者只是"形状受限"，后者是"§6 的整条内网主路径不存在"。
+///
+/// 跑：`cargo test -p notera-net --test tls_policies -- --ignored --nocapture`
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "G35 的复现量具：只打印握手错误链，不判绿（见 PRODUCTION-READINESS）"]
 async fn probe_ca_bundle_handshake_error_chain() {
-    let srv = TlsOrigin::start().await.expect("起 TLS 源站");
-    let url = format!("{}/protocol.json", srv.base_url());
-
-    for (label, add_root) in [("without_added_root", false), ("with_added_root", true)] {
-        let mut b = reqwest::Client::builder()
+    for (label, srv) in [
+        (
+            "self-signed-root",
+            TlsOrigin::start().await.expect("起自签根源站"),
+        ),
+        (
+            "two-level-private-ca",
+            TlsOrigin::start_two_level().await.expect("起两级 CA 源站"),
+        ),
+    ] {
+        let url = format!("{}/protocol.json", srv.base_url());
+        let raw = reqwest::Client::builder()
             .timeout(Duration::from_secs(8))
-            .use_rustls_tls();
-        if add_root {
-            let cert = reqwest::tls::Certificate::from_pem(srv.ca_pem().as_bytes())
-                .expect("CA PEM 要能被 reqwest 认下来");
-            b = b.add_root_certificate(cert);
-        }
-        let c = b.build().expect("client");
-        match c.get(&url).send().await {
-            Ok(resp) => println!("G35 {label}: OK status={}", resp.status()),
+            .use_rustls_tls()
+            .add_root_certificate(
+                reqwest::tls::Certificate::from_pem(srv.ca_pem().as_bytes())
+                    .expect("CA PEM 要能被 reqwest 认下来"),
+            )
+            .build()
+            .expect("client");
+        match raw.get(&url).send().await {
+            Ok(resp) => println!("G35 {label}: CaBundle OK status={}", resp.status()),
             Err(e) => {
                 let mut chain = Vec::new();
                 let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(&e);
@@ -225,18 +266,17 @@ async fn probe_ca_bundle_handshake_error_chain() {
                     chain.push(format!("{x}"));
                     cur = x.source();
                 }
-                println!("G35 {label}: ERR {}", chain.join(" <- "));
+                println!("G35 {label}: CaBundle ERR {}", chain.join(" <- "));
             }
         }
+        println!(
+            "G35 {label}: origin accepted={} handled={}",
+            srv.accepted(),
+            srv.handled()
+        );
     }
     println!(
-        "G35 origin: accepted={} handled={} ca_head={:?}",
-        srv.accepted(),
-        srv.handled(),
-        &srv.ca_pem()[..32.min(srv.ca_pem().len())]
-    );
-    println!(
-        "G35 判读：报签名校验错(NTE_BAD_SIGNATURE)而不是 UnknownIssuer ⇒ 加的根被 Consulted 了，\
-         但系统校验器不认这份根签出来的链。ECDSA/RSA、CA 有无 keyCertSign、链里带不带 CA 都试过了。"
+        "G35 判读：两条都报签名校验错(NTE_BAD_SIGNATURE)而不是 UnknownIssuer ⇒ 加的根被 Consulted 了，\
+         但系统校验器不肯用它验签；ECDSA/RSA、CA 有无 keyCertSign、链里带不带 CA 都已实测排除。"
     );
 }
