@@ -688,6 +688,17 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
     "没有那套临时工装，流水线自己也站得住"这一句是真读到的，不是推出来的。
     **0.0.44 又读一次**：tag `v0.0.44` → run **#21**（commit `dd18b14`）五 job 全 `completed success`，
     产物 windows-x64 13,120,203 B / macos-universal 11,072,348 B / android-apk 34,868,877 B。
+    **0.0.45（G32 这批）再读一次**：tag `v0.0.45` → run **#22**（commit `6f9e5d1`）
+    **五个 job 全 Success**（版本与 tag 对齐 7 s / Windows GNU `.msi`+`.exe` 10m43s / macOS `.dmg`+`.app` 4m29s /
+    Android `.apk` 5m4s / 汇总到 GitHub Release（草稿）20 s），整跑 11m23s；
+    产物在案 android-apk **33.3 MB** / macos-universal **10.6 MB** / windows-x64 **12.5 MB**。
+    **这两次数是哪种精度要写清**：这一次我是从 **GitHub 的 HTML 页面**读的（run 页脚那个 Artifacts 区块），
+    页面给人看的是**取整到 0.1 MB** 的数，不是精确字节 —— 精确字节要有 token 才能拿（产物 zip 未认证回 401）。
+    为什么这次走 HTML 而不是 API：本机上 `node` 的 `fetch` 到 `api.github.com` 连着几次 `TypeError: fetch failed`
+    /`ECONNRESET`（同一时刻 `git push` 是通的，所以不是断网，是那条 HTTPS 路径的问题），
+    而 HTML 页不吃未认证 API 那 60 次/小时的配额 —— 这正是 G28 记过的"读不到日志不等于读不到结论"的另一条通道。
+    **仍要用户亲眼做的两件事**：① 打开那条草稿 Release 数一眼**六个资产**是否都在（草稿对未认证请求是不可见的，
+    我只能读到"publish job 成功 + 三个 Actions 产物在案"，读不到 Release 本身）；② 把 Windows 那份装上跑一遍。
 
   - **解除条件**（三条都要真读到）：① 下一次 tag 的 run 里 **Android job 绿**；② 产物里出现一份 **`.apk`**（并且它的 `versionName` 是这一版的 0.0.41，不是 1.0）；
     ③ `publish` job 真建出带三平台产物 + SHA256SUMS 的**草稿 Release**。这三条没读到之前，§52 终报里这一格按 BLOCKED 写，不写"理论通过"。
