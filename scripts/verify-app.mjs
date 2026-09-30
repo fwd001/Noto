@@ -811,6 +811,95 @@ await step('侧栏那一行的名字是**渲染出来**看得见的（不是 inn
   return `「${name}」静止态可见宽 ${rest.labelWidth}px 未被裁；hover 后 ${hov.sizes.length} 颗动作按钮都可点、行宽仍 ${hov.rowWidth}px`;
 });
 
+await step('列表那一行的动作按钮：44pt、hover 才露面、点了真 repaint（A11Y-04 的最后一格）', async () => {
+  // 台账里挂"待查"的那一处：`.row-item__actions .btn` 原来是 32×32，低于 A11Y-04 自己定的 44pt 下限。
+  // 三件事一起断：尺寸够、静止态不抢行宽（G26 那个形状）、点一下屏幕上真 repaint。
+  // 最后那一断原本红了 —— 红出来的不是尺寸，是缺口 G32：`set_note_pinned` 的成功载荷被
+  // 双重封套（`{"Ok":{…}}`），前端 `applyNoteUpdate` 在 `note.id` 不是字符串那行静默 return，
+  // 于是库里固定状态**真的改了**、HTTP 200、屏幕上那格一动不动。所以这里判"有没有 repaint"，
+  // 不判"请求发没发出去"（发得出去也照样是死的）。
+  await page.setViewportSize({ width: 1240, height: 800 });
+  const row = page.locator('[data-testid^="note-row-"]').first();
+  if ((await row.count()) === 0) {
+    await page.locator('[data-testid="new-note"]').first().click();
+    await page.waitForSelector('[data-testid^="note-row-"]');
+  }
+  // 盯**这一行**而不是"点完之后的第一行"：固定会把那条排进置顶段，读第一行会读到别的笔记。
+  const rowTestId = await row.evaluate((el) => el.getAttribute('data-testid'));
+  const rest = await page.evaluate(
+    (testid) => {
+      const r = document.querySelector(`[data-testid="${testid}"]`);
+      const a = r.querySelector('.row-item__actions');
+      return {
+        opacity: getComputedStyle(a).opacity,
+        width: Math.round(r.getBoundingClientRect().width),
+        pinned: !!r.querySelector('.row-item__pin'),
+      };
+    },
+    rowTestId,
+  );
+  await row.hover();
+  const hov = await page.evaluate(
+    (testid) => {
+      const r = document.querySelector(`[data-testid="${testid}"]`);
+      const a = r.querySelector('.row-item__actions');
+      const btns = [...a.querySelectorAll('button')];
+      return {
+        opacity: getComputedStyle(a).opacity,
+        width: Math.round(r.getBoundingClientRect().width),
+        sizes: btns.map((b) => {
+          const q = b.getBoundingClientRect();
+          const c = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2);
+          return {
+            w: Math.round(q.width),
+            h: Math.round(q.height),
+            hit: !!c && (c === b || b.contains(c) || c.contains(b)),
+            label: b.getAttribute('aria-label'),
+          };
+        }),
+      };
+    },
+    rowTestId,
+  );
+  const fails = [];
+  if (rest.opacity !== '0') fails.push(`静止态动作簇的 opacity 是 ${rest.opacity}（应当不露面）`);
+  if (hov.opacity !== '1') fails.push(`hover 之后仍没露面（opacity ${hov.opacity}）`);
+  if (hov.width !== rest.width) fails.push(`hover 让行宽从 ${rest.width}px 变成 ${hov.width}px ⇒ 鼠标扫过列表字会跳`);
+  if (hov.sizes.length === 0) fails.push('这一行没有动作按钮 ⇒ 判据在空转');
+  hov.sizes.forEach((b, i) => {
+    if (b.w < 44 || b.h < 44) fails.push(`第 ${i + 1} 颗（${b.label}）${b.w}×${b.h}，小于 A11Y-04 的 44×44`);
+    if (!b.hit) fails.push(`第 ${i + 1} 颗（${b.label}）中心命中的不是它自己（点不着）`);
+  });
+
+  // 效果：键名与置顶标记**一起**翻面。用条件等待而不是睡固定时长 —— 这一支要走一次桥往返 +
+  // 列表重排，定长等待就是不稳定门禁（G28 那条同因）。
+  const pinBtn = page.locator(`[data-testid="${rowTestId}"] .row-item__actions button`).first();
+  const labelBefore = await pinBtn.getAttribute('aria-label');
+  await pinBtn.click();
+  const repainted = await page.evaluate(
+    async ([testid, prevLabel, prevPinned]) => {
+      const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+      for (let i = 0; i < 34; i++) {
+        const r = document.querySelector(`[data-testid="${testid}"]`);
+        if (!r) return { ok: false, why: '那一行从列表里消失了（重排或过滤）' };
+        const btn = r.querySelector('.row-item__actions button');
+        const label = btn ? btn.getAttribute('aria-label') : null;
+        const pinned = !!r.querySelector('.row-item__pin');
+        if (label !== prevLabel) return { ok: true, label, pinned, prevPinned };
+        await sleep(150);
+      }
+      return { ok: false, why: `5 秒内键名仍是「${prevLabel}」` };
+    },
+    [rowTestId, labelBefore, rest.pinned],
+  );
+  if (!repainted.ok) fails.push(`点了「${labelBefore}」之后屏幕上那格没动（${repainted.why}）⇒ 这颗是死的（G32）`);
+  else if (repainted.pinned === repainted.prevPinned) {
+    fails.push(`键名翻了但置顶标记没翻（标记仍是 ${repainted.pinned ? '有' : '无'}）⇒ 那格和那颗键说的不是一件事`);
+  }
+  if (fails.length > 0) throw new Error(fails.join('；'));
+  return `静止态不露面、hover 后 ${hov.sizes.length} 颗都是 ${hov.sizes[0].w}×${hov.sizes[0].h} 且可点，行宽仍 ${hov.width}px；点「${labelBefore}」→ 键名翻成「${repainted.label}」、置顶标记${repainted.prevPinned ? '取消' : '出现'}`;
+});
+
 await step('工具条的块型菜单：弹层要看得见、点得着，点完块型真的变（G29）', async () => {
   // 出货默认窗口是 1240 宽，工具条在那一档是横向可滚的（`overflow-x: auto`）。CSS 规定一个轴不是
   // visible 时另一个轴的 visible 也算 auto ⇒ 这条 53 px 高的横条把自己 absolute 弹出的菜单**整个裁掉**：

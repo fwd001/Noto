@@ -336,8 +336,10 @@ onBeforeUnmount(() => {
 }
 
 .row-item__actions .btn {
-  min-height: 32px;
-  min-width: 32px;
+  /* A11Y-04 的下限就是 44pt，这两颗此前是 32×32（台账里挂"待查"那条）。
+     不拿"视觉小"当理由：命不中就是误触，§6 明令禁止的那一类。 */
+  min-height: var(--touch-min);
+  min-width: var(--touch-min);
 }
 
 .row-item__confirm {

@@ -546,12 +546,12 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
             j(app.to_dto(
                 app.store()
                     .set_note_folder(&id(&c.id)?, &id(&c.folder_id)?)?,
-            ))
+            )?)
         }
         "set_note_pinned" => {
             let c: PinCmd =
                 serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
-            j(app.to_dto(app.store().set_note_pinned(&id(&c.id)?, c.pinned)?))
+            j(app.to_dto(app.store().set_note_pinned(&id(&c.id)?, c.pinned)?)?)
         }
         "create_folder" => {
             let c: CreateFolderCmd =
@@ -572,7 +572,7 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
             j(app.to_folder_dto(app.store().move_folder(
                 &id(&c.id)?,
                 c.parent_id.as_deref().map(id).transpose()?.as_ref(),
-            )?))
+            )?)?)
         }
         "delete_folder" => {
             let c: IdCmd =

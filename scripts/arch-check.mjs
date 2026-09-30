@@ -311,6 +311,46 @@ for (const arm of commandsSrc.matchAll(/j\(app\.([a-z_]+)\(/g)) {
 check('edge:command-wire-is-camelCase', 'ARCHITECTURE-MAP §5（命令面出参的键名是契约）', [...new Set(camelArmViolations)],
   `这些命令出参的类型没声明 camelCase，wire 上会是 snake_case 而界面按 camelCase 取值：\n    ${[...new Set(camelArmViolations)].join('\n    ')}`);
 
+// 命令面 `j(...)` 里的 Result **必须就地传播（`?`）**，不许把 `Result` 本身交给序列化。
+// 为什么单独立一条（缺口 G32 的根因）：`dispatch` 的臂写成 `j(app.to_dto(x))`（少了一个 `?`）时，
+// serde 对 `Result` 用的是**外部标签**，于是成功载荷变成 `{"Ok":{…}}` 而不是裸 DTO。这条边有多静默：
+// HTTP 仍是 200、库里真的写进去了、前端 `unwrap()` 照原样返回那个封套，`applyNoteUpdate` 发现
+// `note.id` 不是字符串就**直接 return** —— 用户看到的是"点下去屏幕上什么都没动"。
+// 上面那条 camelCase 规则对它是盲的：它看的是类型有没有声明 rename_all，而 `Result<NoteDto,…>`
+// 这种类型压根没声明位置（`to_dto` 返回的是 `Result`，噪声词表里又有 `Result`/`CmdError`）。
+// 所以这一条只看形状：**返回 Result 的调用，作为 `j()` 的唯一实参时必须带 `?`**。
+const taggedResultArms = [];
+for (const m of commandsSrc.matchAll(/\bj\(app\.([a-z_]+)\(/g)) {
+  const ret = typeReturnOf(m[1]);
+  if (!ret || !ret.trimStart().startsWith('Result')) continue;
+  // 从 `j(` 的左括号起做平衡扫描，拿到 `j()` 的完整实参文本。
+  const open = commandsSrc.indexOf('(', m.index);
+  let depth = 0;
+  let end = -1;
+  for (let i = open; i < commandsSrc.length; i++) {
+    const ch = commandsSrc[i];
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end < 0) continue;
+  const arg = commandsSrc.slice(open + 1, end).trim();
+  if (arg.endsWith('?')) continue;
+  // **必须点上命令名**：`to_dto` 是好几条臂共用的函数，只报函数名会把两处缺陷
+  // 去重成一处（"扫到 1 处"而实际坏 2 处 —— 那是门禁自己骗自己）。往回找这一臂的 `"xxx" =>`。
+  const head = commandsSrc.slice(0, m.index);
+  const names = [...head.matchAll(/"([a-z_]+)"\s*=>/g)];
+  const cmd = names.length ? names[names.length - 1][1] : `(第 ${commandsSrc.slice(0, m.index).split('\n').length} 行)`;
+  taggedResultArms.push(`${cmd}：j(app.${m[1]}(…)) → ${ret}（这个 Result 没被 ? 传播，wire 上是 {"Ok":…}）`);
+}
+check('edge:command-wire-propagates-result', 'ARCHITECTURE-MAP §5（成功载荷是裸 DTO，不是 Result 的外部标签）', [...new Set(taggedResultArms)],
+  `这些臂把 Result 直接交给 j() 序列化，成功载荷会变成 {"Ok":{…}}，前端 unwrap 之后当 DTO 用就全是 undefined：\n    ${[...new Set(taggedResultArms)].join('\n    ')}`);
+
 // 核心每一个 `CmdError::of("<code>")` 都要有 `error.<code>` 文案。
 // 为什么单独一条：`messageFor` 把 `cmd.<code>` 剥前缀后查 `error.<code>`，查不到就退成
 // 通用兜底；而前端那份对齐表（i18n.spec.ts 的 COMMAND_CODES）是手抄的 —— 手抄就会漏，
