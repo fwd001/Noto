@@ -133,6 +133,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | 在 UI 线程调用 argon2id / 全量校验 | 实测 ≈400 ms，会卡 | 性能断言 |
 | 让清单成为正确性来源（如"清单没有就当用户删了"） | 违反 R1/C2/C3 | 协议测试用例 |
 | 命令面直接把 store/core 的类型序列化给界面 | 存储层字段名会漏到 wire 上，而界面按契约名取值 → 静默 `undefined`（曾让设置页三行统计恒为 `—`） | `edge:command-wire-is-camelCase`（出参类型必须显式声明 camelCase）+ `edge:stats-dto-covers-ui-reads`（界面读的每个键都要发得出）+ 真 `invoke` 的键集合断言 |
+| 命令臂把**还没传播的 `Result`** 交给 `j()` 序列化（`j(app.to_dto(x))`，少一个 `?`） | serde 对 `Result` 用外部标签 ⇒ 成功载荷变成 `{"Ok":{…}}` 而不是裸 DTO。这一条边**每一头都看起来是好的**：HTTP 200、库里真写进去了、前端 `unwrap()` 原样返回那个封套，而 `applyNoteUpdate` 在 `note.id` 不是字符串那行静默 return —— 用户看到的是"点下去屏幕上没有任何反应"（缺口 **G32**：`set_note_pinned` / `set_note_folder` / `move_folder` 三条臂，四条界面判据全绿着进了 0.0.41~0.0.44 四个发布版本）。上一条 camelCase 门禁对它是**盲的**：`Result` 在它的噪声词表里被跳过 | `edge:command-wire-propagates-result`（静态：返回 `Result` 的调用作 `j()` 唯一实参时必须以 `?` 结尾，并按**命令名**点名是哪一臂）+ `notera-host/tests/dto_envelope.rs`（真 `dispatch` 的 JSON 里不许有顶层 `Ok`/`Err`，三条臂连值钉）+ `verify-app`「列表那一行的动作按钮…点了真 repaint」步（判效果：`aria-label` 与置顶标记必须一起翻面）；变异 M109/M110/M111/M113/M114 |
 | 跨 host↔store 边界传 `kind` 用裸字符串 | 同一实体有两套词汇（线上短标记 `n/f/a` ↔ 库里长标记 `note/…`），传错词汇编译能过、UPDATE 匹配 0 行、待办静默停在 inflight | 参数类型是 `EntityKind`（词汇翻译只能在适配器一处发生） |
 
 ---
@@ -188,7 +189,8 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 
 | 门禁 | 结果 | 怎么复现 |
 |---|---|---|
-| Rust 测试 | 487 通过 / 0 失败 / 0 ignored（58 个测试二进制） | `cargo test --workspace` |
+| Rust 测试 | **601 通过 / 0 失败 / 6 ignored**（76 个 `test result` 行；**2026-09-30 在 0.0.45 这批独占机器实测**。**本表下面那几行的数多数没跟着批更新** —— 逐批的账以 `CHANGELOG.md` 的门禁表为准，这一格滞后按 §45 记着） | `cargo test --workspace` |
+| 命令面成功载荷的形状（缺口 G32 的门） | **2/2** —— 真 `dispatch` 的 JSON 里不允许出现顶层 `Ok`/`Err`（`j(app.to_dto(x))` 少一个 `?` 就会序列化成 `{"Ok":{…}}`，前端 `applyNoteUpdate` 静默 return ⇒ 点「固定」界面一动不动而库里已经改了）；三条臂连值钉，另 14 条臂一起扫，空载荷用名单钉住 | `cargo test -p notera-host --test dto_envelope`；静态那半条是 `arch-check` 的 `edge:command-wire-propagates-result`；界面那半条在 `verify-app` 第 43 步 |
 | 前端 | 189 通过（20 文件）、`vue-tsc` 无错误、构建 213 KB→gzip 73 KB | `pnpm --dir apps/desktop test` / `run typecheck` / `run build` |
 | 架构适应度 | 26/26（含 §CI-CD 的版本单源）（含 §26 那条"每个交互控件都要有可读名字"的静态扫描；最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |
 | L5 崩溃注入 | 小库矩阵 9 点 + 大库压实 1 点，逐个杀死真子进程 + 重启收敛（`crash_recovery` 2 条 + `compaction_crash` 1 条，名单由 `CRASH_POINTS_NEED_LARGE_LIBRARY` 减法拼回全表） | `NOTERA_CRASH_AT=<点> cargo test -p notera-host --test crash_recovery --test compaction_crash` |
