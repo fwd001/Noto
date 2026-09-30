@@ -202,10 +202,15 @@ trait SystemTheme    { fn current(&self) -> Theme; fn changes(&self) -> Stream<T
 > 一律报 false —— 界面因此不会显示"这台有托盘"却找不到它（那是 §5 能力声明那一格反复防的假）。
 >
 > **还欠的**：返回手势、Material 涟漪/底部弹层、`adjustResize`、SAF、`ACTION_SEND` 收件、通知渠道分级
-> 都**没有实现**，也没有判据；出包那一腿**APK 已经出得来**（run #16 起 `出 APK = success`），
-> 但整条 Android job 还没绿 —— 红在本批新加的"产物结构门禁"上（#17 证明包本身是好的，
-> 判据写错了、已改，等 #18 复跑），所以缺口 **G25** 不撤（见 `PRODUCTION-READINESS` §7）；
+> 都**没有实现**，也没有判据。出包那一腿**已经整条绿了**（GitHub 上 `release.yml` 的 run **#18**（tag `v0.0.41`）
+> 与 **#19**（tag `v0.0.42`）五个 job 全 `completed success`，产物里 `android-apk` 34,870,611 B 在案 ——
+> #9~#17 那九次红的定位过程与两条临时读数通道见 CI-CD §环境与网络限制，通道已拆）；
+> 缺口 **G25 已撤**，**但"装到真机上能启动、基础功能能用"这一格仍未验**（§49 留给用户，见 PRODUCTION-READINESS §7）。
 > 跨零点的"今天"在没有真设备之前按 §40 记成未验，不写"理论通过"。
+>
+> **一条台账编号的账**：本文与几份台账在 2026-09-29 那批里写的 `run #16/#17/#18` 比 GitHub 的 per-workflow
+> 编号**大 1**（当时看的是 HTML 页面上的排序而非 API 的 `run_number`），2026-09-30 已按 Actions REST 的
+> `run_number` 逐条对齐；今后引用 run 号一律以 API 读数为准。
 
 ---
 

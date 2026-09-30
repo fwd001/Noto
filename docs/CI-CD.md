@@ -392,7 +392,10 @@ CI 必须运行的四类检查（映射到 job）：
 >   **未签名未公证**）—— 这两条已经在真 runner 上绿过多次（run #4 起逐步骤读数）。
 > - **`android`**（`ubuntu-22.04`：rustup 加四个 Android 三元组 + JDK 17 + **runner 自带的 SDK/NDK**，
 >   在 **`apps/mobile`** 目录里 `tauri android init` 与 `android build --apk --debug --target aarch64`）——
->   **这一条还是红的，缺口 G25**。debug keystore 签名，不需要 secrets；上架 Play 另说。
+>   **这一条已经绿了**（GitHub 的 run **#18**（tag `v0.0.41`）与 **#19**（tag `v0.0.42`）五个 job 全
+>   `completed success`，`android-apk` 产物 34,870,611 B 在案；缺口 **G25 已撤**）。
+>   debug keystore 签名，不需要 secrets；上架 Play 另说。
+>   **仍未验的是"装到真机上能启动 + 基础功能"**（§49，那一格归用户）。
 >   - **Android 这条腿有一条别处没有的性质**（G25 定位过程中照 tauri-cli 模板原文读出来的，`[实测]` 见
 >     `PRODUCTION-READINESS.md` 的 G25 条）：生成的 `gen/android/buildSrc/.../BuildTask.kt` 里写死了
 >     `executable = """<当初启动 CLI 的那串字的头一节>"""` 与 `args = listOf(<其余各节>, …)`，
@@ -402,7 +405,9 @@ CI 必须运行的四类检查（映射到 job）：
 >     工装上的两个后果：① `init`/`build` 都**不传 `--config`**（`src-tauri/tauri.conf.json` 就是默认位置，
 >     传进去会把一条相对路径写进生成的工程）；② `init` 之后由 `scripts/patch-android-buildtask.mjs`
 >     把那两节**钉成绝对路径**（`node` + `…/@tauri-apps/cli/tauri.js`），钉完在 CI 里复验那两行。
->     这条路能不能走通要等 run 的读数，没读到之前 G25 不撤。
+>     这条路**已经读到**：run #18/#19 里「生成 Android 工程」「钉那两行 + 复验」「出 APK」「结构校验」「收集产物」
+>     五步的**结论**都是 success（读的是 Actions 的 step conclusion，不是日志正文 —— 正文未认证读不到），
+>     APK 也在产物里。**这句的口径到"步过了"为止**，不写"日志里没有过 `Cannot find module`"。
 >   - **产物的结构校验（L6 那一格，三平台都有）**：
 >     - **Android** `scripts/check-apk-badging.mjs` 读 `aapt dump badging` **加 `aapt list`** 的原文，断
 >       包名 `app.notera`、`versionCode` 是正整数、`versionName` 等于这一版（**不是** tauri 在 Android 上退回的 `1.0`）、
