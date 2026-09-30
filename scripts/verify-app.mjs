@@ -1378,6 +1378,69 @@ await step('凭据库没接入的设备：口令那一格要在敲之前就说�
   return 'none ⇒ 那句话出现（含后果）；真 caps ⇒ 不出现，两条腿都验过';
 });
 
+await step('正文字号那根滑杆：改完编辑器里那行的实际字号必须跟着变（外观那一节的调用边）', async () => {
+  // 这一节此前**没有任何一条判据**（两条界面 lane 里搜 fontScale/theme/transparency 零命中），
+  // 于是 G39 那颗假开关躺在里面没人发现。判据打在"量到的字号"上而不是"值写没写进去"：
+  // 前者才是用户看到的那一格（`--editor-font-scale` 真被 CSS 乘进 font-size 才算通）。
+  const px = (s) => Number.parseFloat(String(s));
+  await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
+  const row = page.locator('[data-testid^="note-row-"]').first();
+  await row.waitFor({ timeout: 8000 });
+  await row.click();
+  await page.waitForSelector('[data-testid="editor-doc"] .nb-block', { timeout: 8000 });
+  const before = px(await page.locator('[data-testid="editor-doc"] .nb-block').first().evaluate((el) => getComputedStyle(el).fontSize));
+  if (!(before > 0)) throw new Error(`量不到正文字号（读到 ${before}）—— 判据的地基就是空的`);
+
+  await page.click('[data-testid="nav-settings"]', { timeout: 8000 });
+  const slider = page.locator('[data-testid="font-scale"]');
+  await slider.evaluate((el) => {
+    el.value = '1.6';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.waitForTimeout(250);
+  await page.click('[data-testid="nav-list"], [data-testid="banner-link"]', { timeout: 5000 }).catch(() => {});
+  await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
+  await page.locator('[data-testid^="note-row-"]').first().click();
+  await page.waitForSelector('[data-testid="editor-doc"] .nb-block', { timeout: 8000 });
+  const after = px(await page.locator('[data-testid="editor-doc"] .nb-block').first().evaluate((el) => getComputedStyle(el).fontSize));
+  // 还原，免得把深色/大字号带给后面的步骤
+  await page.click('[data-testid="nav-settings"]', { timeout: 8000 });
+  await page.locator('[data-testid="font-scale"]').evaluate((el) => {
+    el.value = '1';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.waitForTimeout(250);
+  if (!(after > before * 1.3)) {
+    throw new Error(`滑杆推到 1.6 而正文字号 ${before}px → ${after}px（比值 ${(after / before).toFixed(2)}）：那一格是死的`);
+  }
+  return `${before}px → ${after}px（×${(after / before).toFixed(2)}），已还原`;
+});
+
+await step('深色那颗：按下去要真的换色，刷新之后还在（FT-THEME-03 的浏览器侧）', async () => {
+  // 同上一格：这条判据同时钉住两件事 —— `setTheme` → `<html data-theme>` → token 变色这条边是通的，
+  // 以及 `writePrefs` 真的落库（刷新后还是深色 = 核心读回来的，不是内存态）。
+  await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
+  await page.click('[data-testid="nav-settings"]', { timeout: 8000 });
+  const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  const light = await bg();
+  await page.click('[data-testid="theme-dark"]', { timeout: 5000 });
+  await page.waitForTimeout(300);
+  const theme = await page.evaluate(() => document.documentElement.dataset.theme ?? '');
+  if (theme !== 'dark') throw new Error(`点了「深色」而 <html data-theme> 是「${theme}」`);
+  const dark = await bg();
+  if (dark === light) throw new Error(`data-theme 翻了但 body 背景色没变（两边都是 ${light}）—— token 没接上`);
+
+  await page.reload({ waitUntil: 'networkidle', timeout: 20000 });
+  const afterReload = await page.evaluate(() => document.documentElement.dataset.theme ?? '');
+  await page.click('[data-testid="nav-settings"]', { timeout: 8000 });
+  await page.click('[data-testid="theme-system"]', { timeout: 5000 });
+  await page.waitForTimeout(250);
+  if (afterReload !== 'dark') {
+    throw new Error(`刷新之后主题变回了「${afterReload}」：偏好没真落库（或启动时没应用）`);
+  }
+  return `浅色 ${light} → 深色 ${dark}，刷新后仍是 dark，已还原成跟随系统`;
+});
+
 await step('没有实现的效果就不许摆出开关：「窗口透明效果」这颗勾不该出现（缺口 G39）', async () => {
   // PLATFORM.md §观感 写的是"Mica/Acrylic 仅系统支持时启用 + **必须**提供关闭开关"。
   // 实测今天**特效本身没实现**（全仓搜 mica/acrylic/vibrancy/backdrop 零命中，`no-transparency`
