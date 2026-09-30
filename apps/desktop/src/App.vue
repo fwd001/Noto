@@ -89,7 +89,8 @@ function pinCurrent(): void {
 }
 
 function focusSearch(): void {
-  shell.goto('workspace');
+  // 搜索框在列表那一面：窄屏如果停在编辑器上，光 goto('workspace') 到不了输入框
+  shell.openList();
   const input = document.querySelector<HTMLInputElement>('[data-testid="search-input"]');
   input?.focus();
   input?.select();
@@ -249,7 +250,10 @@ onBeforeUnmount(() => {
     <BannerHost />
 
     <div class="app-body">
-      <SidebarPanel v-show="shell.view === 'workspace' || !shell.isCompact" />
+      <!-- 侧栏在窄屏是抽屉：以前"给不给看"只看 `view === 'workspace'`，于是停在设置页点「菜单」
+           会把遮罩打开、侧栏却还藏着 ⇒ 一块黑幕 + 没有第二条路回笔记列表（§6 的"无法返回"）。
+           抽屉既然被点名要开，就让它真的开。 -->
+      <SidebarPanel v-show="shell.view === 'workspace' || shell.drawerTarget === 'sidebar' || !shell.isCompact" />
       <button
         v-if="shell.drawerTarget !== null"
         type="button"

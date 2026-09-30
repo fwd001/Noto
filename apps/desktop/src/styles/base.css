@@ -445,6 +445,21 @@ button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* 窄窗口下先让副标题让位，品牌名不许被裁成 "No…"（它是这一栏唯一的"这是哪个应用"） */
+  flex: 0 0 auto;
+}
+
+.titlebar__tagline {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 560px) {
+  .titlebar__tagline {
+    display: none;
+  }
 }
 
 .titlebar__actions {

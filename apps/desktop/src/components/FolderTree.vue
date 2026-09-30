@@ -91,9 +91,9 @@ async function removeFolder(id: string): Promise<void> {
 
 function openFolder(id: string | null): void {
   void notes.setMode(id === null ? { kind: 'all' } : { kind: 'folder', folderId: id });
-  // 点文件夹也是"回库"的动作：停在设置页时它以前只改 mode，界面却一动不动
-  shell.goto('workspace');
-  if (shell.isCompact) shell.backToList();
+  // 点文件夹也是"回列表"的动作：停在设置页时它以前只改 mode，界面却一动不动；
+  // 窄屏停在编辑器那一面时同理（落点收在 shell.openList 一处）。
+  shell.openList();
 }
 
 function isActive(id: string | null): boolean {

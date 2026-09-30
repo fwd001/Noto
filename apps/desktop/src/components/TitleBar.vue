@@ -41,7 +41,7 @@ async function windowAction(action: 'minimize' | 'maximize' | 'close'): Promise<
         ☰
       </button>
       <span class="titlebar__brand" data-tauri-drag-region>{{ t('app.name') }}</span>
-      <span v-if="!overlay" class="text-sm text-muted" data-tauri-drag-region>{{ t('app.tagline') }}</span>
+      <span v-if="!overlay" class="titlebar__tagline text-sm text-muted" data-tauri-drag-region>{{ t('app.tagline') }}</span>
     </div>
     <div v-if="!overlay" class="titlebar__actions">
       <button type="button" class="titlebar__button" :aria-label="t('win.minimize')" :title="t('win.minimize')" @click="windowAction('minimize')">

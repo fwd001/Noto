@@ -44,16 +44,14 @@ async function commitNewFolder(): Promise<void> {
 
 function selectAll(): void {
   void notes.setMode({ kind: 'all' });
-  // 库内导航必须能把人从设置/冲突页带回列表：以前只改 mode，
-  // 停在设置页时点「全部笔记」看着像死的。
-  shell.goto('workspace');
-  shell.closeDrawer();
+  // 库内导航必须能把人从设置/冲突页、以及窄屏的编辑器那一面带回列表：
+  // 以前只改 mode，停在设置页时点「全部笔记」看着像死的。
+  shell.openList();
 }
 
 function selectTrash(): void {
   void notes.setMode({ kind: 'trash' });
-  shell.goto('workspace');
-  shell.closeDrawer();
+  shell.openList();
 }
 </script>
 

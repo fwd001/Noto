@@ -50,6 +50,16 @@ export const useShellStore = defineStore('shell', () => {
     mobilePane.value = 'list';
   }
 
+  /**
+   * 库内导航的统一落点：回工作区、收抽屉，并且窄屏要停在**列表那一面**。
+   * 以前各处只调 `goto('workspace')`，窄屏下如果上一次看的是编辑器，人就被留在编辑器里 ——
+   * 点「全部笔记」看着像没反应（§6 的"按钮失效"）。三处重复的写法收在这一个函数里。
+   */
+  function openList(): void {
+    goto('workspace');
+    backToList();
+  }
+
   function openDrawer(target: 'sidebar' | 'list'): void {
     drawerTarget.value = target;
   }
@@ -119,6 +129,7 @@ export const useShellStore = defineStore('shell', () => {
     toggleSidebar,
     openEditor,
     backToList,
+    openList,
     openDrawer,
     closeDrawer,
     back,

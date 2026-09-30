@@ -622,10 +622,12 @@
 | A11Y-02 | 块型文案键真的登记过 | `editor/labels.spec.ts` 逐种块型核对 `t(key) !== key` | `pnpm --dir apps/desktop test` | 未知块型返回原始类型名而不是假装"正文"。**已实现并通过**。存在的理由：`t()` 查不到键时**原样返回键名**，拼错的键一声不响 —— 这张表原来用模板串拼键时 7 种里 5 种显示成 `editor.blockCodeBlock` | L0 | P5 |
 | A11Y-03 | 读屏名字跟着块型走 | `editableDirective.spec.ts` 在 `mounted`/`updated` 上断言 | 同上 | 正文→「正文」、代码→「代码」、标题带层级；**切换块型而文本没变时名字也要更新**（`updated` 会因签名相同跳过覆写 DOM，名字必须在短路之前就写好 —— 这条测试第一次跑就抓到我这么写漏了） | L0 | P5 |
 | A11Y-04 | 键盘可达 + 触摸目标 ≥44pt | 真浏览器 | `verify-blackbox.mjs` 第 9 步 / `verify-app.mjs` 移动端视口步 | Esc 与 Tab 不失控、焦点始终在界面里；3 个移动入口全部 ≥44px。**已实现并通过**（沿用），对比度仍只有设计期 token 证据 | L4 | P5 |
+| A11Y-05 | 窄屏的库内导航要真的回到列表，抽屉不许只剩一块黑幕 | 真浏览器 390×844 + `stores/shell.spec.ts` | `verify-app.mjs`「窄屏从设置页点「菜单」…」步 | 点「菜单」⇒ 遮罩在 **且侧栏宽 > 0 且「全部笔记」看得见**；点它 ⇒ 遮罩收、列表有行。单测里**故意演一遍旧写法**（`goto('settings') → goto('workspace')` 之后断 `listVisible === false`），把"为什么要有 `openList()`"钉在测试里。缺口 G27：以前侧栏显示只看 `view === 'workspace'`、遮罩看 `drawerTarget`，两个条件不是一对 ⇒ 手机上点开的是空抽屉，且底部那一排里没有回列表的路 | L4,L0 | P5 |
+| A11Y-06 | 全应用没有文字被**静默裁掉**（两个视口 × 六个画面） | 真浏览器，量渲染后的 `scrollWidth` vs `clientWidth` | `verify-app.mjs`「全应用扫一遍…」步 | 任何自带文字的元素，需要宽度 > 可见宽度即红；只放行两种设计意图：`.visually-hidden`（给读屏器的 1px 裁剪）与"带 `text-overflow: ellipsis` 且文字确实长（>6 字）"。**这条覆盖 G26/G27 同一个形状**，不再修一处补一条断言。变异自证：把标题栏 CSS 还原成修之前的形状 ⇒ 红在三处（`SPAN.titlebar__brand「Notera」要 44px 得 36px`） | L4 | P5 |
 
 ## 纯黑盒 UAT（§23：只许界面动作）
 
-`scripts/verify-blackbox.mjs` —— 10 步，全脚本**没有一次** `/cmd/*` 调用、没有任何数据库读取；
+`scripts/verify-blackbox.mjs` —— 12 步，全脚本**没有一次** `/cmd/*` 调用、没有任何数据库读取；
 断言只读屏幕上可见的文字与几何。它和 `verify-app.mjs` 是两件事：后者用本地桥复核"库里到底有没有"，
 因此不算黑盒，但那条一致性黑盒给不了。两道都得跑。
 

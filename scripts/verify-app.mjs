@@ -840,6 +840,117 @@ await step('移动端视口可用（390×844）', async () => {
   return `${n} 个移动入口，全部 ≥44px`;
 });
 
+await step('窄屏从设置页点「菜单」要真的能回笔记列表（不许只剩一块黑幕）', async () => {
+  // 侧栏"给不给看"以前只看 `view === 'workspace'`：停在设置页时点「菜单」，
+  // 抽屉状态被打开、遮罩铺满屏幕，侧栏却还是 display:none ⇒ 一块点开的黑幕，
+  // 而窄屏底部那一排里没有"回列表"的入口 —— 手机上这条路就断了（§6 的"无法返回"）。
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(500);
+  await page.click('[data-testid="mobile-settings"]');
+  await page.waitForTimeout(600);
+  await page.click('[data-testid="mobile-sidebar"]');
+  await page.waitForTimeout(500);
+  const opened = await page.evaluate(() => {
+    const sb = document.querySelector('[data-testid="sidebar"]');
+    const r = sb.getBoundingClientRect();
+    return {
+      shown: getComputedStyle(sb).display !== 'none' && r.width > 0,
+      width: Math.round(r.width),
+      scrim: !!document.querySelector('[data-testid="scrim"]'),
+      navAll: (document.querySelector('[data-testid="nav-all"]')?.getBoundingClientRect().width ?? 0) > 0,
+    };
+  });
+  const fails = [];
+  if (!opened.scrim) fails.push('点「菜单」没有铺开遮罩 ⇒ 抽屉根本没开');
+  if (!opened.shown) fails.push(`遮罩铺开了但侧栏还是藏着的（宽 ${opened.width}px）⇒ 只剩一块黑幕`);
+  if (!opened.navAll) fails.push('抽屉里没有「全部笔记」⇒ 没有回列表的那一条路');
+  if (fails.length > 0) {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    throw new Error(fails.join('；'));
+  }
+  await page.click('[data-testid="nav-all"]');
+  await page.waitForTimeout(800);
+  const back = await page.evaluate(() => ({
+    scrim: !!document.querySelector('[data-testid="scrim"]'),
+    rows: document.querySelectorAll('[data-testid^="note-row-"]').length,
+  }));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForTimeout(400);
+  if (back.scrim) throw new Error('回到列表之后遮罩还铺着 ⇒ 挡住界面');
+  if (back.rows === 0) throw new Error('点了「全部笔记」却没回到列表（一条笔记行都没有）');
+  return `抽屉打开（侧栏 ${opened.width}px）→ 点「全部笔记」回到 ${back.rows} 行，遮罩已收`;
+});
+
+await step('全应用扫一遍：没有文字被**静默裁掉**（窄屏也算，G26 那一类）', async () => {
+  // 一条覆盖全应用的几何判据，而不是一处修一条断言 —— G26（侧栏名字只剩一个字符）与
+  // 标题栏品牌被裁成 "No…" 是同一个形状：**该占位的没占位，该显示的显示不全**，
+  // 而读 innerText 的判据对它完全失明。
+  // 放行两种**设计如此**的形状：① `.visually-hidden`（给读屏器的 1px 裁剪）；
+  // ② 带 `text-overflow: ellipsis` 且文字确实长（>6 字）—— 那是"名字太长"，不是"栏位被吃掉"。
+  const sweep = () =>
+    page.evaluate(() => {
+      const bad = [];
+      for (const el of document.querySelectorAll('*')) {
+        const cs = getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 1 || r.height < 1) continue;
+        const own = [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent.trim()).join('').trim();
+        if (own.length === 0) continue;
+        if (el.scrollWidth <= el.clientWidth + 1) continue;
+        if (el.classList.contains('visually-hidden')) continue;
+        if (cs.textOverflow === 'ellipsis' && own.length > 6) continue;
+        bad.push(`${el.tagName}.${String(el.className).slice(0, 30)}「${own.slice(0, 16)}」要 ${el.scrollWidth}px 得 ${el.clientWidth}px`);
+      }
+      return bad;
+    });
+  const views = [
+    ['工作区', '[data-testid="nav-all"]'],
+    ['编辑器', '[data-testid^="note-row-"]'],
+    ['设置页', '[data-testid="nav-settings"]'],
+  ];
+  const visit = async (sel) => {
+    const loc = page.locator(sel).first();
+    if ((await loc.count()) === 0 || !(await loc.isVisible())) return false;
+    await loc.click();
+    await page.waitForTimeout(700);
+    return true;
+  };
+  const found = [];
+  const take = async (label) => {
+    for (const b of await sweep()) found.push(`${label}：${b}`);
+  };
+  for (const w of [1440, 390]) {
+    await page.setViewportSize({ width: w, height: w === 1440 ? 900 : 844 });
+    await page.waitForTimeout(500);
+    if (w === 1440) {
+      for (const [label, sel] of views) {
+        if (!(await visit(sel))) {
+          found.push(`1440/${label}：入口 ${sel} 点不到，这一格没看东西`);
+          continue;
+        }
+        await take(`1440/${label}`);
+      }
+    } else {
+      // 窄屏没有侧栏（导航在 mobile-* 那一排），所以扫"当前视图 + 抽屉 + 抽屉里的设置"
+      await take('390/当前视图');
+      if (await visit('[data-testid="mobile-sidebar"]')) await take('390/侧栏抽屉');
+      if (await visit('[data-testid="nav-settings"]')) await take('390/设置页');
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForTimeout(400);
+  // 收尾必须把状态交还给后面的步骤：抽屉要是还开着，遮罩会把每一次点击都吃掉
+  const scrim = page.locator('[data-testid="scrim"]');
+  if ((await scrim.count()) > 0 && (await scrim.first().isVisible())) {
+    await scrim.first().click();
+    await page.waitForTimeout(400);
+  }
+  if (!(await visit('[data-testid="nav-all"]'))) throw new Error('收尾没能回到「全部笔记」，会把后面的步骤带脏');
+  if (found.length > 0) throw new Error(found.slice(0, 8).join('\n    '));
+  return '两个视口、六个画面，无静默裁剪';
+});
+
 await step('控制台零 error', async () => {
   const all = [...consoleErrors, ...pageErrors];
   if (all.length > 0) throw new Error(`${all.length} 条：\n    ${all.slice(0, 6).join('\n    ')}`);
