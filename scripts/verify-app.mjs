@@ -932,6 +932,91 @@ await step('工具条放不下时要有"这边还有东西"那句话，而且每
   return `可视 ${start.clientW}/内容 ${start.scrollW}，视野外 ${start.outLabels.join('、')} 都有渐隐提示且 Tab 可达；滚到底后提示换边（左藏 ${end.hiddenCount} 颗）`;
 });
 
+await step('全应用扫一遍"画得出来却点不着"的控制（G29 那一类的通判据）', async () => {
+  // 为什么要有这条：G29 是"按钮在、坐标在、可被祖先 overflow 裁掉 ⇒ 整块菜单是死的"，
+  // 一条一条补断言永远追不上形状。这里问一个通用问题：**任何被画出来的控制，那一下必须落在它自己身上**。
+  // 故意藏起来的（祖先 opacity:0 / visibility:hidden / display:none，比如 hover 才露面的动作键）不参与判定；
+  // **被裁掉的不豁免** —— 那正是缺陷本身。
+  const SEL = 'button, [role="button"], [role="menuitem"], [role="checkbox"], input:not([type="hidden"]), select, a[href]';
+  const sweep = (label) =>
+    page
+      .evaluate(
+        (sel) => {
+          const bad = [];
+          const painted = (el) => {
+            for (let n = el; n && n !== document.body; n = n.parentElement) {
+              const cs = getComputedStyle(n);
+              if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0) return false;
+            }
+            return true;
+          };
+          const nameOf = (el) =>
+            `${el.tagName.toLowerCase()}.${String(el.className || '').split(' ')[0]}「${(
+              el.getAttribute('aria-label') || el.title || el.textContent || ''
+            )
+              .trim()
+              .slice(0, 12)}」`;
+          for (const el of document.querySelectorAll(sel)) {
+            if (el.disabled || el.getAttribute('aria-disabled') === 'true') continue;
+            const r = el.getBoundingClientRect();
+            if (r.width < 1 || r.height < 1 || !painted(el)) continue;
+            const cx = r.left + r.width / 2;
+            const cy = r.top + r.height / 2;
+            if (cx < 0 || cy < 0 || cx >= innerWidth || cy >= innerHeight) continue;
+            const hit = document.elementFromPoint(cx, cy);
+            if (!hit || hit === el || el.contains(hit) || hit.contains(el)) continue;
+            bad.push(`${nameOf(el)}@${Math.round(r.left)},${Math.round(r.top)} 被 ${hit.tagName.toLowerCase()}.${String(hit.className).split(' ')[0]} 挡住`);
+          }
+          return bad;
+        },
+        SEL,
+      )
+      .then((rows) => rows.map((r) => `${label}：${r}`));
+
+  const found = [];
+  // 导航走 testid，不走可见文字：390 那一档底部那一排里没有「全部笔记」这颗（要先开抽屉），
+  // 按文字点会在窄屏超时 —— 那不是产品坏，是我挑错了定位方式。
+  // 缺口 G31 已知未修：文件夹多到一定数量时，最后几行落在常驻页脚那一块底下、滚也滚不出来。
+  // 这条判据不许把它算成通过：单独计数、打进读数，且只放行"形状完全对上"的那几处
+  // （`.tree__name` 被 `.side-foot` / `.nav-btn` 挡）——遮挡者或被挡的东西一变照样红，allowlist 不能长成垃圾桶。
+  const isG31 = (row) => /^[\d×]+[^：]*：button\.tree__name/.test(row) && /(side-foot|nav-btn)/.test(row);
+  const goList = async (narrow) => {
+    if (narrow) {
+      await page.click('[data-testid="mobile-sidebar"]');
+      await page.waitForTimeout(450);
+    }
+    await page.click('[data-testid="nav-all"]');
+    await page.waitForTimeout(450);
+  };
+  const goSettings = async (narrow) => {
+    await page.click(narrow ? '[data-testid="mobile-settings"]' : '[data-testid="nav-settings"]');
+    await page.waitForTimeout(450);
+  };
+  for (const w of [1240, 390]) {
+    await page.setViewportSize({ width: w, height: w === 1240 ? 800 : 844 });
+    await page.waitForTimeout(350);
+    await goList(w < 700);
+    found.push(...(await sweep(`${w} 列表`)));
+    await goSettings(w < 700);
+    found.push(...(await sweep(`${w} 设置页`)));
+  }
+  // 弹层展开的那一档单独扫（G29 就是这一档漏的）
+  await page.setViewportSize({ width: 1240, height: 800 });
+  await goList(false);
+  await page.locator('[data-testid="new-note"]').first().click();
+  await page.waitForSelector('.tb');
+  found.push(...(await sweep('1240 编辑器')));
+  await page.locator('.tb__menu-wrap button').first().click();
+  await page.waitForTimeout(250);
+  found.push(...(await sweep('1240 块型菜单展开')));
+  await page.keyboard.press('Escape');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const g31 = found.filter(isG31);
+  const rest = found.filter((r) => !isG31(r));
+  if (rest.length > 0) throw new Error(`${rest.length} 处：\n  ${rest.slice(0, 6).join('\n  ')}`);
+  return `两个视口 × 五种画面：除已知 G31（侧栏底部 ${g31.length} 行被常驻页脚挡住，另计）外，每一颗画得出来的控制都点得着`;
+});
+
 await step('桌面视口无横向溢出', async () => {
   const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
   if (m.sw > m.cw + 1) throw new Error(`scrollWidth ${m.sw} > clientWidth ${m.cw}`);
