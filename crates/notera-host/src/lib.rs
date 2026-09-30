@@ -1814,6 +1814,13 @@ impl App {
             return Err(CmdError::of("no_account", false));
         };
         if let Err(key) = self.negotiate(&remote).await {
+            // 凭据不对要走**自己那条码**：`sync_refused` 的文案是"暂时被拒绝…稍后重试"，
+            // 而口令错了等是等不好的（§2「同步失败时应有明确提示」在这一格的样子）。
+            // 两条都写成字面量：算出来的码会让"错误码必须登记文案"那条门禁看不见它。
+            if key == "sync.auth_failed" {
+                return Err(CmdError::of("sync_auth_failed", false)
+                    .with(serde_json::json!({ "reason": key })));
+            }
             return Err(
                 CmdError::of("sync_refused", false).with(serde_json::json!({ "reason": key }))
             );
@@ -1915,6 +1922,27 @@ impl App {
         (!secret.is_empty()).then_some((user, secret))
     }
 
+    /// negotiate 那几处"远端读"的错误词：**凭据问题不许说成"暂时读不到协议信息"**。
+    ///
+    /// 401/407（407 含"代理要求登录"）对用户是**可修**的 —— 改账号或代理口令；
+    /// 而 `sync.protocol_unreadable` 那句文案是"稍后重试"，于是用户会一遍遍点重试而永远不会好。
+    /// PROXY.md §8 那一行早就写的是 `! 代理需要登录`，这里把它真正接上（§45：文档==代码）。
+    /// 顺手落到界面读的那一格（`sync_view.message_key`）：`sync_once` 载荷里的 `reason`
+    /// 前端不显示，显示的是徽章那一行的 message_key。
+    fn remote_read_key(&self, e: notera_sync::RemoteError) -> &'static str {
+        match e {
+            notera_sync::RemoteError::Auth => {
+                self.set_sync(|v| {
+                    v.phase = Phase::Error;
+                    v.badge = Badge::Failed;
+                    v.message_key = Some("sync.auth_failed".into());
+                });
+                "sync.auth_failed"
+            }
+            _ => "sync.protocol_unreadable",
+        }
+    }
+
     /// SYNC-PROTOCOL §2 的启动期协商。返回 `Err(文案键)` 意思是**不许开始同步**，
     /// 调用方必须把它显示出来 —— "静默地不同步"和"静默地同步错"一样不可接受。
     ///
@@ -1936,7 +1964,7 @@ impl App {
         let observed = remote
             .fetch_protocol()
             .await
-            .map_err(|_| "sync.protocol_unreadable")?;
+            .map_err(|e| self.remote_read_key(e))?;
         let mine = self
             .default_folder_id()
             .map_err(|_| "sync.no_default_folder")?;
@@ -1992,7 +2020,7 @@ impl App {
                 if remote
                     .root_looks_used()
                     .await
-                    .map_err(|_| "sync.protocol_unreadable")?
+                    .map_err(|e| self.remote_read_key(e))?
                 {
                     self.set_sync(|v| {
                         v.phase = Phase::Error;
@@ -2016,7 +2044,7 @@ impl App {
                 let created = remote
                     .provision_protocol(&doc)
                     .await
-                    .map_err(|_| "sync.protocol_unreadable")?;
+                    .map_err(|e| self.remote_read_key(e))?;
                 state.root_id = Some(if created {
                     mine.as_str().to_string()
                 } else {
@@ -2024,7 +2052,7 @@ impl App {
                     let other = remote
                         .fetch_protocol()
                         .await
-                        .map_err(|_| "sync.protocol_unreadable")?
+                        .map_err(|e| self.remote_read_key(e))?
                         .ok_or("sync.protocol_mismatch")?;
                     other
                         .get("root_id")

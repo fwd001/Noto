@@ -267,21 +267,30 @@ async fn serve(client: TcpStream, counters: Arc<Counters>, creds: Required) {
 
     // 回传：读源站响应头，按 Content-Length（或读到 EOF，因为请求里写了 close）取 body，
     // 再用本代理自己的 Connection: close 写给客户端。
-    let Some(rsp) = read_response(&mut upstream).await else {
+    //
+    // **HEAD 必须单独走这一档**（第一版就是没做这件事，症状出现在另一条不相干的判据上）：
+    // HEAD 的响应头里带着 `Content-Length`（"GET 会给多少字节"），而**没有 body**。按长度去
+    // `read_exact` 必然读到 EOF ⇒ 本代理一个字节都没回，客户端看到的是"连接被提前关闭"。
+    // 所以：body 一律为空，而源站给的那个 `Content-Length` 原样转出去（改写它等于伪造尺寸）。
+    let is_head = req.method == "HEAD";
+    let Some(rsp) = read_response(&mut upstream, is_head).await else {
         return;
     };
     let mut out_headers: Vec<(String, String)> = rsp
         .headers
         .iter()
         .filter(|(k, _)| {
-            !matches!(
-                k.as_str(),
-                "connection" | "content-length" | "transfer-encoding"
-            )
+            let hop_by_hop = matches!(k.as_str(), "connection" | "transfer-encoding");
+            // 非 HEAD 时 `content-length` 由本代理按真实 body 重新给；HEAD 时**原样保留源站那一个**
+            // （它说的是"GET 会给多少字节"，而这正是客户端要知道的）。
+            let rewritten = !is_head && k == "content-length";
+            !(hop_by_hop || rewritten)
         })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    out_headers.push(("content-length".to_string(), rsp.body.len().to_string()));
+    if !is_head {
+        out_headers.push(("content-length".to_string(), rsp.body.len().to_string()));
+    }
     out_headers.push(("connection".to_string(), "close".to_string()));
     counters
         .bytes
@@ -292,7 +301,7 @@ async fn serve(client: TcpStream, counters: Arc<Counters>, creds: Required) {
         rsp.status,
         &out_headers,
         &rsp.body,
-        false,
+        is_head,
     )
     .await;
 }
@@ -404,7 +413,8 @@ struct Response {
 
 /// 读源站的响应：状态行 + 头部，然后**有 `Content-Length` 就按长度读**，没有就读到 EOF
 /// （本代理在请求里写了 `Connection: close`，所以"读到 EOF"不会挂住）。
-async fn read_response(sock: &mut TcpStream) -> Option<Response> {
+/// `head_only` 时**不读 body**（HEAD 按协议没有 body，而它的 `Content-Length` 是"GET 会给多少"）。
+async fn read_response(sock: &mut TcpStream, head_only: bool) -> Option<Response> {
     let mut buf = BufReader::new(sock);
     let mut line = String::new();
     if buf.read_line(&mut line).await.ok()? == 0 {
@@ -432,6 +442,8 @@ async fn read_response(sock: &mut TcpStream) -> Option<Response> {
         .find(|(k, _)| k == "content-length")
         .and_then(|(_, v)| v.trim().parse::<usize>().ok())
     {
+        // HEAD：按协议没有 body，一个字节都不读（读了就永远等不到那 Content-Length 个字节）。
+        _ if head_only => Vec::new(),
         Some(len) => {
             let mut b = vec![0u8; len];
             if buf.read_exact(&mut b).await.is_err() {

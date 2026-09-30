@@ -264,6 +264,8 @@ const MESSAGES: Record<MessageKey, string> = {
   'error.bad_action': '没看懂这个选择。冲突仍留在收件箱里，双方内容都没有被覆盖。',
   'error.conflict_payload_missing': '这张卡片上"服务器那一版"的正文还没取回来，所以这一次没有替你决定。冲突仍留在收件箱里，两台的内容都没有被改动，下一轮会自动重试。',
   'error.sync_refused': '同步被暂时拒绝：本地数据处于需要保护的状态，这一轮没有做任何改动。',
+  'error.sync_auth_failed':
+    '登录被拒绝：服务器或代理不认这组凭据（WebDAV 的账号/应用密码，或代理的用户名/口令）。这一轮没有改动任何东西；请在设置里核对凭据后再点「立即同步」。',
   'error.sync_busy': '上一轮同步还没结束，这次不用重复点，它会自动继续。',
   'error.unknown_account': '设置里指向的服务器账户在本机没有记录。请在设置里重新保存一次服务器信息。',
   'error.proxy_unreachable': '代理不可达，请检查设置里的代理参数。',
@@ -299,6 +301,8 @@ const MESSAGES: Record<MessageKey, string> = {
   'sync.root_mismatch': '这个服务器上已经是另一个 Notera 库了，已停止同步以免把两个库混在一起。请改用该库原本的路径。',
   'sync.foreign_root': '这个目录里已有别的数据，但不是本库的目录，已停止同步。请换一个根路径。',
   'sync.protocol_unreadable': '暂时读不到服务器上的协议信息，这一轮不写入。请稍后重试。',
+  'sync.auth_failed':
+    '服务器或代理不认这组凭据（WebDAV 的账号/应用密码，或代理的用户名/口令）。这一轮没有改动任何东西，待办也没丢；在设置里改对凭据后点「立即同步」就能继续。',
   'slash.menu': '块类型命令面板',
   'slash.paragraph': '正文',
   'slash.paragraphHint': '普通段落，回车换行',

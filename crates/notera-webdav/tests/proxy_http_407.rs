@@ -218,3 +218,49 @@ async fn the_same_request_goes_through_once_the_proxy_stops_demanding_a_password
     open.shutdown().await;
     srv.stop().await;
 }
+
+/// HEAD 那一档：代理必须把源站声明的 `Content-Length` 原样转出去，而**不许去读一个不存在的 body**。
+///
+/// 这条是被真实事故逼出来的，不是补形状：账户侧的 `root_looks_used()` 用的就是 HEAD，
+/// 工装第一版按 `Content-Length` 去 `read_exact` ⇒ 永远读不到那么多字节 ⇒ 代理一个字节都没回，
+/// 而红出来的却是一条跟 HEAD 毫无关系的错误词（`sync.protocol_unreadable`）。
+/// 判据分三格，少一格都可能被别的兜住：状态要 200、body 必须是空的、
+/// 而声明的字节数必须等于真实尺寸（把它改写成 0 也是一种伪造）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_head_trip_keeps_the_declared_length_and_carries_no_body() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let proxy = HttpForwardProxy::start().await.expect("不要口令的代理");
+    let path = "/.notes/head-probe.txt";
+    let url = format!("http://{}{path}", srv.addr());
+    let payload = b"twenty-four-bytes-head!!";
+
+    let wrote = put(&client(&http_profile(proxy.port(), None)), &url, payload)
+        .await
+        .unwrap_or_else(|e| panic!("前置：PUT 要先成功：{e}"));
+    assert!((200..300).contains(&wrote), "前置 PUT 被拒：{wrote}");
+
+    let http = client(&http_profile(proxy.port(), None));
+    let resp = http
+        .send(RequestSpec::new(HttpMethod::Head, &url))
+        .await
+        .unwrap_or_else(|e| panic!("HEAD 经过转发代理失败了：{e}"));
+    assert_eq!(resp.status, 200, "HEAD 应当是 200");
+    assert!(
+        resp.body.is_empty(),
+        "HEAD 不该带 body，而这里带了 {} 字节",
+        resp.body.len()
+    );
+    let declared = payload.len().to_string();
+    assert_eq!(
+        resp.header("content-length"),
+        Some(declared.as_str()),
+        "HEAD 声明的尺寸被改写了 —— 客户端就靠这个数判断'有没有这份东西'，改写等于伪造"
+    );
+    assert_eq!(
+        origin_hits(&srv, path),
+        2,
+        "源站应当正好收到那一条 PUT 与这条 HEAD"
+    );
+    proxy.shutdown().await;
+    srv.stop().await;
+}

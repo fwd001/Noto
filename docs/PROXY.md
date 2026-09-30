@@ -150,7 +150,7 @@ round         20 s      一轮同步预算，超时则本轮收敛为部分完�
 | 故障 | 出口行为 | 本地影响 | 用户可见 |
 |---|---|---|---|
 | 代理不可达 | `Connect` 分类，退避 | **无**（照常读写） | `! 同步失败` |
-| 代理认证失败(407) | 停轮，outbox `blocked` | 无 | `! 代理需要登录` |
+| 代理认证失败(407) | 停轮、这一轮不写入：`map_status(407) → RemoteError::Auth →` 错误码 `sync_auth_failed`；待办留在 outbox（`Pending`/`Failed` 两态，**没有** "blocked" 这个状态），改对凭据后重试即可 | **无**（照常读写） | `! 服务器或代理不认这组凭据…`（文案键 `sync.auth_failed` 与 `error.sync_auth_failed`）。**0.0.46 之前这一格是假的**：`negotiate` 把所有远端错误折成 `sync.protocol_unreadable`（"暂时读不到…请稍后重试"），凭据问题被说成"等一会儿" —— 缺口 G33，现在由 `notera-host/tests/proxy_account_407.rs` 两条门禁钉住 |
 | 代理中途挂 | 请求超时 → 重试 | 无 | `↻ 正在同步`→`!` |
 | DNS 失败 | `Dns` 分类（与 `Connect` 区分） | 无 | `! 无法解析服务器地址` |
 | TLS 校验失败 | `Tls` 分类，**不降级重试** | 无 | `! 证书不受信任` + 指向 §6 配置 |

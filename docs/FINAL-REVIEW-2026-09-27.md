@@ -810,3 +810,46 @@ workspace **605 通过 / 0 失败 / 6 ignored**（77 个 result 行、`CARGO_RC=
 
 **§28 那张表的本批逐行数**（13 行 = 原句 12 条 + 保证句）：**9 已覆盖 / 3 部分（错误密码、取消、重试）/ 1 未覆盖（真 TLS 握手失败）**。
 之前那两版写的 9/2/3 与 10/2/2 加起来都是 14 —— 抄上一版抄出来的，没逐行数；这次把判据改成"把表读一遍"。
+
+## 十五、同日再追记（2026-09-30 傍晚晚些，§28「错误密码」补完 App 侧，并量出真缺陷 G33；版本 0.0.45 → 0.0.46）
+
+上一节末尾写的那"半条"补上了：`notera-host/tests/proxy_account_407.rs` 两条门禁 —— 主腿证"设置页输入的代理口令，
+这一轮同步**真的**用它经过了那台要求认证的代理"（`forwarded≥1`、`auth_rejects==0`、源站上有这条笔记的记录、待办归零），
+失败腿证"口令错了要按凭据问题说、按可重试处理，而且不许伤到本机"。
+
+**这批的读数是红的先来的**：我先把**正确口令**那一腿写成测试，它红了 —— `sync_refused` + `reason=sync.protocol_unreadable`，
+而代理那边 `forwarded=4 / auth_rejects=0`。两层根因，顺序也是反的：
+
+1. **第一层是我的工装**：`HttpForwardProxy` 按 `Content-Length` 去 `read_exact`，而 **HEAD 有长度、没有 body** ⇒ 每条 HEAD
+   都读到 EOF、代理一个字节都不回。产品侧第一个撞上的是 `root_looks_used()`。**症状落在一条跟 HEAD 毫无关系的判据上**，
+   这种"报错的格子不是坏的那一格"我已经踩过不止一次，所以这次给工装补了第⑤条门禁（状态 200 + body 空 +
+   声明尺寸等于真实字节），并用 **M122**（回退成按长度硬读）验它真的会红 —— 消息正是当初那个症状。
+2. **第二层才是产品的缺陷（G33，§2/§6 级）**：`App::negotiate()` 四处远端读全部 `.map_err(|_| "sync.protocol_unreadable")`，
+   把错误种类丢干净。`map_status(407) → RemoteError::Auth` 那条分类一直在做，只是没人读它。于是**凭据错了 = "暂时读不到
+   服务器上的协议信息，请稍后重试"** —— 用户会一直点重试，而这件事只有改对口令才会好。PROXY.md §8 那行本来就写着
+   407 要显示"代理需要登录"，**这句话从来没有代码实现过**；同一行还写了一个不存在的待办状态 `blocked`。
+
+改的是：一处入口的 `remote_read_key()`（`Auth` ⇒ `sync.auth_failed` 并**同时落** `sync_view.message_key` —— 只改 `sync_once`
+载荷里的 `reason` 等于什么都没改，前端不显示它）；`sync_once` 给凭据问题**自己那条码** `sync_auth_failed`（两条码都写成
+字面量，否则 arch-check 那条"错误码必须登记文案"的门禁看不见算出来的码）；前端补 `sync.auth_failed` 与
+`error.sync_auth_failed` 两格文案；PROXY.md §8 按真实词汇改写。
+
+**三条变异，两条按实记**：**M121**（关掉新的 `Auth` 分支）⇒ 失败腿红在"凭据问题被报成了别的东西（sync_refused）"；
+**M122** ⇒ 只有 HEAD 那条红；**M123**（`net_proxy` 解析到凭据却不让它上 Wire）⇒ App 侧**两条同时红**，而 in-crate 的
+`proxy_credentials_resolve_from_the_system_store` **实测照样绿** —— 它只走到返回值，那一刀在返回值之后。
+这是"要验调用边，不只验被调方的绿"的第二次实测（第一次是 M118）。
+
+**还有一条门禁拦了我自己**：第一版我在这两条里写了 `dump.contains("blk000001") || dump.contains(".json")` ——
+arch-check 的「不许有没写理由的或断言」当场红给我看（第二项恒真）。换成"必须有这条笔记 id 的记录"，
+并在重试**之前**先断"被拒那一轮服务器上还没有它"（不然"重试之后两条都在"就分不出是之前推上去的还是重试推上去的）。
+
+读数：`proxy_account_407` **2/2**、`proxy_http_407` **5/5**、`proxy_socks5` 4/4、`proxy_routing` 3/3、`notera-net` 13/13、
+全量 **612 通过 / 0 失败 / 6 ignored（79 个 result 行，`CARGO_RC=0`）**、
+`clippy -p notera-host -p notera-test-webdav -p notera-webdav -p notera-net --all-targets -- -D warnings` `CLIPPY_EXIT=0` 且 0 条 error/warning、
+`cargo fmt --all --check` `FMTCHK=0`、arch-check **31/31**、check-versions 一致、前端 **219 通过（23 文件）**、`vue-tsc` 0 错。
+**这一批改了产品代码**（`notera-host` 的映射 + 前端两格文案），所以按用户 2026-09-27 的决定第 3 条升到 **0.0.46**，
+并要打 tag 走一次三平台出包。
+
+**§28 那张表的逐行数（13 行）**：**10 已覆盖 / 2 部分（取消、重试）/ 1 未覆盖（真 TLS 握手失败）**。
+§52 终报的结论**没变**：仍是 NOT READY —— 卡的不是这一格，是 G7/G8（两台真设备 + 用户自己的 WebDAV）、
+G9 的安装动作、G21/G31/D8 那几个待拍板的口径，以及"由用户装一次"那一格。
