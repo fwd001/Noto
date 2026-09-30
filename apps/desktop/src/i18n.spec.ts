@@ -47,6 +47,9 @@ const COMMAND_CODES = [
   'no_default_folder',
   'bad_action',
   'sync_refused',
+  // 0.0.46（缺口 G33）：凭据错了原先被折进 sync_refused + "暂时读不到协议信息，请稍后重试"，
+  // 于是它有自己的码之后必须也有自己的文案 —— 用户下一步该做的是改口令，不是等。
+  'sync_auth_failed',
   'sync_busy',
   'unknown_account',
   // 「重试取回 / 重新上传本机这份」这两条用户动作的失败面（核心侧 App::retry_attachment /

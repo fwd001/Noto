@@ -846,7 +846,9 @@ arch-check 的「不许有没写理由的或断言」当场红给我看（第二
 读数：`proxy_account_407` **2/2**、`proxy_http_407` **5/5**、`proxy_socks5` 4/4、`proxy_routing` 3/3、`notera-net` 13/13、
 全量 **612 通过 / 0 失败 / 6 ignored（79 个 result 行，`CARGO_RC=0`）**、
 `clippy -p notera-host -p notera-test-webdav -p notera-webdav -p notera-net --all-targets -- -D warnings` `CLIPPY_EXIT=0` 且 0 条 error/warning、
-`cargo fmt --all --check` `FMTCHK=0`、arch-check **31/31**、check-versions 一致、前端 **219 通过（23 文件）**、`vue-tsc` 0 错。
+`cargo fmt --all --check` `FMTCHK=0`、arch-check **31/31**、check-versions 一致、前端 **220 通过（23 文件）**、`vue-tsc` 0 错、`eslint .` 0 错
+（220 = 219 + 1：新码 `sync_auth_failed` 进了 `i18n.spec.ts` 那份手抄的 `COMMAND_CODES` —— 那张表管的是
+"这条错误真拿得到文案"，只在 Rust 侧发码而忘了文案，那条 `it.each` 就会红在通用兜底上）。
 **这一批改了产品代码**（`notera-host` 的映射 + 前端两格文案），所以按用户 2026-09-27 的决定第 3 条升到 **0.0.46**，
 并要打 tag 走一次三平台出包。
 
