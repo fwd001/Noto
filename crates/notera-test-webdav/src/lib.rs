@@ -31,11 +31,13 @@ mod handler;
 mod http;
 mod inject;
 mod server;
+mod socks5;
 mod state;
 mod xml;
 
 pub use inject::{Injection, LoggedRequest};
 pub use server::{Backend, Started, TestServer};
+pub use socks5::Socks5Forwarder;
 
 /// 测试里唯一允许的服务端断言手段的返回类型别名（便于调用方写文档）。
 pub use state::DumpEntry;

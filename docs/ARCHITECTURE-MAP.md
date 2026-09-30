@@ -189,7 +189,8 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 
 | 门禁 | 结果 | 怎么复现 |
 |---|---|---|
-| Rust 测试 | **601 通过 / 0 失败 / 6 ignored**（76 个 `test result` 行；**2026-09-30 在 0.0.45 这批独占机器实测**。**本表下面那几行的数多数没跟着批更新** —— 逐批的账以 `CHANGELOG.md` 的门禁表为准，这一格滞后按 §45 记着） | `cargo test --workspace` |
+| Rust 测试 | **605 通过 / 0 失败 / 6 ignored**（77 个 `test result` 行；**2026-09-30 在 0.0.45 这批独占机器实测**。**本表下面那几行的数多数没跟着批更新** —— 逐批的账以 `CHANGELOG.md` 的门禁表为准，这一格滞后按 §45 记着） | `cargo test --workspace` |
+| SOCKS5 那条代理通路（§28 的 SOCKS5 格，2026-09-30 补） | **4/4** —— 工装 `notera_test_webdav::Socks5Forwarder` 是真握手真转发（RFC 1928 + 按需 RFC 1929），代理与源站分开。判据的牙齿是**转发器自己的计数**：SOCKS5 是裸 TCP 隧道，源站分不出经代理与直连，所以只有 `tunnels()` 能证"真的走了代理"。四条：隧道真送出 PUT（含源站数到那一条 + 快照里有那份字节）/ 口令不对必须在握手阶段断且一个字节都不许到源站 / `socks5` 与 `socks5h` 各自真能送包 / 握手成而目标连不上必须失败。变异 M115（产品静默忽略 Socks5）⇒ 前两条红；M116（一律放过口令）⇒ 第二条红；M117（两档 scheme 合成一档）⇒ 这里**抓不到**，抓到它的是 notera-net 的 `proxy_url_carries_credentials_and_scheme`（钝处写在测试注释与 TEST-PLAN 表里） | `cargo test -p notera-webdav --test proxy_socks5` |
 | 命令面成功载荷的形状（缺口 G32 的门） | **2/2** —— 真 `dispatch` 的 JSON 里不允许出现顶层 `Ok`/`Err`（`j(app.to_dto(x))` 少一个 `?` 就会序列化成 `{"Ok":{…}}`，前端 `applyNoteUpdate` 静默 return ⇒ 点「固定」界面一动不动而库里已经改了）；三条臂连值钉，另 14 条臂一起扫，空载荷用名单钉住 | `cargo test -p notera-host --test dto_envelope`；静态那半条是 `arch-check` 的 `edge:command-wire-propagates-result`；界面那半条在 `verify-app` 第 43 步 |
 | 前端 | 189 通过（20 文件）、`vue-tsc` 无错误、构建 213 KB→gzip 73 KB | `pnpm --dir apps/desktop test` / `run typecheck` / `run build` |
 | 架构适应度 | 26/26（含 §CI-CD 的版本单源）（含 §26 那条"每个交互控件都要有可读名字"的静态扫描；最后一条是"扫描台账"：任何源码门禁扫到 0 个文件即判失败 —— 此前有 8 条空转了很远，见 CHANGELOG） | `node scripts/arch-check.mjs` |

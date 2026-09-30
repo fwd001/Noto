@@ -217,8 +217,8 @@
 | --- | --- | --- |
 | direct | 已覆盖 | 全仓每一条同步测试都是直连；`proxy_routing.rs` 里另有"直连写入 → 换回直连读出"两条腿 |
 | HTTP proxy | **已覆盖（今天新增门禁）** | `an_http_proxy_route_is_the_only_way_through`：服务器挂"只接受经代理到达"的策略 ⇒ 配了 HTTP 代理必须成、直连必须 403，并且要读服务器自己的 `rejections_403_not_proxied` 计数。**判据是差分的** —— 这是唯一能证"真的用了代理"的形态。变异自证 M9：把 `configure()` 里那条 `b.proxy(p)` 换成 `no_proxy()` → 两条测试同时红（`配了 HTTP 代理却被服务器拒掉：403` / `指向死代理的请求居然成功了`） |
-| SOCKS5 | **未覆盖（BLOCKED）** | 只有配置解析与 `proxy_url` 构造的单测（含"明文 http 代理不许带凭据"那条）。端到端做不了的原因很具体：本工装的"代理"其实是**源站自己**扮的 —— 它认识 CONNECT 与绝对形式，但不认识 SOCKS 握手。解除条件：写一个会答 `05 00` 并连到**另一个**监听端的迷你 SOCKS5 应答器，代理与源站分开 |
-| 错误密码 | **未覆盖（BLOCKED）** | 需要一个会回 `407 Proxy-Authenticate` 的代理，工装没有。已覆盖的是最容易出错的那一半：口令不外泄（`proxy_credentials_never_leak_into_the_route_proof` + notera-net 的 `debug_never_leaks_the_password` / `userinfo_is_stripped_everywhere`） |
+| SOCKS5 | **已覆盖（2026-09-30 补上工装，`proxy_socks5.rs` 4 条）** | 解除条件里那件东西做出来了：`notera_test_webdav::Socks5Forwarder` —— 真 TCP、真 RFC 1928 握手（问候 / `05 00` / CONNECT / ATYP 1·3·4 / 回包），按需带 RFC 1929 用户名口令子协商，之后双向拷贝。**判据的形状与 HTTP 代理那条不同，这里写清为什么**：SOCKS5 是裸 TCP 隧道，源站看到的请求行与直连一模一样，所以 `require_proxy` 用不上；这里的牙齿是**转发器自己的计数**（只有走完握手的连接才记 `tunnels`）。四条：① `a_socks5_tunnel_really_carries_the_request`（PUT 成 + `tunnels≥1` + `bytes>0` + 代理被要求去的目标就是源站 + 源站数到那一条 + 快照里有那份字节）② `socks5_password_mismatch_stops_before_the_origin_sees_anything`（口令对必须成、口令错必须失败且 `auth_rejects≥1`、隧道数不涨、**源站一条都没收到**）③ `socks5h_lets_the_proxy_resolve_the_host_while_socks5_does_not`（两种 scheme 各自真把包送出去，代理记到的目标形式一条是名字一条是 IP）④ `a_socks5_proxy_that_cannot_reach_the_origin_fails_loudly`（握手成了而目标连不上 ⇒ 失败且不算隧道）。<br>变异自证三条：**M115** 在 `notera-net/client.rs` 里把 SOCKS5 那一档静默忽略 ⇒ ①②③同时红，①的消息正是"请求成功而 SOCKS5 隧道数是 0 ⇒ 产品压根没把请求交给代理"（④那条**不会**红 —— 直连一个已停的源站同样失败，这条腿分不出走没走代理，按实记在这儿）；**M116** 让转发器一律放过口令 ⇒ ②红在"口令不对居然成功了：201"；**M117** 把 `proxy_url()` 两档合成一档（永远 `socks5h`）⇒ 我新加的 ③ **照样绿**，被抓到的是 notera-net 自己的 `proxy_url_carries_credentials_and_scheme`。③对那个布尔是**钝的**（两腿 URL 主机形式本来就不同，差可以来自 URL 而来自不了布尔），这条按实写在测试注释里，也不去伸手 `proxy_url()`（它 `pub(crate)` 是故意的，那串带凭据）<br> |
+| 错误密码 | **未覆盖（BLOCKED，但 SOCKS5 侧的等价物已有）** | 还缺的是**HTTP 代理回 `407 Proxy-Authenticate`** 那一格（需要一个会发 407 的代理，工装没有）。SOCKS5 侧的"口令不对"这次有了（上面第②条，含"一个字节都不许到源站"）。已覆盖的另外一半是最容易出错的：口令不外泄（`proxy_credentials_never_leak_into_the_route_proof` + notera-net 的 `debug_never_leaks_the_password` / `userinfo_is_stripped_everywhere`） |
 | 错误 proxy host | 已覆盖（端口形态） | `a_dead_proxy_fails_and_a_bypassed_host_still_works` 第一腿：指向没人监听的端口必须失败；成功就等于"配了代理等于没配" |
 | 代理 DNS | 已覆盖 | 同一测试 ①b 腿：`no-such-proxy-host.invalid` 必须失败（静默直连会被当场抓住） |
 | TLS 失败 | **未覆盖（BLOCKED）** | `TlsPolicy` 三种构造有单测（Strict / CaBundle 解析 / Pin 归一化），但**没有一次真 TLS 握手失败**：工装是明文 HTTP 服务器。与 PROXY.md U2/U3 同一条根因，解除条件同 B2（可访问的真实端点） |
@@ -229,9 +229,9 @@
 | 恢复 | 已覆盖 | 同一测试第四腿：撤掉死代理换回直连，同一份内容立刻可读（前一次失败不在出口层留脏状态）；跨进程恢复在 `reconnect.rs` |
 | **保证句「网络问题永远不会让本地数据不可用」** | 已覆盖（今天补齐关键一环） | FT-ATT-17（只有附件端点挂死时，正文与新笔记的同步照常完成）、`reconnect.rs`（六轮各坏一次，恢复后两台逐条一致、待办归零）、`crash_recovery.rs`（崩在提交点之后数据仍完整） |
 
-一句话账（按上表逐行数，13 行 = §28 原句 12 条 + 最后那句保证句）：**9 行已覆盖、2 行部分（取消、重试）、3 行未覆盖**（SOCKS5 端到端、407 错误密码、真 TLS 握手失败）。今天又补了两条：App 侧那条代理通路（`notera-host/tests/proxy_account.rs`：配置的代理 → `net_proxy()` → 出口客户端 → 真同步）与"撤掉代理必须失败"的差分腿 —— 审查指出这属于"实现齐全、单测全绿、没人调用"那个老形状，现在它有人叫了。
-四条缺口的根因是同一件事：**工装的"代理"由源站扮演，且没有 TLS**。一次解掉前三条要做的是把测试拓扑改成
-"客户端 → 真转发代理（HTTP，可选 407 / SOCKS5）→ 独立源站（可 TLS）" —— 那是**一个新的 harness 组件**，
+一句话账（按上表逐行数，13 行 = §28 原句 12 条 + 最后那句保证句）：**10 行已覆盖、2 行部分（取消、重试）、2 行未覆盖**（HTTP 代理的 407 错误密码、真 TLS 握手失败）。**2026-09-30 这一批把 SOCKS5 端到端那一格从"未覆盖"改成"已覆盖"**（4 条 + 三条变异，见上表），所以那句"四条缺口的根因是同一件事"现在只剩一条根因没解：**没有独立的转发代理与 TLS 源站** —— 这次的做法正是照那句解除条件补了一个真组件（`Socks5Forwarder`，代理与源站分开），而不又是几条用例。09-28 那批还补过两条：App 侧那条代理通路（`notera-host/tests/proxy_account.rs`：配置的代理 → `net_proxy()` → 出口客户端 → 真同步）与"撤掉代理必须失败"的差分腿 —— 审查指出那属于"实现齐全、单测全绿、没人调用"那个老形状，现在它有人叫了。
+剩下两条的根因照原样记：**工装的"代理"由源站扮演，且没有 TLS**。一次解掉它们要做的是把测试拓扑改成
+"客户端 → 真转发代理（HTTP，可选 407）→ 独立源站（可 TLS）" —— 那是**一个新的 harness 组件**，
 不是几条用例，故按 §40 记在这里而不是顺手做完。
 
 ### 富文本节点往返
