@@ -2921,6 +2921,7 @@ dependencies = [
 name = "notera-test-webdav"
 version = "0.0.45"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
  "notera-core",
  "notera-test-webdav",

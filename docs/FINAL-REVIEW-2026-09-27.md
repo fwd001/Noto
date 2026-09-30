@@ -775,3 +775,38 @@ workspace **605 通过 / 0 失败 / 6 ignored**（77 个 result 行、`CARGO_RC=
 `ci.yml` 步骤名里的基线跟着对齐（601/76 → 605/77）。
 **§28 剩下没解的两格**：HTTP 代理的 407 错误密码、真 TLS 握手失败 —— 同一根因（工装没有独立 TLS 源站），
 按 §40 记成 BLOCKED 并写清解除条件，不写"理论通过"。
+
+## 十四、同日再追记（2026-09-30 傍晚，§28「错误密码」那一格：代理侧从 BLOCKED 变成有门禁）
+
+上一节末尾写的"剩下没解的两格"里，**407 那一格本批往前推了一格**：工装补了 `notera_test_webdav::HttpForwardProxy`
+（真 TCP、真绝对形式解析 → 真 origin-form 转发、可选按 RFC 7235 回 `407 Proxy-Authenticate`；也实现 `CONNECT` 隧道），
+门禁 4 条 `cargo test -p notera-webdav --test proxy_http_407` = **4/4**（连跑三轮都 4/4）。**产品代码一个字没动**，
+所以不升号（用户 2026-09-27 的决定第 3 条）；新增依赖只有 workspace 里已有的 `base64`。
+
+**这批最值钱的一条读数是 M118**：我把 `notera-net/client.rs` 里交给 `reqwest::Proxy::all` 的 URL 摘掉 userinfo
+（= "配置里有口令、界面上填了、也存进钥匙串了，而出口那一路把它丢了"），结果 **只有新加的第①条红**
+（`配了正确的代理口令仍被拒：407`），而 notera-net 自己的 `proxy_url_carries_credentials_and_scheme` **实测照样绿** ——
+它断的是 `proxy_url()` 那个字符串，而这一刀落在它**之后的调用边上**。这就是本仓库那句"绿单测掩盖坏调用边"
+的一次实测：新门不是把已有判据再抄一遍，它守的地方原来没有人在守。
+
+**两条按实记下的钝处**（不粉饰成"三条变异都抓住了"）：
+- **M120**（代理写完 407 还把请求转出去）⇒ **只有差分那条红**。②③那两条读的是代理任务里的异步计数
+  （`forwarded()` / 源站 `request_log()`），而客户端早就拿到 407 返回了 —— 那是这条判据自己的时序边界，
+  不是"产品被抓住了"。差分腿（同一份客户端配置只换代理自己的策略）之所以必须存在，正是为了在这种情况下还有牙。
+- **`require_proxy` 与真转发代理不能同机使用**：真代理交给源站的是 origin-form，源站分不出经代理与直连
+  （与 SOCKS5 同一件事）。这一点写进了 `PROXY.md` §9 那段的边界说明，也解释了这两格为什么都改用"两边对照"。
+
+**这一格没写成"已覆盖"，写的是"部分"**：`AccountDraftCmd.proxyUsername/proxyPassword` → 系统凭据 → `net_proxy()`
+那条边有单测（`proxy_credentials_resolve_from_the_system_store`），但**"设置页输入的口令 → 这一轮真同步经 407 代理成/败"**
+还没有会红的门。这正是本项目踩过两次的那个形状（实现齐全、单测全绿、没人调用），下一批就补它。
+
+读数：`proxy_http_407` 4/4、`proxy_socks5` 4/4、`proxy_routing` 3/3、`notera-net` 13/13、
+全量 **609 通过 / 0 失败 / 6 ignored（78 个 result 行，`CARGO_RC=0`）**、
+`clippy -p notera-test-webdav -p notera-webdav -p notera-net --all-targets -- -D warnings` `CLIPPY_EXIT=0` 且 0 条 error/warning、
+`cargo fmt --all --check` `FMTCHK=0`、arch-check **31/31**、check-versions 一致。`ci.yml` 步骤名基线跟着对齐（605/77 → 609/78）。
+**还有一条自己踩的仪器坑，记在这儿因为它和 09-29 那次 awk 是同一类**：这批第一版逐行正则写成 `passed: N`，
+而 cargo 打的是 `N passed;` ⇒ 加出来 **0 个 result 行 / 0 通过**。那个 0 不是"没测试"，是判据坏了；
+从这批起读数一律**同时打印行数**，行数 0 直接当失败处理。
+
+**§28 那张表的本批逐行数**（13 行 = 原句 12 条 + 保证句）：**9 已覆盖 / 3 部分（错误密码、取消、重试）/ 1 未覆盖（真 TLS 握手失败）**。
+之前那两版写的 9/2/3 与 10/2/2 加起来都是 14 —— 抄上一版抄出来的，没逐行数；这次把判据改成"把表读一遍"。

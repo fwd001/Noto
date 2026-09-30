@@ -29,12 +29,14 @@
 mod control;
 mod handler;
 mod http;
+mod http_proxy;
 mod inject;
 mod server;
 mod socks5;
 mod state;
 mod xml;
 
+pub use http_proxy::HttpForwardProxy;
 pub use inject::{Injection, LoggedRequest};
 pub use server::{Backend, Started, TestServer};
 pub use socks5::Socks5Forwarder;

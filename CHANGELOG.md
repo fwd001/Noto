@@ -10,7 +10,7 @@
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test --workspace` | **605 通过 / 0 失败 / 6 ignored**（77 个 result 行，**2026-09-30 同日两批各独占机器跑一次**：601 → 605 = SOCKS5 那 4 条（`--test proxy_socks5`，见上面那条），599 → 601 = 缺口 G32 那两条 `--test dto_envelope`：一条用真 `dispatch` 扫 17 条臂的成功载荷形状 + 三条坏臂连值钉，一条反向哨兵断"读到的是真序列化输出"；那一批 2026-09-30 独占机器重跑，`CARGO_RC=0`、**76** 个 test result 行、clippy `CLIPPY_EXIT=0` 且 0 条 error/warning、fmt `FMTCHK=0`、arch-check 31/31、前端 219/23、`vue-tsc` 0 错；SOCKS5 这批在它之上再独占重跑一次，就是行首那个 **605 / 0 / 6 / 77 行**。**先记一条自己踩过的坑**：这一行的数最初是用 `awk -F'[ ;]'` 从 `test result` 行里加的，`passed` 加对了而 `failed`/`ignored` 全加成了 0 —— 分隔符同时取空格与 `;` 会在 `passed;` 后面切出空字段，字段号整体错位，于是"0 失败 / 0 ignored"是**仪器坏了不是实测**（真数是 0 失败 / **6** ignored）。改用一条真正则逐行取三个数并重算。**下面这段是 599 那一批的账**：598 → 599 = 日记的回收站边界那条（**M105 红过一次**：把 `daily_note` 的查询换成 `trash()` 之后四条 host 单测一起红）；597 → 598 = 日记那格"打完字不空格再按一次「今天」"那条判据（**M104 红过一次**：还原成"日期 + 空格"就红在两个 UUID 不一样）；595 → 597 = 日记第一批两条（纯函数 `pick_daily_note` 的取最近/跨日不硬凑 + 走真 `App::daily_note()` 的"同日重复回到同一篇、写过字不许动他的内容"）；**这两批的数都是 2026-09-29 深夜在 0.0.41 这棵树上独占机器重跑的**：`TEST_EXIT=0`、75 个 test result 行、clippy 0/0、fmt `FMTCHK=0`、arch-check 30/30、前端 216/22、`vue-tsc` 0 错；上一批 593 → 595 = G24 那两条两设备判据（SY-DEL-03），变异 M102/M103 各红过一次；592 → 593 = G22 修好之后那条两设备判据升进主干：`sync_once.rs::a_permanent_delete_reaches_a_device_that_had_nothing_pending`，变异 M99/M100 各红过一次；上一格（591 → 592 = G22 的引擎侧判据 `a_purged_remote_view_purges_a_clean_local_row`）记的那次变异当时是**假绿**：它断言的是引擎发了 `Tombstone{purged:true}`，而落库那侧把这个 bool 吞了 —— 0.0.39 把它改成断 `ApplyOp::Purge`）（15 个单元 + 44 个集成测试二进制 + 13 个 doc-test = 72 个 test result 行；2026-09-29 下午在 0.0.38 这棵树上**独占机器**重跑，此前那一次记数是在 0.0.28 那棵树（0.0.27 → 0.0.28 之间只动了 tauri 的打包配置，Rust 代码一个字没变，两棵树上都是 563/0/2），本日几批依次是 535 → 537 → 541 → 544 → 556 → 557 → 558 → 559 → 560 → 561 → 563 → 569 → 570 → 576 → 578 → 579 → 580 → 581 → **582**（+6 = XML-01 ~ XML-04 那六条"换 XML 解析库版本"的行为锚；+2 = CY-01 两台真设备的文件夹环、CY-02 已坏库的递归查询不许卡死；+1 = SY-CONV-01 同内容收敛不许留下永久待同步；+1 = P11-SR-01 两台设备从同一确认点各自推到同一个 rev；+1 = SY-REV-01 `remote_rev` 要真喂进实体行并且下一次编辑真的取大；+1 = P19 那条规划层单测"已裁决过的同一份分歧不许重问"（0.0.36 时编号是 P14）；582 → **584** = SY-REJ-01 的两条：引擎侧"拒收要计数并留下原因"、host 侧"有拒收就不许折成已同步"；**584 → 590**（0.0.38）= SY-DEL-01 一条（删除要传到空闲的那一台，G20）、SY-REJ-02 一条（引擎落墓碑那一处的拒收也要有去处）、P20 四条（规划层四方向单测 + 三颗按钮各自的两个真设备裁决分支）；**590 → 591** = SY-MISS-01 一条（服务器把记录弄丢时本机不许少东西、不许留永久待同步 —— 顺带量出缺口 **G21**：§10 那条 404→补传的路径今天不可达）。**这条数字有口径**：`cargo test` 默认遇到第一个失败的二进制就停，所以叠着别的套件跑出来的"passed=499 / failed=1"既不是全量也不是产品状态 —— 今天真就这么红过一次（`latency_injection_delays_responses` 是墙钟判据），单跑 16/16、整树独占跑就是下面这行。第一条 ignored 是 `conflict_payload_e2e.rs:519` 的**留档夹具**，由 `scripts/verify-p11-panel.mjs` 显式调用生成两台设备的现场；第二、三条是 **GC / 体检的规模基准**（同一个 `attachment_gc_scale.rs` 里的两条：GC 每轮代价 + 磁盘体检 100/1000 两档），第四条是 **30 分钟泄漏长跑** `leak_trend.rs`，第五条是 0.0.38 新加的**计划输入每轮代价**量具 `plan_input_scale.rs`（20000 行、release 口径：新加的那条 `remote_moved_entities` 稳态 best **9.42 ms** / 中位 10.27 ms，整库待追 25.50 ms；原有 `dirty_entities` 2.52 ms —— 轮间隔 25 s，占空比 ~0.04%，不动 PERF-05 的"空轮 1 请求 0 字节"） —— 第六条是 0.0.39 为缺口 G23 补的**永久删除 × 远端附件**量具 `sync_once.rs::probe_purge_and_remote_attachment_blobs`（把一条带附件的笔记按产品路径挂好、追平、再永久删除，然后自己走一遍服务器目录打出清单 —— 只出数不判绿，因为"要不要连附件一起删"是 D8 那个待拍板的口径）—— 六条都由 `-- --ignored --nocapture` 显式跑，都是刻意 `#[ignore]` 的，不是被跳过的测试：前两条会把 CI 变成"测这台机器的 SQLite 手感"，最后一条本身要 30 分钟。此前台账写的"0 ignored"是错的，2026-09-28 按实测更正） |
+| `cargo test --workspace` | **609 通过 / 0 失败 / 6 ignored**（78 个 result 行，**2026-09-30 同日三批各独占机器跑一次**：605 → 609 = 407 那 4 条（`--test proxy_http_407`，见下面那条新增），601 → 605 = SOCKS5 那 4 条（`--test proxy_socks5`，见上面那条），599 → 601 = 缺口 G32 那两条 `--test dto_envelope`：一条用真 `dispatch` 扫 17 条臂的成功载荷形状 + 三条坏臂连值钉，一条反向哨兵断"读到的是真序列化输出"；那一批 2026-09-30 独占机器重跑，`CARGO_RC=0`、**76** 个 test result 行、clippy `CLIPPY_EXIT=0` 且 0 条 error/warning、fmt `FMTCHK=0`、arch-check 31/31、前端 219/23、`vue-tsc` 0 错；SOCKS5 与 407 这两批各自在它之上再独占重跑一次，就是行首那个 **609 / 0 / 6 / 78 行**。**数怎么来的也要验**：这一行的逐行正则我第一版写成 `passed: N`，而 cargo 打的是 `N passed;` —— 于是加出来 **0 个 result 行 / 0 通过**。那个"0"是仪器坏了，不是"没测试"；把行数一起打印出来、并把"0 行"当失败处理，才没让它变成第二次 awk 事故（同一类坑在一天里踩到两回）。**先记一条自己踩过的坑**：这一行的数最初是用 `awk -F'[ ;]'` 从 `test result` 行里加的，`passed` 加对了而 `failed`/`ignored` 全加成了 0 —— 分隔符同时取空格与 `;` 会在 `passed;` 后面切出空字段，字段号整体错位，于是"0 失败 / 0 ignored"是**仪器坏了不是实测**（真数是 0 失败 / **6** ignored）。改用一条真正则逐行取三个数并重算。**下面这段是 599 那一批的账**：598 → 599 = 日记的回收站边界那条（**M105 红过一次**：把 `daily_note` 的查询换成 `trash()` 之后四条 host 单测一起红）；597 → 598 = 日记那格"打完字不空格再按一次「今天」"那条判据（**M104 红过一次**：还原成"日期 + 空格"就红在两个 UUID 不一样）；595 → 597 = 日记第一批两条（纯函数 `pick_daily_note` 的取最近/跨日不硬凑 + 走真 `App::daily_note()` 的"同日重复回到同一篇、写过字不许动他的内容"）；**这两批的数都是 2026-09-29 深夜在 0.0.41 这棵树上独占机器重跑的**：`TEST_EXIT=0`、75 个 test result 行、clippy 0/0、fmt `FMTCHK=0`、arch-check 30/30、前端 216/22、`vue-tsc` 0 错；上一批 593 → 595 = G24 那两条两设备判据（SY-DEL-03），变异 M102/M103 各红过一次；592 → 593 = G22 修好之后那条两设备判据升进主干：`sync_once.rs::a_permanent_delete_reaches_a_device_that_had_nothing_pending`，变异 M99/M100 各红过一次；上一格（591 → 592 = G22 的引擎侧判据 `a_purged_remote_view_purges_a_clean_local_row`）记的那次变异当时是**假绿**：它断言的是引擎发了 `Tombstone{purged:true}`，而落库那侧把这个 bool 吞了 —— 0.0.39 把它改成断 `ApplyOp::Purge`）（15 个单元 + 44 个集成测试二进制 + 13 个 doc-test = 72 个 test result 行；2026-09-29 下午在 0.0.38 这棵树上**独占机器**重跑，此前那一次记数是在 0.0.28 那棵树（0.0.27 → 0.0.28 之间只动了 tauri 的打包配置，Rust 代码一个字没变，两棵树上都是 563/0/2），本日几批依次是 535 → 537 → 541 → 544 → 556 → 557 → 558 → 559 → 560 → 561 → 563 → 569 → 570 → 576 → 578 → 579 → 580 → 581 → **582**（+6 = XML-01 ~ XML-04 那六条"换 XML 解析库版本"的行为锚；+2 = CY-01 两台真设备的文件夹环、CY-02 已坏库的递归查询不许卡死；+1 = SY-CONV-01 同内容收敛不许留下永久待同步；+1 = P11-SR-01 两台设备从同一确认点各自推到同一个 rev；+1 = SY-REV-01 `remote_rev` 要真喂进实体行并且下一次编辑真的取大；+1 = P19 那条规划层单测"已裁决过的同一份分歧不许重问"（0.0.36 时编号是 P14）；582 → **584** = SY-REJ-01 的两条：引擎侧"拒收要计数并留下原因"、host 侧"有拒收就不许折成已同步"；**584 → 590**（0.0.38）= SY-DEL-01 一条（删除要传到空闲的那一台，G20）、SY-REJ-02 一条（引擎落墓碑那一处的拒收也要有去处）、P20 四条（规划层四方向单测 + 三颗按钮各自的两个真设备裁决分支）；**590 → 591** = SY-MISS-01 一条（服务器把记录弄丢时本机不许少东西、不许留永久待同步 —— 顺带量出缺口 **G21**：§10 那条 404→补传的路径今天不可达）。**这条数字有口径**：`cargo test` 默认遇到第一个失败的二进制就停，所以叠着别的套件跑出来的"passed=499 / failed=1"既不是全量也不是产品状态 —— 今天真就这么红过一次（`latency_injection_delays_responses` 是墙钟判据），单跑 16/16、整树独占跑就是下面这行。第一条 ignored 是 `conflict_payload_e2e.rs:519` 的**留档夹具**，由 `scripts/verify-p11-panel.mjs` 显式调用生成两台设备的现场；第二、三条是 **GC / 体检的规模基准**（同一个 `attachment_gc_scale.rs` 里的两条：GC 每轮代价 + 磁盘体检 100/1000 两档），第四条是 **30 分钟泄漏长跑** `leak_trend.rs`，第五条是 0.0.38 新加的**计划输入每轮代价**量具 `plan_input_scale.rs`（20000 行、release 口径：新加的那条 `remote_moved_entities` 稳态 best **9.42 ms** / 中位 10.27 ms，整库待追 25.50 ms；原有 `dirty_entities` 2.52 ms —— 轮间隔 25 s，占空比 ~0.04%，不动 PERF-05 的"空轮 1 请求 0 字节"） —— 第六条是 0.0.39 为缺口 G23 补的**永久删除 × 远端附件**量具 `sync_once.rs::probe_purge_and_remote_attachment_blobs`（把一条带附件的笔记按产品路径挂好、追平、再永久删除，然后自己走一遍服务器目录打出清单 —— 只出数不判绿，因为"要不要连附件一起删"是 D8 那个待拍板的口径）—— 六条都由 `-- --ignored --nocapture` 显式跑，都是刻意 `#[ignore]` 的，不是被跳过的测试：前两条会把 CI 变成"测这台机器的 SQLite 手感"，最后一条本身要 30 分钟。此前台账写的"0 ignored"是错的，2026-09-28 按实测更正） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning（CI-CD 规定的 PR 门禁，原样命令实测）。**这一行的"0/0"从 2026-09-29 起要求两件事一起确认**：把退出码显式赋给变量并打印（`rc=$?; echo "CLIPPY_EXIT=$rc"`），加上输出里 0 条 `error`/`warning` —— 0.0.32 那一批这里假绿过一次（两条 `enex.rs` 的 lint 被"后台任务通知里那个属于最后一个进程的退出码"盖掉了，见下面 0.0.33 那条更正） |
 | L5 崩溃注入 `--test crash_recovery` | 小库矩阵 **8** 个提交点逐个"真把子进程杀死"，崩完重启后两台设备逐条一致、待办归零（名单一处在 `CRASH_POINTS`；另外三点各自要专门夹具，不在这一批里跑：`after_segment_write` 要大库 = `compaction_crash`，`after_quarantine_move` 要零引用 = `attachment_gc`，`after_corrupt_park` 要"本机被截断而服务器是好的" = `attachment_faults`，见 TEST-PLAN CI-CRASH-10/11/12） |
 | L5 压实崩溃注入 `--test compaction_crash` | 1/1（240 条大库真死在 `after_segment_write`，索引不引用不存在的分段） |
@@ -45,6 +45,48 @@
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
 ### 新增
+- **补上"代理要求认证"那一档：一个真会回 `407 Proxy-Authenticate` 的 HTTP 转发代理（§28「错误密码」那格从未覆盖推到部分；不改产品代码，不升号）**
+  - 上一格（SOCKS5）做完之后，剩下的形状是：工装里会拒的只有**源站**口令（`Authorization`），
+    没有会回 `407` 的**代理**口令（`Proxy-Authorization`）。于是产品那一档是"配置里有 username/password、
+    `net_proxy` 会从系统凭据里取回真凭据、`map_status(407) → RemoteError::Auth` 三条分支各自有单测，
+    而**没有任何一个包真的被一个要求认证的代理挡过**"。
+  - 新增 `notera_test_webdav::HttpForwardProxy`：真 TCP、真绝对形式请求解析（复用本 crate 的 `http`
+    模块的 `read_request`，不另写一份请求解析器 —— 两处各写一遍迟早分叉）、真 origin-form 转发、
+    可选按 RFC 7235 要求 `Basic`；也实现 `CONNECT` 隧道（顺手，且 TLS 那一档要用）。读数
+    `forwarded / tunnels / auth_rejects / bytes_forwarded / last_target`。
+  - 4 条门禁（`cargo test -p notera-webdav --test proxy_http_407`，实测 4/4，连跑三轮都 4/4）：
+    ① 要口令的代理 + 正确凭据 ⇒ 必须成，且 `forwarded≥1`、`auth_rejects==0`、代理被要求去的目标就是源站、
+    源站数到那一条 PUT、快照里有那份字节；② 口令不对 ⇒ 不许成功，`auth_rejects≥1`、`forwarded==0`、
+    **源站一条都没收到**；③ 一个凭据都不给 ⇒ 同样在代理那一层断（②③分开写：②是用户配置错，③是产品
+    plumbing 坏了，两者的修法不同）；④ **差分腿**：同一份客户端配置只换代理自己的策略（要 / 不要口令）。
+    这条存在的理由是前三条如果全红在"代理一直拒"，也能凑出一份看起来合格的账 —— 只有"去掉策略后同一条腿
+    立刻成"才证明那些红是被**策略**挡的，不是被我工装挡的。
+  - **判据的对称性（这条改变了怎么写）**：真转发代理交给源站的是 **origin-form**，于是源站分不出
+    "经代理"与"直连" —— 与 SOCKS5 是同一件事。推论两条：`Injection::require_proxy` 与本工装**不能同机使用**
+    （它靠"看到绝对形式"判定，而那只在"源站扮演代理"的老夹具里成立）；这里的牙齿换成
+    "代理计数 vs 源站请求日志"的两边对照。这一句同时写进了 `PROXY.md` §9 那段的边界说明。
+  - **三条变异，一条比一条有意思**：
+    **M118**（`notera-net/client.rs` 里把交给 `reqwest::Proxy::all` 的 URL 摘掉 userinfo）⇒ **只有新加的①红**
+    （`配了正确的代理口令仍被拒：407`），而 notera-net 自己的 `proxy_url_carries_credentials_and_scheme`
+    **实测照样绿** —— 它断的是 `proxy_url()` 那个字符串，这一刀落在它**之后的调用边上**。这正是本仓库那句
+    "绿单测掩盖坏调用边"的一次实测：新门不是重复劳动，它守的地方原来没有人在守。
+    **M119**（工装一律放过口令）⇒ ②③④同时红，三条消息各不同（`请求居然成功（201）` ×2 / `差分的'拒'腿居然回 201`）。
+    **M120**（写完 407 还把请求转出去，不 return）⇒ **只有④红**。②③没红不是判据坏，是我读的那两个数
+    （`forwarded()` / `request_log()`）在变异体里要等代理任务把转发跑完才变化，而客户端早就拿到 407 返回了 ——
+    这是这条判据自己的时序边界，按实记在这儿，不改写成"三条都抓住了"。
+  - 工装自己的两个坑：v1 把 407 的 `Proxy-Authenticate` 写在 `write_response` 之后（那已经在 body 区，
+    等于写了一行垃圾）；v1 还把 `require_proxy` 当成能用的判据（见上条对称性）。另外 `w.reunite(r)` 要的是
+    `OwnedReadHalf`，而这里是 `BufReader<OwnedReadHalf>` —— CONNECT 那一支顺手量到：读请求时被缓冲进来的
+    尾字节属于隧道，必须**先交给源站**再开始双向拷贝，否则丢掉开头一段。
+  - 本批读数：`proxy_http_407` **4/4**（三轮）、`proxy_socks5` 4/4、`proxy_routing` 3/3、`notera-net` 13/13、
+    全量 **609 通过 / 0 失败 / 6 ignored（78 个 result 行，CARGO_RC=0）**、
+    `clippy -p notera-test-webdav -p notera-webdav -p notera-net --all-targets -- -D warnings`
+    `CLIPPY_EXIT=0` 且 0 条 error/warning、`cargo fmt --all --check` `FMTCHK=0`、arch-check 31/31。
+    **产品代码一个字没动**（M118 改的那两行是变异，跑完立刻还原，`git diff` 对 `client.rs` 为空）；
+    新增依赖只有一个 `base64`，且用的是 workspace 里已有的那一份（`Cargo.toml` 单源，没引新 crate）。
+  - **仍缺的一半**：`AccountDraftCmd.proxyUsername/proxyPassword` → 系统凭据 → `net_proxy()` 这条边有单测，
+    但"设置页输入的口令 → 这一轮真同步经 407 代理成功/失败"还没有会红的门。按 §40 记法，这一格在 TEST-PLAN
+    §28 里就写**部分**，不写"已覆盖"。
 - **补上 SOCKS5 那条端到端：一个真会答 `05 00` 的转发器，代理与源站分开（§28 那格 BLOCKED 解除；不改产品代码，不升号）**
   - 之前那一格的原因写得很具体：工装的"代理"一直是**源站自己扮的** —— 它认识 CONNECT 与绝对形式请求行，
     不认识 SOCKS 握手。于是 `ProxyMode::Socks5` 这一档是"配置解析单测绿、界面真给用户提供这一档、
