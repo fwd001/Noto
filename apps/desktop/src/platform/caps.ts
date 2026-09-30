@@ -135,7 +135,11 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { id: 'search', keys: ['Ctrl', 'K'], macKeys: ['⌘', 'K'], labelKey: 'list.searchPlaceholder' },
   { id: 'collapse', keys: ['Ctrl', '\\'], macKeys: ['⌘', '\\'], labelKey: 'sidebar.collapse' },
   { id: 'pin', keys: ['Ctrl', 'P'], macKeys: ['⌘', 'P'], labelKey: 'list.pin' },
-  { id: 'delete', keys: ['Del'], macKeys: ['⌘', '⌫'], labelKey: 'sidebar.deleteFolder' },
+  // 这一行的文案是踩过的坑（同一处先修的是列表里那颗按钮）：`Del` / `⌘⌫` 干的是
+  // "把当前这条笔记移到最近删除"，可它以前借的是 `sidebar.deleteFolder`（"删除文件夹"）——
+  // 于是设置页教给用户的是一句错的动词加一个错的宾语，用户按完以为文件夹没了。
+  // 门禁在 `caps.spec.ts`：这一行的文案必须说"最近删除"，且不许出现"文件夹"。
+  { id: 'delete', keys: ['Del'], macKeys: ['⌘', '⌫'], labelKey: 'list.moveToTrash' },
   { id: 'bold', keys: ['Ctrl', 'B'], macKeys: ['⌘', 'B'], labelKey: 'tb.bold' },
   { id: 'italic', keys: ['Ctrl', 'I'], macKeys: ['⌘', 'I'], labelKey: 'tb.italic' },
   { id: 'underline', keys: ['Ctrl', 'U'], macKeys: ['⌘', 'U'], labelKey: 'tb.underline' },

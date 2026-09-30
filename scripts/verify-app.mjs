@@ -1441,6 +1441,20 @@ await step('深色那颗：按下去要真的换色，刷新之后还在（FT-TH
   return `浅色 ${light} → 深色 ${dark}，刷新后仍是 dark，已还原成跟随系统`;
 });
 
+await step('设置页那张快捷键表：Del 那一行必须说「移到最近删除」（缺口 G40 的渲染侧）', async () => {
+  // 单测钉的是表里的 labelKey，这一条钉的是**屏幕上那一句** —— 快捷键表是用户唯一的依据，
+  // 它说什么用户就以为按下去发生什么。G40 就是这一行借了"删除文件夹"的文案。
+  await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
+  await page.click('[data-testid="nav-settings"]', { timeout: 8000 });
+  const rows = await page.locator('table tr').allInnerTexts();
+  const delRow = rows.find((r) => /\bDel\b/.test(r));
+  if (!delRow) throw new Error('设置页的快捷键表里没有 Del 那一行（用户查不到这个键）');
+  const flat = delRow.replace(/\s+/g, ' ');
+  if (!flat.includes('最近删除')) throw new Error(`Del 那一行没说要"移到最近删除"：「${flat}」`);
+  if (flat.includes('文件夹')) throw new Error(`Del 那一行还在说"文件夹"（按下去删的是笔记不是文件夹）：「${flat}」`);
+  return flat.slice(0, 48);
+});
+
 await step('没有实现的效果就不许摆出开关：「窗口透明效果」这颗勾不该出现（缺口 G39）', async () => {
   // PLATFORM.md §观感 写的是"Mica/Acrylic 仅系统支持时启用 + **必须**提供关闭开关"。
   // 实测今天**特效本身没实现**（全仓搜 mica/acrylic/vibrancy/backdrop 零命中，`no-transparency`

@@ -95,7 +95,7 @@ jobs:
         # 比 CI 多花两分钟贵。
         run: cargo test --workspace -- --test-threads=1
 
-      - name: 前端单测（本机基线 222 通过 / 23 文件）
+      - name: 前端单测（本机基线 224 通过 / 23 文件）
         working-directory: apps/desktop
         run: pnpm test
 
