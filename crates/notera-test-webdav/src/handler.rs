@@ -75,7 +75,7 @@ pub fn handle(store: &mut Store, req: &Request, inj: &Injection, proxied: bool) 
     };
 
     // `status_for` 规则：非 `post:` 在副作用之前短路；`post:` 先做副作用再改状态。
-    let forced = inj.match_status(&req.method, &path);
+    let forced = inj.match_status(&req.method, &path, &mut store.rule_hits);
     if let Some((code, false)) = forced {
         return injected_reply(code, &path);
     }

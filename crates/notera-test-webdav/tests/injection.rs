@@ -472,31 +472,37 @@ async fn put(addr: &std::net::SocketAddr, path: &str, body: &[u8]) -> RawResp {
 /// 变成"什么都没注入"（它靠一个前置断言能发现，但报出来的会是消费者的名字而不是根因）。
 #[test]
 fn hang_on_follows_the_same_rule_grammar_as_status_for() {
+    // 这两条文法门禁只问"规则的形状匹不匹配"，所以台账是一次性的：这里没有 `#N`，
+    // 无限额规则永远不会碰它（碰了就是文法漂了）。
+    let mut hits = std::collections::HashMap::new();
     let sha = "a".repeat(64);
     let obj = format!("/.notes/attachments/aa/{sha}");
     let only_get = Injection::hang_on(format!("GET *{sha}"));
-    assert!(only_get.hangs("GET", &obj), "该命中的没命中：规则文法漂了");
     assert!(
-        !only_get.hangs("PUT", &obj),
+        only_get.hangs("GET", &obj, &mut hits),
+        "该命中的没命中：规则文法漂了"
+    );
+    assert!(
+        !only_get.hangs("PUT", &obj, &mut hits),
         "方法限定失效了 —— 那会把上传一起挂住，测的就不是下载超时"
     );
     assert!(
-        !only_get.hangs("GET", "/.notes/manifest/index.json"),
+        !only_get.hangs("GET", "/.notes/manifest/index.json", &mut hits),
         "挂到了别的对象上：这条注入不再是'只有附件端点'"
     );
     assert!(
-        Injection::hang_on("*.bin").hangs("PROPFIND", "/x/y.bin"),
+        Injection::hang_on("*.bin").hangs("PROPFIND", "/x/y.bin", &mut hits),
         "不带方法前缀应当任何方法都命中（与 status_for 同语法）"
     );
     assert!(
-        !Injection::hang().hangs("GET", &obj),
+        !Injection::hang().hangs("GET", &obj, &mut hits),
         "全局 hang 与按路径 hang 是两个旋钮，不许互相串"
     );
     // `post:` 是 status_for 专用的（"先落盘再回错"）。hang 吞掉它没问题，但**不能把它当规则的一部分**：
     // 写 `hang_on("post:MOVE *")` 的人该立刻发现这条路不存在，而不是得到一个静默不同的语义。
     let post = Injection::hang_on("post:GET *x.bin");
     assert!(
-        post.hangs("GET", "/a/x.bin"),
+        post.hangs("GET", "/a/x.bin", &mut hits),
         "行为是：`post:` 在 hang 这条路里被剥掉且**不参与判定**（它对 hang 没有意义）。         这条断言钉住这个事实；哪天真要支持 `FAIL(hang,post:…)`，先改这里再改实现"
     );
 }
@@ -509,41 +515,94 @@ fn hang_on_follows_the_same_rule_grammar_as_status_for() {
 /// 测试却照旧"跑过了"）。所以除了命中/不命中，还各钉一条"两个旋钮不许互相串"。
 #[test]
 fn abort_on_follows_the_same_rule_grammar_as_status_for() {
+    let mut hits = std::collections::HashMap::new();
     let sha = "b".repeat(64);
     let obj = format!("/.notes/attachments/bb/{sha}");
     let tmp = "/.notes/tmp/01a0-1.json";
 
     let only_get = Injection::abort_on(format!("GET *{sha}"));
-    assert!(only_get.aborts("GET", &obj), "该命中的没命中：规则文法漂了");
     assert!(
-        !only_get.aborts("PUT", &obj),
+        only_get.aborts("GET", &obj, &mut hits),
+        "该命中的没命中：规则文法漂了"
+    );
+    assert!(
+        !only_get.aborts("PUT", &obj, &mut hits),
         "方法限定失效了 —— 那会把暂存写入一起掐掉，测的就不是'发布那一步被掐'"
     );
     assert!(
-        !only_get.aborts("GET", "/.notes/manifest/index.json"),
+        !only_get.aborts("GET", "/.notes/manifest/index.json", &mut hits),
         "掐到了别的对象上：这条注入不再是'只掐那一个附件'"
     );
     assert!(
-        Injection::abort_on("MOVE *").aborts("MOVE", tmp),
+        Injection::abort_on("MOVE *").aborts("MOVE", tmp, &mut hits),
         "不带 sha 的按方法规则要能命中（附件上传的 MOVE 路径是暂存名，不含 sha）"
     );
     assert!(
-        Injection::abort_on("*.bin").aborts("PROPFIND", "/x/y.bin"),
+        Injection::abort_on("*.bin").aborts("PROPFIND", "/x/y.bin", &mut hits),
         "不带方法前缀应当任何方法都命中（与 status_for 同语法）"
     );
     // 两个旋钮不许互相串：按序号掐的全局 abort 不进 aborts()，按路径挂的 hang 也不进这里。
     assert!(
-        !Injection::abort_after(0).aborts("GET", &obj),
+        !Injection::abort_after(0).aborts("GET", &obj, &mut hits),
         "全局 abort（drop_after_n）与按规则 abort 是两个旋钮，不许互相串"
     );
     assert!(
-        !Injection::hang_on(format!("GET *{sha}")).aborts("GET", &obj),
+        !Injection::hang_on(format!("GET *{sha}")).aborts("GET", &obj, &mut hits),
         "hang 的规则被 abort 读了 —— 那两种脾气（不应答 vs 直接断连）就分不开了"
     );
     // `post:` 对掐断没有意义（副作用做不做得完都不是这条路的语义），但必须**剥掉**而不是
     // 当成路径的一部分去匹配 —— 否则写 `FAIL(abort,post:…)` 的人会静默得到一个不生效的规则。
     assert!(
-        Injection::abort_on(format!("post:GET *{sha}")).aborts("GET", &obj),
+        Injection::abort_on(format!("post:GET *{sha}")).aborts("GET", &obj, &mut hits),
         "`post:` 前缀在 abort 这条路里被当成了规则字符，而不是被剥掉"
     );
+}
+
+/// `#N`（times）**跨真实请求**要成立。
+///
+/// 单测只证明匹配器会数数；这条证明台账真的活在服务器那份 `Store` 里、被各连接的 task 共享，
+/// 并且 `inject()` 会把它归零。少了这一环，消费者（重试门禁）看到的会是"每次都 503"或
+/// "永远不 503"，而报出来的错会挂着重试的名字 —— 工装坏了要由工装自己的门禁说出口。
+#[tokio::test]
+async fn times_suffix_is_enforced_across_real_requests() {
+    let path = "/.notes/manifest/index.json";
+    let rule = Injection {
+        status_for: vec![("GET *.json#2".into(), 503)],
+        ..Default::default()
+    };
+    let s = mem_with(rule.clone()).await;
+    assert_eq!(
+        put(&s.addr, path, b"{\"seq\":1}").await.status,
+        201,
+        "前置：对象要先在服务器上，否则后面的 200 是 404 变出来的"
+    );
+
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        seen.push(get(&s.addr, path).await.status);
+    }
+    assert_eq!(
+        seen,
+        vec![503, 503, 200, 200],
+        "#N 的额度没有跨请求生效（这条规则只该吃掉前两次 GET）"
+    );
+
+    // 换一次注入必须连台账一起归零：同一份配置两次运行要能逐条比对。
+    s.inject(rule).await;
+    assert_eq!(
+        get(&s.addr, path).await.status,
+        503,
+        "inject() 没清空 `#N` 的台账：同一份配置的第二次运行读数不同"
+    );
+    s.stop().await;
+}
+
+/// 文法写错的规则要在**设置注入那一刻**就炸，而不是静默变成"这条规则永不命中"。
+/// 后者意味着整条测试绿着而什么都没注入 —— 本仓反复踩的那一类假绿。
+#[tokio::test]
+#[should_panic(expected = "#N 不是正整数")]
+async fn malformed_times_rule_panics_at_inject_time() {
+    let s = TestServer::start(Backend::Mem).await;
+    // 这个 await 就是断言本身：panic 发生在测试自己的线程里，才归位于这条测试。
+    s.inject(Injection::status("GET /a.json#abc", 503)).await;
 }

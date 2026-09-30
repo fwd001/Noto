@@ -76,7 +76,7 @@ jobs:
       - name: 版本单源（CI-CD §版本与单一版本源）
         run: node scripts/check-versions.mjs
 
-      - name: 架构适应度 + §26 无障碍 + 扫描台账（本机基线 28/28）
+      - name: 架构适应度 + §26 无障碍 + 扫描台账（本机基线 31/31）
         run: node scripts/arch-check.mjs
 
       # 本机 rustfmt 组件已装上并跑过 `cargo fmt --all`（当时发现 92 个文件有漂移，已单独
@@ -87,7 +87,7 @@ jobs:
       - name: Clippy（-D warnings，与本地同一条命令）
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Rust 全量（本机基线 612 通过 / 0 失败 / 6 ignored，79 个 result 行；串行跑，见下面那条注释）
+      - name: Rust 全量（本机基线 625 通过 / 0 失败 / 6 ignored，82 个 result 行；串行跑，见下面那条注释）
         # `--test-threads=1` 不是习惯，是判据：`notera-test-webdav` 的
         # `latency_injection_delays_responses` 量的是墙钟（"控制面必须即时"），
         # 同一个二进制里那十几条并发打服务器时，机器一忙就假红 —— 本机 2026-09-28
@@ -95,7 +95,7 @@ jobs:
         # 比 CI 多花两分钟贵。
         run: cargo test --workspace -- --test-threads=1
 
-      - name: 前端单测（本机基线 219 通过 / 23 文件）
+      - name: 前端单测（本机基线 220 通过 / 23 文件）
         working-directory: apps/desktop
         run: pnpm test
 

@@ -155,11 +155,19 @@ impl TestServer {
     }
 
     /// 安装注入配置；注入相关计数器归零 —— 两次同样配置的运行才可逐条比对。
+    ///
+    /// **规则文法在这里就验一遍**：写坏了（例如 `#abc`）要当场 panic 在测试自己的线程里，
+    /// 而不是让服务器把这条规则当成"永不命中"、于是那条测试永远绿着什么也没注入。
     pub async fn inject(&self, i: Injection) {
+        if let Err(e) = i.check_rules() {
+            panic!("注入规则文法不合法：{e}");
+        }
         let mut c = lock(&self.inner);
         c.injection = i;
         c.counters = InjectionCounters::default();
         c.served_data = 0;
+        // `#N` 的额度属于"这一次注入"，不带着上一次的余额。
+        c.store.rule_hits.clear();
     }
 
     pub fn injection(&self) -> Injection {
@@ -453,7 +461,7 @@ fn decide(shared: &Arc<Shared>, req: &Request, proxied: bool) -> Decision {
 
     // FAIL(hang,target=…)：只挂命中规则的那一类（其余照常服务）。放在全局 timeout_all 之前，
     // 因为它是更具体的形态。
-    if inj.hangs(&req.method, &req.path) {
+    if inj.hangs(&req.method, &req.path, &mut c.store.rule_hits) {
         c.counters.hung += 1;
         c.served_data += 1;
         push_log(&mut c, &req.method, &req.path, 0, req.body.len() as u64);
@@ -468,7 +476,7 @@ fn decide(shared: &Arc<Shared>, req: &Request, proxied: bool) -> Decision {
     }
     // FAIL(abort,target=…)：只掐命中规则的那一类（其余照常服务）。放在全局 drop_after_n
     // 之前，理由与 hang_for 一样 —— 更具体的形态先判。
-    if inj.aborts(&req.method, &req.path) {
+    if inj.aborts(&req.method, &req.path, &mut c.store.rule_hits) {
         c.counters.connections_dropped += 1;
         c.served_data += 1;
         push_log(&mut c, &req.method, &req.path, 0, req.body.len() as u64);

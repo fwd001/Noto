@@ -18,12 +18,19 @@ use serde::{Deserialize, Serialize};
 /// * `status_for` —— 规则表，按序第一条命中生效（`FAIL(status=…,target=…)`）。
 ///   规则串文法：
 ///   ```text
-///   rule := ["post:"] [METHOD " "] pathglob
+///   rule := ["post:"] [METHOD " "] pathglob ["#" N]
 ///   ```
 ///   * `METHOD` 可选（`PUT`/`GET`/`MOVE`/`PROPFIND`…，大小写不敏感）；
 ///   * `pathglob` 支持精确、`前缀*`、`*.json` 后缀、纯 `*`；
+///     注意 `*X` 只认**后缀**，没有"包含"这种形态（想要包含写 `*X*` 的前缀+后缀两段规则，
+///     或直接写精确路径）；
+///   * `#N` = 记法表里的 `times=N`：这条规则只在前 N 次**命中**时生效，之后让位给后面的
+///     规则。`hang_for` / `abort_for` 同一份文法、同一个额度机制（额度按列表位置记账）；
 ///   * `post:` 前缀 = **副作用先执行再返回该状态**，即 `FAIL(partial-write)`
 ///     （服务端已落盘但回 500，SY-FAULT-09 需要这个形态）。
+///   * `#` 是保留分隔符：路径里要字面 `#` 请写 `%23`。
+///   * 文法写错（`#0` / `#abc` / 光一个 `#`）在 [`TestServer`] 设置注入时直接 panic ——
+///     静默降级会让整条测试绿着而什么都没注入。
 /// * `corrupt_manifest` —— GET/HEAD 的 `*manifest*` 响应在发出前篡改 body 中间 1 字节
 ///   （`FAIL(corrupt-body)`）。落盘内容不变，因此**只有客户端视角**看到脏数据，
 ///   sha256 复算必然不一致。
@@ -108,10 +115,58 @@ impl Injection {
         }
     }
 
-    /// 这一条规则（`["METHOD "]pathglob`）是否命中该请求；`None` = 没命中，
-    /// `Some(post)` = 命中，并带回"是否先落盘再回错"那个 `post:` 标记。
-    /// `status_for` 与 `hang_for` 共用它 —— 两套规则各写一遍解析，早晚会漂成两种语法。
-    fn rule_hit(rule: &str, method: &str, path: &str) -> Option<bool> {
+    /// 从规则尾部剥出 `#N`（= 记法表里的 `times=N`，命中 N 次之后这条规则不再命中）。
+    ///
+    /// 文法写错**不许静默降级**：作者写 `#abc` / `#0` 时以为自己在限次数，而"当成无限次"
+    /// 会让那条测试红在别处 —— 这正是本仓库反复踩的那一类。解析错误由 [`Injection::check_rules`]
+    /// 在 `inject()` 那一刻（测试自己的线程里）报出来；这里的 `ok()?` 只是第二道兜底。
+    /// 因此 `#` 成为保留分隔符：要匹配字面 `#` 请写百分号编码 `%23`（现有规则里没有这种路径）。
+    fn split_times(rule: &str) -> Result<(&str, Option<u64>), String> {
+        let Some((glob, n)) = rule.rsplit_once('#') else {
+            return Ok((rule, None));
+        };
+        let trimmed = n.trim();
+        if trimmed.is_empty() || trimmed.starts_with('-') {
+            return Err(format!("规则 `{rule}` 的 #N 不是正整数"));
+        }
+        match trimmed.parse::<u64>() {
+            Ok(0) | Err(_) => Err(format!(
+                "规则 `{rule}` 的 #N 不是正整数（#0 没有意义：别写这条规则就是了）"
+            )),
+            Ok(limit) => Ok((glob, Some(limit))),
+        }
+    }
+
+    /// 这套规则文法的自检：`inject()` 在设置注入时调用，写错立刻 panic（而不是让测试挂在别处）。
+    pub fn check_rules(&self) -> Result<(), String> {
+        for rule in self
+            .status_for
+            .iter()
+            .map(|(r, _)| r)
+            .chain(self.hang_for.iter())
+            .chain(self.abort_for.iter())
+        {
+            Self::split_times(rule)?;
+        }
+        Ok(())
+    }
+
+    /// 这条规则**本次**是否该生效（命中且没超出 `#N` 的额度）。
+    /// `None` = 不生效；`Some(post)` = 生效，并带回"是否先落盘再回错"那个 `post:` 标记。
+    ///
+    /// 台账的键是**「哪条列表 + 第几个位置」**（`key` 由调用方给出），不是规则原文：
+    /// 按原文记账会让 `status_for` 与 `abort_for` 里恰好同形的两条**共用一份额度**，
+    /// 于是第二条静默失效 —— 而"静默失效"正是这套工装最不该有的失败模式。
+    /// 按位置记账的代价是"规则列表中途变更会让额度错位"，而 [`Injection`] 在一次注入里
+    /// 是不可变的（换配置走 `TestServer::inject`，那里连台账一起清）。
+    fn rule_hit(
+        rule: &str,
+        method: &str,
+        path: &str,
+        key: &str,
+        hits: &mut std::collections::HashMap<String, u64>,
+    ) -> Option<bool> {
+        let (rule, limit) = Self::split_times(rule).ok()?;
         let (rule, post) = match rule.strip_prefix("post:") {
             Some(r) => (r, true),
             None => (rule, false),
@@ -125,14 +180,30 @@ impl Injection {
                 return None;
             }
         }
-        path_glob(glob, path).then_some(post)
+        if !path_glob(glob, path) {
+            return None;
+        }
+        let Some(limit) = limit else {
+            return Some(post);
+        };
+        let seen = hits.entry(key.to_owned()).or_insert(0);
+        if *seen >= limit {
+            return None;
+        }
+        *seen += 1;
+        Some(post)
     }
 
-    /// 该请求是否要被**挂住**（永不回应）。
-    pub fn hangs(&self, method: &str, path: &str) -> bool {
-        self.hang_for
-            .iter()
-            .any(|rule| Self::rule_hit(rule, method, path).is_some())
+    /// 该请求是否要被**挂住**（永不回应）。`hits` 是 `#N` 的台账（见 [`Self::rule_hit`]）。
+    pub fn hangs(
+        &self,
+        method: &str,
+        path: &str,
+        hits: &mut std::collections::HashMap<String, u64>,
+    ) -> bool {
+        self.hang_for.iter().enumerate().any(|(i, rule)| {
+            Self::rule_hit(rule, method, path, &format!("hang#{i}"), hits).is_some()
+        })
     }
 
     /// `FAIL(abort,target=pattern)` —— 只掐命中规则的请求，其余照常服务。
@@ -146,10 +217,15 @@ impl Injection {
     /// 该请求是否要被**掐断**（连接直接断，不回应）。与 [`Injection::hangs`] 同文法、
     /// 两种脾气：hang 是"对面不答应"，abort 是"对面挂了"—— 客户端的超时路径与
     /// 传输错误路径不是同一条，所以两个旋钮必须分开存在。
-    pub fn aborts(&self, method: &str, path: &str) -> bool {
-        self.abort_for
-            .iter()
-            .any(|rule| Self::rule_hit(rule, method, path).is_some())
+    pub fn aborts(
+        &self,
+        method: &str,
+        path: &str,
+        hits: &mut std::collections::HashMap<String, u64>,
+    ) -> bool {
+        self.abort_for.iter().enumerate().any(|(i, rule)| {
+            Self::rule_hit(rule, method, path, &format!("abort#{i}"), hits).is_some()
+        })
     }
 
     /// `FAIL(latency,ms=…)`
@@ -182,9 +258,18 @@ impl Injection {
     }
 
     /// 规则命中判定。返回 `(status, 是否先执行副作用)`。
-    pub fn match_status(&self, method: &str, path: &str) -> Option<(u16, bool)> {
-        for (rule, code) in &self.status_for {
-            if let Some(post) = Self::rule_hit(rule, method, path) {
+    ///
+    /// `hits` 是 `#N`（times）的台账：由服务器那份 `Store` 持有，换一次注入就清空。
+    /// 没有它，"两次 503 然后好"这种形态就表达不出来 —— 而那正是 SY-FAULT-03/04 与
+    /// §28「重试」那一格唯一能写成判据的形状。
+    pub fn match_status(
+        &self,
+        method: &str,
+        path: &str,
+        hits: &mut std::collections::HashMap<String, u64>,
+    ) -> Option<(u16, bool)> {
+        for (i, (rule, code)) in self.status_for.iter().enumerate() {
+            if let Some(post) = Self::rule_hit(rule, method, path, &format!("status#{i}"), hits) {
                 return Some((*code, post));
             }
         }
@@ -273,12 +358,135 @@ mod tests {
             ],
             ..Default::default()
         };
+        let mut hits = std::collections::HashMap::new();
         assert_eq!(
-            i.match_status("PUT", "/.notes/records/note/a.json"),
+            i.match_status("PUT", "/.notes/records/note/a.json", &mut hits),
             Some((500, true))
         );
-        assert_eq!(i.match_status("GET", "/x.json"), Some((401, false)));
-        assert_eq!(i.match_status("DELETE", "/x.json"), None);
+        assert_eq!(
+            i.match_status("GET", "/x.json", &mut hits),
+            Some((401, false))
+        );
+        assert_eq!(i.match_status("DELETE", "/x.json", &mut hits), None);
+    }
+
+    /// `#N`（times）：这条规则只在前 N 次**命中**时生效 —— SY-FAULT-03/04 与 §28「重试」
+    /// 那一格唯一能写成判据的形状（"两次 503 然后好"没有它就只能靠猜）。
+    ///
+    /// 这里的 glob 一律用文法真支持的形态（精确 / `前缀*` / `*后缀` / 纯 `*`）。
+    /// 上一版我写了 `*flaky*.json` 当作"包含"，`path_glob` 里 `*X` 只认**后缀**，于是那条
+    /// 规则永远不命中 —— 红得很安静，看起来像"#N 没实现"。文法不认识的写法不会报错，
+    /// 只会静默不命中，所以判据要挑形状。
+    #[test]
+    fn times_limit_fires_exactly_n_times_then_stops() {
+        let i = Injection {
+            status_for: vec![("GET *flaky.json#2".into(), 503)],
+            ..Default::default()
+        };
+        let path = "/.notes/records/flaky.json";
+        let mut hits = std::collections::HashMap::new();
+        assert_eq!(i.match_status("GET", path, &mut hits), Some((503, false)));
+        assert_eq!(i.match_status("GET", path, &mut hits), Some((503, false)));
+        assert_eq!(
+            i.match_status("GET", path, &mut hits),
+            None,
+            "额度用完之后这条规则还在生效"
+        );
+
+        // 额度只按**命中**记账：动词或路径不打在这条规则上的请求不许吃掉它（否则
+        // "重试两次"会变成"一轮里随机两次"，判据就没了确定性）。
+        let mut fresh = std::collections::HashMap::new();
+        assert_eq!(i.match_status("PUT", path, &mut fresh), None);
+        assert_eq!(
+            i.match_status("GET", "/.notes/records/other.json", &mut fresh),
+            None
+        );
+        assert_eq!(i.match_status("GET", path, &mut fresh), Some((503, false)));
+        assert_eq!(i.match_status("GET", path, &mut fresh), Some((503, false)));
+        assert_eq!(i.match_status("GET", path, &mut fresh), None);
+
+        // 额度用完之后由**下一条**规则接管，不是直接放行 —— 这正是"先 503 两次再 500"
+        // 这类组合的写法，必须能被表达。
+        let j = Injection {
+            status_for: vec![("GET *flaky.json#2".into(), 503), ("GET *".into(), 500)],
+            ..Default::default()
+        };
+        let mut k = std::collections::HashMap::new();
+        assert_eq!(j.match_status("GET", path, &mut k), Some((503, false)));
+        assert_eq!(j.match_status("GET", path, &mut k), Some((503, false)));
+        assert_eq!(
+            j.match_status("GET", path, &mut k),
+            Some((500, false)),
+            "第一条用完额度后没有落到下一条"
+        );
+    }
+
+    /// 三条列表**各自**都要吃到 `#N`，且台账按位置记账、互不串用（同一份 hits 传三处）。
+    /// 键若是规则原文，`status_for` 与 `abort_for` 里同形的那两条会共用一份额度，
+    /// 第二条静默失效 —— 这条测试就是钉住那个。
+    #[test]
+    fn times_limit_applies_to_hang_and_abort_rules_too() {
+        let mut hits = std::collections::HashMap::new();
+        let hang = Injection {
+            hang_for: vec!["GET /a/once*#1".into()],
+            ..Default::default()
+        };
+        assert!(hang.hangs("GET", "/a/once.json", &mut hits));
+        assert!(
+            !hang.hangs("GET", "/a/once.json", &mut hits),
+            "hang 的 #1 额度没用上"
+        );
+        let abort = Injection {
+            abort_for: vec!["GET /a/once*#1".into()],
+            ..Default::default()
+        };
+        // 同一条规则原文、挂在另一张列表上：hang 已经把它的额度吃光，abort 必须还有一次自己的。
+        assert!(
+            abort.aborts("GET", "/a/once.json", &mut hits),
+            "台账按规则原文记账，把 abort 的额度也扣掉了"
+        );
+        assert!(!abort.aborts("GET", "/a/once.json", &mut hits));
+
+        // 同一张列表里写两遍同一条规则 = 两份额度（按序第一条先命中，用完才轮到第二条）。
+        let dup = Injection {
+            status_for: vec![("GET /a/x*#1".into(), 503), ("GET /a/x*#1".into(), 500)],
+            ..Default::default()
+        };
+        let mut d = std::collections::HashMap::new();
+        assert_eq!(
+            dup.match_status("GET", "/a/x.json", &mut d),
+            Some((503, false))
+        );
+        assert_eq!(
+            dup.match_status("GET", "/a/x.json", &mut d),
+            Some((500, false))
+        );
+        assert_eq!(dup.match_status("GET", "/a/x.json", &mut d), None);
+    }
+
+    /// 文法写错要**当场报错**，不许被当成"这条规则永不命中"或"无限次"。
+    /// 静默的那两种后果都是"测试绿着而什么都没注入"。
+    #[test]
+    fn malformed_times_suffix_is_rejected() {
+        for bad in [
+            "GET /a.json#abc",
+            "GET /a.json#0",
+            "GET /a.json#",
+            "GET /a.json#-2",
+        ] {
+            let i = Injection {
+                status_for: vec![(bad.into(), 503)],
+                ..Default::default()
+            };
+            assert!(i.check_rules().is_err(), "这条规则应当被拒：{bad}");
+        }
+        let ok = Injection {
+            status_for: vec![("GET /a.json#3".into(), 503)],
+            hang_for: vec!["PUT /b#1".into()],
+            abort_for: vec!["post:MOVE /c#9".into()],
+            ..Default::default()
+        };
+        assert_eq!(ok.check_rules(), Ok(()));
     }
 
     #[test]

@@ -441,6 +441,24 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
     **M108**（去 `@focusin` + 渐隐 `content: none`）⇒ 一次红在三处。**顺带戳穿我自己写的恒真判据**：
     只查 `computed backgroundImage` 含 `linear-gradient` 时，`content: none`（伪元素根本不生成）也照样为真 ——
     改成 `content` 与 `backgroundImage` 两条都查。
+- **G34 产品出口的退避与重试次数不是 PROXY.md §7 写的那一套（2026-09-30 实测；状态 = **未修，等 §9 级取舍拍板**）**：
+  `WebDavRemote::new` 把政策硬编成 `RetryPolicy::deterministic(40, 1)`（base 40 ms、预算 **1**、jitter **0**），
+  而 §7 写的是 `min(15min, 2s × 1.85^n) × (1±0.2 jitter)` 与"一轮内重试预算 3 次"。
+  `RetryPolicy::default()`（就是 §7 那套）在产品路径上**没人用**，`with_retry` 这个覆盖口子全仓唯一的调用点是测试自己给的。
+  **读数**：`notera-host/tests/retry_in_round.rs` 里"一轮连坏两次 503"整批 **0.49 s** 跑完 —— 真按 §7 该是十几秒；
+  一次抖动挡得住、两次挡不住（shipped 预算 1 的直接后果），用户看到的是"稍后重试"，而规范说这一步该被退避吸收。
+  **影响**：① 同步比规范更容易在真实网络抖动面前整轮失败（多设备/移动网络下这条最常碰到）；
+  ② jitter=0 ⇒ 多台设备对着同一台 WebDAV 会**齐步走**重试（§7 引入抖动正是为了这个）；
+  ③ 文档与代码分叉（§45）——"已覆盖 重试"那格读起来像"按 §7 生效"，实际只在层上生效。
+  **为什么不顺手改**：把那一行换成 `default()` 会把"一轮失败"的耗时从 40 ms 抬到十几秒，界面反馈时延、
+  离线类测试与 `round 20 s` 预算全被拽动，属 §9 那类要先量的取舍；**无抖动**这一半单独看更像纯缺陷，
+  若要动，两条一起拍。**解除条件**：用户拍"更扛但报得更慢"还是"维持现状"，然后 §7 那四行与被硬编的那一行对成一句话，
+  并把 `retry_in_round.rs` 的第二半（现在是特征化断言，钉住"挡不住两次"）翻向成"三次以内都挡得住"。
+  已证为真、不随本缺口变动的是：退避**算法**（`notera-net` 单测）、"只重试幂等"那道**护栏**
+  （`notera-net/tests/retry_idempotency.rs`：同注入同预算只变 `idempotent`，MOVE 一条都不许多发）、
+  以及**调用点选择**（条件写 / MOVE / DELETE 压根不进重试层，`notera-webdav/tests/retry_backoff.rs`）。
+
+
 - **G33 代理或服务器不认这组凭据时，界面说的是"暂时读不到服务器上的协议信息，请稍后重试"（2026-09-30 实测；状态 = **已修，0.0.46**）**：
   实测形状：一台真会回 `407 Proxy-Authenticate` 的转发代理 + 真账户配置 + 真 `sync_once()`，把口令填错 ⇒
   `CmdError{code: "sync_refused", detail:{reason: "sync.protocol_unreadable"}}`。前端只显示 `error.<code>` 与状态那一行的

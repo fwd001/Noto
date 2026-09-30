@@ -84,6 +84,13 @@ pub enum MkdirError {
 pub struct Store {
     backend: BackendKind,
     nodes: BTreeMap<String, Node>,
+    /// 注入规则 `#N`（times）的**已命中次数**台账，键是「哪张列表 + 第几个位置」（`status#0` …），
+    /// 不是规则原文 —— 按原文会让两张列表里恰好同形的两条共用一份额度，第二条静默失效。
+    ///
+    /// 放在这里而不是 `Injection` 里：`Injection` 是"配置"（可 clone、可比对），
+    /// 而这是"跑到第几次了"的状态；两者混在一起会让 `inspect()` 里的注入自述不再等于设置。
+    /// 换一次注入就清空（见 `TestServer::inject`），否则上一条测试的额度会咬到下一条。
+    pub(crate) rule_hits: std::collections::HashMap<String, u64>,
 }
 
 /// 路径规范化：拒绝穿越 / 反斜杠 / 空字节；折叠 `//` 与 `.`。
@@ -139,6 +146,7 @@ impl Store {
         let mut store = Store {
             backend,
             nodes: BTreeMap::new(),
+            rule_hits: std::collections::HashMap::new(),
         };
         store.nodes.insert("/".into(), Node::dir());
         if let BackendKind::Fs(dir) = &store.backend {
