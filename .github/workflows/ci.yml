@@ -76,7 +76,7 @@ jobs:
       - name: 版本单源（CI-CD §版本与单一版本源）
         run: node scripts/check-versions.mjs
 
-      - name: 架构适应度 + §26 无障碍 + 扫描台账（本机基线 31/31）
+      - name: 架构适应度 + §26 无障碍 + 扫描台账 + CI 门禁对账（本机基线 32/32）
         run: node scripts/arch-check.mjs
 
       # 本机 rustfmt 组件已装上并跑过 `cargo fmt --all`（当时发现 92 个文件有漂移，已单独
@@ -111,6 +111,20 @@ jobs:
       - name: 前端依赖漏洞审计（high 及以上阻断）
         working-directory: apps/desktop
         run: pnpm audit --audit-level=high --registry=https://registry.npmjs.org
+
+      # Rust 那半边的依赖审计。原先脚本头注释写着"CI 里也是这条"而**CI 里根本没有这一步**
+      # —— 那是 §45 意义上的假账，2026-09-30 对文档时才发现，所以这一步是补账不是加功能。
+      # 先跑判据（`--self-test`：已知有漏洞的 6 个必须报、已知干净的 2 个必须不报，其中
+      # rustls / rustls-webpki / ring 三条是 TLS 那半张图的正向对照），红了就没必要看下一条；
+      # 再跑全量（`Cargo.lock` 624 个 name@version + 2062 条依赖边的对账，覆盖不全直接硬失败）。
+      # 本机 2026-09-30 实测：SELF-TEST 退出码 0；全量 PASS · 624 个 0 条未豁免（3 条豁免逐条有理由）。
+      # **披露**：这两步会把依赖的名字与版本发给外部服务 api.osv.dev（不含代码、路径、凭据），
+      # 与上面 `pnpm audit` 指向公共 registry 是同一类外发。
+      - name: Rust 依赖漏洞审计 · 判据自测（阻断）
+        run: node scripts/audit-rust-deps.mjs --self-test
+
+      - name: Rust 依赖漏洞审计 · 全量（阻断）
+        run: node scripts/audit-rust-deps.mjs
 
       # 契约图要一个可用的 chromium；脚本里写死的是本机路径，CI 上要么找不到浏览器
       # 要么装到别处 —— 所以这一步也先不阻断，等首次运行看清实际行为再收紧。

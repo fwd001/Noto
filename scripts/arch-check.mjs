@@ -7,7 +7,7 @@
  *
  *   node scripts/arch-check.mjs        # exit 0 = 全部通过；exit 1 = 有违规
  */
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, relative, dirname, resolve, normalize } from 'node:path';
 
 const ROOT = process.argv[2] ?? new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
@@ -606,6 +606,42 @@ const ignoredSources = [];
 }
 check('hygiene:no-ignored-source-file', '§45（本机编得过、干净检出编不过，是最贵的一种假绿）', ignoredSources,
   `这些源码文件被 .gitignore 挡住了，不会进版本库：\n    ${ignoredSources.join('\n    ')}`);
+
+
+// ------------------------------------------------------------- 32. CI 里真有这些门 ---
+// 起因是 2026-09-30 对 §45 时撞出来的一条假账：`audit-rust-deps.mjs` 的注释写着"CI 里也是这条"，
+// 而 `ci.yml` 里**从来没有那一步** —— 那条门从写进注释那天起只在本机跑过。
+// 单靠"记得写注释"治不了这一类，所以把它变成判据：**这些命令必须真的出现在 gates job 的 `run:` 里，
+// 而且那一步不许带 `continue-on-error`**（一条会容错的红门禁不是门禁，只是日志）。
+// 两条变异各自验过会红：删掉依赖审计那一步、给 `cargo test` 那一步加上 `continue-on-error: true`。
+const CI_REQUIRED_GATES = [
+  ['node scripts/check-versions.mjs', '版本单源'],
+  ['node scripts/arch-check.mjs', '架构适应度'],
+  ['node scripts/audit-rust-deps.mjs --self-test', 'Rust 依赖审计的判据自测'],
+  ['node scripts/audit-rust-deps.mjs', 'Rust 依赖审计全量'],
+  ['cargo fmt --all --check', '格式检查'],
+  ['cargo clippy --workspace', 'Clippy'],
+  ['cargo test --workspace', 'Rust 全量测试'],
+  ['pnpm audit', '前端依赖审计'],
+];
+const ciGateProblems = [];
+{
+  const ciPath = join(ROOT, '.github', 'workflows', 'ci.yml');
+  const ci = existsSync(ciPath) ? readFileSync(ciPath, 'utf8') : null;
+  if (ci === null) {
+    ciGateProblems.push('读不到 .github/workflows/ci.yml —— 本条在空转');
+  } else {
+    // 按"6 个空格 + `- ` 开头"切步骤块；这一步只要求**同一块里**同时看到命令与容错标记。
+    const blocks = ci.split(/\n {6}- /);
+    for (const [cmd, label] of CI_REQUIRED_GATES) {
+      const hit = blocks.find((b) => /^\s+run:.*/m.test(b) && b.includes(cmd));
+      if (!hit) ciGateProblems.push(`${label}：ci.yml 里没有任何一步真的在跑 \`${cmd}\``);
+      else if (/continue-on-error:\s*true/.test(hit)) ciGateProblems.push(`${label}：那一步带 continue-on-error，红也不拦`);
+    }
+  }
+}
+check('ci:gates-are-actually-blocking', 'CI-CD §流水线分层 / 实际落地的 PR 门禁', ciGateProblems,
+  ciGateProblems.join('\n    '));
 
 
 // ------------------------------------------------------------------------- 输出 ---

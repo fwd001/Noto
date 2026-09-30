@@ -85,6 +85,33 @@
 | `nightly-soak` | `schedule: cron '0 18 * * *'`（UTC，≈ 北京 02:00）+ tag 前手动触发 | 长时/大数据：10 万条笔记、FTS 索引重建、72h（预算截为 3h 采样）多客户端反复同步、内存/FD 泄漏曲线、崩溃重放 1000 次 | ≤ 3 h | 否；但 **release candidate 必须引用最近一次绿过的 nightly run id** |
 | `docs` | `pull_request`，paths: `docs/**`、`*.md`、`crates/**`、`apps/**` | `markdownlint-cli2`；架构图渲染（graphviz `dot` / mermaid，本机无 `dot` → 只在 CI 出图）；**`ARCHITECTURE-MAP` 一致性检查**：文档声明的 crate ↔ 目录 ↔ 依赖边 必须与 `cargo metadata` 实际图一致，漂移即 fail。**本地等价已落地**：`node scripts/arch-check.mjs`（17 条：依赖边、`reqwest` 只在 `notera-net`、`rusqlite` 只在 `notera-store`、store 之外无 SQL 字面量、前端无协议词汇、devserver 必须 debug-only…）；契约图渲染与断言用 `node scripts/verify-diagram.mjs`（59 条） | ≤ 4 min | 是（改文档/改 crate 结构的 PR） |
 
+### 实际落地的 PR 门禁（`.github/workflows/ci.yml`，名字是「PR 门禁（G1 的第一层）」）
+
+上面那张分层表是 Phase 0 的**设计**（7 个 job）。今天真的在跑的只有**一个** `gates` job
+（`windows-latest` + GNU 工具链），步骤顺序就是下面这份；`concurrency.cancel-in-progress: true`
+意味着同一批连着 push 只会留下最后一个 run（这条踩过，见 CHANGELOG 里 G28 那段）。
+**这份清单不是抄来的**：`scripts/arch-check.mjs` 第 32 条 `ci:gates-are-actually-blocking` 会逐条去
+`ci.yml` 里查这些命令在不在某个 `run:` 上、那一步有没有被加上 `continue-on-error` —— 少一步或加了容错就红。
+
+| # | 步骤（阻断） | 本机基线（2026-09-30） |
+| --- | --- | --- |
+| 1 | `actions/checkout` + GNU 工具链 + pnpm/node 准备 + `pnpm install --frozen-lockfile` | — |
+| 2 | `pnpm build`（**必须排在所有 Rust 步骤之前**：桌面壳的 `build.rs` 要嵌前端产物） | 有产物 |
+| 3 | `node scripts/check-versions.mjs` | 一致 |
+| 4 | `node scripts/arch-check.mjs` | **32/32** |
+| 5 | `cargo fmt --all --check` | 退出码 0 |
+| 6 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning |
+| 7 | `cargo test --workspace -- --test-threads=1`（串行是判据，不是习惯：墙钟类注入并发会假红） | **633 / 0 失败 / 7 ignored**（84 个 result 行） |
+| 8 | `pnpm test` + `pnpm typecheck` | 220 通过（23 文件）+ 0 错 |
+| 9 | `pnpm audit --audit-level=high --registry=https://registry.npmjs.org` | 0 条（275 个依赖） |
+| 10 | `node scripts/audit-rust-deps.mjs --self-test` | 6 个脏样本报 18 条、2 个净样本 0 条（**2026-09-30 补**：此前脚本注释写着"CI 里也是这条"而 CI 里从来没这一步，那条门只在本机跑过 —— 缺口 G36） |
+| 11 | `node scripts/audit-rust-deps.mjs` | **PASS · 624 个依赖 0 条未豁免**（外加 2062 条依赖边的覆盖对账） |
+| 12 | `cargo build --release -p notera-desktop`（产物一致性，不签名不打包） | 出得来 |
+
+**显式不在 CI 里跑**的仍按本节末尾那份清单（三条界面 lane、perf、真窗口、真实 WebDAV），
+第 13 步 `verify-diagram` 带 `continue-on-error`（runner 上的浏览器路径没验过）—— 那一步**故意**
+不在这张表里，也不受第 32 条约束：它红过，但没拦过人。
+
 ### 发布门禁的硬规则
 
 | 规则 | 表达 |

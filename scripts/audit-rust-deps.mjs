@@ -16,13 +16,21 @@
  *   前者必须报出来（不然"0 条"没有意义），后者必须不报（报了说明结果按错了索引；
  *   第一版就错过一次：查 6 个只把前 4 个当键，第 5、6 条结果读到 undefined）。
  *
+ * 2026-09-30 补的那一块（`checkEdgeClosure`）：上面那些守卫只保证"发出去的没被吞"，
+ * 不保证**发出去的是全部**。`parseLock` 少解析一个 `[[package]]` 块，表现是查询数从 624
+ * 悄悄变成 623、照样 PASS —— 而少掉的那一个正是"新加的依赖没进审计"这一类，
+ * 与"扫到 0 项 ≠ 检查过"是同一个坑。所以改成用 lockfile 自己的边做对账：每一条
+ * `dependencies` 都必须指向一个**这次真被查过**的包，指不到就硬失败。解析器丢块 ⇒ 那个包
+ * 仍被它的父块引用 ⇒ 边落空 ⇒ 红。变异验证见本文件末尾的注释。
+ *
  * 豁免表 `WAIVERS` 的规矩：**每一条必须写"为什么豁免"与"什么时候回头看"**，不许写"暂时忽略"
  * （§39）。它只把"已经判定过、而我们这一层修不动"的那几条从阻断里拿掉，新冒出来的照样红 ——
  * 豁免是把噪音关掉，不是把判据关掉。每条在 `docs/PRODUCTION-READINESS.md` §7 都有对应的一格。
  *
  * 跑法：
- *   node scripts/audit-rust-deps.mjs               # 审 Cargo.lock 的全部包（CI 里也是这条）
+ *   node scripts/audit-rust-deps.mjs               # 审 Cargo.lock 的全部包（CI 的 gates job 里也是这条，阻断）
  *   node scripts/audit-rust-deps.mjs --self-test    # 只验判据本身
+ *   node scripts/audit-rust-deps.mjs --lock <路径>  # 换一份 lockfile：给变异验证用（判据本身别绕这条）
  */
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -47,15 +55,83 @@ const WAIVERS = {
     '由构建期宏带进来、不进产物。回看时机：等把它拉进来的那条链（proc-macro-error 的父依赖）不再要它。',
 };
 
-/** 解析 `Cargo.lock` 的 `[[package]]` 块 —— 用 lockfile 而不是 `cargo tree`：不跑 cargo、不装工具。 */
+/**
+ * 解析 `Cargo.lock` 的 `[[package]]` 块 —— 用 lockfile 而不是 `cargo tree`：不跑 cargo、不装工具。
+ * 顺带把每个块的 `dependencies` 边收下来，留给 `checkEdgeClosure` 对账。
+ *
+ * v4 锁里的一条边有三种写法，缺一种就是解析器在骗人：
+ *   `"name"`            —— 全图里这个名字只有一个版本，cargo 省略了版本
+ *   `"name version"`    —— 同名多版本（本图里 `sha2`、`cipher` 就是这样）
+ *   `"name version (src)"` —— 还要靠来源区分（当前树里没有；出现也不当噪音跳过）
+ */
 export function parseLock(text) {
-  const out = [];
+  const packages = [];
+  const edges = [];
   for (const block of text.split('[[package]]').slice(1)) {
     const name = /^name = "([^"]+)"/m.exec(block)?.[1];
     const version = /^version = "([^"]+)"/m.exec(block)?.[1];
-    if (name && version) out.push({ name, version });
+    if (!name || !version) continue;
+    packages.push({ name, version });
+    const from = `${name}@${version}`;
+    const deps = /^dependencies = \[([^\]]*)\]/m.exec(block)?.[1] ?? '';
+    for (const quoted of deps.match(/"[^"]*"/g) || []) {
+      edges.push({ from, text: quoted.slice(1, -1).trim() });
+    }
   }
-  return out;
+  return { packages, edges };
+}
+
+/**
+ * 边对账：每条 `dependencies` 必须指向一个**这次真被查过**的包。
+ *
+ * 为什么这一样是判据的一部分而不是锦上添花：审计的"0 条"只覆盖发出去的那批，
+ * 而"发出去的是不是全部"原先没人管。解析器漏一块（改锁格式、名字里带引号、
+ * 块顺序变了）表现就是少查一个 + 照样 PASS。加了这道账之后，漏解析必红 ——
+ * 因为漏掉的那个包一定被它的父块引用着。
+ */
+export function checkEdgeClosure(packages, edges) {
+  const queried = new Set(packages.map((p) => `${p.name}@${p.version}`));
+  const byName = new Map();
+  for (const p of packages) {
+    if (!byName.has(p.name)) byName.set(p.name, []);
+    byName.get(p.name).push(p.version);
+  }
+  const misses = [];
+  for (const e of edges) {
+    const tok = e.text.split(/\s+/);
+    const [name, version, source] = tok;
+    let target;
+    if (tok.length === 1) {
+      const versions = byName.get(name) ?? [];
+      if (versions.length === 0) {
+        // 这一支就是第一版漏掉的那一支：`?? null` + `if (target && …)` 把"引用了一个不存在的
+        // 包"当成了"没事"，两个变异（删掉 rcgen / aws-lc-sys 整块）于是都笑着过了。
+        misses.push(`${e.from} → ${name}：被引用，但它不在被查询的包里（少解析了一个块 ⇒ 覆盖不全）`);
+        continue;
+      }
+      if (versions.length > 1) {
+        misses.push(`${e.from} → ${e.text}：同名有 ${versions.length} 个版本却没写版本号 —— 边指不到确定的包`);
+        continue;
+      }
+      target = `${name}@${versions[0]}`;
+    } else if (tok.length === 2 || (tok.length === 3 && /^\(.+\)$/.test(source))) {
+      target = `${name}@${version}`;
+    } else {
+      misses.push(`${e.from} → ${e.text}：这条边的写法不在已知的三种里 —— 不猜，判失败`);
+      continue;
+    }
+    if (!queried.has(target)) {
+      misses.push(`${e.from} → ${target}：被引用，却没进这次查询（它没被看过，"0 条"不含它）`);
+    }
+  }
+  if (misses.length > 0) {
+    const shown = misses.slice(0, 10).map((m) => `  · ${m}`).join('\n');
+    throw new Error(
+      `lockfile 的依赖边有 ${misses.length} 条落不到被查询的包上 —— 这一跑覆盖不全，不能判"干净"：\n${shown}` +
+        (misses.length > 10 ? `\n  …还有 ${misses.length - 10} 条` : ''),
+    );
+  }
+  return queried.size;
 }
 
 async function queryBatch(packages) {
@@ -105,6 +181,17 @@ async function selfTest() {
     { name: 'time', version: '0.1.44' }, // RUSTSEC-2020-0071
     { name: 'atom', version: '0.3.5' }, // RUSTSEC-2020-0044
     { name: 'chrono', version: '0.2.25' }, // RUSTSEC-2020-0159
+    // 后三条是 **TLS 那半张图的正向对照**（2026-09-30 现测）：我们查的是 rustls 0.23.45 /
+    // rustls-webpki 0.103.15 / ring 0.17.14，而"这几个没通告"有两种可能 —— 真的干净，
+    // 或 OSV 压根不收这个包。拿同族的旧版本当对照，它们必须报，才说明这一族的读数是量出来的：
+    //   rustls@0.21.5 → RUSTSEC-2024-0336，rustls-webpki@0.101.0 → RUSTSEC-2023-0053（+3 条），
+    //   ring@0.16.20 → RUSTSEC-2025-0009 / -0010。
+    // 反面要说清：`rcgen`、`tokio-rustls`、`aws-lc-rs`/`aws-lc-sys` 拿不出这种对照 ——
+    // 这一族历史上就没发过通告。对它们，"0 条"的意思是"上游没报过"，不是"被证明看过"
+    // （边对账只证明**发出去了**）。
+    { name: 'rustls', version: '0.21.5' }, // RUSTSEC-2024-0336
+    { name: 'rustls-webpki', version: '0.101.0' }, // RUSTSEC-2023-0053 等
+    { name: 'ring', version: '0.16.20' }, // RUSTSEC-2025-0009 / -0010
   ];
   // 对照样本自己也得先验一次：第一版拿 `rand@0.9.2` 当"干净"，结果它真的中了一条
   // （RUSTSEC-2026-0097）—— 那是数据不是判据坏，但对照样本就废了。
@@ -139,10 +226,18 @@ async function selfTest() {
 async function main() {
   if (process.argv.includes('--self-test')) return selfTest();
 
-  const packages = parseLock(readFileSync(join(ROOT, 'Cargo.lock'), 'utf8'));
-  if (packages.length === 0) throw new Error('Cargo.lock 里一个 [[package]] 都没解析出来 —— 这条扫描在空转');
+  // `--lock` 只为了能把判据自己拿去跑变异（删掉一个块必须红）。默认路径不动。
+  const lockAt = process.argv.indexOf('--lock');
+  const lockPath = lockAt === -1 ? join(ROOT, 'Cargo.lock') : resolve(process.argv[lockAt + 1] ?? '');
+  if (lockAt !== -1 && !lockPath) throw new Error('--lock 后面要跟一个路径');
+  const { packages, edges } = parseLock(readFileSync(lockPath, 'utf8'));
+  if (packages.length === 0) throw new Error(`${lockPath} 里一个 [[package]] 都没解析出来 —— 这条扫描在空转`);
   const pkgs = [...new Map(packages.map((p) => [`${p.name}@${p.version}`, p])).values()];
-  console.log(`· Cargo.lock：${packages.length} 个条目，去重后 ${pkgs.length} 个 name@version，生态标为 ${ECOSYSTEM}`);
+  console.log(`· ${lockPath}：${packages.length} 个条目，去重后 ${pkgs.length} 个 name@version，生态标为 ${ECOSYSTEM}`);
+
+  // 先对账再查：覆盖不全时不该花一次网络请求去换一个看起来干净的数。
+  const seen = checkEdgeClosure(packages, edges);
+  console.log(`· 依赖边 ${edges.length} 条，全部落到被查询的包上（覆盖 ${seen} 个 name@version）`);
 
   const CHUNK = 400;
   const results = [];
@@ -179,3 +274,19 @@ async function main() {
 }
 
 await main();
+
+/**
+ * 变异验证记录（2026-09-30，本机 `.logs/audit-mut/`，用 `--lock` 指过去跑的）：
+ * 每一条都要"红 + 说清为什么红"，因为边对账本身也要被证明会失败。
+ *
+ * * 删掉 `rcgen` 整块 → 红：`notera-test-webdav@0.0.46 → rcgen：被引用，但它不在被查询的包里`
+ * * 删掉 `aws-lc-sys` 整块 → 红：`aws-lc-rs@1.18.1 → aws-lc-sys：…`
+ * * 删掉 `sha2@0.11.0`（同名两版本里的那一个）→ 红，**3 条**落空（三个直接依赖各自引用它）
+ * * 把一条边写成 `"base64 0.22.1 extra junk"` → 红：`这条边的写法不在已知的三种里`
+ * * 原样拷一份 → 绿（对照组：红是变异造成的，不是脚本坏）
+ *
+ * 第一版这里翻过一次车，值得留着：name-only 那条分支写的是 `?? null` + `if (target && …)`，
+ * 于是"引用了一个没被解析到的包"被当成了没事 —— 前两个变异**笑着跑完全量查询并打印 PASS · 623 个**。
+ * 也就是说：守卫差一行的时候，"覆盖不全"和"覆盖全但干净"在输出上长一个样，只有数不一样，
+ * 而那正是没人会去对的一个数。改成 `versions.length === 0 ⇒ miss` 之后才红。
+ */
