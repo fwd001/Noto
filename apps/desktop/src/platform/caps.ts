@@ -37,13 +37,6 @@ function inferOs(): OsKind {
   return 'other';
 }
 
-function isTransparentOk(os: OsKind): boolean {
-  if (typeof navigator === 'undefined') return false;
-  const data = (navigator as { userAgentData?: { platform?: string } }).userAgentData;
-  if (os === 'windows' && /Windows NT 10/.test(navigator.userAgent ?? '')) return true;
-  return data?.platform === 'Windows';
-}
-
 export function localCaps(): PlatformCaps {
   const os = inferOs();
   const mobile = os === 'ios' || os === 'android';
@@ -61,7 +54,12 @@ export function localCaps(): PlatformCaps {
     windowChrome: os === 'windows' ? 'custom' : os === 'macos' || os === 'ios' ? 'overlay' : 'system',
     safeArea: mobile,
     compactToolbar: mobile,
-    transparency: os === 'macos' || isTransparentOk(os),
+    // 透明效果（PLATFORM.md §观感 写的 Mica/Acrylic + "必须提供关闭开关"）**今天没有实现**：
+    // 我们这边一个 call site 都没有（`window-vibrancy` 只是 tauri 的传递依赖），而 `no-transparency` 那个类
+    // 也没有任何 CSS 消费它。以前这里报 true ⇒ 设置页摆出一颗"窗口透明效果"的勾，
+    // 勾得动、存得下、就是没有任何视觉后果 —— 正是上面那句注释要消灭的形状（托盘/快捷键/钥匙串
+    // 那三颗已经消灭过一次）。能力照实报 false，开关就不出现；等真做特效时连同 §观感 一起翻回来。
+    transparency: false,
     dragAndDrop: !mobile,
   };
 }

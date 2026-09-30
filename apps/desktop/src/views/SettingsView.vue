@@ -406,7 +406,7 @@ function keyHint(): string {
             />
           </label>
 
-          <label v-if="settings.caps.transparency" class="row">
+          <label v-if="settings.caps.transparency" class="row" data-testid="pref-transparency">
             <input v-model="settings.prefs.transparency" type="checkbox" class="checkbox" />
             <span>{{ t('settings.transparency') }}</span>
           </label>

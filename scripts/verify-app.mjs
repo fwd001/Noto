@@ -1378,6 +1378,30 @@ await step('凭据库没接入的设备：口令那一格要在敲之前就说�
   return 'none ⇒ 那句话出现（含后果）；真 caps ⇒ 不出现，两条腿都验过';
 });
 
+await step('没有实现的效果就不许摆出开关：「窗口透明效果」这颗勾不该出现（缺口 G39）', async () => {
+  // PLATFORM.md §观感 写的是"Mica/Acrylic 仅系统支持时启用 + **必须**提供关闭开关"。
+  // 实测今天**特效本身没实现**（全仓搜 mica/acrylic/vibrancy/backdrop 零命中，`no-transparency`
+  // 那个类也没有任何 CSS 消费），而能力却报 transparency:true ⇒ 设置页摆出一颗勾，
+  // 勾得动、存得下、就是没有任何视觉后果 —— 与 caps.ts 那句注释要消灭的形状一模一样。
+  // 修法是把能力照实报 false（开关随之不出现），所以判据是"不出现"，
+  // 而**反向半边**必须有：同一节里那颗真有效的字号滑杆要出现，
+  // 否则"整节没渲染"也能交出这一格的绿。
+  await page.locator('[data-testid="nav-settings"]').scrollIntoViewIfNeeded();
+  await page.click('[data-testid="nav-settings"]', { timeout: 8000 });
+  const scale = page.locator('[data-testid="font-scale"]');
+  if ((await scale.count()) === 0) {
+    throw new Error('外观那一节没渲染（字号滑杆不在）—— 那下面那句"没有透明开关"是假绿');
+  }
+  const sw = page.locator('[data-testid="pref-transparency"]');
+  if ((await sw.count()) > 0) {
+    throw new Error(
+      '「窗口透明效果」这颗勾又出现了：特效我们这边一个 call site 都没有（`window-vibrancy` 只是 tauri 的传递依赖）、' +
+        '`no-transparency` 也没有 CSS 消费，一颗勾得动、存得下、却没有任何后果的开关就是界面缺陷（缺口 G39）',
+    );
+  }
+  return '字号滑杆在（那一节真渲染了）；透明开关不在（能力照实报 false）';
+});
+
 await step('网络请求零失败', async () => {
   if (failedRequests.length > 0) throw new Error(`${failedRequests.length} 条：${failedRequests.slice(0, 5).join('; ')}`);
   return '0 failed';
