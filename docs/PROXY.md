@@ -169,7 +169,7 @@ round         20 s      一轮同步预算，超时则本轮收敛为部分完�
 | 代理认证失败(407) | 停轮、这一轮不写入：`map_status(407) → RemoteError::Auth →` 错误码 `sync_auth_failed`；待办留在 outbox（`Pending`/`Failed` 两态，**没有** "blocked" 这个状态），改对凭据后重试即可 | **无**（照常读写） | `! 服务器或代理不认这组凭据…`（文案键 `sync.auth_failed` 与 `error.sync_auth_failed`）。**0.0.46 之前这一格是假的**：`negotiate` 把所有远端错误折成 `sync.protocol_unreadable`（"暂时读不到…请稍后重试"），凭据问题被说成"等一会儿" —— 缺口 G33，现在由 `notera-host/tests/proxy_account_407.rs` 两条门禁钉住 |
 | 代理中途挂 | 请求超时 → 重试 | 无 | `↻ 正在同步`→`!` |
 | DNS 失败 | `Dns` 分类（与 `Connect` 区分） | 无 | `! 无法解析服务器地址` |
-| TLS 校验失败 | `Tls` 分类，**不降级重试** | 无 | `! 证书不受信任` + 指向 §6 配置 |
+| TLS 校验失败 | `Tls` 分类，**不降级重试** | 无 | `! 证书不受信任` + 指向 §6 配置。**2026-09-30 第一次有门禁**（`notera-net/tests/tls_policies.rs`，新工装 `TlsOrigin`：每次运行现造一张自签 CA + 叶证书，盘上不落密钥）：自签链在 `Strict` 下必须拒且**一个字节的应用数据都不交换**（源站两本账 `accepted≥1 / handled==0`）；`Tls` 不算可重试形态 —— 配预算 3 也只上一次连接（`accepted` 数出来的）。变异 M13（`InsecureLocal` 放行任意主机）、M14（把 `Tls` 当可重试）各红在对应的门禁上。**同批量出缺口 G35**：`CaBundle`（本节写的"内网自签主路径"）在 Windows 上走不通，见 §6 的说明 |
 | 从 System 切到 Direct 后恢复 | 立即触发一轮（网络变化事件） | 无 | `↻` |
 | 配置写坏（非法 host/port） | 保存前校验拒绝；已存在的坏配置 → 回退 Direct 并告警 | 无 | `! 代理配置无效` |
 

@@ -17,6 +17,9 @@ quick-xml = { workspace = true }
 tracing = { workspace = true }
 sha2 = { workspace = true }
 percent-encoding = { workspace = true }
+# TLS 源站（见根 Cargo.toml 那条注释）：只在测试里被链接。
+rcgen = { workspace = true }
+tokio-rustls = { workspace = true }
 
 [dev-dependencies]
 notera-test-webdav = { workspace = true }

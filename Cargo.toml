@@ -73,6 +73,11 @@ bytes = "1"
 # 两个旧行为**：0.37 上它们是红的 —— 旧代码遇到解不开的引用会把整条租约丢掉、
 # 把整个文本节点变成空串，两处都是"看不见的丢失"。
 quick-xml = "0.42"
+# 测试基建专用（只进 notera-test-webdav，全仓都是 dev-dependency，进不了发布包）：
+# TLS 源站 —— §28 最后一格「真 TLS 握手失败」需要一台真能出示证书的源站，
+# 以前所有测试都是 Strict 档打在明文 loopback 上，四档策略里没有一档被真握手验过。
+rcgen = { version = "0.13", default-features = false, features = ["pem", "aws_lc_rs"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs", "logging", "tls12"] }
 percent-encoding = "2"
 tempfile = "3"
 
