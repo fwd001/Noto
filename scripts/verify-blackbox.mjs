@@ -273,8 +273,12 @@ await step('键盘可达：Esc 与 Tab 不失控，焦点始终在界面里', as
 
 await page.screenshot({ path: SHOT });
 await step('全程控制台零 error、无 4xx/5xx', async () => {
-  if (consoleErrors.length > 0) throw new Error(consoleErrors.slice(0, 3).join(' | '));
-  if (badResponses.length > 0) throw new Error(badResponses.slice(0, 3).join(' | '));
+  // 先说 `badResponses`：那条带方法/URL/步骤/响应体，而 console 那句只有 "400 (Bad Request)"。
+  // 顺序反过来的话，红一次就要靠猜是哪支命令 —— 猜出来的修法本身就是下一个假绿的来源。
+  const parts = [];
+  if (badResponses.length > 0) parts.push(...badResponses.slice(0, 3));
+  if (consoleErrors.length > 0) parts.push(...consoleErrors.slice(0, 3));
+  if (parts.length > 0) throw new Error(parts.join(' | '));
   return `截图 ${SHOT.split('/').pop()}`;
 });
 

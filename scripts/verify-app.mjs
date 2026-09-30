@@ -811,6 +811,127 @@ await step('侧栏那一行的名字是**渲染出来**看得见的（不是 inn
   return `「${name}」静止态可见宽 ${rest.labelWidth}px 未被裁；hover 后 ${hov.sizes.length} 颗动作按钮都可点、行宽仍 ${hov.rowWidth}px`;
 });
 
+await step('工具条的块型菜单：弹层要看得见、点得着，点完块型真的变（G29）', async () => {
+  // 出货默认窗口是 1240 宽，工具条在那一档是横向可滚的（`overflow-x: auto`）。CSS 规定一个轴不是
+  // visible 时另一个轴的 visible 也算 auto ⇒ 这条 53 px 高的横条把自己 absolute 弹出的菜单**整个裁掉**：
+  // 按钮进入展开态、DOM 里弹层也在，但屏幕上没有菜单，点下去命中的是编辑区。
+  // 所以判据不能问"弹层在不在 DOM 里"（红的时候它也在），要问"在视口内吗、点得着吗、点完块型变了吗"。
+  await page.setViewportSize({ width: 1240, height: 800 });
+  const primary = page.locator('[data-testid="new-note"]');
+  if ((await primary.count()) > 0) await primary.first().click();
+  await page.waitForSelector('[data-testid="editor-doc"]', { timeout: 5000 });
+  const field = page.locator('[data-testid="editor-doc"] [contenteditable="true"]').first();
+  await field.click();
+  await page.keyboard.type('块型菜单的现场', { delay: 12 });
+  await page.waitForTimeout(300);
+
+  await page.locator('.tb__menu-wrap button').first().click();
+  const pop = page.locator('.tb__popover');
+  await pop.waitFor({ timeout: 3000 });
+  const geo = await pop.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const tb = document.querySelector('.tb').getBoundingClientRect();
+    const item = [...el.querySelectorAll('.tb__item')].find((n) => n.textContent.trim() === '引用');
+    const ir = item.getBoundingClientRect();
+    const hit = document.elementFromPoint(ir.left + ir.width / 2, ir.top + ir.height / 2);
+    return {
+      top: Math.round(r.top),
+      bottom: Math.round(r.bottom),
+      vh: window.innerHeight,
+      tbBottom: Math.round(tb.bottom),
+      inViewport: r.top >= 0 && r.bottom <= window.innerHeight,
+      hitIsItem: !!hit && (hit === item || item.contains(hit)),
+      hitTag: hit ? `${hit.tagName}.${(hit.className ?? '').toString().split(' ')[0]}` : 'null',
+    };
+  });
+  const fails = [];
+  if (!geo.inViewport) fails.push(`弹层盒子 ${geo.top}→${geo.bottom} 不在视口高 ${geo.vh} 之内`);
+  if (!geo.hitIsItem) fails.push(`「引用」那一项中心命中的是 ${geo.hitTag} 而不是它自己（工具条底在 ${geo.tbBottom}，弹层伸到 ${geo.bottom}）⇒ 这颗是死的`);
+  if (fails.length > 0) throw new Error(fails.join('；'));
+
+  const before = await blockSig();
+  await pop.locator('.tb__item').filter({ hasText: /^引用$/ }).click();
+  await page.waitForTimeout(800);
+  const after = await blockSig();
+  if (JSON.stringify(before) === JSON.stringify(after)) throw new Error(`点了「引用」块序列没变：${JSON.stringify(after)}`);
+  if (!after.some((s) => s.startsWith('blockquote:'))) throw new Error(`点完没有 blockquote 那一类：${JSON.stringify(after)}`);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  return `弹层 ${geo.top}→${geo.bottom} 在 ${geo.vh} 高的视口内且点得着；${before.at(-1)} → ${after.at(-1)}`;
+});
+
+await step('工具条放不下时要有"这边还有东西"那句话，而且每颗都够得着（G30）', async () => {
+  // 默认窗口 1240 那一档实测：可视 638 / 内容 818 ⇒ 插入附件、图片、撤销、重做 四颗初始在视野外。
+  // 常驻滚动条是刻意不留的（会把编辑区第一行顶下去），那就得用别的办法说出来 —— 渐隐。
+  // 这条判据同时钉三件事：① 溢出时确有提示；② 提示跟着滚动位置变（不是写死的）；③ 视野外那几颗键盘 Tab 得到。
+  await page.setViewportSize({ width: 1240, height: 800 });
+  const bar = page.locator('.tb');
+  await bar.waitFor({ timeout: 5000 });
+  const start = await bar.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const out = [...el.querySelectorAll('.tb__btn')].filter((b) => b.getBoundingClientRect().right > box.right + 0.5);
+    const after = getComputedStyle(el, '::after');
+    return {
+      clientW: Math.round(box.width),
+      scrollW: el.scrollWidth,
+      outLabels: out.map((b) => (b.getAttribute('aria-label') || b.textContent || '').trim().slice(0, 6)),
+      moreRight: el.getAttribute('data-more-right'),
+      cueContent: getComputedStyle(el, '::after').content,
+      cueImage: getComputedStyle(el, '::after').backgroundImage,
+    };
+  });
+  const fails = [];
+  if (start.scrollW <= start.clientW) fails.push(`这一档没溢出（可视 ${start.clientW} ≥ 内容 ${start.scrollW}）⇒ 判据在空转`);
+  if (start.outLabels.length === 0) fails.push('没有按钮在视野外 ⇒ 这条没东西可保');
+  if (start.moreRight !== 'true') fails.push('右边还有东西但 data-more-right 不在 ⇒ 提示不会出现');
+  // 两条都要看：`content: none` 时伪元素根本不生成，可 computed 里那个 gradient 还在 ——
+  // 只查 backgroundImage 会永远为真（写这条时被自己的变异戳穿了一次）。
+  if (start.cueContent === 'none' || start.cueContent === '') fails.push(`右缘渐隐没生成（::after content = ${start.cueContent}）`);
+  if (!/linear-gradient/.test(start.cueImage)) fails.push(`渐隐没有画（backgroundImage = ${start.cueImage.slice(0, 30)}）`);
+
+  // 键盘可达：视野外那几颗，Tab 聚焦之后必须完整进入视野（focus 的滚动是平滑的，要等它停）
+  const reach = await bar.evaluate(async (el) => {
+    const rows = [];
+    for (const b of el.querySelectorAll('.tb__btn')) {
+      const wasOut = b.getBoundingClientRect().right > el.getBoundingClientRect().right + 0.5;
+      b.focus();
+      await new Promise((res) => setTimeout(res, 260));
+      const r = b.getBoundingClientRect();
+      const box = el.getBoundingClientRect();
+      rows.push({
+        label: (b.getAttribute('aria-label') || b.textContent || '').trim().slice(0, 6),
+        wasOut,
+        ok: r.left >= box.left - 0.5 && r.right <= box.right + 0.5,
+      });
+    }
+    return rows;
+  });
+  for (const r of reach) if (r.wasOut && !r.ok) fails.push(`Tab 聚焦「${r.label}」之后仍没完整进入视野`);
+
+  // 滚到最右端：提示必须换边（写死的实现会在这里红），而渐隐也要跟着换
+  const end = await bar.evaluate(async (el) => {
+    el.scrollLeft = el.scrollWidth;
+    await new Promise((res) => setTimeout(res, 260));
+    const box = el.getBoundingClientRect();
+    const hidden = [...el.querySelectorAll('.tb__btn')].filter((b) => b.getBoundingClientRect().left < box.left - 0.5);
+    return {
+      moreRight: el.getAttribute('data-more-right'),
+      moreLeft: el.getAttribute('data-more-left'),
+      hiddenCount: hidden.length,
+      cueLeftContent: getComputedStyle(el, '::before').content,
+      cueLeftImage: getComputedStyle(el, '::before').backgroundImage,
+    };
+  });
+  if (end.moreRight === 'true') fails.push('已经滚到最右端，data-more-right 还亮着 ⇒ 提示不跟着滚动位置走');
+  if (end.hiddenCount > 0 && end.moreLeft !== 'true') fails.push(`左边还藏着 ${end.hiddenCount} 颗却没说（data-more-left 不在）`);
+  if (end.hiddenCount > 0 && (end.cueLeftContent === 'none' || !/linear-gradient/.test(end.cueLeftImage)))
+    fails.push(`左边还有东西，可左缘那道渐隐没在画（content=${end.cueLeftContent}）`);
+
+  await page.screenshot({ path: `${OUT}/app-toolbar-overflow.png` });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  if (fails.length > 0) throw new Error(fails.join('；'));
+  return `可视 ${start.clientW}/内容 ${start.scrollW}，视野外 ${start.outLabels.join('、')} 都有渐隐提示且 Tab 可达；滚到底后提示换边（左藏 ${end.hiddenCount} 颗）`;
+});
+
 await step('桌面视口无横向溢出', async () => {
   const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
   if (m.sw > m.cw + 1) throw new Error(`scrollWidth ${m.sw} > clientWidth ${m.cw}`);
