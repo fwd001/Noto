@@ -57,7 +57,11 @@ export const useEditorStore = defineStore('editor', () => {
   const pendingAttachments = ref<Record<string, Attachment>>({});
 
   const versionTooNew = computed(() => docVersion.value > SUPPORTED_DOC_VERSION);
-  const writeBlocked = computed(() => versionTooNew.value || inTrash.value || noteId.value === null);
+  // `loading` 也在这一串里，为的是切篇那个往返窗口：`open()` 先把 noteId 换成下一篇、blocks 清空，
+  // 而回读还在飞 —— 这一刻补上来的写会以 `{id: 下一篇, expectedRev: 上一篇的 rev}` 出门
+  // （2026-10-02 在 store 层复现出来，正是 lane 里那对 `actual 5 / expected 2`）。
+  // 窗口里**拒绝**写入（updateBlock 把原因落到 saveErrorKey，不静默），比把串了的那一支发出去好。
+  const writeBlocked = computed(() => loading.value || versionTooNew.value || inTrash.value || noteId.value === null);
   const readOnlyReason = computed<string | null>(() => {
     if (versionTooNew.value) return 'versionTooNew';
     if (inTrash.value) return 'inTrash';
@@ -203,6 +207,23 @@ export const useEditorStore = defineStore('editor', () => {
     // 于是刚保存的内容（实测是一次加粗）被当成旧数据盖掉；而那支保存的回包发现"正文又变了"，
     // 会照着被盖掉的版本再存一次 —— 用户的编辑就此消失。表现是"屏幕上明明有粗体，刷新后没了"。
     await saveChain;
+  }
+
+  /**
+   * 认领"同一行已经被推进"的 rev —— 只前进、只对得上当前打开的那一篇、**不动正文**。
+   *
+   * 为什么需要它：置顶与"移到文件夹"在核心里走的是同一条 `commit_edit`（pinned/folder 要能同步出去，
+   * 就必须占一格 rev），而 `rev.value` 平时只跟着自己的 `edit_note` 回包前进。不交接的读数（2026-10-02 真机）：
+   * 三次置顶把那一行推到 5，下一支自动保存仍报 `expectedRev=2` ⇒ 核心按 `stale_edit` 拒，
+   * 用户刚打的字被 `reloadRemote` 换掉、哪儿也没落，屏幕上却写着"这条笔记在别处被改动了"。
+   *
+   * 只在这里改 rev：认领的是一次**本地已成功的写**，不是远端内容 —— 远端改动仍走 `enterStale` 的草稿冲突那一条路。
+   */
+  function adoptRev(id: string, nextRev: number): void {
+    if (typeof id !== 'string' || typeof nextRev !== 'number') return;
+    if (noteId.value !== id) return;
+    if (nextRev <= rev.value) return;
+    rev.value = nextRev;
   }
 
   async function save(): Promise<void> {
@@ -498,6 +519,7 @@ export const useEditorStore = defineStore('editor', () => {
     consumeFocusHint,
     flush,
     save,
+    adoptRev,
     reloadRemote,
     useLocalDraft,
     discardLocalDraft,

@@ -220,6 +220,7 @@ export const useNoteStore = defineStore('notes', () => {
     try {
       const note = await callCommand<Note>(Commands.setNotePinned, { id, pinned });
       applyNoteUpdate(note);
+      handRevToEditor(note);
     } catch (error) {
       errorKey.value = asBridgeError(error).messageKey;
     }
@@ -229,6 +230,7 @@ export const useNoteStore = defineStore('notes', () => {
     try {
       const note = await callCommand<Note>(Commands.setNoteFolder, { id, folderId });
       applyNoteUpdate(note);
+      handRevToEditor(note);
       await load();
     } catch (error) {
       errorKey.value = asBridgeError(error).messageKey;
@@ -268,6 +270,22 @@ export const useNoteStore = defineStore('notes', () => {
     const row = rowFromNote(note);
     rows.value = existing ? rows.value.map((item) => (item.id === note.id ? { ...row, folderName: item.folderName ?? row.folderName } : item)) : [row, ...rows.value];
     titles.value = { ...titles.value, [note.id]: note.title };
+  }
+
+  /**
+   * 把"同一行刚被推进的那格 rev"交给编辑器。
+   *
+   * 置顶与移到文件夹在核心里走的是同一条 `commit_edit`（pinned/folder 要能同步出去，就必须占一格 rev），
+   * 而编辑器的 `rev` 平时只跟着自己的 `edit_note` 回包前进。不交接的实测形状（缺口 G43，2026-10-02 真机）：
+   * 三次置顶把那一行推到 5，下一支自动保存仍报 `expectedRev=2` ⇒ 核心按 `stale_edit` 拒，
+   * 用户刚打的字被回读换掉、哪儿也没落，屏幕上却写着"这条笔记在别处被改动了"。
+   *
+   * 只交给本地已成功的元数据写；远端同步下来的改动仍走编辑器的草稿冲突那一条路（`enterStale`），
+   * 所以这里**不**放在 `applyNoteUpdate` 里。
+   */
+  function handRevToEditor(note: Note | null | undefined): void {
+    if (!note || typeof note.id !== 'string' || typeof note.rev !== 'number') return;
+    useEditorStore().adoptRev(note.id, note.rev);
   }
 
   function rowById(id: string | null | undefined): NoteListRow | undefined {

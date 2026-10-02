@@ -1519,11 +1519,11 @@ await step('快捷键表逐行驱动：每一行按下去要拿到它那句话�
   // 上一步只读了 Del 那一行的**字**（G40 抓到的是措辞错），这一条抓的是**按下去到底发生什么**：
   // 每行一个独立判据，全部跑完再一起报（第一版就红在哪几行，一次读数拿到整张真相）。
   const bad = [];
-  // 已知缺陷的复现要写在案上，不能让它冒充整个 lane 坏了：这一步在 c57/c58/c60/c61 四次跑里
-  // 每次都撞出一条 edit_note 400 stale_edit（actual 5 / expected 2）—— 那是缺口 G43：连按新建或切篇
-  // 时编辑器还停在上一篇，输入带着旧 rev 出去。声明成这一步至少要有这一条拒绝，于是 G43 修好那天
-  // 这里会红（声明了却一次没发生），提醒把声明撤掉、把判据升级成真不产生 4xx。
-  expectRefusal('edit_note', 'stale_edit');
+  // 这里曾经挂着一条 `expectRefusal('edit_note','stale_edit')`（缺口 G43 的"已知复现"声明，
+  // c57/c58/c60/c61 四跑每次都撞出）。**声明已撤**：G43 查到根因并修掉了 —— 那条 400 不是
+  // "输入落进上一篇"（真机量过：Ctrl+N 之后打字进的正是新那篇，rev 也对），而是置顶/移动文件夹
+  // 这类元数据写把同一行的 rev 推进了，编辑器却还按自己上一次内容写的 rev 出门。
+  // 判据挪到下一步（"置顶之后再打字"），那条判据要求的是**零条拒绝**，方向反过来。
   const ok = [];
   const probe = async (id, note, fn) => {
     try {
@@ -1736,6 +1736,54 @@ await step('快捷键表逐行驱动：每一行按下去要拿到它那句话�
     throw new Error(`快捷键表有 ${bad.length} 行按下去没有它承诺的后果（通过 ${ok.length} 行）：\n    ${bad.join('\n    ')}`);
   }
   return `${ok.length} 行逐条驱动都有后果：${ok.slice(0, 4).join('；')}…`;
+});
+
+await step('置顶之后再打字：那一支要带着置顶推进过的 rev 出门，字要同时留在屏幕和库里（缺口 G43 的判据）', async () => {
+  // 为什么判据长这样：G43 修之前的真机读数（同一座桥、同一份脚本）是
+  //   edit_note expectedRev=1 → 200 rev=2 ；set_note_pinned × 3 → 200 rev=3/4/5 ；
+  //   edit_note expectedRev=2 → **400 stale_edit（actual 5 / expected 2）**，
+  //   屏幕上只剩「这条笔记在别处被改动了」，而"置顶之后打的字"被回读换掉、哪儿也没落。
+  // 也就是：**元数据写也占一格 rev**（pinned 要靠它同步出去），编辑器不认领就是把用户的下一笔
+  // 送进一次假冲突。修后同一脚本读到的是 expectedRev=5 → 200，字都还在。
+  // 两条腿缺一不可：只看"没有 4xx"会放过"字在屏幕上但没落库"；只看库里有时会误判（本地状态自说自话）。
+  await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
+  const row = page.locator('[data-testid^="note-row-"]').first();
+  await row.waitFor({ timeout: 8000 });
+  await row.click();
+  await page.waitForTimeout(900);
+  const id = String(await row.getAttribute('data-testid')).replace('note-row-', '');
+  if (!id) throw new Error('拿不到这一行的笔记 id ⇒ 后面那条"库里必须有字"的判据是空转');
+
+  const before = failedRequests.length;
+  const box = page.locator('[data-testid="editor-doc"] .nb-content').first();
+  await box.pressSequentially('置顶前先一笔', { delay: 25 });
+  await page.waitForTimeout(1700); // 让这一笔先落库（rev 往前推一格）
+
+  // 焦点还在正文里按 Ctrl+P —— 快捷键表那一行说的就是这个键，也是 G43 的入口。
+  // 按两下：置顶再翻回去，不把"已置顶"这个现场留给后面的步骤（lane 的步骤共享同一座库）。
+  await page.keyboard.press('Control+p');
+  await page.waitForTimeout(800);
+  await page.keyboard.press('Control+p');
+  await page.waitForTimeout(800);
+
+  const marker = `置顶后打的字${String(Date.now()).slice(-5)}`;
+  await box.pressSequentially(marker, { delay: 25 });
+  await page.waitForTimeout(1900);
+
+  const fresh = failedRequests.slice(before);
+  const refused = fresh.filter((line) => /edit_note/.test(line));
+  if (refused.length > 0) {
+    throw new Error(`置顶之后再打字被核心拒了（缺口 G43 回来了）：${refused.slice(0, 2).join('; ')}`);
+  }
+  const onScreen = (await page.locator('[data-testid="editor-doc"]').innerText()).replace(/\s+/g, ' ');
+  if (!onScreen.includes(marker)) {
+    throw new Error(`置顶之后打的字不在屏幕上（屏上：「${onScreen.slice(0, 90)}」）—— 那几个字没地方去`);
+  }
+  const stored = JSON.stringify((await callBridge('get_note', { id })).doc ?? '');
+  if (!stored.includes(marker)) {
+    throw new Error(`字在屏幕上但没落库（库里：${stored.slice(0, 90)}）—— 右下角说"已保存"也不算数`);
+  }
+  return `置顶两次之后再打字：零条 edit_note 拒绝，「${marker}」屏幕与库里都在`;
 });
 
 await step('没有实现的效果就不许摆出开关：「窗口透明效果」这颗勾不该出现（缺口 G39）', async () => {

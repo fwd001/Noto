@@ -106,4 +106,67 @@ describe('切篇时的保存排队（缺口 G43）', () => {
       }
     }
   });
+
+  it('切篇的往返还没回来时，上一篇补上来的那一支不许打到下一篇（G43 的稳定复现）', async () => {
+    // 这一条与上面两条不同：上面两条是**负读数**（构造不出来），这一条照 DOM 的真实节奏
+    // 把窗口摆出来 —— `open(B)` 已经把 noteId 换成 B、blocks 清空，而 `get_note(B)` 还在飞
+    // （真机上就是一个往返的窗口；lane 里 `Ctrl+N` 之后 700 ms 打字撞的正是它）。
+    // 那一刻屏幕上还是上一篇的 ProseMirror 视图，它补上来的 `updateBlock` 用的是**A 的块 id**。
+    //
+    // 现状（2026-10-02，未修）：那一支会以 `{id: B, expectedRev: 2}` 出门 —— 2 是 **A 的 rev**，
+    // 而 B 在核心已经是 5 ⇒ 正是 lane 里那条 `stale_edit（actual 5 / expected 2）`。
+    // 所以这条判据在修复之前**必须是红的**；它红了才算复现被锁死。
+    const core: Record<string, number> = { [A]: 2, [B]: 5 };
+    const gate: { release: ((value: unknown) => void) | null } = { release: null };
+    const seen: Array<{ id: string; expectedRev: number }> = [];
+    const service = stubLocalService({
+      get_note: (args) => {
+        const id = String(args.id);
+        if (id === B) {
+          // 手动掌握这一支什么时候落地 —— 窗口要多长由测试说了算，不靠 sleep 猜
+          return new Promise((resolve) => {
+            gate.release = resolve;
+          });
+        }
+        return noteFixture({ id, rev: core[id], doc: docOf('A 的正文') });
+      },
+      edit_note: (args) => {
+        const id = String(args.id);
+        const expected = Number(args.expectedRev ?? 0);
+        seen.push({ id, expectedRev: expected });
+        core[id] = Math.max(core[id], expected + 1);
+        return noteFixture({ id, rev: core[id], doc: (args.doc as never) ?? docOf('') });
+      },
+    });
+    const editor = useEditorStore();
+
+    await editor.open(A);
+    expect(editor.noteId).toBe(A);
+
+    const switching = editor.open(B);
+    await vi.advanceTimersByTimeAsync(0); // 让 open() 跑到那个 pending 的 get_note 上
+    // 上一篇的视图还在屏幕上，用户这几个字打进了它
+    editor.updateBlock({ ...editor.blocks[0], content: [{ text: '用户刚打的字' }] });
+    await vi.advanceTimersByTimeAsync(2000); // 自动保存的计时器到点
+
+    try {
+      const toB = seen.filter((call) => call.id === B);
+      for (const call of toB) {
+        expect(
+          call.expectedRev,
+          `B 收到了一支 expectedRev=${call.expectedRev} 的写（B 在核心是 5）—— 带着上一篇的 rev 出门，` +
+            '核心按 stale_edit 拒，用户那几个字哪儿也没落',
+        ).toBeGreaterThanOrEqual(5);
+      }
+      // 第二条腿：不许静默。窗口期被挡下的输入必须在状态里有交代，
+      // 否则修完只是把"打进去的字"从"报错"换成"什么都不发生"。
+      if (toB.length === 0) {
+        expect(editor.saveErrorKey, '没有把字写进任何一篇，却没给出原因（静默丢输入）').not.toBeNull();
+      }
+    } finally {
+      gate.release?.(noteFixture({ id: B, rev: core[B], doc: docOf('B 的正文') }));
+      await switching;
+    }
+    expect(service.callsOf('get_note').length, 'get_note 至少发过 A 与 B 各一次').toBeGreaterThanOrEqual(2);
+  });
 });
