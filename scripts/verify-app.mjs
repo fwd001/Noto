@@ -1833,6 +1833,58 @@ await step('打字之后按 Del：那几个字要进的是"还在正常列表里
   return `Del 之前那笔先落库再移走：零条 edit_note 拒绝，「${marker}」在回收站中也能读回，现场已恢复`;
 });
 
+await step('回收站里恢复回来之后要能接着写：不许停在"只读 + 旧 rev"那一格（缺口 G44 的判据）', async () => {
+  // 修法之前的真机读数（2026-10-02，同一座桥、同一份脚本）：
+  //   回收站 → 点开那一篇 → 点「恢复」→ 直接打字 ⇒ 屏幕上没字、桥那边**一支写都没收到**，
+  //   也没有任何一句话说明为什么改不动。根因：`inTrash` 与 `rev` 是打开那一篇时 hydrate 进来的，
+  //   而 delete/restore 各自又推进了那一行的 rev —— `notes.restore()` 只刷新列表，不重读编辑器。
+  // 这一条与 G41 那条不同，**它对修法敏感**：撤掉恢复后的那次重读，这里就会红在"屏幕上没有那几个字"。
+  // 动线全程用界面（侧栏那颗「最近删除」与行上的「恢复」），收尾把这一篇留在正常列表里。
+  await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
+  const first = page.locator('[data-testid^="note-row-"]').first();
+  await first.waitFor({ timeout: 8000 });
+  await first.click();
+  await page.waitForTimeout(900);
+  const id = String(await first.getAttribute('data-testid')).replace('note-row-', '');
+  if (!id) throw new Error('拿不到这一行的笔记 id ⇒ 后面"库里有没有那几个字"那条判据是空转');
+
+  const before = failedRequests.length;
+  await page.locator('[data-testid="editor-doc"] .nb-content').first().pressSequentially('恢复前先一笔', { delay: 25 });
+  await page.waitForTimeout(1700);
+  // 焦点挪出正文，Del 才是"移到最近删除"（焦点在正文里时它是删字符）
+  await first.click();
+  await page.waitForTimeout(200);
+  await page.keyboard.press('Delete');
+  await page.waitForTimeout(1200);
+
+  await page.click('[data-testid="nav-trash"]', { timeout: 5000 });
+  await page.waitForTimeout(900);
+  const trashedRow = page.locator(`[data-testid="note-row-${id}"]`);
+  if ((await trashedRow.count()) === 0) throw new Error('回收站里找不到刚删掉的那一篇 ⇒ 后面那半条判据落不了地');
+  await trashedRow.click();
+  await page.waitForTimeout(1000);
+  const restoreBtn = page.locator('[data-testid="restore-note"]');
+  if ((await restoreBtn.count()) === 0) throw new Error('回收站那一屏上没有「恢复」这颗按钮');
+  await restoreBtn.first().click();
+  await page.waitForTimeout(1200);
+
+  const marker = `恢复后接着写${String(Date.now()).slice(-5)}`;
+  const box = page.locator('[data-testid="editor-doc"] .nb-content').first();
+  if ((await box.count()) === 0) throw new Error('恢复之后编辑器不在这篇上了 ⇒ 这条判据抓不到要抓的那一格');
+  await box.pressSequentially(marker, { delay: 25 });
+  await page.waitForTimeout(2000);
+
+  const refused = failedRequests.slice(before).filter((line) => /edit_note/.test(line));
+  if (refused.length > 0) throw new Error(`恢复之后打字被拒了：${refused.slice(0, 2).join('; ')}`);
+  const onScreen = await page.locator('[data-testid="editor-doc"]').innerText();
+  if (!onScreen.includes(marker)) {
+    throw new Error(`恢复之后打的字没出现在屏幕上（屏上：「${onScreen.replace(/\s+/g, ' ').slice(0, 90)}」）—— 那是一颗按得动、却把字吞掉的动线`);
+  }
+  const stored = JSON.stringify((await callBridge('get_note', { id })).doc ?? '');
+  if (!stored.includes(marker)) throw new Error(`字在屏幕上但没落库（库里：${stored.slice(0, 90)}）`);
+  return `恢复之后能接着写：零条拒绝，「${marker}」屏幕与库里都在`;
+});
+
 await step('没有实现的效果就不许摆出开关：「窗口透明效果」这颗勾不该出现（缺口 G39）', async () => {
   // PLATFORM.md §观感 写的是"Mica/Acrylic 仅系统支持时启用 + **必须**提供关闭开关"。
   // 实测今天**特效本身没实现**（全仓搜 mica/acrylic/vibrancy/backdrop 零命中，`no-transparency`

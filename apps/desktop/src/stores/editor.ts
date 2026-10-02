@@ -112,8 +112,12 @@ export const useEditorStore = defineStore('editor', () => {
     saveErrorKey.value = null;
   }
 
-  async function open(id: string | null): Promise<void> {
-    if (id === noteId.value) return;
+  async function open(id: string | null, force = false): Promise<void> {
+    // `force` 只给"同一篇被别处改了状态"的场合用（现在只有一处：从回收站恢复回来）。
+    // 默认那句早退是对的 —— 点列表里已经开着的那一行不该把用户的输入刷掉；
+    // 但 `inTrash` 与 `rev` 只在 hydrate 里被赋值，恢复之后不重读，编辑器就一直停在
+    // "只读 + 旧 rev"那一格（2026-10-02 真机读数：恢复之后打字，屏幕上没字、桥那边也没收到任何写）。
+    if (!force && id === noteId.value) return;
     await flush();
     debouncedSave.cancel();
     localDraft.value = null;

@@ -257,6 +257,12 @@ export const useNoteStore = defineStore('notes', () => {
     try {
       await callCommand<null>(Commands.restoreNote, { id });
       await load();
+      // 恢复之后必须把这一篇**重读**进编辑器（缺口 G44）。不重读的读数（2026-10-02 真机）：
+      // 回收站 → 点开它 → 点「恢复」→ 直接打字 ⇒ 屏幕上没字、桥那边一支写都没收到，
+      // 也没有任何一句话说明为什么改不动 —— 因为编辑器的 `inTrash` 与 `rev` 是打开那一篇时
+      // 从"还在回收站里"的状态 hydrate 来的，而 delete/restore 各自又推进了那一行的 rev。
+      const editorStore = useEditorStore();
+      if (editorStore.noteId === id) await editorStore.open(id, true);
     } catch (error) {
       errorKey.value = asBridgeError(error).messageKey;
     }

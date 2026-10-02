@@ -34,10 +34,11 @@ function makeCore() {
   const trashed = new Set<string>();
   const seq: Array<{ cmd: string; id: string; text: string }> = [];
   const saved = new Map<string, string>();
+  const revs: Record<string, number> = { [A]: 2, [B]: 2 };
   const note = (id: string) =>
     noteFixture({
       id,
-      rev: 2,
+      rev: revs[id],
       doc: docOf(saved.get(id) ?? (id === A ? 'A 的正文' : 'B 的正文')),
       deletedAt: trashed.has(id) ? '2026-10-02T00:00:00Z' : null,
     });
@@ -54,16 +55,25 @@ function makeCore() {
       }
       seq.push({ cmd: 'edit_note', id, text });
       saved.set(id, text);
+      revs[id] = Number(args.expectedRev ?? 0) + 1;
       return note(id);
     },
     delete_note: (args) => {
       const id = String(args.id);
       seq.push({ cmd: 'delete_note', id, text: saved.get(id) ?? '' });
       trashed.add(id);
+      revs[id] += 1; // 软删也走 commit_edit ⇒ 同一行 rev 前进
+      return null;
+    },
+    restore_note: (args) => {
+      const id = String(args.id);
+      seq.push({ cmd: 'restore_note', id, text: saved.get(id) ?? '' });
+      trashed.delete(id);
+      revs[id] += 1; // 恢复同样占一格
       return null;
     },
   });
-  return { service, seq, trashed, saved };
+  return { service, seq, trashed, saved, revs };
 }
 
 beforeEach(() => {
@@ -106,5 +116,33 @@ describe('移进最近删除之前在飞的保存（缺口 G41）', () => {
       seq.filter((row) => row.cmd === 'edit_note').every((row) => row.id === A),
       '移走 B 却替 A 发了写以外的东西 ⇒ 这条边被搅了',
     ).toBe(true);
+  });
+
+  it('在回收站里把它打开、再恢复：不许还停在"只读 + 旧 rev"那一格（恢复之后再打字要能落库）', async () => {
+    // 真机动线：回收站 → 点开那一篇（编辑器 hydrate 成"在回收站里"⇒ 只读）→ 点「恢复」→ 直接打字。
+    // 今天（未修）的两个后果都来自同一处：`notes.restore()` 只 `load()` 列表，**不碰编辑器**，
+    // 而 `inTrash` 只在 `hydrate()` 里被赋值 —— 于是编辑器还留着"只读 + 恢复之前那格 rev"。
+    // 只读那一半是"改不动"（§6 主流程走不通），旧 rev 那一半与 G43 同族（真打字会撞 stale_edit）。
+    const { seq, revs, saved } = makeCore();
+    const editor = useEditorStore();
+    const notes = useNoteStore();
+
+    await editor.open(B); // 编辑器停在别处，免得触发上一条判据里那句 flush
+    await notes.moveToTrash(A);
+    await editor.open(A); // 回收站视图里点开它
+    expect(editor.inTrash, '回收站里打开应当是只读的（这条是前提，不是判据）').toBe(true);
+    const revWhileTrashed = revs[A];
+
+    await notes.restore(A);
+    expect(revs[A], '恢复也走 commit_edit ⇒ 那一行又前进一格').toBe(revWhileTrashed + 1);
+    expect(editor.inTrash, '已经恢复了，编辑器不许还说"这篇在回收站里"（用户那边是改了没反应）').toBe(false);
+    expect(editor.rev, '恢复之后编辑器的 rev 要跟上，不许带旧格出门').toBe(revs[A]);
+
+    editor.updateBlock({ ...editor.blocks[0], content: [{ text: '恢复之后打的字' }] });
+    await vi.advanceTimersByTimeAsync(3000);
+    const last = seq.filter((row) => row.cmd === 'edit_note' && row.id === A).pop();
+    expect(last, '恢复之后打字一支写都没发出去 ⇒ 那几个字哪儿也没落').toBeTruthy();
+    expect(editor.saveErrorKey, '恢复之后打字被挡下了，却没把原因摆在界面上（静默的"改了没反应"）').toBeNull();
+    expect(saved.get(A), '恢复之后打的字要真的在库里').toContain('恢复之后打的字');
   });
 });
