@@ -1786,6 +1786,53 @@ await step('置顶之后再打字：那一支要带着置顶推进过的 rev 出
   return `置顶两次之后再打字：零条 edit_note 拒绝，「${marker}」屏幕与库里都在`;
 });
 
+await step('打字之后按 Del：那几个字要进的是"还在正常列表里"的那一篇，不许打在回收站中的它身上（缺口 G41 的判据）', async () => {
+  // 修前的读数（lane 第 49 步 Del 那一判撞出来的那条 400）：
+  //   `edit_note → 400 {"code":"constraint","why":"笔记 … 在回收站中，请先恢复再编辑"}`
+  //   —— 核心这一步是对的（回收站里的笔记不该被编辑），坏的是用户那边：字打了、屏幕上没落，
+  //   也没有一句话说明它去哪了。修法是把顺序摆正（`moveToTrash` 之前先把当前这篇 flush 掉）。
+  // 两条腿：①这一趟不许有任何 edit_note 拒绝；②Del 之前打的那几个字要能在那一篇（仍在回收站里时）读回来。
+  // 顺序很关键：打字让 debounce 排着之后，要把焦点**移出正文**再按 Del —— 焦点在正文里时 Del 是删字符
+  // （那条 `!typing` 守卫是对的，G41 排除掉的两种解释之一），不会把笔记移走。
+  // 收尾把这一行从回收站恢复回去：这一步制造的是临时状态，不许留给后面的步骤当假红。
+  //
+  // **这条判据能证明什么、不能证明什么（按 §40 写在这儿，别让它冒充修法的门禁）**：
+  // 它钉的是**结果**那一格 —— 移走时不许有写被拒、且 Del 之前那几个字必须真在库里。
+  // 它**不是** `moveToTrash` 里那句 flush 的门禁：变异 **M-G41b**（把那句 flush 整条撤掉）之后
+  // 这一步**仍然 53/53 绿**。没红的原因（**未证实的假说**）：要把焦点从正文挪到列表才能按下 Del，
+  // 而那一下挪动本身就打断了一次编辑会话（blur 之后核心收到的写已经在前一趟里落库了），
+  // 于是这条动线在浏览器里构造不出"排在后面的那一支打在回收站中的它身上"。
+  // 能分辨修没修的门禁在 store 那一层：`stores/trashFlush.spec.ts` 第一条，变异 **M-G41a** 会把它打红。
+  await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
+  const row = page.locator('[data-testid^="note-row-"]').first();
+  await row.waitFor({ timeout: 8000 });
+  await row.click();
+  await page.waitForTimeout(900);
+  const id = String(await row.getAttribute('data-testid')).replace('note-row-', '');
+  if (!id) throw new Error('拿不到这一行的笔记 id ⇒ "字落没落库"那条判据是空转');
+
+  const before = failedRequests.length;
+  const marker = `Del前打的字${String(Date.now()).slice(-5)}`;
+  await page.locator('[data-testid="editor-doc"] .nb-content').first().pressSequentially(marker, { delay: 25 });
+  // 焦点从正文挪到列表（同一条行，不换篇 ⇒ 不会触发切篇的 flush/cancel）
+  await row.click();
+  await page.waitForTimeout(150);
+  await page.keyboard.press('Delete');
+  await page.waitForTimeout(2400);
+
+  const refused = failedRequests.slice(before).filter((line) => /edit_note/.test(line));
+  if (refused.length > 0) {
+    throw new Error(`移进最近删除的那一瞬间把写打在了回收站中的它身上（缺口 G41 回来了）：${refused.slice(0, 2).join('; ')}`);
+  }
+  const stored = JSON.stringify((await callBridge('get_note', { id })).doc ?? '');
+  if (!stored.includes(marker)) {
+    throw new Error(`Del 之前打的字没落库（库里：${stored.slice(0, 90)}）—— 用户那边就是"字打了却哪儿也没去"`);
+  }
+  await callBridge('restore_note', { id });
+  await page.waitForTimeout(600);
+  return `Del 之前那笔先落库再移走：零条 edit_note 拒绝，「${marker}」在回收站中也能读回，现场已恢复`;
+});
+
 await step('没有实现的效果就不许摆出开关：「窗口透明效果」这颗勾不该出现（缺口 G39）', async () => {
   // PLATFORM.md §观感 写的是"Mica/Acrylic 仅系统支持时启用 + **必须**提供关闭开关"。
   // 实测今天**特效本身没实现**（全仓搜 mica/acrylic/vibrancy/backdrop 零命中，`no-transparency`

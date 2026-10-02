@@ -239,6 +239,13 @@ export const useNoteStore = defineStore('notes', () => {
 
   async function moveToTrash(id: string): Promise<void> {
     try {
+      // 移走之前先把**这一篇**在飞/排队的保存结清（缺口 G41）。不结清的两种坏法都量到过：
+      // 那支自动保存随后打在"已经在回收站里"的它身上 ⇒ 核心按 `constraint` 拒（`retryable=false`），
+      // 用户那边是"字打了、屏幕上没落、也没有一句话说明去哪了"（lane 第 49 步 Del 那一判的读数）；
+      // 或者那一支随这次切换被丢掉（`stores/trashFlush.spec.ts` 里打出来的就是这一种，edit_note 零条）。
+      // 顺序摆正之后那几个字进的是"还在正常列表里"的那一篇。
+      const editorStore = useEditorStore();
+      if (editorStore.noteId === id) await editorStore.flush();
       await callCommand<null>(Commands.deleteNote, { id });
       await load();
     } catch (error) {
