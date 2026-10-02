@@ -272,6 +272,13 @@ export const useNoteStore = defineStore('notes', () => {
     try {
       await callCommand<null>(Commands.purgeNote, { id });
       await load();
+      // 永久删除掉的那一篇如果正开在编辑器里，必须关掉（缺口 G45）。2026-10-02 真机读数：
+      // 列表那边是对的（空态出现），但**编辑器还显示着那一篇的正文**，下面还挂着
+      // 「这条在"最近删除"里，恢复后才能继续编辑。」—— 对一篇已经被永久删除的笔记，这句话是假话；
+      // 往那块只读区打字，屏幕上连字都不出现，也没有任何一句话说明发生了什么。
+      // （台账里我原先写"purge 靠选中项搬迁会自动关掉编辑器"，那是推的，量下来是反的。）
+      const editorStore = useEditorStore();
+      if (editorStore.noteId === id) await editorStore.open(null);
     } catch (error) {
       errorKey.value = asBridgeError(error).messageKey;
     }

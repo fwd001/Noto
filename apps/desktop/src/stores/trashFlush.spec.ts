@@ -32,6 +32,7 @@ function docOf(text: string) {
  */
 function makeCore() {
   const trashed = new Set<string>();
+  const purged = new Set<string>();
   const seq: Array<{ cmd: string; id: string; text: string }> = [];
   const saved = new Map<string, string>();
   const revs: Record<string, number> = { [A]: 2, [B]: 2 };
@@ -43,13 +44,16 @@ function makeCore() {
       deletedAt: trashed.has(id) ? '2026-10-02T00:00:00Z' : null,
     });
   const service = stubLocalService({
-    get_note: (args) => note(String(args.id)),
-    list_notes: () => [note(A), note(B)],
+    get_note: (args) => {
+      const id = String(args.id);
+      return purged.has(id) ? null : note(id);
+    },
+    list_notes: () => [note(A), note(B)].filter((n) => !purged.has(String(n.id))),
     edit_note: (args) => {
       const id = String(args.id);
       const content = (args.doc as { content?: Array<{ content?: Array<{ text?: string }> }> })?.content ?? [];
       const text = (content[0]?.content ?? []).map((item) => item.text ?? '').join('');
-      if (trashed.has(id)) {
+      if (trashed.has(id) || purged.has(id)) {
         // 与核心一致：这是"规则不允许"，不是"重试有用"（retryable=false）
         return { ok: false, error: { code: 'constraint', messageKey: 'cmd.constraint', retryable: false } };
       }
@@ -72,8 +76,15 @@ function makeCore() {
       revs[id] += 1; // 恢复同样占一格
       return null;
     },
+    purge_note: (args) => {
+      const id = String(args.id);
+      seq.push({ cmd: 'purge_note', id, text: saved.get(id) ?? '' });
+      trashed.delete(id);
+      purged.add(id);
+      return null;
+    },
   });
-  return { service, seq, trashed, saved, revs };
+  return { service, seq, trashed, saved, revs, purged };
 }
 
 beforeEach(() => {
@@ -144,5 +155,43 @@ describe('移进最近删除之前在飞的保存（缺口 G41）', () => {
     expect(last, '恢复之后打字一支写都没发出去 ⇒ 那几个字哪儿也没落').toBeTruthy();
     expect(editor.saveErrorKey, '恢复之后打字被挡下了，却没把原因摆在界面上（静默的"改了没反应"）').toBeNull();
     expect(saved.get(A), '恢复之后打的字要真的在库里').toContain('恢复之后打的字');
+  });
+
+  it('永久删除正开着的那一篇之后，编辑器不许留着它的正文（缺口 G45：幻影 + 一句已经作废的"在最近删除里"）', async () => {
+    // 2026-10-02 真机读数（`.logs/probe-purge.mjs`，dev 桥 + 真浏览器、全新空库）：
+    //   回收站 → 点开那一篇 → 「永久删除」→ 二次确认之后：
+    //     列表对了（note-row=0、空态出现），**但编辑器还显示着那一篇的正文**，
+    //     下面那句提示也还在：`这条在"最近删除"里，恢复后才能继续编辑。`
+    //   —— 这篇已经不在"最近删除"里了，它被永久删掉了，那句话现在是假的；
+    //   往那块只读区打字，屏幕上连字都不出现（只读），也没有任何一句话说明发生了什么。
+    // 台账里我原先写的是"purge 靠选中项搬迁关掉编辑器，本轮实测无残留态" —— 那是**推**出来的，
+    // 量下来是反的，所以这一格按 §45 更正并补判据。
+    const { purged } = makeCore();
+    const editor = useEditorStore();
+    const notes = useNoteStore();
+
+    await editor.open(B);
+    await notes.moveToTrash(A);
+    await editor.open(A); // 回收站里开着它（只读）
+    expect(editor.inTrash, '前提：回收站里打开是只读的').toBe(true);
+
+    await notes.purge(A);
+    expect(purged.has(A), '核心那边这一篇真没了（前提）').toBe(true);
+    expect(editor.noteId, '那一篇已被永久删除，编辑器不许还停在它身上').toBeNull();
+    expect(editor.blocks.length, '屏幕上不许继续显示一篇已经不存在的正文').toBe(0);
+    expect(editor.inTrash, '“这条在最近删除里”那句话对一篇已被永久删除的笔记是假话').toBe(false);
+  });
+
+  it('永久删除的是别的那一篇时，不许把当前这篇一起关掉（反向腿）', async () => {
+    const { purged } = makeCore();
+    const editor = useEditorStore();
+    const notes = useNoteStore();
+
+    await editor.open(A);
+    await notes.moveToTrash(B);
+    await notes.purge(B);
+    expect(purged.has(B)).toBe(true);
+    expect(editor.noteId, '关错篇 ⇒ 用户正在看的那一篇凭空消失').toBe(A);
+    expect(editor.blocks.length, '当前这篇的正文不许被清掉').toBeGreaterThan(0);
   });
 });

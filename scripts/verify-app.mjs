@@ -550,6 +550,20 @@ await step('回收站这条边：删除 → 回收站看得到 → 恢复 → �
   await page.locator('[data-testid="purge-confirm"]').click();
   await page.waitForTimeout(900);
   if ((await row(doomed).count()) > 0) throw new Error('按了彻底删除，它还挂在回收站里');
+  // 缺口 G45 的那一格（2026-10-02 真机读数：列表那边是对的，**编辑器却还显示着刚被永久删除的那一篇**，
+  // 下面挂着「这条在"最近删除"里，恢复后才能继续编辑。」—— 对一篇已经不存在的笔记，这句话是假话；
+  // 往那块只读区打字，屏幕上连字都不出现，也没有任何一句话说明发生了什么）。
+  // 判据不打"编辑器必须消失"（选中项搬到别的一篇是正当的），打在"不许还显示这一篇"上。
+  const phantomDoc = (await page.locator('[data-testid="editor-doc"]').first().innerText().catch(() => '')).replace(/\s+/g, ' ');
+  if (phantomDoc.includes(doomed)) {
+    throw new Error(
+      `永久删除之后编辑器还留着那一篇（屏上「${phantomDoc.slice(0, 80)}」）—— ` +
+        '一篇已经不存在的笔记不该还能看见、还能"读"，那会让人以为它还在某处',
+    );
+  }
+  if (/最近删除/.test(phantomDoc)) {
+    throw new Error(`编辑器对一篇已被永久删除的笔记说「在最近删除里」（屏上「${phantomDoc.slice(0, 80)}」）—— 那句话现在是假话`);
+  }
   const trash = await callBridge('list_notes', { limit: 500, trash: true });
   if (trash.some((r) => r.id === made.id)) throw new Error('库里的回收站视图还留着它');
   let revived = null;

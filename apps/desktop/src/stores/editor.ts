@@ -125,6 +125,9 @@ export const useEditorStore = defineStore('editor', () => {
     if (id === null) {
       noteId.value = null;
       blocks.value = [];
+      // `inTrash` 是"这一篇在回收站里"的状态，没有"这一篇"就不该留着它 —— 否则空编辑器会把
+      // 只读原因说成 `inTrash`（用户读到的是"这条在最近删除里"，而屏幕上什么都没有）。
+      inTrash.value = false;
       dirty.value = false;
       saveState.value = 'idle';
       return;
