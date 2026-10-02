@@ -72,6 +72,31 @@ describe('命令层错误文案', () => {
     expect(text.length).toBeGreaterThan(6);
   });
 
+  /**
+   * 凭据那几条文案里的**具体主张**必须与核心现在真做的一致（§45）。
+   *
+   * 上一条只保证"取得到一句像样的话"，管不了那句话是不是在说另一件事：0.0.52 之前
+   * `credential_too_long` 写的是"256 个字符"（上限实际按 **UTF-16 单元**算，缺口 G38 选 B 之后
+   * 这条规则在会话后端同样成立，不再是"这台设备的凭据库"的事），而 `proxy_credential_missing`
+   * 只提"这个平台还没接入"（现在的常态是"只活在这次运行里，重启就没了"）。
+   * 把两句主张写成断言，改口的人就会撞红 —— 文案漂移是扫不出来的，只有对着它提问才知道。
+   */
+  it('凭据文案说的单位、退路与时点，要和核心现在的行为对得上', () => {
+    const tooLong = messageFor('cmd.credential_too_long');
+    expect(tooLong).toContain('256');
+    expect(tooLong).toContain('UTF-16');
+
+    const proxy = messageFor('cmd.proxy_credential_missing');
+    expect(proxy).toMatch(/这次运行|重启/);
+
+    const gone = messageFor('cmd.sync_needs_credentials');
+    expect(gone).toContain('重填');
+    // 这一格最坏的那种错：把"配好了但拿不到口令"说成"没配服务器"。
+    expect(gone).not.toContain('还没有配置同步服务器');
+    // 反向腿：`no_account` 那一格仍然必须是"没配服务器"，两条不许合成一句。
+    expect(messageFor('cmd.no_account')).toContain('还没有配置同步服务器');
+  });
+
   it.each(['offline', 'server_unavailable', 'transport_unreachable', 'timeout'])(
     '裸 code %s 也能解析（同步事件只带 error_code，没有前缀）',
     (code) => {
