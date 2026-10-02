@@ -865,6 +865,18 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
     现在是**直接读到清单**，验收标准第 4 条里"产物应上传到 GitHub Release"这一格不再需要推理。
     **仍然没读到的一格**（不换口径）：三平台的包**装上并启动**后的基础功能验证 —— 那是 §49 里用户那一段（要真机）。
     Release 目前是**草稿**：发布（publish）是把版本号与产物对外生效的动作，按 §5 属用户拍板，我不擅自点。
+  - **同一件事在下一版又读了一次，这次带的是 B 那批代码（tag `v0.0.52` → run `36988588498`，2026-10-02 09:13Z 触发，`completed success`）**：
+    job 读数是"版本与 tag 对齐"success、macOS success、Android success、Windows（GNU）success；
+    Artifacts `android-apk` **35 005 358** / `windows-x64` **13 212 109** / `macos-universal` **13 269 325** 字节；
+    `gh release view v0.0.52` 读到 `isDraft: true` + 六件附件（`app-universal-debug.apk`、
+    `Notera_0.0.52_aarch64.dmg`、`Notera_0.0.52_universal.app.zip`、`Notera_0.0.52_x64-setup.exe`、
+    `Notera_0.0.52_x64_zh-CN.msi`、`SHA256SUMS.txt`）。
+    用户 2026-10-02 同时定了发布形态：**都先留草稿，亲手测过再 publish** —— 所以"最新 vs 历史"这一格现在按
+    tag 与 CHANGELOG 分（`v0.0.52` 是含 G38=B 的那一版），正式 Release 那一步等用户点头之后再做。
+  - **一条会咬人的事，写在这儿免得以后对不上**：`v0.0.52` 这个 tag 指向 `90dde2a`，而两句错误文案的改口
+    是下一个 commit（`f9f0c94`，版本已升到 `0.0.53`）。所以**装 `v0.0.52` 的包能看到 B 的全部行为**
+    （会话表、三句提示、`sync_needs_credentials`），但超长口令与代理凭据那两句还是旧措辞
+    （"256 个字符"、"这个平台还没接入"）。功能判据与验收第 2/3 条不受影响；下一次出包会把文案带上。
     **拆完之后又读到一次全绿**：tag `v0.0.43` → run **#20**（commit `058f9d7`）五个 job 全 `completed success`，
     三份产物在案（windows-x64 13,118,090 B、android-apk 34,870,287 B、macos-universal 11,061,448 B）——
     "没有那套临时工装，流水线自己也站得住"这一句是真读到的，不是推出来的。
