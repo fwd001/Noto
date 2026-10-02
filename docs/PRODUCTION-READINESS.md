@@ -727,6 +727,18 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
     并且第 49 步那句原本的 400 也回来了（`actual 5 / expected 2`）—— 这条撤销同时解释了第 49 步那四跑每次都出的读数。
     撤声明这一步本身也有牙：那张白名单是双向的（出现没声明的拒绝 ⇒ 红），所以"修好了却忘了撤"和"根本没修"
     两种情况都会红，不会静悄悄。
+- **查过、判定不是缺陷的一格：`FolderTree.vue` 里 `commitRename` 少了那一次 `notes.load()`（2026-10-02；依据是代码读，**没做屏幕量，别当实测引用**）**
+  - 为什么看着可疑：侧栏四个出口里 `create` / `move` / `remove` 之后都跟了一句 `notes.load()`，
+    只有 `commitRename` 没有 —— 不对称就是"漏一次刷新 ⇒ 列表行上的文件夹标签停在旧名字"的形状，
+    而且与今晚修掉的 G43/G44/G45 同一族（一个视图缓存了第二个写入者的状态）。
+  - 为什么判定成立（不需要刷新）：store 的 rows 里 `rowFromNote` **从不写** `folderName`
+    （唯一碰它的是 `applyNoteUpdate` 那句 `item.folderName ?? row.folderName`，两边都是 undefined），
+    而列表那一格的取值是 `row.folderName ?? folders.nameOf(row.folderId)`（`NoteList.vue:61`）——
+    走的是 `folders` store 的响应式回退，重命名当场跟着换。所以这一处"少一句 load()"在屏幕上没有后果。
+  - **为什么仍要记这一条**：不记，下一位（或下一次的我）看到不对称就会顺手"修"它。
+    真正的风险在另一头：**哪天有人往 `row.folderName` 填了真值，这条响应式回退就会被缓存盖掉**，
+    那时缺的那次刷新才成真缺陷 —— 到那时该改的是取值优先级（以 `folders` 为唯一来源），不是补一句 load()。
+
 - **G34 产品出口的退避与重试次数不是 PROXY.md §7 写的那一套（2026-09-30 实测；状态 = **未修，等 §9 级取舍拍板**）**：
   `WebDavRemote::new` 把政策硬编成 `RetryPolicy::deterministic(40, 1)`（base 40 ms、预算 **1**、jitter **0**），
   而 §7 写的是 `min(15min, 2s × 1.85^n) × (1±0.2 jitter)` 与"一轮内重试预算 3 次"。
