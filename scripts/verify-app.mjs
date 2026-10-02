@@ -1514,6 +1514,230 @@ await step('设置页那张快捷键表：Del 那一行必须说「移到最近�
   return flat.slice(0, 48);
 });
 
+await step('快捷键表逐行驱动：每一行按下去要拿到它那句话承诺的后果（缺口 G40 的尾巴）', async () => {
+  // 表里那一行是用户唯一的依据 —— 它说 `Ctrl+P 固定`，用户就以为按下会固定。
+  // 上一步只读了 Del 那一行的**字**（G40 抓到的是措辞错），这一条抓的是**按下去到底发生什么**：
+  // 每行一个独立判据，全部跑完再一起报（第一版就红在哪几行，一次读数拿到整张真相）。
+  const bad = [];
+  // 已知缺陷的复现要写在案上，不能让它冒充整个 lane 坏了：这一步在 c57/c58/c60/c61 四次跑里
+  // 每次都撞出一条 edit_note 400 stale_edit（actual 5 / expected 2）—— 那是缺口 G43：连按新建或切篇
+  // 时编辑器还停在上一篇，输入带着旧 rev 出去。声明成这一步至少要有这一条拒绝，于是 G43 修好那天
+  // 这里会红（声明了却一次没发生），提醒把声明撤掉、把判据升级成真不产生 4xx。
+  expectRefusal('edit_note', 'stale_edit');
+  const ok = [];
+  const probe = async (id, note, fn) => {
+    try {
+      await fn();
+      ok.push(`${id}（${note}）`);
+    } catch (e) {
+      bad.push(`${id}: ${String(e.message).slice(0, 150)}`);
+    }
+  };
+  const doc = () => page.locator('[data-testid="editor-doc"]').first();
+  const rows = () => page.locator('[data-testid^="note-row-"]');
+  const openList = async () => {
+    await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
+    await rows().first().waitFor({ timeout: 8000 });
+  };
+
+  // ① new-note：Ctrl+N ⇒ 列表多一行，且编辑器打开在新那行上
+  await probe('new-note Ctrl+N', '列表 +1 并进新笔记', async () => {
+    await openList();
+    const before = await rows().count();
+    await page.keyboard.press('Control+n');
+    await page.waitForTimeout(700);
+    const after = await rows().count();
+    if (after !== before + 1) throw new Error(`按下之后列表行数是 ${after}（原本 ${before}）：没多出一条`);
+  });
+
+  // ② search：Ctrl+K ⇒ 焦点真的落到搜索框上
+  await probe('search Ctrl+K', 'activeElement 是 search-input', async () => {
+    await openList();
+    await page.click('[data-testid="nav-list"], body', { timeout: 5000 }).catch(() => {});
+    await page.keyboard.press('Control+k');
+    await page.waitForTimeout(400);
+    const id = await page.evaluate(() => document.activeElement?.getAttribute('data-testid') ?? String(document.activeElement?.tagName));
+    if (id !== 'search-input') throw new Error(`焦点在「${id}」而不是 search-input`);
+  });
+
+  // ③ collapse：Ctrl+\ ⇒ 侧栏宽度真的变（两次按 = 收起再展开）
+  await probe('collapse Ctrl+\\', '侧栏宽度变了又回来', async () => {
+    await openList();
+    const side = page.locator('[data-testid="sidebar"]').first();
+    const w0 = (await side.boundingBox())?.width ?? 0;
+    await page.keyboard.press('Control+\\');
+    await page.waitForTimeout(500);
+    const hidden = (await side.count()) === 0 || ((await side.boundingBox())?.width ?? 0) < w0 - 8 || w0 === 0;
+    if (!hidden) throw new Error(`按下之后侧栏宽度还是 ${w0}px（没收起来）`);
+    await page.keyboard.press('Control+\\');
+    await page.waitForTimeout(500);
+  });
+
+  // 开一篇只有"键检文字"这一段的新笔记，返回它的 id（后面按行驱动都拿这篇当现场：
+  // 别的步骤留下的笔记里有代码块/标题，第一次版用 `doc().locator('p')` 去点就超时了）。
+  // 开一篇新笔记、把它当后续判据的现场，返回它的 id。
+  // 三版的形状各有其坏法，按实记：只等 700ms 就往 .nb-content 打字 ⇒ 那一刻编辑器还在上一篇，
+  // 字带着旧 rev 出去（缺口 G43：两次跑各撞出一条 edit_note 400 stale_edit，actual 5 / expected 2）；
+  // 改成等"只剩一个空块"也不成立（空块里有占位，谓词永远不真，六个判据全红在超时）。
+  // 现在这一步走的是用户本来就会做的动作：新建 → **点那一行** → 打字。点行是唯一真正走到
+  // editor.open(id) 的路径，编辑器开对了篇，rev 才是新的。产品侧那条边仍然记在 G43，不撤。
+  const openFreshNote = async (title) => {
+    const beforeIds = new Set((await callBridge('list_notes')).map((n) => n.id));
+    await page.keyboard.press('Control+n');
+    await page.waitForTimeout(900);
+    const fresh = (await callBridge('list_notes')).find((n) => !beforeIds.has(n.id));
+    if (!fresh) throw new Error('新建的那篇笔记没出现在列表里（前置坏了，下面的判据都不算）');
+    await page.locator(`[data-testid="note-row-${fresh.id}"]`).first().click();
+    await page.waitForTimeout(900);
+    await page.locator('[data-testid="editor-doc"] .nb-content').first().click();
+    await page.keyboard.type(title);
+    await page.waitForTimeout(1300);
+    return fresh.id;
+  };
+  const selectWholeBlock = async () => {
+    const block = doc().locator('.nb-content').first();
+    await block.click();
+    await page.keyboard.press('Home');
+    await page.keyboard.down('Shift');
+    await page.keyboard.press('End');
+    await page.keyboard.up('Shift');
+    await page.waitForTimeout(300);
+  };
+
+  // ④ pin：Ctrl+P 在**焦点不在正文**与**正在正文里打字**两种上下文都要真翻面。
+  //    置顶的可见证据用那颗 `✓`（`.row-item__pin`）—— 行本身没有 aria-label，
+  //    第一版判据去读行的 aria-label 读到空串，于是两种上下文都"红了"而产品其实没错（先验探针）。
+  const pinState = async (id) => (await page.locator(`[data-testid="note-row-${id}"] .row-item__pin`).count()) > 0;
+  await probe('pin Ctrl+P（两种上下文）', '✓ 出现又消失', async () => {
+    await openList();
+    const id = await openFreshNote('固定检查用的笔记');
+    if (await pinState(id)) throw new Error('新笔记一开就是置顶的（前置不成立）');
+    // 上下文 A：焦点从正文挪到列表（不重新加载页面 —— 重新加载会把选中项清掉，那是另一种状态）
+    await page.locator('[data-testid="note-list"]').click({ position: { x: 4, y: 4 } });
+    await page.waitForTimeout(400);
+    await page.keyboard.press('Control+p');
+    await page.waitForTimeout(900);
+    if (!(await pinState(id))) throw new Error('焦点不在正文里按 Ctrl+P，那颗 ✓ 没出现');
+    await page.keyboard.press('Control+p');
+    await page.waitForTimeout(900);
+    if (await pinState(id)) throw new Error('再按一次没取消置顶（那句话是"固定"这个动作，不是单向的）');
+    // 上下文 B：正在正文里打字时按 —— 表里那一行没写"只在列表里有效"，用户最常在的就是这个状态
+    await page.locator(`[data-testid="note-row-${id}"]`).click();
+    await page.waitForTimeout(600);
+    await doc().locator('.nb-content').first().click();
+    await page.keyboard.type('打字中');
+    await page.waitForTimeout(1100);
+    await page.keyboard.press('Control+p');
+    await page.waitForTimeout(1000);
+    if (!(await pinState(id))) {
+      throw new Error(
+        '在编辑器里按 Ctrl+P 没有固定这篇笔记（表里那句「Ctrl+P 固定」在最常用的状态下不成立）',
+      );
+    }
+  });
+
+  // ⑤ delete：Del（列表焦点）⇒ 那一行从列表消失且回收站能看到
+  await probe('delete Del', '列表少一行、回收站多一行', async () => {
+    await openList();
+    const n0 = await rows().count();
+    const victim = rows().first();
+    const title = ((await victim.innerText()) || '').split('\n')[0].slice(0, 18);
+    await victim.focus();
+    await page.keyboard.press('Delete');
+    await page.waitForTimeout(900);
+    const n1 = await rows().count();
+    if (n1 !== n0 - 1) throw new Error(`按 Del 之后列表行数是 ${n1}（原本 ${n0}）：没删掉`);
+    await page.click('[data-testid="nav-trash"]', { timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(700);
+    const trashText = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
+    if (title && !trashText.includes(title)) throw new Error(`列表里少了「${title}」但回收站里也看不到它：可能真删了而不是移到最近删除`);
+    // 第二条腿：这篇已经进了最近删除，编辑器却不该还停在它上面 —— 停在上面就是留着一个
+    // "打字会被核心拒收"的面（核心对回收站中的笔记回 constraint，用户那边看到的是字打了却不在）。
+    // 缺口 G41 的那次 400 是"移走那一瞬间还在飞的 debounce"打的，所以这里等一个渲染周期读**稳定态**。
+    await page.waitForTimeout(900);
+    const shown = (await page.locator('[data-testid="editor-doc"]').first().innerText()).replace(/\s+/g, ' ');
+    if (shown.includes(title)) {
+      throw new Error(`移进最近删除之后编辑器还停在那一篇（屏上：${shown.slice(0, 70)}）：在这里打字会被核心拒收`);
+    }
+  });
+
+  // ⑥ sync：F5 ⇒ 不许刷新页面（那句话是"立即同步"）
+  await probe('sync F5', '页面没被刷新', async () => {
+    await openList();
+    await page.evaluate(() => {
+      window.__laneF5Sentinel = 'alive';
+    });
+    await page.keyboard.press('F5');
+    await page.waitForTimeout(900);
+    const alive = await page.evaluate(() => window.__laneF5Sentinel ?? null);
+    if (alive !== 'alive') throw new Error('按 F5 之后页面被刷新了（那个键在表里说的是"立即同步"，不是重载）');
+  });
+
+  // ⑦ conflicts：Ctrl+Shift+C ⇒ 冲突面板真出现
+  await probe('conflicts Ctrl+Shift+C', 'conflicts-view 出现', async () => {
+    await openList();
+    await page.keyboard.press('Control+Shift+c');
+    await page.waitForTimeout(800);
+    if ((await page.locator('[data-testid="conflicts-view"]').count()) === 0) {
+      throw new Error('按下之后屏幕上没有冲突面板');
+    }
+    await page.click('[data-testid="nav-list"]', { timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(500);
+  });
+
+  // ⑧ attach：Ctrl+Shift+F ⇒ 真把"选文件"这个动作交出来（filechooser 事件）
+  await probe('attach Ctrl+Shift+F', '触发 file chooser', async () => {
+    await openList();
+    await rows().first().click();
+    await page.waitForTimeout(700);
+    const picked = page.waitForEvent('filechooser', { timeout: 4000 }).catch(() => null);
+    await page.keyboard.press('Control+Shift+f');
+    const fc = await picked;
+    if (!fc) throw new Error('按下之后没有弹出文件选择（要么这个键没接，要么它不该出现在表里）');
+  });
+
+  // ⑨~⑬ 编辑器那五行：开一篇干净的新笔记，选中整段，按完之后屏幕上必须出现它说的那个东西。
+  // 标记写在 data-mark 上（editor/dom.ts 的约定：解析以数据属性为准，不依赖浏览器的标签归一化），
+  // 所以第一版去找 <strong> 是拿错了形状 —— 那不是产品没做，是我的探针读错了地方。
+  // 块级那两行（标题 / 待办）读的是落库的那份文档：屏幕上"看起来变了"不够，
+  // 按下去存下来的是什么，才是同步与重启之后还要一致的东西。
+  const markCase = (id, keys, mark) =>
+    probe(id, `data-mark 里出现 ${mark}`, async () => {
+      await openList();
+      await openFreshNote(`${id} 的现场段落`);
+      await selectWholeBlock();
+      await page.keyboard.press(keys);
+      await page.waitForTimeout(900);
+      const html = await doc().innerHTML();
+      if (!new RegExp(`data-mark="[^"]*${mark}`, 'i').test(html)) {
+        throw new Error(`按了 ${keys} 之后这一段里没有 data-mark="${mark}"（读到的开头：${html.slice(0, 160)}）`);
+      }
+    });
+  await markCase('bold Ctrl+B', 'Control+b', 'bold');
+  await markCase('italic Ctrl+I', 'Control+i', 'italic');
+  await markCase('underline Ctrl+U', 'Control+u', 'underline');
+
+  const blockTypeCase = (id, keys, want, describe) =>
+    probe(id, describe, async () => {
+      await openList();
+      const noteId = await openFreshNote(`${id} 段落`);
+      await selectWholeBlock();
+      await page.keyboard.press(keys);
+      await page.waitForTimeout(1300);
+      const stored = JSON.stringify(await callBridge('get_note', { id: noteId }));
+      if (!new RegExp(want, 'i').test(stored)) {
+        throw new Error(`按 ${keys} 之后这篇笔记的文档里没有它说的那件事（${want}）：${stored.slice(0, 220)}`);
+      }
+    });
+  await blockTypeCase('heading Ctrl+1', 'Control+1', 'heading', '这一段真变成标题块');
+  await blockTypeCase('checklist Ctrl+Enter', 'Control+Enter', 'checklist', '这一段真变成待办');
+
+  if (bad.length > 0) {
+    throw new Error(`快捷键表有 ${bad.length} 行按下去没有它承诺的后果（通过 ${ok.length} 行）：\n    ${bad.join('\n    ')}`);
+  }
+  return `${ok.length} 行逐条驱动都有后果：${ok.slice(0, 4).join('；')}…`;
+});
+
 await step('没有实现的效果就不许摆出开关：「窗口透明效果」这颗勾不该出现（缺口 G39）', async () => {
   // PLATFORM.md §观感 写的是"Mica/Acrylic 仅系统支持时启用 + **必须**提供关闭开关"。
   // 实测今天**特效本身没实现**（全仓搜 mica/acrylic/vibrancy/backdrop 零命中，`no-transparency`
