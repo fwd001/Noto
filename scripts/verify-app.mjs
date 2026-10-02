@@ -1341,41 +1341,100 @@ await step('设置页导入 .enex：报告、说明、以及列表里真的出�
   return `列表两条都在；说明：${notices.slice(0, 60)}`;
 });
 
-await step('凭据库没接入的设备：口令那一格要在敲之前就说清楚（缺口 G38 欠的那句提示）', async () => {
-  // 本机是 Windows，核心报的永远是 `credentialManager`，这一支在真机上不会显示 —— 所以按这条 lane
-  // 已有的办法用 route 把 `platform_caps` 换成 `keychain:"none"` 的那一份（= macOS/Android 的真形态），
-  // 让那句话在浏览器里真的渲染一次。判据是**两条腿**：喂 none 要出现，撤掉之后不许还挂着
-  // —— 少了后一条，这一步就是一句恒真的装饰，抓不到任何东西。
-  const MATCH = '**/cmd/platform_caps';
+await step('口令的三种状态要各说一句各的话（缺口 G38 选 B：没有系统凭据库时只活一次运行）', async () => {
+  // 本机是 Windows，核心报的永远是 `credentialManager`，"这台设备没有系统凭据库"那一支在真机上
+  // 不会显示 —— 所以按这条 lane 已有的办法用 route 把 `platform_caps` 换成 `keychain:"none"`
+  // 的那一份（= macOS/Android 的真形态），让那句话在浏览器里真的渲染一次。
+  // 第二位（`credentialLive`/`credentialPersistent`）也照样喂三种组合：**判据是"哪句出现、哪句不许出现"**，
+  // 少了反向那一半就是恒真装饰。旧文案里那句"配不了同步"是 B 之前的口径，留着它就是一句假话。
+  const CAPS = '**/cmd/platform_caps';
+  const ACCOUNT = '**/cmd/account';
+  const acct = (over) => ({
+    ok: true,
+    payload: {
+      id: '00000000-0000-7000-8000-000000000001',
+      label: '车道账户',
+      baseUrl: 'http://127.0.0.1:5005/.notes',
+      rootPrefix: '/.notes',
+      username: 'lane-user',
+      authKind: 'basic',
+      tlsPolicy: 'strict',
+      proxyMode: 'direct',
+      bypass: [],
+      enabled: true,
+      hasCredential: true,
+      credentialLive: true,
+      credentialPersistent: true,
+      hasCaPem: false,
+      pinnedSha256: [],
+      ...over,
+    },
+  });
+  const openSettings = async () => {
+    await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
+    await page.locator('[data-testid="nav-settings"]').scrollIntoViewIfNeeded();
+    await page.click('[data-testid="nav-settings"]', { timeout: 8000 });
+  };
+  const say = async (testid) => {
+    const el = page.locator(`[data-testid="${testid}"]`);
+    return {
+      shown: (await el.count()) > 0,
+      text: (await el.count()) > 0 ? (await el.first().innerText()).replace(/\s+/g, ' ') : '',
+    };
+  };
   try {
-    await page.route(MATCH, (route) =>
-      route.fulfill({
-        status: 200,
-        headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
-        body: JSON.stringify({ ok: true, payload: { keychain: 'none' } }),
-      }),
-    );
-    await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
-    await page.locator('[data-testid="nav-settings"]').scrollIntoViewIfNeeded();
-    await page.click('[data-testid="nav-settings"]', { timeout: 8000 });
-    const hint = page.locator('[data-testid="credential-store-none"]');
-    await hint.waitFor({ state: 'visible', timeout: 8000 });
-    const text = (await hint.innerText()).replace(/\s+/g, ' ');
-    if (!/口令不会被保存/.test(text)) throw new Error(`提示出现了，但没说清后果：「${text}」`);
-    if (!/配不了同步/.test(text)) throw new Error(`提示没点出"这台设备配不出同步"：「${text}」`);
+    // ① Windows 真形态：三句都不该出现（口令在系统凭据库里，重启也还在）。
+    await page.route(ACCOUNT, (route) => route.fulfill({ status: 200, headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' }, body: JSON.stringify(acct({})) }));
+    await openSettings();
+    for (const id of ['credential-store-none', 'credential-volatile', 'credential-gone']) {
+      const s = await say(id);
+      if (s.shown) throw new Error(`系统凭据库在的场景里出现了「${id}」：「${s.text}」`);
+    }
 
-    await page.unroute(MATCH);
-    await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
-    await page.locator('[data-testid="nav-settings"]').scrollIntoViewIfNeeded();
-    await page.click('[data-testid="nav-settings"]', { timeout: 8000 });
-    if (await page.locator('[data-testid="credential-store-none"]').count() > 0) {
-      throw new Error('本机有凭据库（credentialManager）而那句话还挂着 ⇒ 它是恒真的装饰，不是能力判定');
+    // ② 有口令、只在这次运行里（macOS/Android 敲完那一刻）：要说"退出后需重填"，不能说"配不了"。
+    await page.route(CAPS, (route) => route.fulfill({ status: 200, headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' }, body: JSON.stringify({ ok: true, payload: { keychain: 'none' } }) }));
+    await page.unroute(ACCOUNT);
+    await page.route(ACCOUNT, (route) => route.fulfill({ status: 200, headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' }, body: JSON.stringify(acct({ credentialLive: true, credentialPersistent: false })) }));
+    await openSettings();
+    const pre = await say('credential-store-none');
+    if (!pre.shown) throw new Error('keychain=none 而那句"这台设备没有系统凭据库"没出现 ⇒ caps 没接到界面');
+    if (!/内存|一次运行/.test(pre.text)) throw new Error(`提示没说清后果（口令只活一次运行）：「${pre.text}」`);
+    // 反向判据只钉**旧口径那三句**（B 之前写的"保存会被拒绝 / 配不了同步 / 口令不会被保存"）。
+    // 这里第一版写的是 `/拒绝|不会被保存|配不了/` —— 把新文案里那句"**保存不会被拒绝**"
+    // 也当成旧口径抓出来了，于是一条产品没错的红（读数在 0.0.52 那条里）。判据要钉的是谎话，
+    // 不是"某个字出现过"。
+    if (/配不了同步|保存会被拒绝|口令不会被保存/.test(pre.text)) {
+      throw new Error(`旧口径还留在文案里（B 之后保存不会被拒）：「${pre.text}」`);
+    }
+    const vol = await say('credential-volatile');
+    if (!vol.shown || !/退出后需要重填|退出后重填/.test(vol.text)) throw new Error(`口令只活一次运行却没说"退出后重填"：「${vol.text}」`);
+    if ((await say('credential-gone')).shown) throw new Error('这一轮明明拿得到口令，却同时说"已经不在了"');
+
+    // ③ 重启之后：引用挂着、东西没了 ⇒ 只能说"请重填"，不许再说"已保存口令"。
+    await page.unroute(ACCOUNT);
+    await page.route(ACCOUNT, (route) => route.fulfill({ status: 200, headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' }, body: JSON.stringify(acct({ credentialLive: false, credentialPersistent: false })) }));
+    await openSettings();
+    const gone = await say('credential-gone');
+    if (!gone.shown || !/重填/.test(gone.text)) throw new Error(`引用挂着而口令没了，却没说"请重填"：「${gone.text}」`);
+    if ((await say('credential-volatile')).shown) throw new Error('口令已经不在了还说"只在这次运行里有效"（两句互相矛盾）');
+    const hintTexts = await page.locator('.field-hint').allInnerTexts();
+    if (hintTexts.some((s) => /已保存口令/.test(s))) {
+      throw new Error(`这一轮已经拿不到口令，界面上却还挂着"已保存口令（留空则不修改）"：${JSON.stringify(hintTexts)}`);
+    }
+
+    // ④ 撤掉 caps 的假象：那句"这台设备没有系统凭据库"必须跟着消失（反向腿）。
+    await page.unroute(CAPS);
+    await page.unroute(ACCOUNT);
+    await openSettings();
+    if ((await say('credential-store-none')).shown) {
+      throw new Error('本机有凭据库（credentialManager）而那句話还挂着 ⇒ 它是恒真的装饰，不是能力判定');
     }
   } finally {
-    await page.unroute(MATCH).catch(() => {});
+    await page.unroute(CAPS).catch(() => {});
+    await page.unroute(ACCOUNT).catch(() => {});
     await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 }).catch(() => {});
   }
-  return 'none ⇒ 那句话出现（含后果）；真 caps ⇒ 不出现，两条腿都验过';
+  return '四种组合各说各的话：真 caps 三句都不出现；none+活的说"退出后重填"；引用挂着而没了说"请重填"；反向腿都验过';
 });
 
 await step('正文字号那根滑杆：改完编辑器里那行的实际字号必须跟着变（外观那一节的调用边）', async () => {

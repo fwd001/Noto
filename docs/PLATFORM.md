@@ -56,7 +56,7 @@ trait SystemTheme    { fn current(&self) -> Theme; fn changes(&self) -> Stream<T
 | 安全区 | N/A | N/A | ✅ insets | ✅ safeAreaInsets |
 | 动态字体 | ⚠ WebView 缩放 | ⚠ | ✅ | ✅ |
 | 系统字体 | Segoe UI Variable | SF Pro | Roboto | SF Pro |
-| 凭据存储 | Credential Manager | Keychain | Keystore | Keychain |
+| 凭据存储 | ✅ Credential Manager（as-built，0.0.29） | ⚠ Keychain（**未接**，现状见 §macOS 那一条） | ⚠ Keystore（**未接**，同上） | ⚠ Keychain（**未接**，同上） |
 | 生物识别解锁 | ⚠ Windows Hello（需原生插件） | ✅ LocalAuthentication | ✅ BiometricPrompt | ✅ Face/Touch ID |
 | 键盘避让 | N/A | N/A | ✅ `adjustResize` | ✅ |
 | 键盘外接快捷键 | ✅ | ✅ | ✅ | ✅ |
@@ -158,7 +158,7 @@ trait SystemTheme    { fn current(&self) -> Theme; fn changes(&self) -> Stream<T
   *as-built（2026-09-27）*：托盘图标在桌面三端启动时挂上（左键 = 显示/隐藏窗口，右键 = 托盘菜单：显示/隐藏、新建笔记、立即同步、退出）；**关窗是否收进托盘由设置页那个开关决定，默认关**（开关 = `UiPrefs.trayHint`，判据是 `platform/caps.ts::shouldHideOnClose`，要"开关为真 **且** 托盘真的挂上"两个条件同时成立 —— 只判断前者会得到一个关不掉也找不回的进程）。托盘菜单里的"新建笔记/立即同步"与原生菜单、快捷键共用同一批 id，经 `notera://menu` 一条路进前端。
 * **全局快捷键**：*as-built（2026-09-27）* 两条，`Ctrl+Alt+N`（任何应用里新建笔记）与 `Ctrl+Alt+I`（显示/隐藏窗口），mac 为 `⌘⌥N` / `⌘⌥I`；定义在 `notera_host::platform::global_shortcut_plan()`（唯一来源）。**刻意不复用应用菜单上的 accel**（`Ctrl+S`、`Ctrl+F` 那批）：把它们注册成系统级快捷键就是劫持别的应用的按键。注册只发生在 Rust 侧，前端不碰这个插件的 IPC，因此不需要给前端开 capability；成没成经 `report_native_cap` 写回能力声明，设置页里那两行快捷键（`requires: 'globalShortcuts'`）随之出现或消失，实际注册的组合键与界面上显示的字面由 `the_settings_page_shows_exactly_the_registered_global_shortcuts` 对账。**P6（托盘/后台常驻的默认取向）仍未拍板**，所以"常驻"这条路按默认关实现。
 * **WebView2**：Tauri 在 Windows 的硬依赖。开发机实测**WebView2 运行时已装（150.0.4078.105）**（无 `Edge\Application` 也无 `EdgeCore`）→ 安装包必须内置离线安装器引导，且启动时检测缺失要给出可操作提示，而不是白屏。
-* **凭据**：Windows Credential Manager（`keyring` crate）。
+* **凭据**：*as-built（0.0.29；0.0.52 更正这一句的依赖写法）* Windows 凭据管理器的 generic credential，走 `windows-sys` 的 `CredWriteW` / `CredReadW` / `CredDeleteW`（此前这里写的是 `keyring` crate —— 那个依赖全仓没有，是按 §45 扫出来的文档错话）；blob 上限 512 字节 = **256 个 UTF-16 单元**，超限**具名报错、绝不截断**。
 * **文件**：`IFileOpenDialog`（经 Tauri dialog 插件），拖拽入窗支持图片/文件。
 * **通知**：WinRT 通知，需 AppUserModelID 与开始菜单快捷方式（安装器负责）。
 
@@ -170,7 +170,7 @@ trait SystemTheme    { fn current(&self) -> Theme; fn changes(&self) -> Stream<T
 * **菜单**：原生主菜单（`应用/文件/编辑/格式/显示/窗口/帮助`），菜单项由 Rust 侧定义、动作经命令派发 —— 保证 ⌘ 快捷键在系统层面可被用户改。
 * **窗口**：支持多窗口（每条笔记可弹出独立窗口编辑）→ 需要 `sync_rev` 乐观并发保护，跨窗口编辑同一条走 §冲突路径。
 * **观感**：跟随系统外观 + 强调色；字体走系统 SF Pro； vibrancy 谨慎使用（正文可读性优先）。
-* **凭据**：Keychain，`kSecUseDataProtectionKeychain`。
+* **凭据**：设计是 Keychain（`kSecUseDataProtectionKeychain`），**尚未接**（缺口 G38）。*as-built（0.0.52，用户拍板走 B）*：这一格现在退到**本次进程的内存** —— 保存不被拒、这一轮同步真拿得到口令、**不落盘**、退出后需要重填；设置页按 `caps.keychain` 与 `credentialLive`/`credentialPersistent` 在三个时点各说一句各的话。判据 = `notera-host/tests/credential_session.rs` 七条 + TEST-PLAN FT-CRED-08..11，边界与代价写在 ADR-0020 追记与 PROXY.md §凭据。Android 那一壳共用同一份 `credential_store`，现状一模一样。
 * **签名与公证**：无开发者证书时产物只能 ad-hoc 签名 → Gatekeeper 会拦。已在 CI-CD.md 列为待决策。
 
 ---

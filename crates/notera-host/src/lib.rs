@@ -1824,7 +1824,18 @@ impl App {
     /// 按需探测 → 协商 → 跑一轮，返回这一轮的统计（CLI `sync-once` 的落点）。
     /// 没配账户/凭据 → `Err`：诊断工具宁可不报，也不许拿"零请求"冒充同步成功。
     pub async fn sync_once(&self) -> Result<RoundStats, CmdError> {
+        let configured = ConfigRepository::active(&self.config()).is_some();
         let Some(remote) = self.remote_for_sync().await? else {
+            // 「没配服务器」与「配了服务器但这一轮拿不到凭据」必须**分开说**。
+            // 以前两者都折成 `no_account`（"还没有配置同步服务器"），而后一种其实是配好了的 ——
+            // 用户照着那句话去翻表单，会看见一个填得满满的账户。缺口 G38 选 B 之后，
+            // 没有系统凭据库的平台上**每次重启**都是后一种（口令只活在这次进程里），
+            // 于是那条假话从边角变成了每天第一次点同步都会撞上的常态。
+            // 徽标那一格早就分开了（`sync.needsCredentials`），这里补上返回值的对偶（§45）。
+            // 两条都写成字面量：算出来的码 arch-check 那条"错误码必须登记"看不见。
+            if configured {
+                return Err(CmdError::of("sync_needs_credentials", false));
+            }
             return Err(CmdError::of("no_account", false));
         };
         if let Err(key) = self.negotiate(&remote).await {
@@ -3088,6 +3099,13 @@ fn account_dto(a: &AccountConfig) -> AccountDto {
         bypass: a.proxy.bypass.clone(),
         enabled: a.enabled,
         has_credential: !a.credential_ref.is_empty(),
+        // 这一轮真拿得到口令吗（系统里或本次会话的内存表里）。引用挂着但取不到 = 重启过了，
+        // 界面上要说的不是"已保存"而是"请重填"。
+        credential_live: credential_store::live(&credential_store::webdav_target(&a.id)),
+        // 拿到的那一份是不是落在系统凭据库里（= 重启后还在）。会话表里的算 false。
+        credential_persistent: credential_store::persistent(&credential_store::webdav_target(
+            &a.id,
+        )),
         has_ca_pem: a.ca_pem.as_deref().is_some_and(|s| !s.trim().is_empty()),
         pinned_sha256: a.pinned_sha256.clone().unwrap_or_default(),
         username: a.username.clone(),
@@ -3102,18 +3120,19 @@ fn account_dto(a: &AccountConfig) -> AccountDto {
 /// `why` 里只放"哪一步、什么码、多长"，**绝不放口令本身** —— 这个结构体会被写进日志与
 /// 界面的错误详情，口令一旦进去就等于没进凭据库。
 ///
-/// 三条分支把码**写成 `CmdError::of("…")` 的字面量**而不是 `e.code()` 那种算出来的值：
+/// 两条分支把码**写成 `CmdError::of("…")` 的字面量**而不是 `e.code()` 那种算出来的值：
 /// 这些码是界面取文案的键，而 `arch-check` 的"错误码必须登记"那一条只认字面量。写成算出来的
 /// 码，漏登记既不编译报错也不测试失败 —— 0.0.29 就是那么漏过去的：非 Windows 配账号时拿到的
 /// 是那句通用兜底，而不是"这台设备的凭据库还没接上"这句能照着办事的话（现在由第 30 条守着）。
+///
+/// 那第三条码 `credential_unavailable` 已经整条删掉（缺口 G38 选 B）：现在没有哪个平台会
+/// "存不了口令"，留着一条永远不会发生的码，就是留一段永远不会被看到的文案。
 fn secret_err(e: credential_store::SecretError) -> CmdError {
     match e {
         credential_store::SecretError::TooLong(units) => CmdError::of("credential_too_long", false)
             .with(serde_json::json!({
                 "why": format!("口令 {units} 个 UTF-16 单元，超过系统凭据 blob 的上限（256 单元）")
             })),
-        credential_store::SecretError::Unavailable => CmdError::of("credential_unavailable", false)
-            .with(serde_json::json!({ "why": "这个平台还没有接入系统凭据库" })),
         credential_store::SecretError::Store(code) => {
             CmdError::of("credential_store_failed", false).with(
                 serde_json::json!({ "why": format!("系统凭据调用失败（Win32 错误码 {code}）") }),

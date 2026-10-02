@@ -72,11 +72,19 @@ fn a_stored_secret_comes_back_byte_identical_and_removal_is_idempotent() {
     let target = credential_store::test_target("roundtrip");
     let _guard = Guard(target.clone());
     if !credential_store::available() {
-        // 非 Windows：这一格是 BLOCKED（ADR-0020），断言它给出的是**具名错误**而不是静默成功。
+        // 非 Windows（缺口 G38 选 B 之后）：口令**不退到报错，退到本次进程的内存表**。
+        // 这一支在 Windows 上跑不到，所以它是"文档说的退路真存在"的唯一自动检查。
+        credential_store::put(&target, "u", "p").expect("没有系统凭据库时也要存得进去（会话表）");
         assert_eq!(
-            credential_store::put(&target, "u", "p"),
-            Err(credential_store::SecretError::Unavailable)
+            credential_store::get(&target).unwrap(),
+            Some(("u".to_string(), "p".to_string())),
+            "存进会话表必须读得回来，否则同步那一轮拿不到口令"
         );
+        assert!(
+            !credential_store::persistent(&target),
+            "会话表里的不算持久 —— 界面上那句「退出后要重填」就是照这位说的"
+        );
+        credential_store::remove(&target).expect("删也要幂等");
         assert_eq!(credential_store::get(&target).unwrap(), None);
         return;
     }
@@ -88,6 +96,16 @@ fn a_stored_secret_comes_back_byte_identical_and_removal_is_idempotent() {
         credential_store::get(&target).unwrap(),
         Some((user.to_string(), secret.to_string())),
         "读回来的必须与存进去的一字不差"
+    );
+    // 这两位在**有**系统凭据库的平台上必须是 true / true —— 界面那句"退出后不用重填"照它们说。
+    // 没有这一条，`persistent()` 写成常量 `false` 也能让别的门禁全绿（缺的就是这个反向差分）。
+    assert!(
+        credential_store::live(&target),
+        "真存进系统凭据库却报「这一轮拿不到」"
+    );
+    assert!(
+        credential_store::persistent(&target),
+        "系统凭据库里明明有，`persistent` 却报 false —— 这一位不许硬编码"
     );
     // 覆盖同一目标：内容寻址之外这里是"同名替换"，第二次说了算（重设口令就是这个形状）。
     credential_store::put(&target, user, "新的口令").expect("替换");
@@ -110,9 +128,20 @@ fn the_blob_limit_is_enforced_at_the_boundary_without_storing_anything() {
     let target = credential_store::test_target("limit");
     let _guard = Guard(target.clone());
     if !credential_store::available() {
+        // 上限是**后端无关**的一条规则（超限就报错、绝不截断），所以会话表这条路也要验它：
+        // 截断后的口令存进去，用户拿到的还是一个"配好了但 401"的账户。
+        let one_over = "ａ".repeat(credential_store::MAX_UNITS + 1);
         assert_eq!(
-            credential_store::put(&target, "u", "p"),
-            Err(credential_store::SecretError::Unavailable)
+            credential_store::put(&target, "u", &one_over),
+            Err(credential_store::SecretError::TooLong(
+                credential_store::MAX_UNITS + 1
+            )),
+            "没有系统凭据库时也不许把超长口令塞进会话表"
+        );
+        assert_eq!(
+            credential_store::get(&target).unwrap(),
+            None,
+            "被拒的那一次不许留下任何东西"
         );
         return;
     }

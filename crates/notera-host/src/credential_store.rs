@@ -11,9 +11,37 @@
 //! * blob 上限是 **512 字节**，而 blob 装的是 UTF-16 ⇒ 最多 256 个 UTF-16 单元。
 //!   超限**报错**，绝不截断 —— 截断后的口令存进去，用户会拿到一个"配好了但 401"的账户。
 //!
-//! 非 Windows 平台还没接：`available()` 返回 false，`put/get/remove` 一律
-//! `Unavailable`。调用方必须把它当成"这条能力没有"而不是"存成功了"（§46：不许用
-//! 理论通过糊这一格）。
+//! 非 Windows 平台还没接系统凭据库。**2026-10-02 用户拍板走"口令只留本次会话内存"（缺口 G38 选 B）**，
+//! 所以这一格现在不再是"保存被拒"，而是**退到进程内的会话表**：
+//! * 存：OS 后端不可用时写进 `SESSION`，`put` 返回 `Ok` ⇒ 保存不再被顶回来；
+//! * 取：`get` 先看 OS，再看到会话表 ⇒ 这一轮同步真拿得到口令；
+//! * **绝不落盘**：口令不进 SQLite、不进 `AppConfig`、不进日志（配置里那个 `credential_ref`
+//!   只是引用），进程一退出就没了 —— 下一次启动 `get` 返回 `None`，界面按"需要凭据"提示重填。
+//!
+//! 这条退化不是"静默兜底"：它由 DTO 上 `credentialLive` / `credentialPersistent` 两位说出来，
+//! 设置页在用户敲口令**之前**就写明"只在这次运行里有效"（判据见 `notera-host/tests/credential_session.rs`
+//! 与 `docs/ADR/0020-*.md` 的追记）。§46：不许用"理论通过"糊这一格。
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
+
+/// 本次会话内的口令表。用 `OnceLock` 而不是 `thread_local`：读它的有两个壳与同步线程，
+/// 而"会话"的边界是**进程**（退出即失效），不是线程。
+static SESSION: OnceLock<Mutex<HashMap<String, (String, String)>>> = OnceLock::new();
+/// 测试缝：把 OS 后端当成"这个平台没有"，好在本机（Windows）真跑一遍上面那条退路。
+/// 只在**自己的测试二进制**里翻（cargo 每个集成测试文件一个进程），否则会跟别的凭据测试抢全局态。
+static SESSION_ONLY: AtomicBool = AtomicBool::new(false);
+
+fn session() -> &'static Mutex<HashMap<String, (String, String)>> {
+    SESSION.get_or_init(Default::default)
+}
+
+/// 测试用：之后本进程内 `available()` 一律报 false，`put/get/remove` 全走会话表。
+#[doc(hidden)]
+pub fn force_session_only() {
+    SESSION_ONLY.store(true, Ordering::SeqCst);
+}
 
 /// 引用前缀与目标名的关系：配置里写 `keychain:{id}`，系统里那条叫
 /// `notera:webdav:{id}`。分成两个字符串是因为前者会被下发到界面的等价物
@@ -31,9 +59,11 @@ pub const MAX_UNITS: usize = 256;
 pub enum SecretError {
     /// 口令太长（带实际单元数，界面上要说清上限是多少）。
     TooLong(usize),
-    /// 这个平台上还没有接入（非 Windows）。
-    Unavailable,
     /// 系统调用失败，带 last-error 码。
+    ///
+    /// 以前这里还有一个 `Unavailable`（"这个平台没接入"）—— 缺口 G38 选 B 之后没有平台会
+    /// "存不了"了（退到会话表），那条码就没有出口了，于是整条删掉：留着一条永远不会发生的
+    /// 错误码，界面上就永远有一段永远不会被看到的文案。
     Store(u32),
 }
 
@@ -41,7 +71,7 @@ pub enum SecretError {
 ///
 /// 这里**不**再放一个 `code()`：错误码必须在 `CmdError::of("…")` 那个位置以字面量出现，
 /// 才会被"错误码必须登记文案"那条门禁看到（算出来的码它扫不到，漏登记就静默退成通用兜底）。
-/// 三条码现在住在 `App::secret_err` 的三个分支里。
+/// 两条码现在住在 `App::secret_err` 的两个分支里。
 impl std::fmt::Display for SecretError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -52,7 +82,6 @@ impl std::fmt::Display for SecretError {
                 MAX_UNITS * 2,
                 limit = MAX_UNITS
             ),
-            Self::Unavailable => write!(f, "这个平台还没有接入系统凭据库"),
             Self::Store(code) => write!(f, "系统凭据调用失败（Win32 错误码 {code}）"),
         }
     }
@@ -76,58 +105,85 @@ pub fn account_of(reference: &str) -> Option<&str> {
     reference.strip_prefix(REF_PREFIX)
 }
 
-/// 这个平台上到底有没有系统凭据库。**只有 Windows 接了**（`put`/`get` 在非 Windows 直接 `Unavailable`），
-/// 而 `App::configure_account` 里口令那一格是 `put(...)?` —— 于是填了口令的账户在 macOS / Android 上
-/// **保存就会被拒**，也就是那两个平台目前配不出可用的同步。用户侧后果与三条出路记在
-/// PRODUCTION-READINESS §7 的 **G38**（等口径拍板）。
+/// 这个平台上到底有没有**系统**凭据库。只有 Windows 接了（且测试缝没把它关掉）；
+/// 报 false 不再意味着"口令存不了"，而是"退到本次会话的内存表"（见文件头，缺口 G38 选 B）。
 ///
 /// 这里以前写着"界面的『记住口令』那颗开关要照它显示"，而界面里从来没有那颗开关（全仓零命中）——
-/// 注释承诺了一个不存在的控制，按现状改回来。
+/// 注释承诺了一个不存在的控制，按现状改回来。界面上现在说的是另一件事：
+/// `credentialPersistent` 那位（"退出后要不要重填"）。
 pub fn available() -> bool {
-    cfg!(windows)
+    cfg!(windows) && !SESSION_ONLY.load(Ordering::SeqCst)
 }
 
 /// 存（或替换）一条口令。返回值只说成不成 —— 内容不进配置，也不进日志。
+/// OS 后端不可用时**退到会话表**并返回 `Ok`（这就是 G38 选 B 的那条退路）。
 pub fn put(target: &str, user: &str, secret: &str) -> Result<(), SecretError> {
     let units: Vec<u16> = secret.encode_utf16().collect();
     if units.len() > MAX_UNITS {
         return Err(SecretError::TooLong(units.len()));
     }
-    #[cfg(windows)]
-    {
-        win::put(target, user, &units)
+    if available() {
+        #[cfg(windows)]
+        return win::put(target, user, &units);
     }
-    #[cfg(not(windows))]
-    {
-        let _ = (target, user, units);
-        Err(SecretError::Unavailable)
-    }
+    // 中毒的锁只会是别处 panic 的现场，表本身还是那份 HashMap —— 拿它继续跑比丢掉口令安全。
+    let mut map = session()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    map.insert(target.to_string(), (user.to_string(), secret.to_string()));
+    tracing::debug!(target, "系统凭据库不可用：这条口令只留在本次进程的内存里");
+    Ok(())
 }
 
-/// 取。`Ok(None)` = 系统里没有这一条（正常状态，不是错误）。
+/// 取。`Ok(None)` = 这一轮拿不到（系统里没有、或进程刚重启过）。
+/// 顺序是**先系统后会话**：接了 OS 后端的平台上会话表永远是空的，反过来则会让旧值盖住新值。
 pub fn get(target: &str) -> Result<Option<(String, String)>, SecretError> {
+    if available() {
+        #[cfg(windows)]
+        return win::get(target);
+    }
+    let found = session()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(target)
+        .cloned();
+    Ok(found)
+}
+
+/// 这一轮真拿得到吗（不管在系统里还是在会话表里）—— 界面上"能不能就这么同步"的判据。
+pub fn live(target: &str) -> bool {
+    matches!(get(target), Ok(Some(_)))
+}
+
+/// 这条口令是不是落在**系统**凭据库里（= 重启后还在）。会话表里的不算，
+/// 所以非 Windows 上永远是 false —— 设置页那句"退出后要重填"就是照它说的。
+pub fn persistent(target: &str) -> bool {
+    if !available() {
+        return false;
+    }
     #[cfg(windows)]
     {
-        win::get(target)
+        matches!(win::get(target), Ok(Some(_)))
     }
     #[cfg(not(windows))]
     {
-        let _ = target;
-        Err(SecretError::Unavailable)
+        false
     }
 }
 
 /// 删。**幂等**：系统里本来没有这一条算成功（删账户、回滚、重试都会走到这里）。
+/// 两个后端都清 —— 换过平台或测试里翻过缝之后，不该留一份还能读到的旧口令。
 pub fn remove(target: &str) -> Result<(), SecretError> {
-    #[cfg(windows)]
-    {
-        win::remove(target)
+    if available() {
+        #[cfg(windows)]
+        win::remove(target)?;
     }
-    #[cfg(not(windows))]
-    {
-        let _ = target;
-        Err(SecretError::Unavailable)
-    }
+    // 会话表也清一份：换过平台、或测试里翻过那条缝之后，不该留一条还能读到的旧口令。
+    session()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(target);
+    Ok(())
 }
 
 /// 测试与清理用：一条只在本进程生命周期里有意义的目标名（不会撞用户的真凭据）。

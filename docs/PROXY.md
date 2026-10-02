@@ -73,7 +73,18 @@ ProxyProfile {
 * 凭据**永不**进 SQLite、不进日志、不进 URL 明文（`notera-net` 在写审计日志前统一脱敏，见 §9）。
 * 存储：配置只存 profile 本体 + 一个引用。as-built（0.0.29，ADR-0020）：`credential_ref` = `keychain:<账户 id>`，系统侧的条目名是 `notera:webdav:<账户 id>`；代理凭据同一条通道，条目名 `notera:proxy:<账户 id>`（`UserName` 装用户名、blob 装口令的 UTF-16 字节）。引用**只在真的存进去之后**才写 —— 它是"系统里有一条"的证据，不是"用户填过"的证据。
 * 上限：generic credential 的 blob 是 **512 字节**，按 UTF-16 算是 **256 个单元**。超限返回具名错误 `credential_too_long`（带上实际单元数），**什么都不写、也不截断** —— 截断存进去等于交给用户一个"配好了但永远 401"的账户。
-* **钥匙串不可用时的降级（本地加密文件：argon2id 派生 + AES-256-GCM-SIV，并在 UI 明说"凭据保护强度下降"）尚未实现**。今天的行为是：`credential_store::available() == false` → `put/get/remove` 一律 `credential_unavailable`，发布版徽标停在"需要凭据"（`caps.keychain` 报 `none`，这一处至少是诚实的）。按 §40 记：原因 = 各平台的凭据后端没接、这台机器上也无法验证；影响 = macOS / Linux / Android 上发布版仍不能同步；解除条件 = 各平台后端 + 真机验证，或者实现这条降级路径（`argon2` 与 `aes-gcm-siv` 已在工作区依赖里）。**不静默降级为明文**这一条始终成立。
+* **没有系统凭据库的平台上的降级（2026-10-02 用户拍板，缺口 G38 选 B）= 口令只留在本次进程的内存里**。
+  今天的行为：`credential_store::available() == false` 时 `put` **照旧成功**（写进进程内的会话表），
+  `get` 先问系统再读到会话表 ⇒ 这一轮同步真拿得到口令；进程退出即失效，下一次启动 `get` 回 `None`，
+  徽标停在"需要凭据"、返回值报具名码 `sync_needs_credentials`（不再折成 `no_account` 那句
+  "还没有配置同步服务器" —— 账户明明配好了，那句是假话）。`credential_unavailable` 这条错误码随
+  这次决定**整条删除**：没有平台会再"存不了"，留着一条永不到来的码就是留一段永不出现的文案。
+  这条退化不是静默兜底（§39）：DTO 上 `credentialLive` / `credentialPersistent` 两位说出来，设置页在
+  用户敲口令**之前**、保存之后、以及重启之后各说一句各的话（判据 = `notera-host/tests/credential_session.rs`
+  六条 + `verify-app` 那一步的四组合，ADR-0020 追记）。
+  **仍未做**：Keychain / Secret Service / Android Keystore 各自的后端 + 真机验证（解除条件：那一格的
+  后端实现；届时要改的只有 `available()` 与 `put/get` 那两处分支，会话表留着当"这个平台上没接上"的退路）。
+  **不静默降级为明文落盘**这一条始终成立，并由那条门禁按字节扫整个数据目录钉住。
 
 ---
 

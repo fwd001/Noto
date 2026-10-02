@@ -22,18 +22,23 @@ const COMMAND_CODES = [
   'bad_id',
   'unknown_command',
   'no_account',
+  // 配好了账户、这一轮只是拿不到口令 —— 与 `no_account` 是两件事（缺口 G38 选 B 之后
+  // 在没有系统凭据库的平台上这是每次重启的正常状态）。
+  'sync_needs_credentials',
   'multi_account_unsupported',
   'invalid_account',
   'save_failed',
   'bad_device',
   'net_config',
   'proxy_credential_missing',
-  // 这三条凭据码是 0.0.31 补的：它们当时**不在 arch-check 的扫描结果里**，因为 Rust 侧写的是
+  // 这两条凭据码是 0.0.31 补的：它们当时**不在 arch-check 的扫描结果里**，因为 Rust 侧写的是
   // `CmdError::of(e.code())` —— 算出来的码那条门禁看不见，于是"漏登记文案"既不报错也不红，
   // 用户只会看到那句通用兜底。现在码写成字面量（被第 12 条看见），并由第 30 条
   // `hygiene:error-code-must-be-literal` 守住"不许再写算出来的码"这一形。
+  // 第三条 `credential_unavailable` 随缺口 G38 选 B 一起删了：没有系统凭据库的平台上
+  // 口令退到本次会话的内存表，"存不了"这条错误再也不会发生 —— 留一条永远不会出现的码，
+  // 就是留一段永远不会被看到的文案。
   'credential_too_long',
-  'credential_unavailable',
   'credential_store_failed',
   'serialize',
   'handler_panic',

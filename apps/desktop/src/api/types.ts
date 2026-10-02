@@ -215,6 +215,16 @@ export interface Account {
   enabled?: boolean;
   hasCredential?: boolean;
   /**
+   * 这一轮**真拿得到**口令吗（系统凭据库里有，或本次会话的内存表里有）。
+   * 引用挂着而这里是 false = 重启过了 / 换机器了 —— 界面要说的不是"已保存"而是"请重填"。
+   */
+  credentialLive?: boolean;
+  /**
+   * 拿到的那一份是不是落在**系统**凭据库里（= 退出后还在）。
+   * 缺口 G38 选了 B：没有系统凭据库的平台上口令只活在这次进程里，所以这一位是 false。
+   */
+  credentialPersistent?: boolean;
+  /**
    * §5 探测结果。`null`/缺省 = **还没探过**（区别于 `0` = 探过了，什么都不支持）。
    * 核心的 `Option<u32>` 序列化成 JSON `null`，所以这里必须允许 null。
    */

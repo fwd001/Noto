@@ -226,11 +226,18 @@ function keyHint(): string {
               data-testid="account-password"
             />
             <span v-if="settings.passwordIsSet" class="field-hint">{{ t('settings.accountPasswordSet') }}</span>
-            <!-- 缺口 G38：核心那侧口令只允许进系统凭据库，没接的平台上一次带口令的保存会被当场拒掉。
-                 这句话必须在敲口令之前说出来 —— 让用户撞一次失败才发现"这台设备配不了同步"，
-                 是界面欠着的一句提示（`caps.keychain` 早就报到了前端，此前没人读它）。 -->
+            <!-- 缺口 G38 选了 B：没有系统凭据库的平台上口令只留在这次进程的内存里。
+                 这句话必须在敲口令**之前**说出来（`caps.keychain`），保存之后也要跟着说
+                 （`credentialLive` / `credentialPersistent` 那两位）—— 三种状态各有各的话，
+                 合成一句就必然在其中一种状态下说谎。 -->
             <p v-if="settings.credentialStoreUnavailable" class="field-hint field-hint--warn" data-testid="credential-store-none">
               {{ t('settings.credentialStoreNone') }}
+            </p>
+            <p v-if="settings.credentialVolatile" class="field-hint field-hint--warn" data-testid="credential-volatile">
+              {{ t('settings.credentialVolatile') }}
+            </p>
+            <p v-if="settings.credentialSavedButGone" class="field-hint field-hint--warn" data-testid="credential-gone">
+              {{ t('settings.credentialGone') }}
             </p>
           </label>
 

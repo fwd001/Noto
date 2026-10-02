@@ -141,7 +141,9 @@ const MESSAGES: Record<MessageKey, string> = {
   'settings.accountUser': '用户名',
   'settings.accountPassword': '口令',
   'settings.accountPasswordSet': '已保存口令（留空则不修改）',
-  'settings.credentialStoreNone': '这台设备的系统凭据库还没接入：口令不会被保存，带口令的保存会被拒绝，本平台暂时配不了同步。本地记录与搜索不受影响。',
+  'settings.credentialStoreNone': '这台设备没有系统凭据库：口令只留在这次运行的内存里，**退出后需要重新填写**一次才能继续同步。保存不会被拒绝，本地记录与搜索也不受影响。',
+  'settings.credentialVolatile': '这条口令现在只在这次运行里有效（这台设备没有系统凭据库），退出后需要重填。',
+  'settings.credentialGone': '这台设备上上次填的口令已经不在了（口令只活在一次运行里）。账户与服务器地址都还在，重填一次口令就能继续同步。',
   'settings.accountRootPrefix': '存储前缀',
   // §6 的 ca_bundle / pin 两档的输入格（此前下拉里选得到、却没有输入口）。
   'settings.tlsCaPem': '内网根证书（PEM）',
@@ -288,6 +290,10 @@ const MESSAGES: Record<MessageKey, string> = {
   'error.invalid_input': '输入的内容无法保存，请检查后重试。',
   'error.permission_denied': '系统拒绝了这次操作。',
   'error.no_account': '还没有配置同步服务器。不配置也能继续记笔记。',
+  // 配好了服务器、只是这一轮拿不到口令 —— 与上一条是两件事，措辞必须分开：
+  // 合成一条时用户会去翻一个明明填满了的表单（缺口 G38 选 B 之后，没有系统凭据库的
+  // 平台上**每次重启**都落在这里，不是边角情况）。
+  'error.sync_needs_credentials': '这台设备上现在读不到同步口令（账户与服务器地址都还在）。本机笔记照常保存，在设置里重填一次口令就能继续同步。',
   'error.multi_account_unsupported': '当前版本一台设备只支持一台同步服务器。请先停用现有的，再添加新的。',
   'error.storage': '本机存储这一步没成功。笔记仍在磁盘上，可以重试。',
   'error.constraint': '这份内容不符合本地数据的规则，没有被保存。',
@@ -304,8 +310,6 @@ const MESSAGES: Record<MessageKey, string> = {
     '这台设备读不到已保存的代理凭据（系统凭据库里那条可能已被删除，或这个平台还没接入）。这一轮同步不会带着凭据发出去 —— 请在设置里重配一次代理的用户名与口令。',
   'error.credential_too_long':
     '这条口令太长了，超出这台设备凭据库单条的上限（256 个字符）。请换一条短一些的口令。',
-  'error.credential_unavailable':
-    '这台设备的系统凭据库还没接上（当前只有 Windows 可用），所以口令存不进来，同步也用不了。本机笔记照常保存。',
   'error.credential_store_failed':
     '写进系统凭据库时失败了，口令没有保存、账户也没有生效。可以再试一次；若反复失败，请把这条提示与下方详情一起给我。',
   'sync.root_mismatch': '这个服务器上已经是另一个 Notera 库了，已停止同步以免把两个库混在一起。请改用该库原本的路径。',

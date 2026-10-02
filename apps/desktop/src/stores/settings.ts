@@ -106,11 +106,29 @@ export const useSettingsStore = defineStore('settings', () => {
 
   const resolvedTheme = computed<ThemeMode>(() => (prefs.value.theme === 'system' ? (systemDark.value ? 'dark' : 'light') : prefs.value.theme));
   const hasAccount = computed(() => account.value !== null && Boolean(account.value?.baseUrl));
-  const passwordIsSet = computed(() => account.value?.hasCredential === true);
   /**
-   * 这台设备的系统凭据库到底有没有。核心那侧口令**只**允许进系统凭据库，
-   * 没有它的平台上一次带口令的保存会被当场拒掉（`credential_unavailable`）——
-   * 所以这句话必须在用户敲口令之前说出来，而不是让他撞一次失败才发现（缺口 G38）。
+   * 口令格上那句"已保存口令（留空则不修改）"的依据。
+   *
+   * 用的是 `credentialLive` 而**不是** `hasCredential`：后者只说明配置里挂着一条引用，
+   * 而缺口 G38 选 B 之后，没有系统凭据库的平台上口令只活在这次进程里 —— 重启后引用还在、
+   * 东西已经没了。照 `hasCredential` 显示就等于当着用户说"你的口令还在"，
+   * 而他下一次同步必然失败（`hasCredential` 的原始语义正是本项目踩过的那类谎报）。
+   */
+  const passwordIsSet = computed(() => account.value?.credentialLive === true);
+  /** 配置里挂着引用、这一轮却拿不到了 = 重启过 / 换机器 —— 界面要说的是"请重填"，不是"已保存"。 */
+  const credentialSavedButGone = computed(
+    () => account.value?.hasCredential === true && account.value?.credentialLive === false,
+  );
+  /** 现在拿得到，但只在这次运行里有效（这台设备没有系统凭据库）：退出后要重填。 */
+  const credentialVolatile = computed(
+    () => account.value?.credentialLive === true && account.value?.credentialPersistent === false,
+  );
+  /**
+   * 这台设备到底有没有**系统**凭据库（`caps.keychain`）。
+   *
+   * 这句话必须在用户敲口令**之前**说出来：没有它时口令只留在本次进程的内存里，
+   * 退出即失效。核心那侧不再因此拒绝保存（缺口 G38 选 B），所以这里说的不是"配不了同步"，
+   * 而是"这次运行有效、下次要重填" —— 说错的那一半曾经写在这里，照文档对代码扫出来的。
    */
   const credentialStoreUnavailable = computed(() => caps.value.keychain === 'none');
   /**
@@ -343,6 +361,8 @@ export const useSettingsStore = defineStore('settings', () => {
     accountErrorKey,
     hasAccount,
     passwordIsSet,
+    credentialSavedButGone,
+    credentialVolatile,
     credentialStoreUnavailable,
     caPemIsSet,
     usesPlainHttp,
