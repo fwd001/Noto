@@ -133,7 +133,12 @@ function onGlobalKeydown(event: KeyboardEvent): void {
       shell.toggleSidebar();
       return;
     }
-    if (key === 'p' && !typing) {
+    if (key === 'p') {
+      // 这一条**不带** `!typing` 守卫（0.0.54 改的）：设置页那张表写的是「Ctrl+P 固定」，
+      // 而用户最常要固定的正是**手上正开着、焦点在正文里**的那一篇 —— 带着守卫时那一刻按下去
+      // 什么都不发生（表里那句话在最 common 的状态下不成立），更坏的是这个键位没被接住，
+      // 就交给 WebView2 的"打印"弹窗口。同处的 `Delete`/`Backspace` 必须留守卫：
+      // 那两个在正文里是删字符，不打断打字才有道理。
       event.preventDefault();
       pinCurrent();
       return;
