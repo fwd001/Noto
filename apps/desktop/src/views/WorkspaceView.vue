@@ -5,6 +5,7 @@ import NoteList from '../components/NoteList.vue';
 import RichEditor from '../components/RichEditor.vue';
 import EmptyState from '../components/EmptyState.vue';
 import SkeletonRows from '../components/SkeletonRows.vue';
+import AppSelect from '../components/ui/AppSelect.vue';
 import { useEditorStore } from '../stores/editor';
 import { useFolderStore } from '../stores/folders';
 import { useNoteStore } from '../stores/notes';
@@ -30,11 +31,17 @@ const canEdit = computed(() => notes.selectedId !== null && !editor.loading);
 // 留下一块"标题在、正文空、只显示正在读取本地库"的面板 —— 用户看到的就是卡住。
 watch(() => notes.selectedId, (id) => { void editor.open(id); }, { immediate: true });
 
-function onFolderChange(event: Event): void {
-  const id = notes.selectedId;
-  if (!id) return;
-  void notes.moveTo(id, (event.target as HTMLSelectElement).value || null);
+function moveToFolder(id: string): void {
+  const noteId = notes.selectedId;
+  if (!noteId) return;
+  void notes.moveTo(noteId, id || null);
 }
+
+/** 「移动到其他文件夹」那一份选项：根 + 全部文件夹（路径拼出来当标签）。 */
+const folderChoices = computed(() => [
+  { value: '', label: t('sidebar.root') },
+  ...folders.flat.map((entry) => ({ value: entry.node.id, label: entry.path.join(' / ') })),
+]);
 </script>
 
 <template>
@@ -66,17 +73,16 @@ function onFolderChange(event: Event): void {
         </button>
         <span class="pane-title" :title="title">{{ title }}</span>
 
-        <select
-          class="select editor-head__folder"
-          :aria-label="t('sidebar.moveTo')"
-          :disabled="!canEdit"
-          :value="folderId"
-          data-testid="move-folder"
-          @change="onFolderChange"
-        >
-          <option value="">{{ t('sidebar.root') }}</option>
-          <option v-for="entry in folders.flat" :key="entry.node.id" :value="entry.node.id">{{ entry.path.join(' / ') }}</option>
-        </select>
+        <span class="editor-head__folder">
+          <AppSelect
+            :model-value="folderId ?? ''"
+            :options="folderChoices"
+            :label="t('sidebar.moveTo')"
+            :disabled="!canEdit"
+            testid="move-folder"
+            @update:model-value="moveToFolder($event)"
+          />
+        </span>
 
         <!--右侧动作区。`margin-left:auto` 把它推到顶栏右端，
              于是顶栏读起来是"左=这篇是什么/  右=对它做什么"，

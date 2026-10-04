@@ -2,6 +2,7 @@
 /** 设置页：账户 / 代理 / 证书 / 外观 / 数据 / 快捷键（按能力显示）。 */
 import { computed, onMounted, ref } from 'vue';
 import SyncBadge from '../components/SyncBadge.vue';
+import AppSelect from '../components/ui/AppSelect.vue';
 import { currentTransport } from '../api/bridge';
 import type { ProxyMode, TlsPolicyKind } from '../api/types';
 import { useSettingsStore } from '../stores/settings';
@@ -73,6 +74,14 @@ const proxyOptions: Array<{ value: ProxyMode; label: string }> = [
   { value: 'https', label: 'settings.proxyHttps' },
   { value: 'socks5', label: 'settings.proxySocks5' },
 ];
+
+// 交给 AppSelect 的那三份：文案在这里翻成当前语言，控件本身不认识 i18n。
+const tlsChoices = computed(() => tlsOptions.map((o) => ({ value: o.value, label: t(o.label) })));
+const proxyChoices = computed(() => proxyOptions.map((o) => ({ value: o.value, label: t(o.label) })));
+const importChoices = computed(() => [
+  { value: 'merge', label: t('settings.importModeMerge') },
+  { value: 'intoEmpty', label: t('settings.importModeEmpty') },
+]);
 
 const themeOptions: Array<{ value: ThemeMode; label: string }> = [
   { value: 'system', label: 'settings.themeSystem' },
@@ -322,9 +331,13 @@ function jumpTo(id: string): void {
 
           <label class="field">
             <span>{{ t('settings.tls') }}</span>
-            <select v-model="settings.draft.tlsPolicy.kind" class="select" data-testid="account-tls">
-              <option v-for="option in tlsOptions" :key="option.value" :value="option.value">{{ t(option.label) }}</option>
-            </select>
+            <AppSelect
+              :model-value="settings.draft.tlsPolicy.kind ?? 'strict'"
+              :options="tlsChoices"
+              :label="t('settings.tls')"
+              testid="account-tls"
+              @update:model-value="settings.draft.tlsPolicy.kind = $event as typeof settings.draft.tlsPolicy.kind"
+            />
             <span v-if="settings.draft.tlsPolicy.kind === 'insecureLocal'" class="field-hint field-hint--warn">{{ t('sync.insecureWarn') }}</span>
           </label>
 
@@ -362,9 +375,13 @@ function jumpTo(id: string): void {
 
           <label class="field">
             <span>{{ t('settings.proxyMode') }}</span>
-            <select v-model="settings.draft.proxy.mode" class="select" data-testid="proxy-mode">
-              <option v-for="option in proxyOptions" :key="option.value" :value="option.value">{{ t(option.label) }}</option>
-            </select>
+            <AppSelect
+              :model-value="settings.draft.proxy.mode ?? 'direct'"
+              :options="proxyChoices"
+              :label="t('settings.proxyMode')"
+              testid="proxy-mode"
+              @update:model-value="settings.draft.proxy.mode = $event as typeof settings.draft.proxy.mode"
+            />
           </label>
 
           <template v-if="proxyNeedsHost">
@@ -582,10 +599,13 @@ function jumpTo(id: string): void {
           </div>
           <label class="row">
             <span class="text-sm">{{ t('settings.importModeEmpty') }}</span>
-            <select v-model="importMode" class="select">
-              <option value="merge">{{ t('settings.importModeMerge') }}</option>
-              <option value="intoEmpty">{{ t('settings.importModeEmpty') }}</option>
-            </select>
+            <AppSelect
+              :model-value="importMode"
+              :options="importChoices"
+              :label="t('settings.importModeEmpty')"
+              testid="import-mode"
+              @update:model-value="importMode = $event as 'merge' | 'intoEmpty'"
+            />
           </label>
           <p v-if="report" class="field-hint" data-testid="data-report">{{ t('settings.report', { text: report }) }}</p>
           <p v-if="restoreHint" class="field-hint" data-testid="restore-hint">{{ restoreHint }}</p>

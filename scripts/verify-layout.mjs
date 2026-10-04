@@ -220,6 +220,35 @@ for (const width of WIDTHS) {
   notes.push(`     宽 ${width} 内层滚动 ${lastCard.scrolledTo}/${lastCard.maxScroll}px · 末卡底 ${lastCard.lastBottom} vs 视口 ${lastCard.vh}`);
   await page.evaluate(() => { document.querySelector('.settings__body').scrollTop = 0; });
 
+  // ⑦ 下拉：不许再有原生 <select>（它的面板由操作系统画 ⇒ 两端不可能一致），
+  //    换成无头库之后面板是我们 DOM 里的节点，于是"画得对不对、在不在视口里"可量。
+  const native = await page.evaluate(() => document.querySelectorAll('select').length);
+  check(`宽 ${width}：页面上没有原生 <select>`, native === 0, `实到 ${native}`);
+  await page.click('[data-testid="account-tls"]');
+  await page.waitForTimeout(300);
+  const panel = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="app-select-panel"]');
+    if (!el) return { missing: true };
+    const r = el.getBoundingClientRect();
+    const opts = el.querySelectorAll('[role="option"]');
+    return {
+      top: Math.round(r.top),
+      bottom: Math.round(r.bottom),
+      right: Math.round(r.right),
+      bg: getComputedStyle(el).backgroundColor,
+      optionCount: opts.length,
+      labels: Array.from(opts).map((o) => o.textContent.trim()),
+    };
+  });
+  check(
+    `宽 ${width}：TLS 面板是我们画的、4 项、完整在视口内`,
+    !panel.missing && panel.optionCount === 4 && panel.top >= 0 && panel.bottom <= 950 && panel.right <= width && panel.bg !== 'rgba(0, 0, 0, 0)',
+    JSON.stringify(panel),
+  );
+  notes.push(`     宽 ${width} 下拉面板 ${JSON.stringify({ top: panel.top, bottom: panel.bottom, right: panel.right, bg: panel.bg, n: panel.optionCount })}`);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+
   check(`宽 ${width}：console error 为零`, errors.length === 0, errors.slice(0, 3).join(' | '));
   await page.close();
 }
