@@ -114,10 +114,10 @@ async fn removing_the_account_stops_the_engine_without_a_restart() {
     let app = boot(&dir.0);
     app.enable_background_sync();
     let saved = app.configure_account(draft(&url)).expect("配置账户");
-    assert!(
-        wait_until(30, || !srv.request_log().is_empty()).await,
-        "前置不成立：引擎没起来"
-    );
+    // 判据先落到一个具名布尔上再断言：`arch-check` 那条"「或」断言要写理由"的扫描
+    // 会把闭包竖线当成断言里的二选一，所以这里不让闭包出现在断言的括号里。
+    let engine_started = wait_until(30, || !srv.request_log().is_empty()).await;
+    assert!(engine_started, "前置不成立：引擎没起来");
 
     app.remove_account(&saved.id).expect("删账户");
     tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
