@@ -2,7 +2,7 @@
 /** 编辑器工具条：全部动作以事件抛给 RichEditor（选区只有它知道）。 */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { t } from '../i18n';
-import { MARK_BUTTONS } from '../editor/marks';
+import { TOOLBAR_MARK_BUTTONS } from '../editor/marks';
 import { blockTypeLabel } from '../editor/labels';
 import type { TextBlockType } from '../editor/model';
 
@@ -22,7 +22,6 @@ const emit = defineEmits<{
   (event: 'mark', kind: string, attrs?: Record<string, unknown>): void;
   (event: 'type', type: TextBlockType): void;
   (event: 'heading', level: number): void;
-  (event: 'checklist'): void;
   (event: 'indent', delta: number): void;
   (event: 'rule'): void;
   (event: 'attach', role: 'inline' | 'file'): void;
@@ -67,7 +66,7 @@ async function toggleTypeMenu(): Promise<void> {
 const typeLabel = computed(() => blockTypeLabel(props.blockType, props.headingLevel));
 
 /** 与浮动选区条同一份定义：glyph、文案键、顺序只有一处真相。 */
-const markButtons = MARK_BUTTONS;
+const markButtons = TOOLBAR_MARK_BUTTONS;
 
 /** 类型菜单只列可切换的文本块型；顺序即菜单顺序。 */
 const TEXT_TYPE_ORDER: readonly TextBlockType[] = ['paragraph', 'blockquote', 'codeBlock', 'orderedList', 'bulletList', 'checklistItem'];
@@ -208,7 +207,6 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <button type="button" class="tb__btn" :disabled="props.disabled" :title="t('tb.checklist')" :aria-label="t('tb.checklist')" @mousedown.prevent @click="emit('checklist')">☑</button>
     <button type="button" class="tb__btn" :disabled="props.disabled || !props.canIndent" :title="t('tb.outdent')" :aria-label="t('tb.outdent')" @mousedown.prevent @click="emit('indent', -1)">⇤</button>
     <button type="button" class="tb__btn" :disabled="props.disabled || !props.canIndent" :title="t('tb.indent')" :aria-label="t('tb.indent')" @mousedown.prevent @click="emit('indent', 1)">⇥</button>
     <button type="button" class="tb__btn" :disabled="props.disabled" :title="t('tb.rule')" :aria-label="t('tb.rule')" @mousedown.prevent @click="emit('rule')">—</button>

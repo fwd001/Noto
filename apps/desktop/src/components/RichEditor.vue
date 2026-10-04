@@ -16,7 +16,6 @@ import {
   backspace,
   changeType,
   cycleChecklist,
-  insertBelow,
   insertRule,
   insertText,
   mergeWithPrevious,
@@ -131,10 +130,6 @@ async function onGripKeydown(index: number, event: KeyboardEvent): Promise<void>
   const to = index + (event.key === 'ArrowUp' ? -1 : 1);
   if (to < 0 || to >= blocks.value.length) return;
   await run(moveBlock(blocks.value, index, to));
-}
-
-function onInsertBelow(index: number): void {
-  void run(insertBelow(blocks.value, index));
 }
 
 /** 指示线画在哪：落在自己原来的缝就不画，免得看着像在动。 */
@@ -568,7 +563,6 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
       @mark="toggleMarkKind"
       @type="onType"
       @heading="onHeading"
-      @checklist="run(cycleChecklist(blocks, activeIndex))"
       @indent="onIndent"
       @rule="onRule"
       @attach="onAttach"
@@ -598,18 +592,10 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
             class="nb-handles"
             :class="{ 'nb-handles--on': dragFrom === index || activeIndex === index }"
           >
-            <button
-              type="button"
-              class="nb-handle nb-handle--add"
-              data-testid="insert-below"
-              tabindex="-1"
-              :aria-label="t('editor.insertBelow')"
-              :title="t('editor.insertBelow')"
-              @mousedown.prevent
-              @click="onInsertBelow(index)"
-            >
-              +
-            </button>
+            <!-- 行首那颗 `+`（在这一行下面插一块）已经拿掉：回车就是新起一行，
+                 工具条上还有"插入附件/图片/分隔线"，那颗 `+` 是第三种做同一件事的入口，
+                 而且它让每一行左边看起来像有一列加减号控件 —— 用户原话：
+                 「这块我觉得有没有必要还有一个加号减号这种感觉」。拖动排序那颗 ⠿ 保留。 -->
             <span
               class="nb-handle nb-grip"
               role="button"
@@ -673,7 +659,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
             role="textbox"
             :aria-multiline="true"
             :aria-readonly="readOnly ? 'true' : 'false'"
-            :data-placeholder="t('editor.placeholder')"
+            :data-placeholder="index === 0 ? t('editor.placeholder') : ''"
             @input="onInput(index, $event)"
             @keydown="onKeydown(index, $event)"
             @paste="onPaste(index, $event)"

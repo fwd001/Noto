@@ -18,3 +18,12 @@ export const MARK_BUTTONS: readonly MarkButton[] = [
   { kind: 'code', glyph: '</>', label: 'tb.code' },
   { kind: 'highlight', glyph: 'H', label: 'tb.highlight' },
 ];
+
+/**
+ * 顶部工具条只放"一眼看得懂"的四颗；`code` / `highlight` 留在**选中文字后浮出的那条**上
+ * —— 它们必须先有选区才有意义，摆在常驻工具条上就是 16 颗里没人碰的那几颗。
+ * 用户口径：「富文本选项应该像 Apple 便签那样只有几项」。
+ */
+export const TOOLBAR_MARK_BUTTONS: readonly MarkButton[] = MARK_BUTTONS.filter(
+  (entry) => entry.kind === 'bold' || entry.kind === 'italic' || entry.kind === 'underline' || entry.kind === 'strike',
+);

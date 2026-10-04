@@ -54,7 +54,7 @@ const MESSAGES: Record<MessageKey, string> = {
   /* 编辑器 */
   'editor.untitled': '无标题',
   'editor.pane': '笔记正文',
-  'editor.placeholder': '开始写…',
+  'editor.placeholder': '请输入标题和正文',
   'editor.saved': '已保存',
   'editor.saving': '保存中',
   'editor.unsaved': '未保存',
