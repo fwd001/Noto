@@ -74,22 +74,31 @@ describe('渲染侧：按钮可见性跟着核心的判据走', () => {
     return wrapper;
   }
 
-  it('默认本那一行没有改名/移动/删除；普通文件夹三颗都在', async () => {
+  it('默认本那一行没有改名/删除；普通文件夹两颗都在', async () => {
     const wrapper = await render();
     expect(nodeOf('folder-default')?.systemKind, '夹具没生效：读不到 systemKind').toBe('default');
 
-    // 计数而不是"存在性"：两行里只允许普通文件夹那一行贡献这三颗。
+    // 计数而不是"存在性"：两行里只允许普通文件夹那一行贡献这两颗。
     expect(wrapper.findAll('[data-testid="folder-rename"]')).toHaveLength(1);
-    expect(wrapper.findAll('[data-testid="folder-move"]')).toHaveLength(1);
     expect(wrapper.findAll('[data-testid="folder-delete"]')).toHaveLength(1);
 
-    // 反向腿：普通文件夹的三颗不能被一起藏掉。
+    // 反向腿：普通文件夹的两颗不能被一起藏掉。
     const workRow = wrapper.get('[data-testid="folder-folder-work"]').element.closest('.tree__row');
     expect(workRow?.querySelector('[data-testid="folder-delete"]'), '"工作"那行该有删除').not.toBeNull();
     expect(workRow?.querySelector('[data-testid="folder-rename"]'), '"工作"那行该有改名').not.toBeNull();
+  });
 
-    // 默认本仍然可以往里装东西：新建子文件夹那颗留着。
-    expect(wrapper.find('[data-testid="folder-new-sub-folder-default"]').exists(), '默认本该能新建子文件夹').toBe(true);
+  it('层级 UI 已经拿掉：没有"新建子文件夹"、也没有"移动到父级"', async () => {
+    const wrapper = await render();
+    expect(wrapper.find('[data-testid^="folder-new-sub-"]').exists(), '还留着"在这下面新建"').toBe(false);
+    expect(wrapper.find('[data-testid="folder-move"]').exists(), '还留着"移动到父级"').toBe(false);
+  });
+
+  it('所有文件夹行同一层：缩进不许随层级变', async () => {
+    const wrapper = await render();
+    const pads = wrapper.findAll('[data-testid="folder-row"]').map((r) => getComputedStyle(r.element).paddingLeft);
+    expect(pads.length, '一行都没量到，判据在空转').toBeGreaterThan(0);
+    expect(new Set(pads).size, `缩进不止一种：${JSON.stringify(pads)}`).toBe(1);
   });
 
   it('藏掉按钮不等于只藏图标：改名输入框也进不去', async () => {

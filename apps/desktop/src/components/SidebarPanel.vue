@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /** 侧栏：文件夹树 + 新建/入口 + 同步徽标 + 导航。 */
-import { computed, nextTick, ref } from 'vue';
+import { computed, ref } from 'vue';
 import FolderTree from './FolderTree.vue';
+import AppDialog from './ui/AppDialog.vue';
 import SyncBadge from './SyncBadge.vue';
 import { useFolderStore } from '../stores/folders';
 import { useNoteStore } from '../stores/notes';
@@ -17,29 +18,28 @@ const settings = useSettingsStore();
 const shell = useShellStore();
 const conflicts = useConflictStore();
 
-const showNewFolder = ref(false);
+const newFolderOpen = ref(false);
 const newName = ref('');
-const nameInput = ref<HTMLInputElement | null>(null);
 
-const parentLabel = computed(() => (notes.mode.kind === 'folder' && notes.mode.folderId ? folders.nameOf(notes.mode.folderId) : t('sidebar.root')));
 const trashCount = computed(() => settings.stats?.notesInTrash ?? 0);
 const allCount = computed(() => settings.stats?.notes ?? 0);
 const errorText = computed(() => messageFor(folders.errorKey ?? 'error.fallback'));
 
-async function openNewFolder(): Promise<void> {
-  showNewFolder.value = true;
+function openNewFolder(): void {
   newName.value = '';
-  await nextTick();
-  nameInput.value?.focus();
+  newFolderOpen.value = true;
 }
 
+/**
+ * 新建一律落在**根**：以前这里取"当前打开的那个文件夹"当父级，
+ * 于是从子文件夹里点＋会长出孙层 —— 而产品口径已经收成"只有一层文件夹用于归档"。
+ */
 async function commitNewFolder(): Promise<void> {
   const name = newName.value.trim();
-  showNewFolder.value = false;
+  newFolderOpen.value = false;
   newName.value = '';
   if (name.length === 0) return;
-  const parentId = notes.mode.kind === 'folder' ? notes.mode.folderId : null;
-  const created = await folders.create(parentId, name);
+  const created = await folders.create(null, name);
   if (created) await notes.setMode({ kind: 'folder', folderId: created.id });
 }
 
@@ -102,16 +102,26 @@ function selectTrash(): void {
         <button type="button" class="btn btn--quiet btn--icon" :aria-label="t('sidebar.newFolder')" data-testid="new-folder" @click="openNewFolder">＋</button>
       </div>
 
-      <form v-if="showNewFolder" class="new-folder" @submit.prevent="commitNewFolder">
-        <input ref="nameInput" v-model="newName" class="input" type="text" :aria-label="t('sidebar.newFolder')" :placeholder="t('sidebar.newFolder')" @keydown.escape.prevent="showNewFolder = false" />
-        <p class="field-hint">{{ t('sidebar.newSubfolder') }}：{{ parentLabel }}</p>
-        <div class="row">
-          <button type="submit" class="btn btn--primary">{{ t('list.confirm') }}</button>
-          <button type="button" class="btn btn--quiet" @click="showNewFolder = false">{{ t('list.cancel') }}</button>
-        </div>
-      </form>
+      <AppDialog
+        :open="newFolderOpen"
+        :title="t('sidebar.newFolder')"
+        testid="new-folder-dialog"
+        :confirm-disabled="newName.trim().length === 0"
+        @close="newFolderOpen = false"
+        @confirm="commitNewFolder"
+      >
+        <input
+          v-model="newName"
+          class="input"
+          type="text"
+          data-testid="new-folder-input"
+          :aria-label="t('sidebar.newFolder')"
+          :placeholder="t('sidebar.newFolder')"
+          @keydown.enter.prevent="commitNewFolder"
+        />
+      </AppDialog>
 
-      <FolderTree :depth="0" />
+      <FolderTree />
       <p v-if="folders.errorKey" class="side-error" role="alert">{{ errorText }}</p>
     </div>
 

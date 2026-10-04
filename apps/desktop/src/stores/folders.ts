@@ -124,15 +124,6 @@ export const useFolderStore = defineStore('folders', () => {
     }
   }
 
-  async function move(id: string, parentId: string | null): Promise<void> {
-    try {
-      replaceNode((await callCommand<Folder>(Commands.moveFolder, { id, parentId })) as unknown as FolderNode);
-      await load();
-    } catch (error) {
-      errorKey.value = asBridgeError(error).messageKey;
-    }
-  }
-
   async function remove(id: string): Promise<void> {
     try {
       await callCommand<null>(Commands.deleteFolder, { id });
@@ -147,5 +138,5 @@ export const useFolderStore = defineStore('folders', () => {
     return byId.value.get(id)?.node.name ?? '';
   }
 
-  return { nodes, flat, byId, loading, errorKey, load, create, rename, move, remove, nameOf };
+  return { nodes, flat, byId, loading, errorKey, load, create, rename, remove, nameOf };
 });

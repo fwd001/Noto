@@ -393,7 +393,6 @@ export const Commands = {
   purgeNote: 'purge_note',
   createFolder: 'create_folder',
   renameFolder: 'rename_folder',
-  moveFolder: 'move_folder',
   deleteFolder: 'delete_folder',
   listNotes: 'list_notes',
   getNote: 'get_note',

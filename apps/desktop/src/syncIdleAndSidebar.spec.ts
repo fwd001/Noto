@@ -128,7 +128,7 @@ describe('② 侧栏三块视觉同级', () => {
 describe('② 噪声点与动作区', () => {
   it('空文件夹不显示计数（"默认名 0"那个噪点）', () => {
     const tree = read('components/FolderTree.vue');
-    expect(tree).toMatch(/noteCount === 'number' && node\.noteCount > 0/);
+    expect(tree).toMatch(/noteCount === 'number' && row\.node\.noteCount > 0/);
   });
 
   it('编辑器顶栏动作区贴右（margin-left:auto），不挤在标题旁', () => {

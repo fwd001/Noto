@@ -57,10 +57,18 @@ async function ensureSeededNote() {
 
   // ⑧ 那一腿要一个"可以删"的文件夹 —— 默认本上没有删除入口（那是 P0 那条修复本身）。
   const folders = await cmd('list_folders', {});
-  const plain = Array.isArray(folders) ? folders.find((f) => f.systemKind == null) : null;
+  const plain = Array.isArray(folders) ? folders.find((f) => f.systemKind == null && f.parentId == null) : null;
   const folderId = plain?.id ?? (await cmd('create_folder', { parentId: null, name: '布局夹具本' }))?.id;
   if (!folderId) throw new Error('造不出一个普通文件夹：⑧ 那条判据无从量起');
-  return { noteId: id, folderId };
+
+  // ⑨ 那一腿要一个**历史嵌套**的子层：拍平之后它必须还在（不能因为不渲染层级就消失），
+  // 而且与父级同一左缘。先查再造，免得每次跑门禁都多堆一个文件夹。
+  const hasChild = Array.isArray(folders) && folders.some((f) => f.parentId === folderId);
+  const childId = hasChild
+    ? folders.find((f) => f.parentId === folderId).id
+    : (await cmd('create_folder', { parentId: folderId, name: '布局夹具子' }))?.id;
+  if (!childId) throw new Error('造不出历史子层：⑨ 那条"拍平不许丢文件夹"的判据无从量起');
+  return { noteId: id, folderId, childId };
 }
 
 let seed;
@@ -220,6 +228,29 @@ for (const width of WIDTHS) {
     const closed = await page.evaluate(() => document.querySelectorAll('[data-testid="app-popover-panel"]').length);
     check(`宽 ${width}：Esc 关得掉那层确认`, closed === 0, `残留 ${closed} 个面板`);
   }
+
+  // ⑨ 文件夹只剩一层：所有行同一左缘，且层级 UI（"移动到父级"/"在这下面新建"）确实没了。
+  //    历史子层必须**还在这一排里**（拍平不等于藏起来 —— 不然它里面的笔记就找不回了）。
+  const flat = await page.evaluate((ids) => {
+    const rows = Array.from(document.querySelectorAll('[data-testid="folder-row"]'));
+    const leftOf = (id) => {
+      const el = document.querySelector(`[data-testid="folder-${id}"]`);
+      return el ? Math.round(el.closest('.tree__row').getBoundingClientRect().left) : null;
+    };
+    return {
+      xs: [...new Set(rows.map((r) => Math.round(r.getBoundingClientRect().left)))],
+      rowCount: rows.length,
+      parentX: leftOf(ids[0]),
+      childX: leftOf(ids[1]),
+      move: document.querySelectorAll('[data-testid="folder-move"]').length,
+      sub: document.querySelectorAll('[data-testid^="folder-new-sub-"]').length,
+    };
+  }, [seed.folderId, seed.childId]);
+  check(
+    `宽 ${width}：文件夹平铺一层（历史子层还在、与父级同一左缘，且没有"移动到父级"/"在这下面新建"）`,
+    flat.rowCount > 0 && flat.xs.length === 1 && flat.parentX !== null && flat.parentX === flat.childX && flat.move === 0 && flat.sub === 0,
+    JSON.stringify(flat),
+  );
 
   // ① 设置页一栏到底
   await page.evaluate(() => document.querySelector('[data-testid="nav-settings"]').click());
