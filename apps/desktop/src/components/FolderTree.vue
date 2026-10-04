@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 文件夹树：新建 / 重命名 / 移动 / 删除。删除文件夹不级联删笔记（由本地核心保证）。 */
 import { computed, nextTick, ref } from 'vue';
+import AppPopover from './ui/AppPopover.vue';
 import { useFolderStore, type FlatFolder } from '../stores/folders';
 import { useNoteStore } from '../stores/notes';
 import { useShellStore } from '../stores/shell';
@@ -18,14 +19,31 @@ const shell = useShellStore();
 const editingId = ref<string | null>(null);
 const creatingUnder = ref<string | null>(null);
 const nameDraft = ref('');
-const movingId = ref<string | null>(null);
-const confirmingDelete = ref<string | null>(null);
 const inputEl = ref<HTMLInputElement | null>(null);
 
 const visibleNodes = computed<readonly FolderNode[]>(() => (props.depth === 0 ? folders.nodes : (props.nodes ?? [])));
 const padLeft = computed(() => `calc(var(--space-2) + ${props.depth} * var(--space-4))`);
 
-const moveTargets = computed<FlatFolder[]>(() => folders.flat.filter((entry) => entry.node.id !== movingId.value && !isUnderMoving(entry)));
+/**
+ * 「移动到」那一份候选：开合交给 AppPopover，所以这里按"给哪一行算"来出，
+ * 不再存一个全局 movingId（以前那个 ref 同时管开合与过滤，两件事缠在一起）。
+ */
+function moveTargetsFor(nodeId: string): FlatFolder[] {
+  return folders.flat.filter((entry) => entry.node.id !== nodeId && !isUnder(nodeId, entry));
+}
+
+/** `entry` 是不是 `nodeId` 那棵的子层 —— 父亲不能挪到儿子底下（核心也会拒）。 */
+function isUnder(nodeId: string, entry: FlatFolder): boolean {
+  let node: FlatFolder | undefined = entry;
+  const seen = new Set<string>();
+  while (node && !seen.has(node.node.id)) {
+    if (node.node.id === nodeId) return true;
+    seen.add(node.node.id);
+    const parentId: string | null = node.node.parentId ?? null;
+    node = parentId === null ? undefined : folders.byId.get(parentId);
+  }
+  return false;
+}
 
 /**
  * 核心对 `systemKind` 非空的文件夹一律拒绝改名/移动/删除（`assert_folder_writable`）。
@@ -36,24 +54,8 @@ function isSystem(node: FolderNode): boolean {
   return typeof node.systemKind === 'string' && node.systemKind.length > 0;
 }
 
-function isUnderMoving(entry: FlatFolder): boolean {
-  const moving = movingId.value;
-  if (!moving) return false;
-  let node: FlatFolder | undefined = entry;
-  const seen = new Set<string>();
-  while (node && !seen.has(node.node.id)) {
-    if (node.node.id === moving) return true;
-    seen.add(node.node.id);
-    const parentId: string | null = node.node.parentId ?? null;
-    node = parentId === null ? undefined : folders.byId.get(parentId);
-  }
-  return false;
-}
-
 async function beginRename(id: string, current: string): Promise<void> {
   editingId.value = id;
-  confirmingDelete.value = null;
-  movingId.value = null;
   nameDraft.value = current;
   await nextTick();
   inputEl.value?.focus();
@@ -86,13 +88,11 @@ async function commitRename(id: string): Promise<void> {
 }
 
 async function moveTo(id: string, target: string | null): Promise<void> {
-  movingId.value = null;
   await folders.move(id, target);
   await notes.load();
 }
 
 async function removeFolder(id: string): Promise<void> {
-  confirmingDelete.value = null;
   await folders.remove(id);
   if (notes.mode.kind === 'folder' && notes.mode.folderId === id) await notes.setMode({ kind: 'all' });
   else await notes.load();
@@ -135,12 +135,33 @@ function isActive(id: string | null): boolean {
           <button type="button" class="btn btn--quiet btn--icon" :data-testid="`folder-new-sub-${node.id}`" :title="t('sidebar.newSubfolder')" :aria-label="t('sidebar.newSubfolder')" @click="beginCreate(node.id)">
             ＋
           </button>
-          <button v-if="!isSystem(node)" type="button" class="btn btn--quiet btn--icon" data-testid="folder-move" :aria-expanded="movingId === node.id ? 'true' : 'false'" :title="t('sidebar.moveTo')" :aria-label="t('sidebar.moveTo')" @click="movingId = movingId === node.id ? null : node.id">
-            ⇄
-          </button>
-          <button v-if="!isSystem(node)" type="button" class="btn btn--quiet btn--icon" data-testid="folder-delete" :title="t('sidebar.deleteFolder')" :aria-label="t('sidebar.deleteFolder')" @click="confirmingDelete = confirmingDelete === node.id ? null : node.id">
-            ⌫
-          </button>
+          <AppPopover
+            v-if="!isSystem(node)"
+            icon="⇄"
+            testid="folder-move"
+            :label="t('sidebar.moveTo')"
+          >
+            <template #default="{ close }">
+              <button type="button" class="btn btn--block" @click="close(); moveTo(node.id, null)">{{ t('sidebar.root') }}</button>
+              <button v-for="target in moveTargetsFor(node.id)" :key="target.node.id" type="button" class="btn btn--block" @click="close(); moveTo(node.id, target.node.id)">
+                {{ target.path.join(' / ') }}
+              </button>
+            </template>
+          </AppPopover>
+          <AppPopover
+            v-if="!isSystem(node)"
+            icon="⌫"
+            testid="folder-delete"
+            :label="t('sidebar.deleteFolder')"
+          >
+            <template #default="{ close }">
+              <p class="tree__confirm-text">{{ t('sidebar.deleteFolderHint') }}</p>
+              <span class="tree__confirm-row">
+                <button type="button" class="btn btn--danger" data-testid="folder-delete-confirm" @click="close(); removeFolder(node.id)">{{ t('list.confirm') }}</button>
+                <button type="button" class="btn btn--quiet" @click="close()">{{ t('list.cancel') }}</button>
+              </span>
+            </template>
+          </AppPopover>
         </div>
       </div>
 
@@ -155,19 +176,6 @@ function isActive(id: string | null): boolean {
         @keydown.escape.prevent="editingId = null"
         @blur="commitRename(node.id)"
       />
-
-      <div v-if="movingId === node.id" class="tree__popover">
-        <button type="button" class="btn btn--block" @click="moveTo(node.id, null)">{{ t('sidebar.root') }}</button>
-        <button v-for="target in moveTargets" :key="target.node.id" type="button" class="btn btn--block" @click="moveTo(node.id, target.node.id)">
-          {{ target.path.join(' / ') }}
-        </button>
-      </div>
-
-      <p v-if="confirmingDelete === node.id" class="tree__confirm">
-        <span>{{ t('sidebar.deleteFolderHint') }}</span>
-        <button type="button" class="btn btn--danger" data-testid="folder-delete-confirm" @click="removeFolder(node.id)">{{ t('list.confirm') }}</button>
-        <button type="button" class="btn btn--quiet" @click="confirmingDelete = null">{{ t('list.cancel') }}</button>
-      </p>
 
       <div v-if="creatingUnder === node.id" class="tree__create">
         <input
@@ -215,6 +223,8 @@ function isActive(id: string | null): boolean {
   align-items: center;
   gap: var(--space-1);
   min-height: var(--touch-min);
+  /* 工具层要浮在这一行之上（见 .tree__tools），所以这一行得是它的定位父级。 */
+  position: relative;
   padding-right: var(--space-2);
 }
 
@@ -252,52 +262,50 @@ function isActive(id: string | null): boolean {
 }
 
 .tree__tools {
-  /* 静止态不占宽：以前靠 opacity: 0 藏起来却仍在流里占 176 px（4 × 44，A11Y-04 的下限），
-     246 px 的一行只剩 18~50 px 给名字，连"默认"都被裁掉半个字。
-     用 width: 0 而不是 display/visibility: hidden —— 后两种会把四颗按钮摘出 Tab 序列，
-     键盘就再也够不着这些动作了；留着焦点可达，:focus-within 才掀得开它。 */
+  /**
+   * 工具层**浮在行上**，不参与这一行的排版。三个理由，缺一不可：
+   *  ① 静止态不能再"占 0 宽"或"占 176 宽"：占 0 宽就得配 `overflow: hidden`，
+   *     那会把悬浮面板一起剪掉（面板量到 inView=false 就是这么来的）；
+   *     占 176 宽则把名字挤成两行 —— 真读数：打开确认层时侧栏 scrollHeight 从 536 掉到 492、
+   *     两行往上跳，正是用户那句"而不是底下占了一个"的同一种病，只是换了个方向。
+   *  ② 面板要能逃出这一栏的裁剪，所以这里不能有任何 overflow 裁剪。
+   *  ③ 静止态要不可点（`pointer-events: none`），否则透明按钮会盖住名字那一片的点击。
+   */
+  position: absolute;
+  top: 0;
+  right: var(--space-2);
+  bottom: 0;
   display: flex;
   align-items: center;
-  width: 0;
-  overflow: hidden;
+  gap: var(--space-1);
   opacity: 0;
+  pointer-events: none;
 }
 
 .tree__row:hover .tree__tools,
-.tree__row:focus-within .tree__tools {
-  width: auto;
+.tree__row:focus-within .tree__tools,
+/* 面板开着的时候不许收回去：指针移到面板上就已经离开这一行了，
+   没有这一条的话"确认删除"永远点不到 —— 而 aria-expanded 是 Headless UI 自己维护的，
+   不另立一套状态。 */
+.tree__tools:has([aria-expanded='true']) {
   opacity: 1;
+  pointer-events: auto;
+}
+
+.tree__confirm-text {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.tree__confirm-row {
+  display: flex;
+  gap: var(--space-1);
 }
 
 .tree__input,
 .tree__create .input {
   margin: var(--space-1) var(--space-3);
   width: calc(100% - var(--space-6));
-}
-
-.tree__popover {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  margin: var(--space-1) var(--space-3);
-  padding: var(--space-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-2);
-  background: var(--bg-raised);
-  box-shadow: var(--shadow-2);
-  max-height: 260px;
-  overflow: auto;
-}
-
-.tree__confirm {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-  background: var(--bg-sunken);
 }
 
 .tree__empty {

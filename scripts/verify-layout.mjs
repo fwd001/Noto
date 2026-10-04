@@ -54,16 +54,23 @@ async function ensureSeededNote() {
   if (!id) throw new Error('拿不到列表里的笔记 id：⑤ 那条判据无从量起');
   const pinned = await cmd('set_note_pinned', { id, pinned: true });
   if (!pinned || pinned.id !== id) throw new Error(`置顶夹具失败：${JSON.stringify(pinned).slice(0, 120)}`);
-  return id;
+
+  // ⑧ 那一腿要一个"可以删"的文件夹 —— 默认本上没有删除入口（那是 P0 那条修复本身）。
+  const folders = await cmd('list_folders', {});
+  const plain = Array.isArray(folders) ? folders.find((f) => f.systemKind == null) : null;
+  const folderId = plain?.id ?? (await cmd('create_folder', { parentId: null, name: '布局夹具本' }))?.id;
+  if (!folderId) throw new Error('造不出一个普通文件夹：⑧ 那条判据无从量起');
+  return { noteId: id, folderId };
 }
 
-let seedNoteId;
+let seed;
 try {
-  seedNoteId = await ensureSeededNote();
+  seed = await ensureSeededNote();
 } catch (e) {
   console.error(`布局门禁的前置不满足：${e.message}\n要先起：cargo run -p notera-cli -- --data-dir <目录> serve --port 17323`);
   process.exit(1);
 }
+const seedNoteId = seed.noteId;
 
 const browser = await chromium.launch({ executablePath: CHROME });
 const failures = [];
@@ -163,6 +170,56 @@ for (const width of WIDTHS) {
   );
   check(`宽 ${width}：已置顶那颗读得出"已置顶"（● + aria-pressed=true）`, pin.dotText === '●' && pin.dotPressed === 'true', JSON.stringify(pin));
   check(`宽 ${width}：那颗点 ≥44×44（§6 触摸目标下限）`, Number(pin.dotSize?.[0]) >= 44 && Number(pin.dotSize?.[1]) >= 44, JSON.stringify(pin.dotSize));
+
+  // ⑧ 确认层是悬浮的：打开它不许把下面任何一行顶走（用户那句"而不是底下占了一个"）
+  // 量**相对**位移：`.banners` 那一格会在两次采样之间自己冒出来（离线横幅，与弹层无关），
+  // 拿视口绝对坐标比就会把它的 44px 算到弹层头上 —— 第一版就是这么假红的。
+  const treeShapeSrc = `(() => {
+    const body = document.querySelector('.pane--sidebar .pane-body');
+    const tree = document.querySelector('.pane--sidebar .tree');
+    const bt = body.getBoundingClientRect().top;
+    return {
+      treeH: Math.round(tree.getBoundingClientRect().height),
+      relTops: Array.from(document.querySelectorAll('.tree__row')).map((r) => Math.round(r.getBoundingClientRect().top - bt)),
+    };
+  })()`;
+  const popBefore = await page.evaluate(treeShapeSrc);
+  const hasDelete = await page.evaluate(() => Boolean(document.querySelector('[data-testid="folder-delete"]')));
+  if (!hasDelete) {
+    check(`宽 ${width}：夹具里该有一个可删的普通文件夹`, false, '页面上找不到 folder-delete');
+  } else {
+    // 那三颗是 hover 才掀开的（工具层浮在行上）—— 不先把指针放到行上，
+    // Playwright 会报"被 .tree__name 拦截"。这不是将就，是这条路径本来的样子。
+    const row = page.locator('.tree__row', { has: page.locator(`[data-testid="folder-${seed.folderId}"]`) });
+    await row.hover();
+    await page.waitForTimeout(150);
+    await row.locator('[data-testid="folder-delete"]').click();
+    await page.waitForTimeout(300);
+    const popAfter = await page.evaluate(`
+      (() => {
+        const body = document.querySelector('.pane--sidebar .pane-body');
+        const tree = document.querySelector('.pane--sidebar .tree');
+        const bt = body.getBoundingClientRect().top;
+        const panel = document.querySelector('[data-testid="app-popover-panel"]');
+        const r = panel?.getBoundingClientRect();
+        return {
+          treeH: Math.round(tree.getBoundingClientRect().height),
+          relTops: Array.from(document.querySelectorAll('.tree__row')).map((x) => Math.round(x.getBoundingClientRect().top - bt)),
+          panel: panel && r ? { position: getComputedStyle(panel).position, h: Math.round(r.height), inView: r.top >= 0 && r.bottom <= window.innerHeight, hasConfirm: Boolean(panel.querySelector('[data-testid="folder-delete-confirm"]')) } : null,
+        };
+      })()
+    `);
+    const shifted = popAfter.relTops.filter((t, i) => t !== popBefore.relTops[i]).length;
+    check(
+      `宽 ${width}：删除确认是悬浮层（面板 absolute、可见、带确认按钮，且树的高度与各行相对位置一格未动）`,
+      popAfter.panel?.position === 'absolute' && popAfter.panel.h > 0 && popAfter.panel.hasConfirm && popAfter.panel.inView && shifted === 0 && popAfter.treeH === popBefore.treeH,
+      JSON.stringify({ panel: popAfter.panel, shiftedRows: shifted, treeH: [popBefore.treeH, popAfter.treeH], relTops: [popBefore.relTops, popAfter.relTops] }),
+    );
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+    const closed = await page.evaluate(() => document.querySelectorAll('[data-testid="app-popover-panel"]').length);
+    check(`宽 ${width}：Esc 关得掉那层确认`, closed === 0, `残留 ${closed} 个面板`);
+  }
 
   // ① 设置页一栏到底
   await page.evaluate(() => document.querySelector('[data-testid="nav-settings"]').click());
