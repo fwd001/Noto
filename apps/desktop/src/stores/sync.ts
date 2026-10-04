@@ -1,6 +1,11 @@
 /**
- * 同步状态：把后端事件折叠成用户可见的四个状态（✓ 已同步 / ↻ 正在同步 / ○ 离线 / ! 同步失败）。
- * 任何未知的内部状态都归入"同步失败"，绝不出现第 5 态；错误只以文案键呈现。
+ * 同步状态：把后端事件折叠成用户可见的状态。
+ *
+ * 口径（2026-10-04 与用户重定，见 docs/CI-CD.md「装完应该是干净的」）：
+ * `✓ 已同步 / ↻ 正在同步 / ○ 离线 / ! 同步失败` 四态**只描述一轮同步**，
+ * 而"这一台设备根本没在同步"是第五种事实 —— 它必须有**静止**的落点（`idle`），
+ * 否则"没配账户"会被显示成"正在忙"。协议细节一律折进这五格，不外露第 6 态。
+ * 任何未知的内部状态都归入"同步失败"。
  */
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
@@ -8,6 +13,7 @@ import { callCommand, type LinkState } from '../api/bridge';
 import { Commands, type SyncBadgeKind, type SyncProgress } from '../api/types';
 import { messageFor } from '../i18n';
 import { asBridgeError } from '../util/errors';
+import { useSettingsStore } from './settings';
 
 export interface FoldedSyncState {
   badge: SyncBadgeKind;
@@ -25,7 +31,7 @@ export interface SyncSignal {
   messageKey?: string;
 }
 
-const KNOWN_BADGES: readonly SyncBadgeKind[] = ['synced', 'syncing', 'offline', 'failed'];
+const KNOWN_BADGES: readonly SyncBadgeKind[] = ['synced', 'syncing', 'offline', 'failed', 'idle'];
 
 export function normalizeBadge(value: string | undefined | null): SyncBadgeKind {
   return (KNOWN_BADGES as readonly string[]).includes(value ?? '') ? (value as SyncBadgeKind) : 'failed';
@@ -55,7 +61,17 @@ export function foldSyncEvent(state: FoldedSyncState, signal: SyncSignal, at: nu
     case 'synced':
       return { badge: 'synced', progress: null, messageKey: null, retryable: false, finishedAt: at, rounds: state.rounds + 1 };
     case 'offline':
-      return { ...state, badge: 'offline', progress: null, messageKey: null, retryable: false };
+      // 「离线」这一格**必须把原因带上**。核心在缺凭据 / 协议不匹配 / root 不匹配那几处
+      // 发的都是 `badge: Offline` + 一个具名 `message_key`（`crates/notera-host/src/lib.rs`
+      // 的 `Phase::NeedsCredentials` 那一段），而旧写法把 `messageKey` 一律清成 `null`
+      // ⇒ PROXY.md §7 那句"徽标停在『需要凭据』"在界面上根本不存在，用户只看见"离线"，
+      // 既不知道是口令没了，也不知道去哪儿修。（这条是补"原因要看得见"那格时被自己的门禁抓出来的）
+      return { ...state, badge: 'offline', progress: null, messageKey: signal.messageKey ?? signal.errorCode ?? null, retryable: false };
+    case 'idle':
+      // 核心当前只有 4 个 `Badge`（没有 Idle），所以这条路暂时只能由本地上来。
+      // 但折叠必须是**全函数**：少这一支时 `'idle'` 会掉进 `default` 变成"同步失败"——
+      // 把"没在同步"报成"同步坏了"，正是用户投诉的那类谎。
+      return { ...state, badge: 'idle', progress: null, messageKey: null, retryable: false };
     case 'failed':
     default:
       return {
@@ -84,16 +100,33 @@ const BADGE_LABEL_KEYS: Record<SyncBadgeKind, string> = {
   syncing: 'sync.syncing',
   offline: 'sync.offline',
   failed: 'sync.failed',
+  idle: 'sync.idle',
 };
 
 export const useSyncStore = defineStore('sync', () => {
-  const state = ref<FoldedSyncState>({ badge: 'syncing', progress: null, messageKey: null, retryable: false, finishedAt: null, rounds: 0 });
+  // 初始态用 `idle` 而不是 `syncing`：**首帧时还没有任何一轮同步在跑**，
+  // 写 `syncing` 等于开口就说谎 —— 而且在没有事件来纠正它的界面上，
+  // 那颗圈会一直转到用户以为"卡住了"（用户反馈"那个按钮一直转"）。
+  // 等真的一轮开始（`markBusy(true)`）再变 `syncing`。
+  const state = ref<FoldedSyncState>({ badge: 'idle', progress: null, messageKey: null, retryable: false, finishedAt: null, rounds: 0 });
   const link = ref<LinkState>('unknown');
   const busy = ref(false);
 
   const badge = computed(() => state.value.badge);
   const dbTooNew = ref(false);
-  const label = computed(() => messageFor(BADGE_LABEL_KEYS[state.value.badge]));
+  /**
+   * 静止态（`idle`）要说清是**哪一种**静止：没配过 vs 配了但关了。
+   *
+   * 两者都该静止、都不该转圈，但把"已关闭"报成"未配置同步"是另一句假话 ——
+   * 用户会去翻一个填得满满当当的表单（`sync.needsCredentials` 踩过同一形：G38）。
+   */
+  const syncActive = computed(() => useSettingsStore().syncActive);
+  const configuredButOff = computed(() => useSettingsStore().hasAccount && !syncActive.value);
+  const label = computed(() =>
+    state.value.badge === 'idle' && configuredButOff.value
+      ? messageFor('sync.disabled')
+      : messageFor(BADGE_LABEL_KEYS[state.value.badge]),
+  );
   const detail = computed(() => (state.value.messageKey ? messageFor(state.value.messageKey) : null));
   const showRetry = computed(() => state.value.badge === 'failed' && state.value.retryable);
   const percent = computed(() => {
@@ -120,6 +153,35 @@ export const useSyncStore = defineStore('sync', () => {
     if (next) state.value = foldSyncEvent(state.value, { badge: 'syncing' }, Date.now());
   }
 
+  /**
+   * 没有同步账户时，把徽标落到一个**诚实**的状态。
+   *
+   * 为什么必须单独处理：用户截图里那颗"正在同步"一直转，原因就是
+   * `markBusy(true)` 把它置成 `syncing`，而核心对"没配账户"返回的是
+   * `no_account` 错误（crates/notera-host/src/lib.rs 的sync 分支）——
+   * **那不是一次同步失败，而是一次根本没发生的同步**。`busy` 复位后没有事件
+   * 把它带走，于是它永远停在"正在同步"。
+   *
+   * 而"转不停的圈"是最坏的答案：用户无法判断是在忙、在卡、还是根本没配账户。
+   * 这里让它落到 `idle`（文案是"未配置同步"），那颗圈自然停。
+   */
+  function markNoAccount(): void {
+    // **链接不可达时不要盖成"未配置同步"。**
+    //
+    // 两件事要同时说清：① 本地服务连不上（`unreachable`）；② 没配同步账户（`idle`）。
+    // 而"连本地服务都连不上"是**更前置**的条件 —— 此时界面能不能读到笔记都还没保证，
+    // 报"未配置同步"是**转移焦点**：用户会去设置里翻同步，而真正的问题是服务没起。
+    // 旧测试（app.spec「本地服务没起时显示明确状态」）就是钉这一条的。
+    //
+    // ⚠ 而这条也正好服务于用户的要求「没配 WebDAV 就该是静止的」——
+    // `unreachable` 同样是静止字形（○），不会转。
+    if (link.value === 'unreachable') {
+      state.value = foldLinkState(state.value, 'unreachable');
+      return;
+    }
+    state.value = { ...state.value, badge: 'idle', progress: null, messageKey: null, retryable: false };
+  }
+
   function noteSavedLocally(): void {
     // 本地写入成功后，未同步期间的可见态仍是"离线/正在同步"，不伪装成已同步。
     if (state.value.badge === 'synced') return;
@@ -129,12 +191,36 @@ export const useSyncStore = defineStore('sync', () => {
   /** 手动同步：命令本身不等网络，结果一律由事件回流。 */
   async function syncNow(): Promise<void> {
     if (busy.value) return;
+    // **先看配置，再决定要不要亮"正在同步"。**
+    //
+    // 这一道闸门是用户那条投诉的正解（「我没配置同步，咋一点击未同步就开始转了」）：
+    // `sync_now` 命令只做 `dirty_ticks += 1` 就回 `null`（HTTP 200，**从不回错**），
+    // 而调度器只在壳里"首帧之后、当时已配好账户"那一次 spawn ——
+    // 没配账户时没有任何消费者，于是 `markBusy(true)` 亮起来的 `syncing`
+    // **永远不会被一条事件带走**。实测（`.logs/repro-click-spin.mjs`）：
+    // 空库点一下，连采 12 秒全是 `syncing`，`aria-busy=true`，控制台零 error。
+    //
+    // 所以 `no_account` 那条 catch 在旧形状上是死代码（仍然留着：核心那侧同步补了具名码，
+    // 真回错时得接住）。真正守位置的是这里 —— **徽标只说真话**，
+    // 而"点了该有去处"（把人带去设置页）归 `SyncBadge` 自己判，store 不偷偷换视图。
+    if (!syncActive.value) {
+      markNoAccount();
+      return;
+    }
     markBusy(true);
     try {
       await callCommand<null>(Commands.syncNow, {});
     } catch (error) {
       const bridge = asBridgeError(error);
-      // 连不上 = 离线，不是"同步失败"：四态折叠在这里发生，不暴露内部码
+      // 三条路要分开说，别都塞进"同步失败"：
+      // ① 没配账户 ⇒ `no_account`。那是"根本没在同步"，落 `idle`，那颗圈会停 ——
+      //    以前这里落回 `syncing` 且没有事件来纠正，于是永远转（用户截图里的那颗）。
+      // ② 连不上本地服务 ⇒ 离线。
+      // ③ 其余才是真失败。
+      if (bridge.code === 'no_account') {
+        markNoAccount();
+        return;
+      }
       state.value = foldSyncEvent(
         state.value,
         { badge: bridge.isOffline ? 'offline' : 'failed', ...(bridge.isOffline ? {} : { messageKey: bridge.messageKey }) },
@@ -151,6 +237,7 @@ export const useSyncStore = defineStore('sync', () => {
     badge,
     label,
     detail,
+    syncActive,
     dbTooNew,
     showRetry,
     percent,
@@ -160,6 +247,9 @@ export const useSyncStore = defineStore('sync', () => {
     applySignal,
     setLink,
     markBusy,
+    // 导出给启动流程用：没有账户时首帧就该落`idle`，
+    // 否则用户一打开就看到"正在同步"转起来（那轮同步根本不会发生）。
+    markNoAccount,
     noteSavedLocally,
     syncNow,
   };

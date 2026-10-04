@@ -27,6 +27,8 @@ export interface AccountDraftWire {
   proxyHost?: string;
   proxyPort?: number;
   proxyUsername?: string;
+  /** 代理口令：与 `password` 同一套"留空 = 不改"，只写不回读（核心存进系统凭据库）。 */
+  proxyPassword?: string;
   bypass: string[];
   enabled: boolean;
 }
@@ -85,6 +87,9 @@ export function toWire(draft: AccountDraft): AccountDraftWire {
     if (proxy.host) wire.proxyHost = proxy.host;
     if (typeof proxy.port === 'number' && proxy.port > 0) wire.proxyPort = proxy.port;
     if (proxy.username) wire.proxyUsername = proxy.username;
+    // 代理口令以前**根本没发出去**：界面有那一格、核心 `AccountDraftCmd` 也收，
+    // 但 `toWire` 不 emit ⇒ 填了被静默丢掉，需要代理认证的服务器永远连不上（缺口 G53）。
+    if (proxy.password) wire.proxyPassword = proxy.password;
   }
   return wire;
 }
@@ -114,7 +119,9 @@ export function draftFromWire(account: Account | null | undefined): AccountDraft
       mode,
       host: account.proxyHost ?? '',
       port: typeof account.proxyPort === 'number' ? account.proxyPort : undefined,
-      username: account.proxyUsername ?? '',
+      // 代理用户名回传不了本体（存在凭据项里），留空 = 不改 —— 与口令/PEM 同一套。
+      // 界面上那一格靠 `account.proxyHasUsername` 显示"已设置"的占位提示。
+      username: '',
       bypass: account.bypass ?? [],
     },
   };

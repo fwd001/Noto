@@ -11,6 +11,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { stubLocalService } from '../testing/http';
 import { useEditorStore } from './editor';
+import { useSettingsStore } from './settings';
+import { useSyncStore } from './sync';
 import { useToastStore } from './toasts';
 
 const SHA = 'e'.repeat(64);
@@ -23,9 +25,12 @@ beforeEach(() => {
 describe('「重试取回」', () => {
   it('发的命令名与载荷逐字对齐核心，返回体就是账上那对状态', async () => {
     const service = stubLocalService({
+      // 「催一轮」只在**真配了同步**时才有意义：见下面那条"没配就不催"。
+      account: () => ({ id: 'acct-1', baseUrl: 'https://dav.home.example/dav', enabled: true }),
       attachment_retry: () => ({ sha256: SHA, localState: 'missing', remoteState: 'unknown' }),
       sync_now: () => ({}),
     });
+    await useSettingsStore().loadAccount();
     const editor = useEditorStore();
 
     const st = await editor.retryAttachmentFetch(SHA);
@@ -35,6 +40,26 @@ describe('「重试取回」', () => {
     expect(st).toEqual({ sha256: SHA, localState: 'missing', remoteState: 'unknown' });
     // 撤完该催一轮，否则用户要等到下一次 20 s 心跳才看到动静
     expect(service.callsOf('sync_now').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('没配同步时不许催：一发 `sync_now` 就把徽标点亮成"正在同步"，而没人会把它带走', async () => {
+    // 这条钉的是调用边上的**门控**，不是被调方：`sync_now` 从不回错（只做 dirty_ticks+=1
+    // 然后 HTTP 200），而没配账户时调度器根本没 spawn ⇒ 没有任何事件来纠正 `syncing`。
+    // 于是"重试取回"在没配同步的机器上会点出一颗转到重启为止的圈（用户那条投诉同一根）。
+    const service = stubLocalService({
+      account: () => null,
+      attachment_retry: () => ({ sha256: SHA, localState: 'missing', remoteState: 'unknown' }),
+      sync_now: () => ({}),
+    });
+    await useSettingsStore().loadAccount();
+    const editor = useEditorStore();
+    const sync = useSyncStore();
+
+    await editor.retryAttachmentFetch(SHA);
+
+    expect(service.callsOf('attachment_retry'), '取回意图仍然要递到核心').toHaveLength(1);
+    expect(service.callsOf('sync_now'), '没有远端可取，就不该发这一轮同步').toHaveLength(0);
+    expect(sync.badge, '徽标更不许被点亮成"正在同步"').not.toBe('syncing');
   });
 
   it('核心说不必重试时，显示的是中文文案而不是漏出键名', async () => {

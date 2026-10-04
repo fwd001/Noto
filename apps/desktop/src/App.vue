@@ -180,8 +180,18 @@ function onGlobalKeydown(event: KeyboardEvent): void {
     if (shell.back()) event.preventDefault();
     return;
   }
-  if (event.key === 'Escape' && shell.drawerTarget !== null) {
-    shell.closeDrawer();
+  if (event.key === 'Escape') {
+    // 抽屉优先：抽屉开着时 Esc 只关抽屉，不顺手把整页带走（否则在抽屉里按一次Esc
+    // 会连带退回主界面，那是"按一下却走了两格"）。
+    if (shell.drawerTarget !== null) {
+      shell.closeDrawer();
+      return;
+    }
+    // 其余交给 `back()`：它在设置页/冲突页回到工作区，在窄屏编辑器回到列表，
+    // 已经在工作区且无抽屉时返回 false（= 没有可退的，不抢占按键）。
+    // 此前Esc 只认抽屉，于是"设置页按 Esc 没反应"—— 返回键`‹` 与 Alt+← 都在，
+    // 唯独键盘用户最习惯的那一键是死的。
+    if (shell.back()) event.preventDefault();
   }
 }
 
@@ -210,7 +220,29 @@ async function boot(): Promise<void> {
   void settings.loadAccount();
   void settings.loadStats();
   void conflicts.load();
-  void sync.syncNow();
+
+  // **只在真的配了、且用户开着同步时才自动同步。**
+  //
+  // 原来这里是**无条件** `sync.syncNow()`（用户反馈"我没设WebDAV，它却一直转"的直接原因）。
+  // ⚠ 别把这条想成"核心回了 no_account 没人接" —— 实测 `sync_now` **从不回错**
+  // （只做 `dirty_ticks += 1` 然后 HTTP 200 `null`），而没配账户时调度器压根没 spawn，
+  // 所以没有任何事件来带走 `syncing`：那一转就是**永久**的。守位置的地方在门口，不在 catch 里。
+  //
+  // 改成以配置为准：**没配就不动**。这是"安装后应该是干净的"这条底线 ——
+  // 用户装一个笔记应用，不该看到一个"正在把你的笔记传到某处"的指示。
+  //
+  // 顺序有讲究：`loadAccount()` 本身是异步的，所以要**等它落地**再判配置。
+  // 若不 await 就去读，`syncActive` 还是 false，首轮同步被跳过 ⇒ 用户配好了却不同步。
+  //
+  // 判的是 `syncActive` 而**不是** `hasAccount`：后者只说"配过"，前者才说"用户要它跑"。
+  // 拿 hasAccount 当门，用户关了「启用同步」之后启动照样自动同步一遍 ——
+  // 那是"以我的设置为主"这条要求被当面绕过。
+  void settings
+    .loadAccount()
+    .then(() => {
+      if (settings.syncActive) void sync.syncNow();
+      else sync.markNoAccount();
+    });
 }
 
 onMounted(() => {

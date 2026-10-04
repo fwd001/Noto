@@ -20,7 +20,7 @@ afterEach(() => {
 describe('即时搜索', () => {
   it('连续输入只在停止 200ms 后打一次请求', async () => {
     const service = stubLocalService({
-      search: () => [{ noteId: 'note-1', score: 1, titleHit: true, snippetHtml: '<b>甲</b>乙' }],
+      search: () => [{ noteId: 'note-1', score: 1, title: '第一条', snippetHtml: '<b>甲</b>乙' }],
       list_notes: () => [],
     });
     const notes = useNoteStore();

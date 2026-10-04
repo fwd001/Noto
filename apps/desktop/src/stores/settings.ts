@@ -11,6 +11,7 @@ import {
   type ImportRequest,
   type Report,
   type RestoreOutcome,
+  type EraseOutcome,
   type StoreStats,
 } from '../api/types';
 import { draftFromWire, toWire } from '../sync/accountWire';
@@ -106,6 +107,18 @@ export const useSettingsStore = defineStore('settings', () => {
 
   const resolvedTheme = computed<ThemeMode>(() => (prefs.value.theme === 'system' ? (systemDark.value ? 'dark' : 'light') : prefs.value.theme));
   const hasAccount = computed(() => account.value !== null && Boolean(account.value?.baseUrl));
+  /**
+   * 同步到底在不在跑 —— 一切**以配置为准**（用户原话）。
+   *
+   * `hasAccount` 只回答"配过没配过"；`enabled` 才是"用户要不要它跑"。
+   * 只用前者会出两种假话：关了「启用同步」却照样自动同步（启动那条路），
+   * 以及把"已关闭"念成"未配置同步"（徽标那条路）。
+   *
+   * ⚠ 这一位要靠核心把**未启用**的那条账户也回传才能成立：
+   *   `ConfigRepository::active()` 按 `enabled` 过滤，未启用时 `account` 直接是 `null` ——
+   *   于是设置页表单被洗空、用户没法再把它打开（只能重敲口令）。
+   */
+  const syncActive = computed(() => hasAccount.value && account.value?.enabled !== false);
   /**
    * 口令格上那句"已保存口令（留空则不修改）"的依据。
    *
@@ -226,6 +239,35 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  /**
+   * 删掉同步账户（**不动笔记**）。
+   *
+   * 这条命令在核心里存在了很久，但界面上没有任何入口 —— 于是"我不想再同步了"
+   * 只有一条路：清除一切数据（连正文一起删）。两件事差得远。
+   * 核心那侧会把它在系统凭据库里的口令一并抹掉（`remove_account` 里那段循环），
+   * 所以这里不需要再补什么"清凭据"的动作。
+   */
+  async function removeAccount(): Promise<boolean> {
+    const id = account.value?.id;
+    if (!id) return false;
+    accountSaving.value = true;
+    accountErrorKey.value = null;
+    try {
+      await callCommand<null>(Commands.removeAccount, { id });
+      account.value = null;
+      draft.value = emptyDraft();
+      toasts.push('settings.accountRemoved', 'info');
+      return true;
+    } catch (error) {
+      const bridge = asBridgeError(error);
+      accountErrorKey.value = bridge.messageKey;
+      toasts.push(bridge.messageKey, 'error');
+      return false;
+    } finally {
+      accountSaving.value = false;
+    }
+  }
+
   function forgetPassword(): void {
     draft.value = { ...draft.value, password: '' };
   }
@@ -311,6 +353,28 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   /** 恢复只排期：真正落地在下次启动，所以这里必须明说"要重启"。 */
+  /**
+   * 清除一切数据，恢复到刚装好的状态。
+   *
+   * 不可撤销，所以调用方（设置页）必须先做二次确认；这里再传一次 `confirmed`，
+   * 是因为命令是公开的 —— 不能只靠界面那一道闸门。
+   */
+  async function eraseAllData(): Promise<EraseOutcome | null> {
+    dataBusy.value = true;
+    lastReport.value = null;
+    try {
+      const out = await callCommand<EraseOutcome>(Commands.eraseAllData, { confirmed: true });
+      if (out) toasts.push('settings.eraseDone', 'info');
+      return out ?? null;
+    } catch (error) {
+      const bridge = asBridgeError(error);
+      toasts.push(bridge.messageKey, 'error');
+      return null;
+    } finally {
+      dataBusy.value = false;
+    }
+  }
+
   async function restoreDb(path: string): Promise<RestoreOutcome | null> {
     dataBusy.value = true;
     lastReport.value = null;
@@ -360,6 +424,7 @@ export const useSettingsStore = defineStore('settings', () => {
     accountSaving,
     accountErrorKey,
     hasAccount,
+    syncActive,
     passwordIsSet,
     credentialSavedButGone,
     credentialVolatile,
@@ -378,6 +443,7 @@ export const useSettingsStore = defineStore('settings', () => {
     setCaps,
     loadAccount,
     saveAccount,
+    removeAccount,
     forgetPassword,
     loadStats,
     exportData,
@@ -385,6 +451,7 @@ export const useSettingsStore = defineStore('settings', () => {
     importFiles,
     backupDb,
     restoreDb,
+    eraseAllData,
     describeReport,
   };
 });

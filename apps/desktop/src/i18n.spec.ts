@@ -168,4 +168,19 @@ describe('文案键登记完整性', () => {
     const missing = [...usedKeys].filter((key) => !hasMessage(key)).sort();
     expect(missing).toEqual([]);
   });
+
+  /**
+   * 反向那一半（登记了却没人用）**故意没有做成硬门禁**，理由记在这里免得有人再试一遍：
+   * 扫源码认不出"动态取键"那几条路 —— 核心的 `messageKey`（`note.staleEdit`、
+   * `proxy.cert_untrusted`、`attach.tooLarge`…）与 `toasts.push('settings.x')` 这种
+   * 实参位置都不在上面 `keysIn` 认的两种形状里，硬判会得到 39 条误报。
+   * 要做对，得先把"核心可能回哪些 messageKey"列成一份与 `commands.rs` 对齐的表
+   * （`COMMAND_CODES` 已经为 `cmd.*` 做了同样的事），再把 `toasts.push(` 加进扫描形状。
+   * 本轮按那份表逐条核过并删掉了 7 条真正没有 call site 的界面文案
+   * （`settings.cleared` 那批 —— 它们背后都是"被砍掉却没清干净"的动作）。
+   */
+  it('扫描器认得的键数量与文案表同量级（防扫描器自己失效）', () => {
+    // 只做一条廉价的自证：`keysIn` 挂了会扫到 0 条，上面那条"用到的键都登记"就常绿。
+    expect(usedKeys.size).toBeGreaterThan(MESSAGE_KEYS.length / 2);
+  });
 });

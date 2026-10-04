@@ -13,11 +13,14 @@ const MESSAGES: Record<MessageKey, string> = {
   /* 侧栏 */
   'sidebar.allNotes': '全部笔记',
   'sidebar.folders': '文件夹',
+  // 分区小标题。侧栏现在有"导航 / 同步 / 文件夹"三块，
+  // 每一块都带同样式的小标题，眼睛就不必靠"有没有边框"去猜层级
+  // （用户反馈"层级乱"）。跟"文件夹"那个标题用同一套 `.section-title`。
+  'sidebar.syncSection': '同步',
   'sidebar.trash': '最近删除',
   'sidebar.newFolder': '新建文件夹',
   'sidebar.rename': '重命名',
   'sidebar.moveTo': '移动到…',
-  'sidebar.moveHere': '移动到这里',
   'sidebar.deleteFolder': '删除文件夹',
   'sidebar.deleteFolderHint': '删除文件夹不会删除其中的笔记，它们会回到"未归类"。',
   'sidebar.root': '未归类',
@@ -32,7 +35,6 @@ const MESSAGES: Record<MessageKey, string> = {
   'list.noResultsHint': '换个词试试，中文两个字也能搜。',
   'list.empty': '这里还没有笔记',
   'list.emptyHint': '按 Ctrl+N 或在右侧开始写。',
-  'list.emptyFolder': '这个文件夹是空的',
   'list.newNote': '新建笔记',
   'list.dailyNote': '今天',
   'list.pin': '固定',
@@ -58,7 +60,6 @@ const MESSAGES: Record<MessageKey, string> = {
   'editor.readOnly': '只读',
   'editor.staleTitle': '这条笔记在别处被改动了',
   'editor.staleBody': '为避免覆盖，已显示对方版本。你的改动仍保留在下方，可自行取舍。',
-  'editor.showMyDraft': '查看我的版本',
   'editor.useMyDraft': '用我的版本继续编辑',
   'editor.discardMyDraft': '放弃我的改动',
   'editor.versionTooNew': '这条笔记由更新版本的 Notera 保存，请升级后编辑（当前可查看）。',
@@ -97,7 +98,6 @@ const MESSAGES: Record<MessageKey, string> = {
   'tb.link': '链接',
   'tb.linkPrompt': '输入链接地址',
   'tb.linkApply': '应用',
-  'tb.type': '段落样式',
   'tb.checklist': '清单',
   'tb.indent': '增加缩进',
   'tb.outdent': '减少缩进',
@@ -111,6 +111,17 @@ const MESSAGES: Record<MessageKey, string> = {
   'sync.syncing': '正在同步',
   'sync.offline': '离线',
   'sync.failed': '同步失败',
+  'sync.idle': '未配置同步',
+  'sync.idleGoConfigure': '未配置同步 —— 点这里去设置',
+  'sync.disabled': '同步已关闭',
+  'settings.dangerZone': '危险操作',
+  'settings.erase': '清除一切数据…',
+  'settings.eraseHint': '删除本机全部笔记、文件夹、附件与同步配置，恢复到刚安装的状态。此操作不可撤销，也没有回收站。',
+  'settings.eraseConfirm': '真的要删掉本机所有数据吗？建议先「备份数据库」留一份。',
+  'settings.eraseCancel': '取消',
+  'settings.eraseConfirmBtn': '确认删除全部',
+  'settings.eraseDone': '已清除全部数据，请重启应用',
+  'settings.eraseDoneDetail': '已清空 {tables} 张表的数据，回收附件约 {kb} KB。请重启应用。',
   'sync.retry': '重试',
   'sync.detail': '同步状态',
   'sync.syncNow': '立即同步',
@@ -178,11 +189,16 @@ const MESSAGES: Record<MessageKey, string> = {
   'settings.proxyHost': '地址',
   'settings.proxyPort': '端口',
   'settings.proxyUser': '用户名',
+  'settings.proxyUserSet': '已设置（留空则不改）',
+  'settings.accountRemoved': '已删除同步账户。笔记都还在本机，只是不再同步了。',
+  'settings.removeAccount': '删除同步账户',
+  'settings.removeAccountHint': '只停掉同步：删掉服务器地址与存在系统里的口令，**不删任何笔记**。想连笔记一起清掉请用下面的「清除一切数据」。',
+  'settings.removeAccountConfirm': '确定删除这台同步服务器？本机笔记不受影响，之后想再同步要重新填地址与口令。',
+  'settings.removeAccountYes': '确认删除账户',
   'settings.proxyPassword': '口令',
   'settings.proxyBypass': '绕过（每行一个主机/网段/*.域名）',
   'settings.save': '保存账户',
   'settings.saved': '已保存',
-  'settings.cleared': '已停用',
   'settings.enabled': '启用同步',
   'settings.theme': '外观',
   'settings.themeSystem': '跟随系统',
@@ -226,12 +242,10 @@ const MESSAGES: Record<MessageKey, string> = {
   'state.reconnect': '重试连接',
   'state.offlineBanner': '离线：改动会先存到本机',
   'state.dbTooNew': '本地数据由更新版本的 Notera 写入，当前版本只读打开，不会写坏数据。',
-  'state.attachmentMissing': '附件缺失',
   'state.dismiss': '知道了',
 
   /* 无障碍 */
   'a11y.skipToSearch': '跳到搜索',
-  'a11y.main': '主内容',
 
   /* 窗口控件 */
   'win.minimize': '最小化',
@@ -290,6 +304,9 @@ const MESSAGES: Record<MessageKey, string> = {
   'error.invalid_input': '输入的内容无法保存，请检查后重试。',
   'error.permission_denied': '系统拒绝了这次操作。',
   'error.no_account': '还没有配置同步服务器。不配置也能继续记笔记。',
+  // 不可撤销的命令在命令面还有一道闸门（`confirmed` 不为真就不执行）。界面正常走不到这里，
+  // 但这条码是**公开的**：没有文案时它会退成那句通用兜底，用户就分不清"删了"与"没删"。
+  'error.erase_not_confirmed': '清除一切数据需要明确确认，这一次没有删除任何内容。',
   // 配好了服务器、只是这一轮拿不到口令 —— 与上一条是两件事，措辞必须分开：
   // 合成一条时用户会去翻一个明明填满了的表单（缺口 G38 选 B 之后，没有系统凭据库的
   // 平台上**每次重启**都落在这里，不是边角情况）。

@@ -106,10 +106,12 @@ export interface FolderNode extends Folder {
 export interface SearchHit {
   noteId: Uuid;
   score: number;
-  titleHit?: boolean;
+  /** 核心回的是**命中标题**（`SearchHitDto.title`）。以前这里写的是 `titleHit?: boolean`
+   *  与 `matchStarts?: number[]` —— 核心从来没发过这两个键，TS 与 mock 一起绿灯，
+   *  真产物里缺的那一格是 `title`（跨语言契约踩过两次的同一形状）。 */
+  title: string;
   /** 已由本地核心转义的片段，可直接渲染。 */
   snippetHtml: SafeHtml;
-  matchStarts?: number[];
 }
 
 /* -------------------------------------------------------------------- 附件 */
@@ -210,7 +212,9 @@ export interface Account {
   proxyMode?: string;
   proxyHost?: string;
   proxyPort?: number;
-  proxyUsername?: string;
+  /** 核心回的是"代理用户名存过没有"（本体在凭据项里，回传不了），
+   *  与 `hasCredential` / `hasCaPem` 同一套口径。 */
+  proxyHasUsername?: boolean;
   bypass?: string[];
   enabled?: boolean;
   hasCredential?: boolean;
@@ -295,6 +299,13 @@ export interface RestoreOutcome {
   path: string;
 }
 
+/** 「清除一切」的回执：清了多少张表、回收多少附件字节。 */
+export interface EraseOutcome {
+  tables: number;
+  freedBytes: number;
+  restartRequired: boolean;
+}
+
 /* ------------------------------------------------------------------ 冲突 */
 
 export interface ConflictCard {
@@ -315,7 +326,14 @@ export interface ConflictCard {
 
 /* ---------------------------------------------------------------- 事件总线 */
 
-export type SyncBadgeKind = 'synced' | 'syncing' | 'offline' | 'failed';
+/**
+ * 同步徽标的可见态。
+ *
+ * `idle` = **没有配置同步账户**，不是"同步失败"，也不是"正在同步"。
+ * 这一态是单独加出来的：原先只有四态时，"没配账户"会落回 `syncing`，
+ * 于是界面上出现一颗永远转不停的圈（用户反馈"不知道是不是历史数据"）。
+ */
+export type SyncBadgeKind = 'synced' | 'syncing' | 'offline' | 'failed' | 'idle';
 
 export interface SyncProgress {
   done: number;
@@ -382,6 +400,9 @@ export const Commands = {
   stats: 'stats',
   syncNow: 'sync_now',
   configureAccount: 'configure_account',
+  /** 核心早就有这条命令，但界面**从来没有入口** ⇒ 用户想停掉同步只能"清除一切数据"
+   *  （连笔记一起删掉）。删账户与删库是两件事。 */
+  removeAccount: 'remove_account',
   account: 'account',
   exportData: 'export_data',
   importData: 'import_data',
@@ -389,6 +410,8 @@ export const Commands = {
   backupDb: 'backup_db',
   listBackups: 'list_backups',
   restoreDb: 'restore_db',
+  // 「清除一切数据恢复初始化」。**不可撤销**，命令面要求显式 `confirmed: true`。
+  eraseAllData: 'erase_all_data',
   openConflicts: 'open_conflicts',
   resolveConflict: 'resolve_conflict',
   previewText: 'preview_text',
