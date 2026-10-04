@@ -5,7 +5,7 @@
 mod common;
 
 use common::*;
-use notera_store::{SearchPath, SearchQuery};
+use notera_store::{MatchKind, SearchPath, SearchQuery};
 
 fn seed(store: &notera_store::Store, folder: &notera_core::EntityId) {
     for (i, body) in [
@@ -294,4 +294,137 @@ fn limit_and_empty_query_behave() {
         .search(&SearchQuery::new("查无此词"))
         .unwrap()
         .is_empty());
+}
+
+// ------------------------------------------------------------ 模糊档（P4 / 用户口径「精准 + 模糊共同搜」）---
+
+/// 精准档要的是**连着出现**；模糊档要的是**这段的三字串都在同一条笔记里**，允许中间隔着别的话。
+/// 用户打「同步协议」却忘了原文写作「同步协调…下一步协议」—— 老规则一句都不回，
+/// 那是"没有结果"，不是"没有"。
+#[test]
+fn fuzzy_tier_returns_the_spaced_out_hit_exact_missed() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    store
+        .create_note(
+            &folder,
+            doc_text("先说同步协调的事，之后再谈下一步协议的附件"),
+        )
+        .unwrap();
+
+    let hits = store.search(&SearchQuery::new("同步协议")).unwrap();
+    assert_eq!(hits.len(), 1, "模糊档要把这条捞回来：{hits:?}");
+    assert_eq!(hits[0].match_kind, MatchKind::Fuzzy);
+    assert_eq!(hits[0].path_used, SearchPath::FtsTrigram);
+}
+
+/// 模糊不是"沾边就算"：只命中两段三字串里的一段，仍然不该出现。
+/// 没有这条，模糊档会退化成"含'同步协'的都算"，结果列表就是噪音。
+#[test]
+fn fuzzy_tier_still_requires_every_trigram_of_the_segment() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    // 只有「同步协」，没有「步协议」
+    store
+        .create_note(&folder, doc_text("今年开始同步协调，明年再说"))
+        .unwrap();
+    assert!(
+        store
+            .search(&SearchQuery::new("同步协议"))
+            .unwrap()
+            .is_empty(),
+        "缺一截三字串就不该进模糊档"
+    );
+}
+
+/// 两档**同时**跑，但精准的排在前面（用户那句"共同的去搜索"）。
+#[test]
+fn exact_hits_rank_above_fuzzy_hits() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    store
+        .create_note(
+            &folder,
+            doc_text("先说同步协调的事，之后再谈下一步协议的附件"),
+        )
+        .unwrap();
+    let exact = store
+        .create_note(&folder, doc_text("同步协议的实现细节"))
+        .unwrap();
+
+    let hits = store.search(&SearchQuery::new("同步协议")).unwrap();
+    assert_eq!(hits.len(), 2, "{hits:?}");
+    assert_eq!(hits[0].note_id, exact.id, "精准那条必须在第一：{hits:?}");
+    assert_eq!(hits[0].match_kind, MatchKind::Exact);
+    assert_eq!(hits[1].match_kind, MatchKind::Fuzzy);
+}
+
+/// ≤2 字的段没有 trigram token ⇒ 它自己**不可能**被放宽；但同一个查询里的长段照常进模糊档。
+/// 这条判的是混合长度查询的组合规则：**每一段都要满足**，短段按精准、长段按放宽。
+#[test]
+fn short_segment_has_no_fuzzy_tier_but_does_not_poison_the_long_one() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    // 「同步协」「步协议」都在，但不连着；「说明」连着出现；这条**没有**「附件」。
+    store
+        .create_note(
+            &folder,
+            doc_text("先说同步协调的事，之后再谈下一步协议的说明"),
+        )
+        .unwrap();
+
+    // 短段「附件」根本不在 ⇒ 两段不许各自为政，整条查询必须空
+    assert!(
+        store
+            .search(&SearchQuery::new("同步协议 附件"))
+            .unwrap()
+            .is_empty(),
+        "短段没命中时不许靠长段放宽凑结果"
+    );
+
+    // 短段「说明」在 ⇒ 长段按三字串放宽，这一条进模糊档
+    let hits = store.search(&SearchQuery::new("同步协议 说明")).unwrap();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(hits[0].match_kind, MatchKind::Fuzzy);
+}
+
+// ------------------------------------------------------------ 交集完整性（「匹配所有关键字」）---
+
+/// 老写法是"每段各取 `limit*4` 条再取交集"：某一段命中太多时，**同时含两个词的那条会被窗口
+/// 截掉**，用户得到的是一句"没有结果"。这条测试把窗口调到最小、并把那篇笔记刻意排成最旧，
+/// 于是老实现必然回 0 条。
+#[test]
+fn intersection_is_not_truncated_by_the_per_segment_window() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    let both = store
+        .create_note(&folder, doc_text("同步机制的两段式说明"))
+        .unwrap();
+    // 六条只含「同步」的新笔记：LIKE 档按 updated_at DESC 取，窗口 limit*4 = 4 会把最旧那条挤掉
+    for i in 0..6 {
+        store
+            .create_note(&folder, doc_text(&format!("第 {i} 次同步的会议记录")))
+            .unwrap();
+    }
+    let conn = rusqlite::Connection::open(fx.db_file()).unwrap();
+    conn.execute(
+        "UPDATE notes SET updated_at = '2000-01-01T00:00:00+00:00' WHERE id = ?1",
+        [both.id.to_string()],
+    )
+    .unwrap();
+    drop(conn);
+
+    let hits = store
+        .search(&SearchQuery {
+            text: "同步 机制".into(),
+            limit: 1,
+        })
+        .unwrap();
+    assert_eq!(hits.len(), 1, "两个词都在的那条必须回来：{hits:?}");
+    assert_eq!(hits[0].note_id, both.id, "{hits:?}");
 }

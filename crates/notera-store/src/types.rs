@@ -183,6 +183,14 @@ pub enum SearchPath {
     LikeFallback,
 }
 
+/// 命中来自哪一档。**两档同时跑**（用户口径「精准匹配和模糊匹配共同的去搜索」）：
+/// `Exact` = 每个词段都连着出现；`Fuzzy` = 每个词段的三字串都在同一条笔记里，但允许中间隔话。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MatchKind {
+    Exact,
+    Fuzzy,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SearchHit {
     pub note_id: EntityId,
@@ -190,6 +198,7 @@ pub struct SearchHit {
     /// 已 HTML 转义并插入 `<mark>` 的片段，UI 可直接渲染。
     pub snippet_html: String,
     pub path_used: SearchPath,
+    pub match_kind: MatchKind,
 }
 
 /// 写入口使用的 revision 来源标记（`note_revisions.origin`）。

@@ -110,7 +110,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | 加代理模式 | `notera-net` + `notera-config` | PROXY.md §2 能力表、RouteProof、差分测试、`net probe` | 在 `notera-webdav` 里处理代理 |
 | 加平台能力（托盘/后台…） | `platform/<os>` + `PlatformCaps` | host 能力协商、UI 按能力渲染、PLATFORM.md §2 矩阵 | 在 UI 判断机型 |
 | 加 Tauri 命令 | `notera-host::commands` + `apps/desktop/src/api` | DTO 类型、错误→UserReason 映射、命令契约测试 | 在命令处理器里写业务规则或等网络 |
-| 改搜索行为 | `notera-store::search` | 双路径阈值（≥3 字 MATCH / ≤2 字 LIKE）、性能预算、FTS 重建与 verify | 把 <3 字查询交给 MATCH |
+| 改搜索行为 | `notera-store::search` | 双路径阈值（≥3 字 MATCH / ≤2 字 LIKE）、**两档**（精准=连着、模糊=每个三字串都在同一篇）、AND 下推进一条 SQL（`tier_sql` 有形状单测）、性能预算由 `tests/search_latency.rs` 每次 `cargo test` 重算（DATA-MODEL §7.2.1/§7.2.2）、FTS 重建与 verify | 把 <3 字查询交给 MATCH；每段各取一批再在 Rust 里交集（会截掉"两个词都在"的那条）；把两档写成 OR（结果列表变噪音） |
 | 改同步定时 | `notera-host::SchedulerPolicy` + SYNC-PROTOCOL §14 | 空轮 1 请求 0 字节断言、移动端诚实预算 | 把周期调短来"假装更快" |
 | 加测试 | `tests/<层>` | 该用例的注入方式与后置条件断言写清 | 用 mock 替代真实 HTTP/真实进程崩溃 |
 

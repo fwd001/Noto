@@ -428,6 +428,40 @@ len(query) <= 2   → content 表 LIKE + COLLATE NOCASE（慢一个数量级但�
 
 `LIKE` 路径需要 `plain_text` 上的扫描，5000 条 ≈ 4 ms，可接受；20 000 条需重测，超预算则引入 2 字 bigram 辅助表（Phase 7 待验证项，不提前实现）。
 
+#### 7.2.1 交集必须下推进 SQL（2026-10-04 改，实测驱动）
+
+上面那句"取交集"以前是实现里的 `limit*4` **窗口**：每段各取一批再在 Rust 里交集。某一段命中太多时，
+"两个词都在"的那一条会被窗口挤掉 ⇒ 用户看到"没有结果"，而数据其实在库里。这是"匹配笔记里所有关键字"
+这句话的正面反例，回归由 `notera-store/tests/search_paths.rs::intersection_is_not_truncated_by_the_per_segment_window` 钉住。
+
+修法不是"去掉 LIMIT"（那样正确了但慢：下表第一行），而是**把 AND 下推进一条 SQL**：
+≥3 字的段合成一个 `MATCH` 表达式，≤2 字的段各挂一个 `LIKE` 条件，`LIMIT` 因此重新变安全。
+
+| 写法（5000 篇真库，debug 构建，同一台机器同一批语料） | p50 | p95 | max |
+|---|---|---|---|
+| 每段取**不限条数**的候选集，再在 Rust 里交集 | 33.9 ms | 149 ms | 157 ms |
+| AND 下推进一条 SQL（现在的写法） | **10.4 ms** | **20.9 ms** | 22.1 ms |
+
+读数由 `notera-store/tests/search_latency.rs` 每次 `cargo test` 重算；预算 p50 ≤ 40 ms、p95 ≤ 80 ms、
+max ≤ 240 ms。**为什么预算不是越紧越好**：把 `LIMIT` 放大 400 倍的变异只让 p95 从 20.9 涨到 37.4 ms
+—— 时间抓不住 2 倍级，卡在 30 ms 会变成 CI 噪声。2 倍级由 `search.rs::tests::tier_sql_keeps_the_page_size_at_the_requested_page`
+这类**形状断言**抓（它今天实测把 `LIMIT 28` 当场抓红）。
+
+#### 7.2.2 两档：精准 + 模糊同时跑（2026-10-04 加）
+
+| 档 | 判据 | 排序 |
+|---|---|---|
+| 精准 `Exact` | 每个词段都**连着**出现（FTS 短语 / `LIKE` 字面） | bm25（LIKE 档用新旧序） |
+| 模糊 `Fuzzy` | 每个 ≥3 字段词的**每一个三字串**都在同一篇里，允许中间隔话 | bm25，接在精准之后 |
+
+* 短段（≤2 字）没有 trigram token ⇒ **不放宽**；混合查询里短段仍按字面 `LIKE` 硬要求。
+* 只命中一部分三字串不算数（`"同步协" OR "步协议"` 会退化成"沾边就算"，实测被
+  `fuzzy_tier_still_requires_every_trigram_of_the_segment` 抓红）。
+* 这一档**不是**容错/编辑距离：`"同步协"` 与 `"步协议"` 都必须出现，只是不必相连。
+* 精准档已经填满那一页 ⇒ 模糊档不查（没有格子可站，查了是白烧一次索引）。
+* `SearchHit.match_kind` 在 store 层，**不进 wire**：两档的差别靠次序表达，界面不必解释实现。
+
+
 ### 7.3 完整性
 
 * `meta.search_generation` 每次全量重建 +1；
