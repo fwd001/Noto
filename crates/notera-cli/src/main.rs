@@ -8,7 +8,7 @@ use notera_host::{commands, App};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "notera", version, about = "Notera 诊断与测试驱动")]
+#[command(name = "notera", version, about = "Noto 诊断与测试驱动")]
 struct Cli {
     /// 应用数据目录（默认 %LOCALAPPDATA%/notera 或 ./.notera-dev）
     #[arg(long, global = true)]

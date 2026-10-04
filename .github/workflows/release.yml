@@ -235,7 +235,7 @@ jobs:
           v="${{ needs.meta.outputs.version }}"
           APP=$(ls -1d target/release/bundle/macos/*.app 2>/dev/null | head -1 || true)
           if [ -z "$APP" ]; then echo "bundle/macos 下没有 .app，压不了 zip"; exit 1; fi
-          ZIP="target/release/bundle/macos/Notera_${v}_universal.app.zip"
+          ZIP="target/release/bundle/macos/Noto_${v}_universal.app.zip"
           ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
           rc=$?
           if [ "$rc" -ne 0 ] || [ ! -f "$ZIP" ]; then echo "ditto 退出码 $rc，zip=$ZIP 不在"; exit 1; fi
@@ -255,7 +255,7 @@ jobs:
           name: macos-universal
           path: |
             target/release/bundle/dmg/*.dmg
-            target/release/bundle/macos/Notera_*.app.zip
+            target/release/bundle/macos/Noto_*.app.zip
           if-no-files-found: error
 
   android:
@@ -486,7 +486,7 @@ jobs:
           set -euo pipefail
           v="${{ needs.meta.outputs.version }}"
           {
-            echo "## Notera $v"
+            echo "## Noto $v"
             echo
             echo "本 Release 由 tag \`v$v\` 的推送自动构建（\`.github/workflows/release.yml\`）。"
             echo
@@ -535,7 +535,7 @@ jobs:
             else
               echo "--- 建草稿 Release v$v"
               gh release create "v$v" release-assets/* \
-                --title "Notera $v" \
+                --title "Noto $v" \
                 --notes-file RELEASE-NOTES.md \
                 --draft \
                 --target "$GITHUB_SHA"

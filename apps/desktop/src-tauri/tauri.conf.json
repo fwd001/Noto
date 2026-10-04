@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Notera",
+  "productName": "Noto",
   "version": "0.0.63",
   "identifier": "app.notera",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Notera",
+        "title": "Noto",
         "width": 1240,
         "height": 800,
         "minWidth": 720,
@@ -43,7 +43,7 @@
       "icons/128x128@2x.png"
     ],
     "shortDescription": "Local-first 笔记",
-    "longDescription": "Notera —— 数据在你自己的 WebDAV 上，离线可用，自动同步。",
+    "longDescription": "Noto —— 数据在你自己的 WebDAV 上，离线可用，自动同步。",
     "category": "Productivity",
     "windows": {
       "webviewInstallMode": {

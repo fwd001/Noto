@@ -109,5 +109,5 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("Notera 移动壳启动失败");
+        .expect("Noto 移动壳启动失败");
 }

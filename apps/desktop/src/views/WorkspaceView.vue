@@ -55,7 +55,7 @@ function onFolderChange(event: Event): void {
     </button>
     <NoteList v-if="shell.listVisible" @open="shell.openEditor()" />
 
-    <section v-if="shell.editorVisible" class="pane pane--editor" aria-label="Notera" data-testid="editor-pane">
+    <section v-if="shell.editorVisible" class="pane pane--editor" :aria-label="t('editor.pane')" data-testid="editor-pane">
       <div class="pane-header editor-head">
         <button v-if="shell.isCompact" type="button" class="btn btn--quiet btn--icon" :aria-label="t('mobile.back')" data-testid="back-to-list" @click="shell.backToList()">
           ‹

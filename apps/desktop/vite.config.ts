@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 
-// Notera 前端构建配置。dev 端口固定 5173（Playwright / 文档均以该端口为准）。
+// Noto 前端构建配置。dev 端口固定 5173（Playwright / 文档均以该端口为准）。
 export default defineConfig({
   plugins: [vue()],
   clearScreen: false,

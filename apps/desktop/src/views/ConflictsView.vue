@@ -69,7 +69,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="pane conflicts" aria-label="Notera" data-testid="conflicts-view">
+  <section class="pane conflicts" :aria-label="t('conflict.title')" data-testid="conflicts-view">
     <div class="pane-header">
       <button type="button" class="btn btn--quiet btn--icon" :aria-label="t('mobile.back')" @click="shell.goto('workspace')">‹</button>
       <span class="pane-title">{{ t('conflict.title') }}</span>

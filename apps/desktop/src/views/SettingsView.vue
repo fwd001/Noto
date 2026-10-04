@@ -248,7 +248,7 @@ function jumpTo(id: string): void {
 </script>
 
 <template>
-  <section class="pane settings" aria-label="Notera">
+  <section class="pane settings" :aria-label="t('settings.title')">
     <div class="pane-header">
       <button type="button" class="btn btn--quiet btn--icon" :aria-label="t('mobile.back')" data-testid="settings-back" @click="shell.goto('workspace')">‹</button>
       <span class="pane-title">{{ t('settings.title') }}</span>

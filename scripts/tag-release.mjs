@@ -83,7 +83,7 @@ if (checkOnly) {
   process.exit(0);
 }
 
-execFileSync('git', ['tag', '-a', tagName, '-m', `Notera ${version}\n\n由 release.yml 出包（Windows / macOS；tag 推送触发）`], {
+execFileSync('git', ['tag', '-a', tagName, '-m', `Noto ${version}\n\n由 release.yml 出包（Windows / macOS；tag 推送触发）`], {
   cwd: ROOT,
   stdio: 'inherit',
 });

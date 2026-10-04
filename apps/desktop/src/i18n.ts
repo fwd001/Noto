@@ -7,7 +7,7 @@
 export type MessageKey = string;
 
 const MESSAGES: Record<MessageKey, string> = {
-  'app.name': 'Notera',
+  'app.name': 'Noto',
   'app.tagline': '本地优先 · 自有服务器同步',
 
   /* 侧栏 */
@@ -53,6 +53,7 @@ const MESSAGES: Record<MessageKey, string> = {
 
   /* 编辑器 */
   'editor.untitled': '无标题',
+  'editor.pane': '笔记正文',
   'editor.placeholder': '开始写…',
   'editor.saved': '已保存',
   'editor.saving': '保存中',
@@ -62,7 +63,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'editor.staleBody': '为避免覆盖，已显示对方版本。你的改动仍保留在下方，可自行取舍。',
   'editor.useMyDraft': '用我的版本继续编辑',
   'editor.discardMyDraft': '放弃我的改动',
-  'editor.versionTooNew': '这条笔记由更新版本的 Notera 保存，请升级后编辑（当前可查看）。',
+  'editor.versionTooNew': '这条笔记由更新版本的 Noto 保存，请升级后编辑（当前可查看）。',
   'editor.unknownBlock': '暂不支持的内容（已原样保留）',
   'editor.attachmentMissing': '附件不在这台设备上，正在等待下载',
   // 坏图/坏附件占位上的两个手动动作（2026-09-28 的决定：终态那一格必须给用户一个能点的东西）。
@@ -241,7 +242,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'state.linkDownHint': '在本机启动本地服务后会自动接上（默认 127.0.0.1:17323）。',
   'state.reconnect': '重试连接',
   'state.offlineBanner': '离线：改动会先存到本机',
-  'state.dbTooNew': '本地数据由更新版本的 Notera 写入，当前版本只读打开，不会写坏数据。',
+  'state.dbTooNew': '本地数据由更新版本的 Noto 写入，当前版本只读打开，不会写坏数据。',
   'state.dismiss': '知道了',
 
   /* 无障碍 */
@@ -272,7 +273,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'error.folder_missing': '找不到默认笔记本，导入没有进行。本机的笔记不受影响，请重启应用再试。',
   'conflict.remoteNotFetched': '没能从服务器取回那一版的正文（可能这一轮同步的预算用完了，或那条记录已被清理）。本机这一版完好，可以再点一次同步，或先保留本机版。',
   'list.contendedNote': '这条在别的设备上有了分歧，等你处理',
-  'error.db_too_new': '本地数据来自更新版本的 Notera，已按只读方式打开。',
+  'error.db_too_new': '本地数据来自更新版本的 Noto，已按只读方式打开。',
   'error.conflict_needs_attention': '有几条笔记出现分歧，请到"需要处理的版本"里确认。',
   'error.sync_failed': '这一轮同步没完成，会自动重试。',
   'error.corrupt_record': '发现一条无法识别的记录，已跳过以保护其他数据。',
@@ -329,7 +330,7 @@ const MESSAGES: Record<MessageKey, string> = {
     '这条口令太长了：这台设备一条凭据最多存 **256 个 UTF-16 单元**（普通字符大约 256 个，emoji 这类会占两个）。请换一条短一些的口令。',
   'error.credential_store_failed':
     '写进系统凭据库时失败了，口令没有保存、账户也没有生效。可以再试一次；若反复失败，请把这条提示与下方详情一起给我。',
-  'sync.root_mismatch': '这个服务器上已经是另一个 Notera 库了，已停止同步以免把两个库混在一起。请改用该库原本的路径。',
+  'sync.root_mismatch': '这个服务器上已经是另一个 Noto 库了，已停止同步以免把两个库混在一起。请改用该库原本的路径。',
   'sync.foreign_root': '这个目录里已有别的数据，但不是本库的目录，已停止同步。请换一个根路径。',
   'sync.protocol_unreadable': '暂时读不到服务器上的协议信息，这一轮不写入。请稍后重试。',
   'sync.auth_failed':
@@ -367,7 +368,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'sync.unsupported': '这台服务器不支持这项操作，已按它支持的方式继续。',
   'sync.divergence': '远端的清单与本地记录对不上，已暂停写入以保护现有数据。',
   'sync.cancelled': '这一轮同步被取消，本机内容没有改动。',
-  'app.db_too_new': '本地数据来自更新版本的 Notera，已按只读方式打开。',
+  'app.db_too_new': '本地数据来自更新版本的 Noto，已按只读方式打开。',
   'attach.missing': '附件暂时不可用，正文不受影响。',
   'attach.tooLarge': '这个文件超过单个附件 32 MiB 的上限，没有添加。正文与其它附件都没被改动。',
   'attach.empty': '这个文件是空的，没有添加。',

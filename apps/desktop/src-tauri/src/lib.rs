@@ -146,7 +146,7 @@ fn attach_tray(app: &tauri::AppHandle) -> Result<(), String> {
         // 左键也弹菜单的话，一次点击两个意图，用户分不清自己刚刚是收起还是打开了菜单。
         .show_menu_on_left_click(false)
         .icon(icon)
-        .tooltip("Notera")
+        .tooltip("Noto")
         .build(app)
         .map_err(|e| e.to_string())?;
     Ok(())

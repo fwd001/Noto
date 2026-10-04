@@ -134,7 +134,7 @@ const p = PLATFORMS[process.platform];
 const isAndroid = flag('android') || (flag('target') && opt('target')?.startsWith('aarch64'));
 
 if (flag('list')) {
-  say(`Notera ${version} · 本机（${process.platform}）能出的包：`);
+  say(`Noto ${version} · 本机（${process.platform}）能出的包：`);
   if (p) {
     say(`  ${p.label}: --bundles ${p.bundles.join(',')}  —— ${p.note}`);
   }
@@ -182,7 +182,7 @@ if (!p) {
 const bundles = (opt('bundles') || p.bundles.join(',')).split(',').map((s) => s.trim()).filter(Boolean);
 const target = opt('target') || p.target;
 
-say(`Notera ${version} · 本机 ${p.label} 出包`);
+say(`Noto ${version} · 本机 ${p.label} 出包`);
 say(`  bundles: ${bundles.join(',')}`);
 if (target) say(`  target : ${target}`);
 if (p.note) say(`  说明   : ${p.note}`);

@@ -3,7 +3,7 @@ name = "notera-desktop"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Notera 桌面/移动外壳（Tauri 2）"
+description = "Noto 桌面/移动外壳（Tauri 2）"
 
 [lib]
 name = "notera_desktop_lib"
