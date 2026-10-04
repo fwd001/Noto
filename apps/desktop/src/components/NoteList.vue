@@ -4,6 +4,8 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import SearchField from './SearchField.vue';
 import EmptyState from './EmptyState.vue';
 import SkeletonRows from './SkeletonRows.vue';
+import AppPopover from './ui/AppPopover.vue';
+import { TEMPLATE_CHOICES, type NoteTemplate } from '../editor/templates';
 import { useNoteStore } from '../stores/notes';
 import { useEditorStore } from '../stores/editor';
 import { useFolderStore } from '../stores/folders';
@@ -131,6 +133,17 @@ onMounted(() => {
 onBeforeUnmount(() => {
   void editor.flush();
 });
+function currentFolderId(): string | null {
+  return notes.mode.kind === 'folder' ? notes.mode.folderId : null;
+}
+
+function createBlank(): void {
+  void notes.create(currentFolderId());
+}
+
+function createFrom(tpl: NoteTemplate): void {
+  void notes.create(currentFolderId(), tpl.build());
+}
 </script>
 
 <template>
@@ -140,9 +153,25 @@ onBeforeUnmount(() => {
       <!-- 这里**不再**放侧栏把手。原本列表头这颗与标题栏那颗、主区左上那颗会同时出现，
            用户看到的就是「折起之后下面一层还有一个折起」；把手的唯一归属由
            `drawsTitleBar(caps)` 决定（见 WorkspaceView / SidebarPanel）。 -->
-      <button type="button" class="btn btn--quiet" data-testid="new-note" :title="t('list.newNote')" @click="notes.create(notes.mode.kind === 'folder' ? notes.mode.folderId : null)">
+      <button type="button" class="btn btn--quiet" data-testid="new-note" :title="t('list.newNote')" @click="createBlank">
         {{ t('list.newNote') }}
       </button>
+      <!-- 那颗 ▾ 才是"快捷新建模板"。默认路径（上面那颗）保持**空白一页**，
+           因为口径是"默认的模板要非常简洁，一进去就是请输入标题和正文"。 -->
+      <AppPopover icon="▾" testid="new-note-templates" :label="t('list.newFromTemplate')">
+        <template #default="{ close }">
+          <button
+            v-for="tpl in TEMPLATE_CHOICES"
+            :key="tpl.id"
+            type="button"
+            class="btn btn--block"
+            :data-testid="`template-${tpl.id}`"
+            @click="close(); createFrom(tpl)"
+          >
+            {{ t(tpl.label) }}
+          </button>
+        </template>
+      </AppPopover>
       <button type="button" class="btn btn--quiet" data-testid="daily-note" :title="t('list.dailyNote')" :aria-label="t('list.dailyNote')" @click="notes.openToday()">
         {{ t('list.dailyNote') }}
       </button>

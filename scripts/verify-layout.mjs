@@ -14,6 +14,11 @@
  *     修前 1280×900 设置页实测两层：文档 177px + `.settings__body` 2002px。
  *  ⑤ 置顶那颗点**不悬停也在**：算出来的 opacity 必须是 1，而同行的删除那颗必须是 0
  *     （后者是正对照 —— 否则"量到 1"可能只是因为整套 hover 规则没生效）。
+ *  ⑥–⑨（本轮 UX 批加的四条，判据都打在渲染后的几何或真调用上）：
+ *     ⑥ 宽屏只有一颗把手且收起后回得来；⑦ 页面上没有原生 `<select>`、面板是我们画的；
+ *     ⑧ 删除确认是**悬浮层** —— 打开它不许把下面任何一行顶走；⑨ 文件夹平铺成一层，
+ *     历史子层不许因为"不渲染层级"就找不到，且"移动到父级"/"在这下面新建"两颗要真的没了。
+ *  ⑩ 快捷新建的模板：真点一次，核心里只多一篇、落库载荷第一块是空段落，编辑器真画出三行待办。
  *
  * 前置（脚本不管，由调用方起）：
  *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
@@ -251,6 +256,68 @@ for (const width of WIDTHS) {
     flat.rowCount > 0 && flat.xs.length === 1 && flat.parentX !== null && flat.parentX === flat.childX && flat.move === 0 && flat.sub === 0,
     JSON.stringify(flat),
   );
+
+  // ⑩ 快捷新建的模板那颗 ▾。单测能证明 build() 造的载荷对，证明不了**点下去有没有 dispatch**、
+  //    也证明不了编辑器按那份载荷画没画出来 —— 而"控件存在但没有效果"正是本项目踩过的那一族。
+  //    只在 1440 跑一遍：这是行为判据，不是几何判据，四个视口跑四遍只会往夹具库里多塞三篇。
+  if (width === 1440) {
+    const before = await cmd('list_notes', { folderId: null, trash: false });
+    await page.click('[data-testid="new-note-templates"]');
+    await page.waitForTimeout(300);
+    const options = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('[data-testid="app-popover-panel"] [data-testid^="template-"]')).map((el) => el.dataset.testid),
+    );
+    check(
+      `宽 ${width}：模板那层列出候选（待办 / 会议），且不再列"空白"`,
+      options.length === 2 && options.includes('template-todo') && options.includes('template-meeting') && !options.includes('template-blank'),
+      JSON.stringify(options),
+    );
+    await page.click('[data-testid="template-todo"]');
+    await page.waitForTimeout(1500);
+
+    const after = await cmd('list_notes', { folderId: null, trash: false });
+    const fresh = after.filter((n) => !before.some((b) => b.id === n.id));
+    check(`宽 ${width}：点一次模板核心里只多一篇`, fresh.length === 1, `实到 ${fresh.length} 篇：${JSON.stringify(fresh.map((n) => n.id))}`);
+
+    let wire = null;
+    let painted = null;
+    if (fresh.length === 1) {
+      const full = await cmd('get_note', { id: fresh[0].id });
+      const blocks = full?.doc?.content ?? [];
+      wire = {
+        firstType: blocks[0]?.type ?? null,
+        firstText: blocks[0]?.content?.length ?? -1,
+        checks: blocks.filter((b) => b.type === 'checklistItem').length,
+        title: full?.title ?? null,
+      };
+      check(
+        `宽 ${width}：落库的那份载荷第一块是空段落 + 三行待办`,
+        wire.firstType === 'paragraph' && wire.firstText === 0 && wire.checks === 3,
+        JSON.stringify(wire),
+      );
+      check(
+        `宽 ${width}：标题没被模板文字顶掉（第一行留给用户）`,
+        wire.title === '' || wire.title === null,
+        JSON.stringify({ title: wire.title }),
+      );
+      painted = await page.evaluate(() => {
+        const first = document.querySelector('.nb-block .nb-content');
+        return {
+          checks: document.querySelectorAll('.nb-check').length,
+          placeholder: first?.dataset.placeholder ?? null,
+          firstText: (first?.innerText ?? '').trim(),
+          visible: first ? getComputedStyle(first, ':before').content : null,
+        };
+      });
+      check(
+        `宽 ${width}：编辑器真画出三行待办，第一行空着且挂着「请输入标题和正文」`,
+        painted.checks === 3 && painted.placeholder === '请输入标题和正文' && painted.firstText === '',
+        JSON.stringify(painted),
+      );
+      await cmd('purge_note', { id: fresh[0].id });
+      notes.push(`     宽 ${width} 模板实测 落库=${JSON.stringify(wire)} 画出=${JSON.stringify({ checks: painted.checks, ph: painted.placeholder, text: painted.firstText })}`);
+    }
+  }
 
   // ① 设置页一栏到底
   await page.evaluate(() => document.querySelector('[data-testid="nav-settings"]').click());
