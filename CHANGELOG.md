@@ -1596,7 +1596,8 @@ E2EE 那两本 `key_vault.rs`/`sealed_e2ee.rs` 的若干条）。
 读数（这一批把 CI 那份清单逐条本机跑过，GNU 工具链）：`cargo fmt --all --check` 0、
 `cargo clippy --workspace --all-targets -- -D warnings` 0、`pnpm build` 0（产物 232.53 kB / gzip 78.85 kB）、
 `pnpm audit --audit-level=high` 0、`audit-rust-deps` 判据自测与全量各 0、
-`cargo test --workspace -- --test-threads=1` 见下面那行、前端 285/31、`vue-tsc` 0、`eslint` 0、arch-check 32/32。
+`cargo test --workspace -- --test-threads=1`（CI 那条原样命令）**672 通过 / 0 失败 / 6 ignored**、90 个 `test result` 行、
+前端 285/31、`vue-tsc` 0、`eslint` 0、arch-check 32/32。
 
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
 - **G38 同步在 macOS / Linux / Android 上配不出来：口令只允许进 OS 凭据库，而那三个平台没接**（2026-09-30 按 §45 扫出来；状态 = **未修，等口径拍板**；三条出路写在 PRODUCTION-READINESS §7）
