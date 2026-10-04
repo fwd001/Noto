@@ -17,7 +17,8 @@
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "icons": "node ../../scripts/build-icons.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.0",

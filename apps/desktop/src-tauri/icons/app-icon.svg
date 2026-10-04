@@ -1,0 +1,16 @@
+<!-- Noto 品牌源图：唯一的图标真源。所有平台图标由 `pnpm icons` 从这里生成，勿手改产物。
+     画布 1024×1024，圆角方底之外保持透明（各平台自己套遮罩）。 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2E5A9E" />
+      <stop offset="1" stop-color="#16294A" />
+    </linearGradient>
+  </defs>
+  <rect x="48" y="48" width="928" height="928" rx="216" fill="url(#ground)" />
+  <g fill="#F7F9FC">
+    <rect x="214" y="196" width="136" height="632" />
+    <rect x="674" y="196" width="136" height="632" />
+    <polygon points="214,196 350,196 810,828 674,828" />
+  </g>
+</svg>
