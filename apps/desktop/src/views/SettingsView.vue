@@ -7,6 +7,8 @@ import type { ProxyMode, TlsPolicyKind } from '../api/types';
 import { useSettingsStore } from '../stores/settings';
 import { useSyncStore } from '../stores/sync';
 import { useNoteStore } from '../stores/notes';
+import { useConflictStore } from '../stores/conflicts';
+import { useEditorStore } from '../stores/editor';
 import { useFolderStore } from '../stores/folders';
 import { useShellStore } from '../stores/shell';
 import { shortcutsFor, type PlatformCaps } from '../platform/caps';
@@ -29,6 +31,9 @@ const dataPath = ref('');
 const outPath = ref('');
 const restoreHint = ref('');
 const importMode = ref<'intoEmpty' | 'merge'>('merge');
+// 「清除一切」的确认闸门：默认 false（确认区不展开），点过确认后立刻复位。
+const eraseArmed = ref(false);
+const eraseReport = ref('');
 // 按文件夹导出：勾了才发 folderIds，不勾就是整库。默认整库 —— 备份的语义不该被误点改窄。
 const exportScoped = ref(false);
 const pickedFolders = ref<string[]>([]);
@@ -127,6 +132,15 @@ async function syncNow(): Promise<void> {
   await sync.syncNow();
 }
 
+/** 删账户的确认位：默认不展开，点过之后立刻复位（与「清除一切」同一形）。 */
+const removeArmed = ref(false);
+
+async function doRemoveAccount(): Promise<void> {
+  const ok = await settings.removeAccount();
+  removeArmed.value = false;
+  if (ok) await settings.loadStats();
+}
+
 async function doExport(): Promise<void> {
   await settings.exportData({
     folderIds: exportScoped.value ? pickedFolders.value : [],
@@ -178,8 +192,58 @@ async function doRestore(): Promise<void> {
   await settings.restoreDb(path);
 }
 
+/**
+ * 清除一切数据。
+ *
+ * 两道闸门在**界面**上：先点`eraseArmed` 才展开确认区，再点确认才真发命令。
+ * 第三道在命令面：`erase_all_data` 要求 `confirmed: true`（不可撤销的命令不该只靠界面保证）。
+ * 做完后**不自动刷新界面** —— 库里已经空了，刷新会让当前这些页面全部变成"空列表"，
+ * 与其让用户看着界面突然清空，不如让他自己重启应用（回执里已说明要重启）。
+ */
+async function doErase(): Promise<void> {
+  const out = await settings.eraseAllData();
+  if (!out) return;
+  eraseArmed.value = false;
+  const kb = Math.max(1, Math.round(out.freedBytes / 1024));
+  eraseReport.value = t('settings.eraseDoneDetail', { tables: out.tables, kb });
+
+  // 库已经空了，但**界面还显示着清库之前的样子** —— 用户反馈"清除了，列表上还是 40 笔记 / 3 最近删除"。
+  // 根因是侧栏那两颗数字读`settings.stats`，而它只在 App.vue 启动时取一次
+  // （以及笔记增删时由 notes.refreshCounts 刷）；清库这条路径**不经过 notes store**，
+  // 所以那份 stats 一直是"清库前"的快照。
+  //
+  // ⇒ 清完主动把三处数据源都重载：统计、笔记列表、冲突计数。
+  // 不重载的话，用户会以为"清除没生效"，然后去重复点击 —— 那才是真正的危险。
+  //
+  // 还要**把编辑器关掉**：它开着的那一篇已经被永久删除了，
+  // 而编辑器手里还留着它的 blocks（`editor.open(null)` 会清空）——
+  // 否则用户看着一篇"已经不存在的笔记"，还挂着一句关于"最近删除"的假提示。
+  // 先关编辑器再 load：反过来会让 load 把 selectedId 迁到新列表的第一行，
+  // 编辑器却还开着上一篇。
+  await useEditorStore().open(null);
+  await Promise.all([
+    settings.loadStats(),
+    useNoteStore().load(),
+    useConflictStore().load(),
+  ]);
+}
+
 function keyHint(): string {
   return shortcuts.value.map((entry) => keysFor(entry)).join(' · ');
+}
+/** 分节跳转：id 与卡片一一对应，顺序 = 页面上的顺序。 */
+const sections = [
+  { id: 'sec-account', label: 'settings.account' },
+  { id: 'sec-sync', label: 'sync.detail' },
+  { id: 'sec-appearance', label: 'settings.theme' },
+  { id: 'sec-data', label: 'settings.data' },
+  { id: 'sec-danger', label: 'settings.dangerZone' },
+  { id: 'sec-keys', label: 'settings.shortcuts' },
+];
+
+function jumpTo(id: string): void {
+  const reduce = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+  document.getElementById(id)?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
 }
 </script>
 
@@ -192,8 +256,23 @@ function keyHint(): string {
     </div>
 
     <div class="pane-body settings__body">
+      <!-- 单列内容 + 左侧分节跳转（Obsidian / Notion 的设置页都是这一形）：
+           一栏到底解决了"2 列 3 列对不齐"，但也把页面拉长了，
+           所以给一条粘性的分节导航，而不是让人一路滚到底。 -->
+      <nav class="settings__rail" :aria-label="t('settings.title')">
+        <button
+          v-for="sec in sections"
+          :key="sec.id"
+          type="button"
+          class="settings__rail-item"
+          data-testid="settings-rail"
+          @click="jumpTo(sec.id)"
+        >
+          {{ t(sec.label) }}
+        </button>
+      </nav>
       <div class="settings__grid">
-        <form class="card" @submit.prevent="save">
+        <form id="sec-account" class="card" @submit.prevent="save">
           <h2 class="card__title">{{ t('settings.account') }}</h2>
 
           <label class="field">
@@ -307,11 +386,24 @@ function keyHint(): string {
             </label>
             <label v-if="needsProxyAuth" class="field">
               <span>{{ t('settings.proxyUser') }}</span>
-              <input v-model="settings.draft.proxy.username" class="input" type="text" autocomplete="off" />
+              <input
+                v-model="settings.draft.proxy.username"
+                class="input"
+                type="text"
+                autocomplete="off"
+                :placeholder="settings.account?.proxyHasUsername ? t('settings.proxyUserSet') : ''"
+                data-testid="proxy-user"
+              />
             </label>
             <label v-if="needsProxyAuth" class="field">
               <span>{{ t('settings.proxyPassword') }}</span>
-              <input v-model="settings.draft.proxy.password" class="input" type="password" autocomplete="new-password" />
+              <input
+                v-model="settings.draft.proxy.password"
+                class="input"
+                type="password"
+                autocomplete="new-password"
+                data-testid="proxy-pass"
+              />
             </label>
           </template>
 
@@ -332,7 +424,7 @@ function keyHint(): string {
           <p v-if="accountError" class="field-hint field-hint--warn" role="alert">{{ accountError }}</p>
         </form>
 
-        <div class="card">
+        <div id="sec-sync" class="card">
           <h2 class="card__title">{{ t('sync.detail') }}</h2>
           <p class="text-sm">
             <SyncBadge />
@@ -341,6 +433,22 @@ function keyHint(): string {
             {{ sync.state.finishedAt ? t('sync.lastRound', { when: formatWhen(new Date(sync.state.finishedAt).toISOString()) }) : t('sync.never') }}
           </p>
           <button type="button" class="btn" data-testid="sync-now" @click="syncNow()">{{ t('sync.syncNow') }}</button>
+
+          <!-- 删账户与删库是两件事：核心一直有 `remove_account`，界面上却没有入口，
+               于是"不想再同步了"只能连笔记一起清掉。两道确认与「清除一切」同一形。 -->
+          <template v-if="settings.hasAccount">
+            <button v-if="!removeArmed" type="button" class="btn btn--quiet" data-testid="remove-account" @click="removeArmed = true">
+              {{ t('settings.removeAccount') }}
+            </button>
+            <div v-else class="row" role="group" :aria-label="t('settings.removeAccount')">
+              <span class="text-sm">{{ t('settings.removeAccountConfirm') }}</span>
+              <button type="button" class="btn btn--primary" data-testid="remove-account-yes" @click="doRemoveAccount">
+                {{ t('settings.removeAccountYes') }}
+              </button>
+              <button type="button" class="btn btn--quiet" @click="removeArmed = false">{{ t('list.cancel') }}</button>
+            </div>
+            <p class="field-hint">{{ t('settings.removeAccountHint') }}</p>
+          </template>
 
           <div v-if="settings.hasAccount" class="caps" data-testid="server-caps">
             <h3 class="caps__title">{{ t('settings.serverCaps') }}</h3>
@@ -384,7 +492,7 @@ function keyHint(): string {
           </dl>
         </div>
 
-        <div class="card">
+        <div id="sec-appearance" class="card">
           <h2 class="card__title">{{ t('settings.theme') }}</h2>
           <div class="row" role="radiogroup" :aria-label="t('settings.theme')">
             <button
@@ -427,7 +535,7 @@ function keyHint(): string {
           <p class="field-hint">{{ t('settings.path') }}：{{ transportLabel }}</p>
         </div>
 
-        <div class="card">
+        <div id="sec-data" class="card">
           <h2 class="card__title">{{ t('settings.data') }}</h2>
           <label class="field">
             <span>{{ t('settings.exportPathLabel') }}</span>
@@ -484,7 +592,53 @@ function keyHint(): string {
           <p class="field-hint">{{ t('settings.restoreNeedsRestart') }}</p>
         </div>
 
-        <div class="card">
+        <!-- 「清除一切数据」独立成块，不与导出/恢复挤在一起：
+             那是不可撤销的操作，混在日常按钮行里迟早会被误触。
+             两道闸门：① 先要点这颗按钮才展开确认区；② 确认区里还要再点一次。
+
+             块级类用 `.card`（设置页其余 5 个块都是它）——原先我写的是
+             `.section`，而那个类**在样式表里根本没有定义**，于是这一块的
+             内边距/间距/背景全走浏览器默认，与上下几块对不齐（用户反馈"没对齐"）。 -->
+        <div id="sec-danger" class="card card--danger">
+          <h2 class="card__title">{{ t('settings.dangerZone') }}</h2>
+          <p class="field-hint">{{ t('settings.eraseHint') }}</p>
+          <button
+            v-if="!eraseArmed"
+            type="button"
+            class="btn btn--danger"
+            :disabled="settings.dataBusy"
+            data-testid="erase-arm"
+            @click="eraseArmed = true"
+          >
+            {{ t('settings.erase') }}
+          </button>
+          <div v-else class="erase-confirm" data-testid="erase-confirm">
+            <p class="erase-confirm__text">{{ t('settings.eraseConfirm') }}</p>
+            <div class="erase-confirm__row">
+              <button
+                type="button"
+                class="btn"
+                :disabled="settings.dataBusy"
+                data-testid="erase-cancel"
+                @click="eraseArmed = false"
+              >
+                {{ t('settings.eraseCancel') }}
+              </button>
+              <button
+                type="button"
+                class="btn btn--danger"
+                :disabled="settings.dataBusy"
+                data-testid="erase-confirm-btn"
+                @click="doErase"
+              >
+                {{ t('settings.eraseConfirmBtn') }}
+              </button>
+            </div>
+          </div>
+          <p v-if="eraseReport" class="field-hint" data-testid="erase-report">{{ eraseReport }}</p>
+        </div>
+
+        <div id="sec-keys" class="card">
           <h2 class="card__title">{{ t('settings.shortcuts') }}</h2>
           <table class="keys">
             <tbody>
@@ -523,13 +677,67 @@ function keyHint(): string {
 
 .settings__body {
   padding: var(--space-4);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-5);
 }
 
+/* 分节导航：只在放得下的宽度出现（窄屏时那一栏会把正文挤窄，
+   而跳转在窄屏本来就不需要 —— 一屏就能滚到底）。 */
+.settings__rail {
+  position: sticky;
+  top: 0;
+  display: none;
+  flex: 0 0 168px;
+  width: 168px;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-block: var(--space-2);
+}
+
+.settings__rail-item {
+  min-height: var(--touch-min);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-1, 6px);
+  background: none;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  text-align: left;
+}
+
+.settings__rail-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+@media (min-width: 1180px) {
+  .settings__rail {
+    display: flex;
+  }
+}
+
+/**
+ * 一栏到底，宽度封顶 —— 这一格以前是「2 列 3 列长度对不齐」那一句话的正身。
+ *
+ * 旧写法 `repeat(auto-fit, minmax(min(360px,100%),1fr))` + `align-items:start`
+ * 的实测后果（`.logs/measure-ui.mjs`，量的是渲染后的几何）：
+ *   宽 900 / 1100 → 2 列；1440 → 3 列；1800 → **4 列**，
+ *   而同批卡片的实际高度是 892 / 331 / 253 / 649 / 172 / 532 ——
+ *   底边落在 977 / 416 / 338 / 1642 / 1164 / 1525 六个不同的地方。
+ *   ⇒ 视口每宽一点就多塞一列、每列底部都是台阶，短卡片下面是一整片空白。
+ *
+ * 知名笔记软件的设置页都不是这种"瀑布"：Obsidian / Notion 是"分类 + 单列内容"，
+ * Apple Notes / UpNote 的偏好窗口是**一栏分组**。单列还有一个附带的好处 ——
+ * 正文行宽封顶（这里 760px ≈ 表单字号下的可读上限），字段不会在 1800px 下被拉成
+ * 一条扫不到尾的横线。
+ */
 .settings__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
-  align-items: start;
+  width: min(760px, 100%);
+  margin-inline: auto;
 }
 
 .card {
@@ -541,6 +749,14 @@ function keyHint(): string {
   border-radius: var(--radius-3);
   background: var(--bg-raised);
   box-shadow: var(--shadow-1);
+}
+
+/* 危险块：与其它块**同样的间距与圆角**（对齐的第一要求），
+   只在边框与底色上做出区分 —— 不改变任何盒模型尺寸，
+   否则"加了个危险区"就变成了"下面几块全被推歪了"。 */
+.card--danger {
+  border-color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .card__title {
@@ -655,4 +871,24 @@ function keyHint(): string {
   height: 22px;
   accent-color: var(--accent);
 }
+.erase-confirm {
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: var(--bg-raised);
+}
+
+.erase-confirm__text {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+
+.erase-confirm__row {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
 </style>

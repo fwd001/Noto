@@ -36,6 +36,23 @@ function onFolderChange(event: Event): void {
 
 <template>
   <div class="workspace">
+    <!-- 侧边栏收起后的**唯一**回来的路。
+         为什么必须放在这里而不是侧栏内部：折叠那颗按钮原本长在 `SidebarPanel` 里
+         （sidebar-collapse），侧栏一收它自己就被 `v-show` 一起藏了 ⇒ 收起来之后
+         界面上再没有第二颗能把它叫回来的按钮，用户只能重启应用。
+         这不是"少一个按钮"，是**出去之后回不来**（§6「无法返回」那一类）。
+         放在主区左上角：它属于"主区"，不随侧栏生死。窄屏另有抽屉按钮，不重复。 -->
+    <button
+      v-if="!shell.isCompact && !shell.sidebarOpen"
+      type="button"
+      class="workspace__reopen"
+      :aria-label="t('sidebar.expand')"
+      :title="t('sidebar.expand')"
+      data-testid="reopen-sidebar"
+      @click="shell.toggleSidebar()"
+    >
+      ☰
+    </button>
     <NoteList v-if="shell.listVisible" @open="shell.openEditor()" />
 
     <section v-if="shell.editorVisible" class="pane pane--editor" aria-label="Notera" data-testid="editor-pane">
@@ -57,27 +74,32 @@ function onFolderChange(event: Event): void {
           <option v-for="entry in folders.flat" :key="entry.node.id" :value="entry.node.id">{{ entry.path.join(' / ') }}</option>
         </select>
 
-        <button
-          type="button"
-          class="btn btn--quiet"
-          :disabled="!canEdit"
-          :aria-pressed="pinned ? 'true' : 'false'"
-          data-testid="toggle-pin"
-          @click="notes.selectedId && notes.setPinned(notes.selectedId, !pinned)"
-        >
-          {{ pinned ? t('list.unpin') : t('list.pin') }}
-        </button>
-        <button
-          type="button"
-          class="btn btn--quiet btn--danger"
-          :disabled="!canEdit || notes.inTrash"
-          :title="t('list.moveToTrash')"
-          :aria-label="t('list.moveToTrash')"
-          data-testid="trash-note"
-          @click="notes.selectedId && notes.moveToTrash(notes.selectedId)"
-        >
-          {{ t('list.delete') }}
-        </button>
+        <!--右侧动作区。`margin-left:auto` 把它推到顶栏右端，
+             于是顶栏读起来是"左=这篇是什么/  右=对它做什么"，
+             而不是三颗按钮挤在标题旁边（用户反馈"对不齐"）。 -->
+        <div class="editor-head__actions">
+          <button
+            type="button"
+            class="btn btn--quiet"
+            :disabled="!canEdit"
+            :aria-pressed="pinned ? 'true' : 'false'"
+            data-testid="toggle-pin"
+            @click="notes.selectedId && notes.setPinned(notes.selectedId, !pinned)"
+          >
+            {{ pinned ? t('list.unpin') : t('list.pin') }}
+          </button>
+          <button
+            type="button"
+            class="btn btn--quiet btn--danger"
+            :disabled="!canEdit || notes.inTrash"
+            :title="t('list.moveToTrash')"
+            :aria-label="t('list.moveToTrash')"
+            data-testid="trash-note"
+            @click="notes.selectedId && notes.moveToTrash(notes.selectedId)"
+          >
+            {{ t('list.delete') }}
+          </button>
+        </div>
       </div>
 
       <SkeletonRows v-if="editor.loading" :rows="4" />
@@ -92,7 +114,7 @@ function onFolderChange(event: Event): void {
 
       <div v-else class="editor-blank" role="status">
         <p class="text-sm text-muted">{{ editor.saveErrorKey ? t('error.fallback') : t('state.loading') }}</p>
-        <button type="button" class="btn" @click="notes.selectedId && editor.open(notes.selectedId)">{{ t('sync.retry') }}</button>
+        <button type="button" class="btn" data-testid="editor-retry" @click="notes.selectedId && editor.open(notes.selectedId, true)">{{ t('sync.retry') }}</button>
       </div>
     </section>
   </div>
@@ -100,6 +122,7 @@ function onFolderChange(event: Event): void {
 
 <style scoped>
 .workspace {
+  position: relative;
   display: flex;
   flex: 1;
   min-width: 0;
@@ -107,9 +130,64 @@ function onFolderChange(event: Event): void {
   gap: var(--space-1);
 }
 
+/* 侧栏收起后留在原位的那颗「展开」：绝对定位在列表左缘，
+   不占flex 位（否则会把列表挤窄一格，松手时列表宽度会跳一下）。
+
+   ⚠️ 它会盖住列表第一行的标题左端（实测截图里"笔记"两个字被压住了）。
+   所以给列表留出等宽的左内边距 —— 让"标题/搜索框"从按钮右边开始，
+   而不是从按钮底下钻出来。收起态下这块内边距是唯一的补偿。 */
+.workspace__reopen {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 3;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+}
+
+.workspace__reopen:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* 收起态：给列表顶上一块与按钮等高的留白，标题不被压住。
+   挂在 workspace 上而不是 NoteList 内部：这是"侧栏收起"这个状态的补偿，
+   属于布局层，不该由列表自己去猜侧栏的状态。
+   选择器对的是 NoteList 的根类 `.pane--list`（`data-testid="note-list"`）。 */
+.workspace:has(> .workspace__reopen) :deep(.pane--list .pane-header) {
+  padding-left: 44px;
+}
+
+/* 编辑器顶栏。
+   原来只有 `gap: var(--space-2)`（8px）+ `nowrap`，而这一栏里挤着
+   「未归类下拉 · 固定 · 删除」三件东西 —— 8px 间距让它们看着像**一串挤在一起的
+   按钮**，而不是"这篇笔记的属性"（用户反馈"对不齐、层级乱"）。
+
+   这里把「固定 / 删除」这类**危险/次要动作**用 `margin-left:auto` 推到右侧，
+   让左侧的标题+归属占住视觉主线 —— 与 Notion/Obsidian 的编辑器顶栏一致：
+   左边是这篇是什么，右边是对它做什么。 */
 .editor-head {
   gap: var(--space-2);
   flex-wrap: nowrap;
+}
+
+/* 顶栏右侧动作区：与左侧标题之间留出明确的分界。 */
+.editor-head__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+  padding-left: var(--space-2);
+  flex: 0 0 auto;
 }
 
 .editor-head__folder {

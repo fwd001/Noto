@@ -13,7 +13,17 @@ import { t, messageFor } from '../i18n';
 import { formatWhen } from '../util/format';
 import type { NoteListRow, SearchHit } from '../api/types';
 
-const ROW_HEIGHT = 76;
+/**
+ * 列表行的**唯一**高度来源。
+ *
+ * 原来是 76px写死，而一行里实际要装：标题（text-base）+ 摘要（text-sm）+ 时间（text-xs）
+ * 再加上 padding 与 gap —— 实测需要 92px 才装得下。装不下又没溢出保护时，
+ * 时间那一行会**压到下一行的标题上**（用户截图里"阿斯蒂芬"正好盖住下一行标题）。
+ *
+ * 关键约束：虚拟滚动的 `startIndex / endIndex / padTop / padBottom` 全都按这个常量算，
+ * 所以它必须同时是"渲染高度"和"计算高度"。改这里等于改整个滚动模型。
+ */
+const ROW_HEIGHT = 92;
 const OVERSCAN = 4;
 
 /** 正卡在未裁决冲突里的那些笔记（§5.1 第 4 步：用户没选之前，列表上就该看得出来）。 */
@@ -127,7 +137,7 @@ onBeforeUnmount(() => {
   <section class="pane pane--list" :aria-label="t('list.searchPlaceholder')" data-testid="note-list">
     <div class="pane-header">
       <span class="pane-title">{{ listTitle }}</span>
-      <button v-if="shell.isCompact" type="button" class="btn btn--quiet btn--icon" :aria-label="t('mobile.menu')" data-testid="open-sidebar" @click="shell.openDrawer('sidebar')">
+      <button v-if="!shell.sidebarInline" type="button" class="btn btn--quiet btn--icon" :aria-label="t('mobile.menu')" data-testid="open-sidebar" @click="shell.toggleSidebar()">
         ☰
       </button>
       <button type="button" class="btn btn--quiet" data-testid="new-note" :title="t('list.newNote')" @click="notes.create(notes.mode.kind === 'folder' ? notes.mode.folderId : null)">
@@ -278,6 +288,12 @@ onBeforeUnmount(() => {
 .row-item__title {
   font-weight: 650;
   font-size: var(--text-base);
+  /* 标题/摘要各自单行省略。它们本来就有 ellipsis，但**没有行高上限**：
+     父级`.row-item` 是固定高度 + `justify-content: center`，
+     所以内容一旦超出版心就��从上下两侧溢出，压到相邻行上 ——
+     ellipsis 救不了溢出，只救"单行太长"。 */
+  line-height: 1.35;
+  max-height: 1.35em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -293,6 +309,9 @@ onBeforeUnmount(() => {
 .row-item__snippet {
   font-size: var(--text-sm);
   color: var(--text-secondary);
+  /* 同上：单行省略 + 行高封顶，父级固定高度时才不会被顶穿。 */
+  line-height: 1.4;
+  max-height: 1.4em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

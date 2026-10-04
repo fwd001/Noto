@@ -37,7 +37,7 @@ async function windowAction(action: 'minimize' | 'maximize' | 'close'): Promise<
 <template>
   <header v-if="visible" class="titlebar" :class="{ 'titlebar--overlay': overlay }" data-testid="titlebar">
     <div class="titlebar__drag" data-tauri-drag-region>
-      <button type="button" class="btn btn--quiet btn--icon" :aria-label="t(shell.sidebarOpen ? 'sidebar.collapse' : 'sidebar.expand')" @click="shell.toggleSidebar()">
+      <button type="button" class="btn btn--quiet btn--icon" :aria-label="t(shell.sidebarShown ? 'sidebar.collapse' : 'sidebar.expand')" @click="shell.toggleSidebar()">
         ☰
       </button>
       <span class="titlebar__brand" data-tauri-drag-region>{{ t('app.name') }}</span>

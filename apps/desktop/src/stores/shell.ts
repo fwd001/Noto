@@ -29,6 +29,20 @@ export const useShellStore = defineStore('shell', () => {
 
   const layout = computed<LayoutMode>(() => layoutFor(width.value));
   const isCompact = computed(() => layout.value === 'one');
+  /**
+   * 侧栏**此刻到底在不在屏幕上** —— 一个位，两种布局都说得准。
+   *
+   * 为什么要新加这一位：侧栏的可见性本来有两套互不相干的机制
+   * （三栏看 `data-sidebar`，两栏/单栏看 `data-drawer`），而 `toggleSidebar()`
+   * 只翻前者 ⇒ 在 820–1179 那一档点 ☰ 什么都不动（空控件），而那一档又没有任何
+   * 别的入口（☰ 长在侧栏自己内部，抽屉收起来时它跟着藏了；列表栏那个 ☰ 又只在
+   * `isCompact` 才出现）⇒ 文件夹 / 同步 / 设置 整档够不着。
+   */
+  const sidebarShown = computed(() =>
+    layout.value === 'three' ? sidebarOpen.value : drawerTarget.value === 'sidebar',
+  );
+  /** 侧栏是不是**占着版面**（三栏且没收起）。false 时界面上必须有个 ☰ 在侧栏外面。 */
+  const sidebarInline = computed(() => layout.value === 'three' && sidebarOpen.value);
   const showsListAndEditorTogether = computed(() => layout.value !== 'one');
   const editorVisible = computed(() => layout.value === 'three' || layout.value === 'two' || mobilePane.value === 'editor');
   const listVisible = computed(() => layout.value !== 'one' || mobilePane.value === 'list');
@@ -39,7 +53,14 @@ export const useShellStore = defineStore('shell', () => {
   }
 
   function toggleSidebar(force?: boolean): void {
-    sidebarOpen.value = force ?? !sidebarOpen.value;
+    const next = force ?? !sidebarShown.value;
+    if (layout.value === 'three') {
+      sidebarOpen.value = next;
+      return;
+    }
+    // 两栏/单栏：侧栏是抽屉，`data-sidebar` 在那两种布局里没有对应规则（CSS 里只有
+    // `[data-layout='three'][data-sidebar='collapsed']` 那一条），要开合就得动抽屉位。
+    drawerTarget.value = next ? 'sidebar' : null;
   }
 
   function openEditor(): void {
@@ -70,12 +91,15 @@ export const useShellStore = defineStore('shell', () => {
 
   /** 系统返回/退格语义：抽屉 → 编辑器回列表 → 其余交给壳层。 */
   function back(): boolean {
-    if (view.value !== 'workspace') {
-      goto('workspace');
-      return true;
-    }
+    // 抽屉必须排在「退页面」之前，否则注释与实现说的不是一回事：
+    // 窄屏下在设置页把侧栏抽屉拉出来，那一次返回/Alt+←/Esc 会连带把设置页也退掉，
+    // 看着像"按一下走了两格"。抽屉开着就先只关抽屉。
     if (drawerTarget.value !== null) {
       closeDrawer();
+      return true;
+    }
+    if (view.value !== 'workspace') {
+      goto('workspace');
       return true;
     }
     if (isCompact.value && mobilePane.value === 'editor') {
@@ -122,6 +146,8 @@ export const useShellStore = defineStore('shell', () => {
     drawerTarget,
     layout,
     isCompact,
+    sidebarShown,
+    sidebarInline,
     showsListAndEditorTogether,
     editorVisible,
     listVisible,

@@ -109,7 +109,14 @@ function isActive(id: string | null): boolean {
       <div class="tree__row" :data-active="isActive(node.id) ? 'true' : 'false'" :style="{ paddingLeft: padLeft }">
         <button type="button" class="tree__name" :data-testid="`folder-${node.id}`" @click="openFolder(node.id)">
           <span class="tree__label" :title="node.name">{{ node.name }}</span>
-          <span v-if="typeof node.noteCount === 'number'" class="tree__count">{{ node.noteCount }}</span>
+          <!-- **空文件夹不显示计数**。
+               原来只要 `noteCount` 是数字就渲染，于是"默认名 0"那一行
+               在侧栏里孤零零地挂着一个 0（用户截图里能看到）。
+               计数的作用是"告诉你哪个文件夹有东西"，0 传达不了这件事，
+               反而在视觉上多一个噪点—— 而且它紧跟在"文件夹"小标题下面，
+               让人误以为"文件夹"分区里就只剩这一个 0。
+               Notion / Obsidian 都是这么做的：有内容才给数字。 -->
+          <span v-if="typeof node.noteCount === 'number' && node.noteCount > 0" class="tree__count">{{ node.noteCount }}</span>
         </button>
 
         <div class="tree__tools">

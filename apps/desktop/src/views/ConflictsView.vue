@@ -30,6 +30,23 @@ function choose(card: ConflictCard): void {
   conflicts.selectedId = card.conflictId;
 }
 
+/**
+ * 「打开笔记」只负责**去看那一篇**，不许顺手裁决。
+ *
+ * 以前它和「手动合并」共用 `act('manualMerge')` —— 那个动作会 `resolve` 掉这条分歧并关掉卡片。
+ * 于是"我先看看正文长什么样"这个只读意图，实际效果是**代替用户做了一个不可见的裁决**
+ * （卡片消失、分歧状态被写成已处理）。用户点它的时候往往还没决定要哪一版。
+ */
+async function openOnly(): Promise<void> {
+  const card = selected.value;
+  const target = card?.copyNoteId ?? card?.noteId;
+  if (!target) return;
+  await notes.setMode({ kind: 'all' }, target);
+  await editor.open(target);
+  shell.goto('workspace');
+  if (shell.isCompact) shell.openEditor();
+}
+
 async function act(action: ConflictAction): Promise<void> {
   const card = selected.value;
   if (!card) return;
@@ -115,7 +132,7 @@ onMounted(() => {
             </button>
             <span id="keep-both-hint" class="text-sm text-muted">{{ t('conflict.emptyHint') }}</span>
             <button type="button" class="btn" data-testid="conflict-manual-merge" @click="act('manualMerge')">{{ t('conflict.manualMerge') }}</button>
-            <button v-if="selected.noteId ?? selected.copyNoteId" type="button" class="btn btn--quiet" @click="act('manualMerge')">{{ t('conflict.openNote') }}</button>
+            <button v-if="selected.noteId ?? selected.copyNoteId" type="button" class="btn btn--quiet" data-testid="conflict-open-note" @click="openOnly">{{ t('conflict.openNote') }}</button>
           </div>
         </div>
       </div>

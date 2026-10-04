@@ -59,7 +59,9 @@ function selectTrash(): void {
   <aside class="pane pane--sidebar" :aria-label="t('sidebar.folders')" data-testid="sidebar">
     <div class="pane-header">
       <span class="pane-title">{{ t('app.name') }}</span>
-      <button v-if="!shell.isCompact" type="button" class="btn btn--quiet btn--icon" :aria-label="t('sidebar.collapse')" data-testid="sidebar-collapse" @click="shell.toggleSidebar()">
+      <!-- 收/开用**同一颗**按钮：三栏时它是"收起"，两栏/单栏时这块面板是抽屉，
+           它就是抽屉里那个"关掉"。`toggleSidebar()` 现在按布局落到对的位上。 -->
+      <button type="button" class="btn btn--quiet btn--icon" :aria-label="t(shell.sidebarShown ? 'sidebar.collapse' : 'sidebar.expand')" data-testid="sidebar-collapse" @click="shell.toggleSidebar()">
         ⟨
       </button>
     </div>
@@ -79,7 +81,16 @@ function selectTrash(): void {
       </button>
     </div>
 
+    <!--同步状态。
+         这一块原先只有上下两条分隔线、**没有小节标题**，于是在界面上
+         像一个"从别处掉下来的悬空胶囊"（用户反馈"长度对不齐、层级乱"）。
+         按 Notion / Obsidian 的通行做法，每个分区都带一个同样式的小标题，
+         于是三块（导航 / 同步 / 文件夹）在视觉上是**同级**的，
+         眼睛不需要靠"有没有边框"去猜层级。 -->
     <div class="side-sync">
+      <div class="section-head section-head--sync">
+        <span class="section-title">{{ t('sidebar.syncSection') }}</span>
+      </div>
       <SyncBadge />
     </div>
 
@@ -143,7 +154,18 @@ function selectTrash(): void {
 
 .side-sync {
   border-top: 1px solid var(--border-subtle);
-  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* 分区小标题（"同步"）。
+   `.section-head` 原本给"文件夹"那块的用法是 `justify-content: space-between`
+   + `min-height: var(--touch-min)`，因为它右边要放一个"＋"按钮。
+   同步这块右边没东西，若沿用那套就会**左对齐但占满一整行高度**，
+   看起来又是一块空地。所以单列一个修饰符：只留上半padding、去掉 min-height，
+   让它紧贴上面的分隔线、下面是内容 —— 与"文件夹"那条标题的视觉重量对齐。 */
+.section-head--sync {
+  justify-content: flex-start;
+  min-height: 0;
+  padding: var(--space-3) var(--space-3) var(--space-1);
 }
 
 .side-foot {

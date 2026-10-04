@@ -51,7 +51,14 @@ export function localCaps(): PlatformCaps {
     keychain,
     filePicker: mobile ? 'web' : 'native',
     biometric: os === 'ios' || os === 'android' || os === 'macos',
-    windowChrome: os === 'windows' ? 'custom' : os === 'macos' || os === 'ios' ? 'overlay' : 'system',
+    // Windows 用**系统**标题栏，不再自绘一层。
+    // 原来是 `custom`：壳层（tauri.conf 的 decorations）与前端 `TitleBar` 各画一次，
+    // 屏幕上就是两条标题栏叠在一起 —— 最上面是系统的（带「笔记/同步/前往」菜单），
+    // 紧跟着又一条自绘的（☰ Notera + 另一组最小化/最大化/关闭）。用户反馈"有两层"。
+    // 自绘那层还带来一个更坏的后果：侧边栏的折叠按钮长在它里面（见WorkspaceView
+    // 那个 `reopen-sidebar`），所以界面层级被它搅乱。
+    // macOS/iOS 仍走 `overlay`（贴靠红绿灯，由系统绘制）。
+    windowChrome: os === 'macos' || os === 'ios' ? 'overlay' : 'system',
     safeArea: mobile,
     compactToolbar: mobile,
     // 透明效果（PLATFORM.md §观感 写的 Mica/Acrylic + "必须提供关闭开关"）**今天没有实现**：

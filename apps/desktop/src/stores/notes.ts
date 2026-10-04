@@ -13,6 +13,7 @@ import { createDebounced, SEARCH_DEBOUNCE_MS, type Debounced } from '../util/tim
 import { asBridgeError } from '../util/errors';
 import { emptyDoc } from '../editor/model';
 import { useEditorStore } from './editor';
+import { useSettingsStore } from './settings';
 
 export type ListMode = { kind: 'all' } | { kind: 'folder'; folderId: string | null } | { kind: 'trash' };
 
@@ -81,6 +82,19 @@ export const useNoteStore = defineStore('notes', () => {
       titles.value = next;
       if (!append && rows.value.length > 0 && !rows.value.some((row) => row.id === selectedId.value)) {
         selectedId.value = rows.value[0]?.id ?? null;
+      } else if (!append && rows.value.length === 0) {
+        // **列表空了就必须把选中项也清掉**（原来漏了这一支）。
+        //
+        // 漏掉的后果，用户实测撞到了：「清除一切数据」之后侧栏显示 0 篇，
+        // 而编辑器里还**留着刚被删掉那一篇的正文**—— 因为 selectedId 仍指向
+        // 一个已经不存在的 id，编辑器照旧渲染它的内容。在回收站里那一篇
+        // 还在正文之前挂着一句「这条在"最近删除"里，恢复后才能继续编辑。」，
+        // 而它**已经被永久删除了**，那句话是假的。
+        //
+        // 顺带把标题缓存也丢掉：留着已删 id 的标题，只会让列表重挂载时
+        // 凭空冒出一行"有标题但点不开"的条目。
+        selectedId.value = null;
+        titles.value = {};
       }
     } catch (error) {
       if (mine !== requestId) return;
@@ -199,9 +213,25 @@ export const useNoteStore = defineStore('notes', () => {
     }
   }
 
+  /**
+   * 笔记的**条数**变了之后刷一次侧栏计数。
+   *
+   * 为什么必须在这里刷：侧栏「全部笔记 / 最近删除」旁边那两颗数读的是
+   * `settings.stats`，而 `settings.loadStats()` 此前**只在 App.vue 启动时调一次**
+   * （实测 `loadStats` 的调用点只有 App.vue 与 SettingsView 那几处）。
+   * 于是新建/删除之后，列表里条目已经变了而侧栏数字还是旧的 ——
+   * 用户看着"我明明建了 3 篇，数字却没动"，那是在说界面在说谎。
+   *
+   * 用 `void` 不await：统计是旁路，刷新失败不该把创建/删除这一步变成失败。
+   */
+  function refreshCounts(): void {
+    void useSettingsStore().loadStats();
+  }
+
   async function create(folderId: string | null, doc?: NoteDoc): Promise<Note | null> {
     try {
       const note = await callCommand<Note>(Commands.createNote, { folderId, doc: doc ?? emptyDoc() });
+      refreshCounts();
       if (mode.value.kind === 'trash') await setMode({ kind: 'all' });
       else await load();
       selectedId.value = note.id;
@@ -247,6 +277,7 @@ export const useNoteStore = defineStore('notes', () => {
       const editorStore = useEditorStore();
       if (editorStore.noteId === id) await editorStore.flush();
       await callCommand<null>(Commands.deleteNote, { id });
+      refreshCounts();
       await load();
     } catch (error) {
       errorKey.value = asBridgeError(error).messageKey;
@@ -256,6 +287,7 @@ export const useNoteStore = defineStore('notes', () => {
   async function restore(id: string): Promise<void> {
     try {
       await callCommand<null>(Commands.restoreNote, { id });
+      refreshCounts();
       await load();
       // 恢复之后必须把这一篇**重读**进编辑器（缺口 G44）。不重读的读数（2026-10-02 真机）：
       // 回收站 → 点开它 → 点「恢复」→ 直接打字 ⇒ 屏幕上没字、桥那边一支写都没收到，
@@ -271,6 +303,7 @@ export const useNoteStore = defineStore('notes', () => {
   async function purge(id: string): Promise<void> {
     try {
       await callCommand<null>(Commands.purgeNote, { id });
+      refreshCounts();
       await load();
       // 永久删除掉的那一篇如果正开在编辑器里，必须关掉（缺口 G45）。2026-10-02 真机读数：
       // 列表那边是对的（空态出现），但**编辑器还显示着那一篇的正文**，下面还挂着
