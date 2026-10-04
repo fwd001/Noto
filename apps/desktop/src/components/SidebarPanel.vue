@@ -8,6 +8,7 @@ import { useNoteStore } from '../stores/notes';
 import { useSettingsStore } from '../stores/settings';
 import { useShellStore } from '../stores/shell';
 import { useConflictStore } from '../stores/conflicts';
+import { drawsTitleBar } from '../platform/caps';
 import { t, messageFor } from '../i18n';
 
 const folders = useFolderStore();
@@ -60,8 +61,9 @@ function selectTrash(): void {
     <div class="pane-header">
       <span class="pane-title">{{ t('app.name') }}</span>
       <!-- 收/开用**同一颗**按钮：三栏时它是"收起"，两栏/单栏时这块面板是抽屉，
-           它就是抽屉里那个"关掉"。`toggleSidebar()` 现在按布局落到对的位上。 -->
-      <button type="button" class="btn btn--quiet btn--icon" :aria-label="t(shell.sidebarShown ? 'sidebar.collapse' : 'sidebar.expand')" data-testid="sidebar-collapse" @click="shell.toggleSidebar()">
+           它就是抽屉里那个"关掉"。`toggleSidebar()` 现在按布局落到对的位上。
+           有自绘标题栏时不画 —— 那颗把手归标题栏，画两颗就是"折起下面还有一层折起"。 -->
+      <button v-if="!drawsTitleBar(settings.caps)" type="button" class="btn btn--quiet btn--icon" :aria-label="t(shell.sidebarShown ? 'sidebar.collapse' : 'sidebar.expand')" data-testid="sidebar-collapse" @click="shell.toggleSidebar()">
         ⟨
       </button>
     </div>

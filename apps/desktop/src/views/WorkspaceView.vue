@@ -8,12 +8,15 @@ import SkeletonRows from '../components/SkeletonRows.vue';
 import { useEditorStore } from '../stores/editor';
 import { useFolderStore } from '../stores/folders';
 import { useNoteStore } from '../stores/notes';
+import { useSettingsStore } from '../stores/settings';
 import { useShellStore } from '../stores/shell';
+import { drawsTitleBar } from '../platform/caps';
 import { t } from '../i18n';
 
 const editor = useEditorStore();
 const folders = useFolderStore();
 const notes = useNoteStore();
+const settings = useSettingsStore();
 const shell = useShellStore();
 
 const currentRow = computed(() => notes.rowById(notes.selectedId));
@@ -36,19 +39,20 @@ function onFolderChange(event: Event): void {
 
 <template>
   <div class="workspace">
-    <!-- 侧边栏收起后的**唯一**回来的路。
+    <!-- 侧边栏收起后的**唯一**回来的路（没有自绘那一行时）。
          为什么必须放在这里而不是侧栏内部：折叠那颗按钮原本长在 `SidebarPanel` 里
          （sidebar-collapse），侧栏一收它自己就被 `v-show` 一起藏了 ⇒ 收起来之后
          界面上再没有第二颗能把它叫回来的按钮，用户只能重启应用。
          这不是"少一个按钮"，是**出去之后回不来**（§6「无法返回」那一类）。
-         放在主区左上角：它属于"主区"，不随侧栏生死。窄屏另有抽屉按钮，不重复。 -->
+         有自绘标题栏时这颗不画 —— 那时唯一的把手在标题栏里，画两颗就是
+         「折起之后下面还有一层折起」。 -->
     <button
-      v-if="!shell.isCompact && !shell.sidebarOpen"
+      v-if="!shell.isCompact && !shell.sidebarOpen && !drawsTitleBar(settings.caps)"
       type="button"
       class="workspace__reopen"
       :aria-label="t('sidebar.expand')"
       :title="t('sidebar.expand')"
-      data-testid="reopen-sidebar"
+      data-testid="open-sidebar"
       @click="shell.toggleSidebar()"
     >
       ☰

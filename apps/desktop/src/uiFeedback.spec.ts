@@ -80,13 +80,28 @@ describe('列表行高与溢出（用户截图：内容被下一行压住）', (
   });
 });
 
-describe('侧边栏收起后必须还能打开（用户截图：不知道怎么打开）', () => {
-  it('展开入口在主区，不在侧栏内部', () => {
+describe('侧边栏收起后必须还能打开，且全屏幕只有一颗把手', () => {
+  it('主区那颗展开入口存在，且让位给自绘标题栏那一颗（不同时出现）', () => {
     const ws = read('views/WorkspaceView.vue');
     // 折叠按钮原本长在 SidebarPanel 里（sidebar-collapse），侧栏一收它自己就被藏了。
-    // 展开入口必须由 WorkspaceView 持有 —— 它属于主区，不随侧栏生死。
-    expect(ws).toContain('reopen-sidebar');
-    expect(ws).toMatch(/!shell\.sidebarOpen/);
+    // 展开入口必须由主区持有 —— 它不随侧栏生死；但那一行自绘时它必须不出，
+    // 否则就是用户说的「折起之后下面一层还有一个折起」。
+    expect(ws).toContain('data-testid="open-sidebar"');
+    expect(ws).toMatch(/!shell\.sidebarOpen && !drawsTitleBar\(settings\.caps\)/);
+  });
+
+  it('列表头不许再有第三颗把手（回归：那颗和标题栏那颗叠着出现过）', () => {
+    const list = read('components/NoteList.vue');
+    expect(list, 'NoteList 里又出现了侧栏把手').not.toMatch(/toggleSidebar/);
+  });
+
+  it('标题栏那颗把手在，且它画不画由 caps 决定（不是按机型）', () => {
+    const bar = read('components/TitleBar.vue');
+    expect(bar).toContain('data-testid="sidebar-handle"');
+    expect(bar).toMatch(/v-if="visible"/);
+    const caps = read('platform/caps.ts');
+    expect(caps).toMatch(/export function drawsTitleBar\(caps: PlatformCaps\): boolean/);
+    expect(caps).toMatch(/windowChrome !== 'system'/);
   });
 
   it('展开按钮绝对定位，不占 flex 位（否则松手时列表宽度会跳）', () => {
@@ -97,7 +112,7 @@ describe('侧边栏收起后必须还能打开（用户截图：不知道怎么�
 
   it('展开入口只在宽屏出现 —— 窄屏已有抽屉按钮，不重复', () => {
     const ws = read('views/WorkspaceView.vue');
-    expect(ws).toMatch(/v-if="!shell\.isCompact && !shell\.sidebarOpen"/);
+    expect(ws).toMatch(/v-if="!shell\.isCompact && !shell\.sidebarOpen && !drawsTitleBar\(settings\.caps\)"/);
   });
 });
 

@@ -272,6 +272,11 @@ pub fn run() {
                 }
             }
             if let Some(w) = handle.get_webview_window("main") {
+                // Windows：去掉系统标题栏，前端那一行就是唯一的把手与窗口按钮。
+                // macOS 不在这里动 —— conf 的 `titleBarStyle: Overlay` 已经把系统标题栏
+                // 收成零高度、只留红绿灯浮在那一行上（在这里 set_decorations(false) 会连灯一起没）。
+                #[cfg(target_os = "windows")]
+                let _ = w.set_decorations(false);
                 let _ = w.show();
                 let _ = w.set_focus();
             }

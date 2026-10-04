@@ -137,9 +137,9 @@ onBeforeUnmount(() => {
   <section class="pane pane--list" :aria-label="t('list.searchPlaceholder')" data-testid="note-list">
     <div class="pane-header">
       <span class="pane-title">{{ listTitle }}</span>
-      <button v-if="!shell.sidebarInline" type="button" class="btn btn--quiet btn--icon" :aria-label="t('mobile.menu')" data-testid="open-sidebar" @click="shell.toggleSidebar()">
-        ☰
-      </button>
+      <!-- 这里**不再**放侧栏把手。原本列表头这颗与标题栏那颗、主区左上那颗会同时出现，
+           用户看到的就是「折起之后下面一层还有一个折起」；把手的唯一归属由
+           `drawsTitleBar(caps)` 决定（见 WorkspaceView / SidebarPanel）。 -->
       <button type="button" class="btn btn--quiet" data-testid="new-note" :title="t('list.newNote')" @click="notes.create(notes.mode.kind === 'folder' ? notes.mode.folderId : null)">
         {{ t('list.newNote') }}
       </button>

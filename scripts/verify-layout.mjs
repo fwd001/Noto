@@ -82,22 +82,26 @@ for (const width of WIDTHS) {
   await page.waitForSelector('[data-testid="sidebar"]', { timeout: 15000 });
   await page.waitForTimeout(2200);
 
-  // ② 侧栏够得着
-  const reach = await page.evaluate(() => {
+  // ② 侧栏够得着 + ⑥ 全屏幕只有一颗把手
+  // 把手的两个合法位置：自绘标题栏那一颗（sidebar-handle），或没有那一行时主区左上那颗
+  // （open-sidebar）。侧栏内部的 sidebar-collapse 不算"外面的把手"。
+  const OUTSIDE = '[data-testid="sidebar-handle"], [data-testid="open-sidebar"]';
+  const ALL_HANDLES = '[data-testid="sidebar-handle"], [data-testid="open-sidebar"], [data-testid="sidebar-collapse"]';
+  const reach = await page.evaluate((OUT) => {
     const side = document.querySelector('[data-testid="sidebar"]');
     const r = side.getBoundingClientRect();
     const inline = r.x >= 0 && r.width > 0 && r.right <= window.innerWidth;
-    const handle = document.querySelector('[data-testid="open-sidebar"]');
+    const handle = document.querySelector(OUT);
     let handleInView = false;
     if (handle) {
       const h = handle.getBoundingClientRect();
       handleInView = h.x >= 0 && h.width > 0 && h.right <= window.innerWidth;
     }
     return { inline, hasHandle: Boolean(handle), handleInView };
-  });
+  }, OUTSIDE);
   if (!reach.inline) {
     check(`宽 ${width}：侧栏不在版面上时，侧栏外必须有一颗 ☰`, reach.hasHandle && reach.handleInView, JSON.stringify(reach));
-    await page.evaluate(() => document.querySelector('[data-testid="open-sidebar"]').click());
+    await page.evaluate(() => document.querySelector('[data-testid="sidebar-handle"], [data-testid="open-sidebar"]').click());
     await page.waitForTimeout(600);
     const opened = await page.evaluate(() => {
       const r = document.querySelector('[data-testid="sidebar"]').getBoundingClientRect();
@@ -109,6 +113,30 @@ for (const width of WIDTHS) {
   } else {
     check(`宽 ${width}：侧栏inline（无需外部 ☰）`, true, JSON.stringify(reach));
   }
+
+  // ⑥ 把手数量：侧栏开着 = 1 颗，收着 = 1 颗（用户那句"折起之后下面一层还有一个折起"）
+  const handlesOpen = await page.evaluate((sel) => {
+    const v = (s) => Array.from(document.querySelectorAll(s)).filter((el) => {
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    }).map((el) => el.getAttribute('data-testid'));
+    return { all: v(sel), outside: v('[data-testid="sidebar-handle"], [data-testid="open-sidebar"]') };
+  }, ALL_HANDLES);
+  check(`宽 ${width}：侧栏开着时全屏幕只有一颗把手`, handlesOpen.all.length === 1, JSON.stringify(handlesOpen));
+  await page.evaluate(() => document.querySelector('[data-testid="sidebar-handle"], [data-testid="open-sidebar"]').click());
+  await page.waitForTimeout(500);
+  const handlesClosed = await page.evaluate((sel) => {
+    const v = (s) => Array.from(document.querySelectorAll(s)).filter((el) => {
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    }).map((el) => el.getAttribute('data-testid'));
+    return { all: v(sel), outside: v('[data-testid="sidebar-handle"], [data-testid="open-sidebar"]') };
+  }, ALL_HANDLES);
+  check(`宽 ${width}：侧栏收起后仍然只有一颗把手（且它在侧栏外，回得来）`, handlesClosed.all.length === 1 && handlesClosed.outside.length === 1, JSON.stringify(handlesClosed));
+  notes.push(`     宽 ${width} 把手：开着 ${JSON.stringify(handlesOpen.all)} → 收起 ${JSON.stringify(handlesClosed.all)}`);
+  // 收回"开着"，让后面几条腿看到同一份起点
+  await page.evaluate(() => document.querySelector('[data-testid="sidebar-handle"], [data-testid="open-sidebar"]').click());
+  await page.waitForTimeout(500);
 
   // ⑤ 置顶那颗点：不悬停也在（鼠标停在 (0,0)，不在任何行上）
   const pin = await page.evaluate((noteId) => {

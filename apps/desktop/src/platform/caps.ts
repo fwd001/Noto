@@ -23,6 +23,16 @@ export interface PlatformCaps {
 
 export const CAPS_COMMAND = 'platform_caps';
 
+/**
+ * 这一屏有没有"应用自己画的那一行"。它同时决定侧栏把手长在哪：
+ * 画 ⇒ 把手只在那一行里（一颗）；不画 ⇒ 退到主区左上角 / 侧栏内部。
+ * 之前这条规则没人写下来，于是四颗把手（标题栏、列表头、主区左上、侧栏内部）会同时出现，
+ * 用户看到的是"折起之后下面还有一层折起"。
+ */
+export function drawsTitleBar(caps: PlatformCaps): boolean {
+  return caps.windowChrome !== 'system';
+}
+
 type OsKind = 'windows' | 'macos' | 'ios' | 'android' | 'other';
 
 /** 仅在本模块内用于确定窗口外观与触摸尺寸，不做任何业务判定。 */
@@ -51,14 +61,12 @@ export function localCaps(): PlatformCaps {
     keychain,
     filePicker: mobile ? 'web' : 'native',
     biometric: os === 'ios' || os === 'android' || os === 'macos',
-    // Windows 用**系统**标题栏，不再自绘一层。
-    // 原来是 `custom`：壳层（tauri.conf 的 decorations）与前端 `TitleBar` 各画一次，
-    // 屏幕上就是两条标题栏叠在一起 —— 最上面是系统的（带「笔记/同步/前往」菜单），
-    // 紧跟着又一条自绘的（☰ 旧品牌名 + 另一组最小化/最大化/关闭）。用户反馈"有两层"。
-    // 自绘那层还带来一个更坏的后果：侧边栏的折叠按钮长在它里面（见WorkspaceView
-    // 那个 `reopen-sidebar`），所以界面层级被它搅乱。
-    // macOS/iOS 仍走 `overlay`（贴靠红绿灯，由系统绘制）。
-    windowChrome: os === 'macos' || os === 'ios' ? 'overlay' : 'system',
+    // Windows 与 macOS **都自绘那一行**（用户要求两端一致）：
+    //  - macOS：conf 的 `titleBarStyle: Overlay` + `hiddenTitle` ⇒ 系统标题栏不再单独占一行，
+    //    红绿灯浮在我们这一行左侧（`.titlebar--overlay` 预留 78px）。
+    //  - Windows：壳在 setup 里 `set_decorations(false)`，最小/最大/关闭由这一行画。
+    // 报 `system` 就等于前端不画这一行（`drawsTitleBar`），侧栏把手会退回到主区左上角。
+    windowChrome: os === 'macos' || os === 'ios' ? 'overlay' : 'custom',
     safeArea: mobile,
     compactToolbar: mobile,
     // 透明效果（PLATFORM.md §观感 写的 Mica/Acrylic + "必须提供关闭开关"）**今天没有实现**：
