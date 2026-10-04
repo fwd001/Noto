@@ -20,7 +20,10 @@
 
 mod envelope;
 
+mod recovery_wordlist;
+mod vault;
 pub use envelope::{check_kind_value, EncAlg, EncMeta, Envelope, HashAlg};
+pub use vault::{KeyVault, UnlockMethod, RECOVERY_WORDS};
 
 use sha2::{Digest, Sha256};
 

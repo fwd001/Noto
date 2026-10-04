@@ -9,10 +9,16 @@ license.workspace = true
 # 能在毫秒级单测里跑满分支，也避免同步层与存储层互相牵制编译。
 [dependencies]
 notera-core = { workspace = true }
+# E2EE 密封层（sealed.rs）。选它不违反上面那条依赖隔离：`notera-crypto` 是纯密码学
+# 原语 + 记录信封，**不知道 store / webdav / sync 的存在**（它自己的 crate 文档写着
+# "不得依赖 store / webdav / sync"），所以把它拉进来不会让同步层与存储层互相牵制。
+notera-crypto = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
+# 密封/开封失败要留痕（"这一条拒收"必须看得见，见 sealed.rs 与 I6）。
+tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

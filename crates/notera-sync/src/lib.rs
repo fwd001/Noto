@@ -13,11 +13,14 @@
 
 pub mod manifest;
 pub mod plan;
+pub mod sealed;
+pub use sealed::{is_undecryptable, open_incoming, seal_outgoing, Sealed, PRIMARY_KID};
 
 use manifest::{EntryRef, Manifest, ManifestError};
 use plan::{Action, ConflictKind, Decision, LocalView, Plan, RemoteView};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 pub use manifest::PROTOCOL as SYNC_PROTOCOL_VERSION;
@@ -392,12 +395,44 @@ pub struct SyncEngine<L: LocalPort, R: RemotePort> {
     local: L,
     remote: R,
     cfg: EngineConfig,
+    /// E2EE 用不着的钥匙（未启用 / 未解锁时是 `None`）。
+    ///
+    /// 用 `Arc<RwLock<..>>` 而不是把钥匙塞进 `EngineConfig`：`Config` 是
+    /// 「构造时定好、不中途变」的值，而解锁/锁定是**运行中反复发生**的
+    /// （用户解锁一次、锁屏自动上锁）。放进 config 就得为此重建整个引擎。
+    /// 依赖方向：`KeyVault` 来自 `notera-crypto`（纯密码学原语），
+    /// 不违反本 crate "不依赖 store / webdav" 的隔离。
+    vault: Arc<RwLock<Option<Arc<notera_crypto::KeyVault>>>>,
 }
 
 impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
     pub fn new(local: L, remote: R, cfg: EngineConfig) -> Self {
-        Self { local, remote, cfg }
+        Self {
+            local,
+            remote,
+            cfg,
+            vault: Arc::new(RwLock::new(None)),
+        }
     }
+
+    /// 装上（或换掉）这轮要用的钥匙。`None` = 关闭加密，走明文。
+    ///
+    /// 不在 `new()` 里要参数，是为了让"没启用加密"这件事**不需要改动任何调用方**：
+    /// 存量代码照旧 `SyncEngine::new(..)`，不启用就永远是明文路径。
+    pub fn set_vault(&self, vault: Option<Arc<notera_crypto::KeyVault>>) {
+        *self.vault.write().expect("vault 锁 poisoned") = vault;
+    }
+
+    /// 当前是否有钥匙可用。界面用它说"已加密 / 未加密"。
+    pub fn is_encrypted(&self) -> bool {
+        self.vault.read().expect("vault 锁 poisoned").is_some()
+    }
+
+    /// 取一份钥匙快照。**趁锁还开着就 clone 出 Arc**，别把 guard 递出去。
+    fn vault_snapshot(&self) -> Option<Arc<notera_crypto::KeyVault>> {
+        self.vault.read().expect("vault 锁 poisoned").clone()
+    }
+
     pub fn local(&self) -> &L {
         &self.local
     }
@@ -680,11 +715,26 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 break;
             }
             let Some(l) = lmap.get(&d.key) else { continue };
-            let wire = match self.local.envelope_wire(&l.kind, &l.id) {
+            let plain = match self.local.envelope_wire(&l.kind, &l.id) {
                 Ok(Some(w)) => w,
                 Ok(None) => continue,
                 Err(_) => continue,
             };
+            // **密封必须在 `probe_record_etag` 之前**：条件写用的 ETag 属于
+            // 服务器上**当前**那份（可能是密文、也可能是明文）。若先探 ETag
+            // 再密封，两次看到的不是同一个对象，CAS 就会拿着明文版的 ETag
+            // 去改密文版的行 ⇒ 要么 412（假冲突），要么覆盖掉别人的并发写。
+            let sealed = match seal_outgoing(&plain, self.vault_snapshot().as_deref()) {
+                Ok(s) => s,
+                Err(e) => {
+                    // 密封失败（信封畸形等）**不许上行**。计入拒收并留下原因，
+                    // 不能"跳过这一条" —— 那会让用户以为已经同步了。
+                    st.rejections += 1;
+                    tracing::warn!(kind = %l.kind, id = %l.id, error = %e, "密封失败，这一条不上行");
+                    continue;
+                }
+            };
+            let wire = sealed.wire();
             let known_etag = self
                 .remote
                 .probe_record_etag(&l.kind, &l.id)
@@ -694,7 +744,7 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             st.requests += 1;
             match self
                 .remote
-                .put_record(&l.kind, &l.id, &wire, known_etag.as_deref())
+                .put_record(&l.kind, &l.id, wire, known_etag.as_deref())
                 .await
             {
                 Ok(c) if c.verified => {
@@ -766,6 +816,26 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 Ok(Some(wire)) => {
                     st.requests += 1;
                     st.bytes_down += wire.len() as u64;
+                    // **开封必须在 apply 之前**：I6 规定脏数据不入库，而
+                    // "解不开的密文"正是脏数据。解密失败一律计入拒收并留下原因，
+                    // 绝不把密文当明文 apply 进去 —— 那会让库里出现一篇读不出正文的笔记，
+                    // 而界面上还显示"已同步"。
+                    let no_key = is_undecryptable(&wire, None);
+                    let opened = open_incoming(&wire, self.vault_snapshot().as_deref());
+                    let wire = match opened {
+                        Ok(w) => w,
+                        Err(e) => {
+                            st.rejections += 1;
+                            let reason = if no_key {
+                                format!("{kind}/{id}: 远端是密文，这台设备还没有那把钥匙（拒收）")
+                            } else {
+                                format!("{kind}/{id}: 开封失败（{e}）")
+                            };
+                            tracing::warn!(kind = %kind, id = %id, error = %e, "下行开封失败，这条拒收");
+                            st.last_rejection = Some(reason);
+                            continue;
+                        }
+                    };
                     // ADR-0021 D3：本地 apply 的拒绝**不许没有去处**。
                     // 以前这里是 `.unwrap_or_default()` —— 一条被拒的远端版本（同 rev 不同内容、
                     // 哈希不符 I6、rev 回退 I2…）连一行痕迹都不留，界面上是"同步正常"而库里少一条。
