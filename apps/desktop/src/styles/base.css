@@ -16,6 +16,16 @@ body,
   margin: 0;
 }
 
+/* 外壳自己占满视口，**文档永远不滚**：滚动只发生在各栏的 `.pane-body` 里。
+   真读数（1280×900 设置页）：加上这条之前有两层滚动条 ——
+   文档 177px + `.settings__body` 2002px；滚外层会把整个壳顶上去、底下露出约 260px 空白，
+   就是用户那句「最外层的滚动条滚上去底下是空白」。
+   这条不是遮丑：内层那一栏本来就装得下全部内容（下面这条判据在 verify-layout 里量）。 */
+html,
+body {
+  overflow: hidden;
+}
+
 body {
   background: var(--bg-canvas);
   color: var(--text-primary);
