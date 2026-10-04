@@ -102,6 +102,10 @@ pub fn run() {
             // 能力声明：移动壳**不**上报 Tray / GlobalShortcuts —— 这两个面在 Android 上不存在，
             // 不上报就是 false（`PlatformCaps` 的默认值）。上一批桌面那份能力表如果被照抄过来，
             // 设置页就会摆出三个按了没反应的开关，所以这里刻意什么都不报。
+            //
+            // 后台同步：移动壳以前**从来没有起过引擎**（桌面那条 spawn 只写在桌面壳里），
+            // 也就是配好 WebDAV 也永远不上传。生命周期收进宿主之后，这里一句就够（缺口 G50）。
+            app.enable_background_sync();
             Ok(())
         })
         .run(tauri::generate_context!())

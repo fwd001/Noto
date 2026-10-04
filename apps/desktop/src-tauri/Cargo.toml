@@ -13,6 +13,15 @@ name = "notera_desktop_lib"
 # 由它自己的 crate 承担，桌面只要 rlib + bin。
 crate-type = ["rlib"]
 
+# ⚠ 不要在这里写 `[[bin]] windows_subsystem = "windows"`。
+# `windows_subsystem` 是 **rustc 的 crate 属性**，不是 cargo 的 manifest key ——
+# 写成这样 cargo 会给一条 `unused manifest key: bin.0.windows_subsystem` 警告，
+# 而**exe 仍然是 console 子系统**（启动照样弹终端窗口）。
+# 正确写法在 `src/main.rs`：
+#   #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+# 之所以加 `not(debug_assertions)`：`cargo run` 调试时保留控制台，
+# 崩溃的第一现场（panic 信息）才有地方可看。
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

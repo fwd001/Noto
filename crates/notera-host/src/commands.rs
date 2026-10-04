@@ -119,6 +119,10 @@ pub struct AccountDto {
     pub proxy_mode: String,
     pub proxy_host: Option<String>,
     pub proxy_port: Option<u16>,
+    /// 代理用户名存在凭据项里（与它的口令同一条），配置只有引用 ⇒ 回传不了本体。
+    /// 与 `has_credential` / `has_ca_pem` 同一套口径：告诉界面"存过没有"，
+    /// 那一格才能显示"已设置（留空则不改）"，而不是每次重开都被洗成空。
+    pub proxy_has_username: bool,
     pub bypass: Vec<String>,
     pub enabled: bool,
     /// 永不下发明文，只告诉 UI 有没有存过
@@ -376,6 +380,12 @@ pub struct AccountDraftCmd {
     pub proxy_password: Option<String>,
     #[serde(default)]
     pub bypass: Option<Vec<String>>,
+    /// 「启用同步」那一格。此前这个字段**根本不在结构体里**：前端一直在发（`toWire`），
+    /// serde 静默丢掉，`configure_account` 又硬编 `enabled: true` —— 于是那个勾选框
+    /// 是个没有任何作用的控件（用户关掉了同步，它照跑）。
+    /// `Option`：缺省 = **不改**（编辑账户时保留原值），与口令/PEM 同一套语义。
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -399,6 +409,19 @@ pub struct PrefsCmd {
 pub struct PathCmd {
     #[serde(default)]
     pub path: Option<String>,
+}
+
+/// 不可撤销操作的确认闸门。
+///
+/// 刻意用 `deny_unknown_fields`：`多传一个字段`（比如手滑传了 `path`）就让整条命令
+/// 按 `bad_args` 拒掉，而不是"因为只读 confirmed 所以别的字段随它去" ——
+/// 那会让将来加参数时静默失效。
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfirmCmd {
+    /// 必须显式为真。缺失时 serde 会因 `bool` 无默认值而报 `bad_args` ——
+    /// 也就是"没确认"不是默认值。
+    pub confirmed: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -699,6 +722,11 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
             j(app.backup_db(c.path.as_ref().map(std::path::Path::new))?)
         }
         "list_backups" => j(app.list_backups()?),
+        "erase_all_data" => {
+            let c: ConfirmCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            j(app.erase_all_data(c.confirmed)?)
+        }
         "restore_db" => {
             let c: PathCmd =
                 serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;

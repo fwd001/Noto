@@ -236,6 +236,8 @@ struct Inner {
     seq_applied: AtomicU64,
     syncing: AtomicBool,
     dirty_ticks: AtomicU64,
+    /// 后台同步监督循环是否已经开起来（`enable_background_sync` 幂等的依据）。
+    sync_supervisor: AtomicBool,
 }
 
 /// 今天那一篇日记是哪一条（纯函数，给上面那条方法用）。
@@ -290,6 +292,7 @@ impl App {
                 seq_applied: AtomicU64::new(0),
                 syncing: AtomicBool::new(false),
                 dirty_ticks: AtomicU64::new(0),
+                sync_supervisor: AtomicBool::new(false),
             }),
         };
         // 启动自检结论必须可见：不静默修，也不静默忽略
@@ -1451,6 +1454,23 @@ impl App {
         self.inner.store.list_backups().map_err(CmdError::from)
     }
 
+    /// 恢复到「刚装好」的状态（用户要的"清除一切数据"）。
+    ///
+    /// `confirmed` 必须为真才执行：这是**不可撤销**的操作（没有回收站、没有撤销），
+    /// 所以命令面上要有一道显式闸门 —— 界面已经做了二次确认，但命令是公开的，
+    /// 不能只靠界面保证。
+    pub fn erase_all_data(&self, confirmed: bool) -> Result<serde_json::Value, CmdError> {
+        if !confirmed {
+            return Err(CmdError::of("erase_not_confirmed", false));
+        }
+        let report = self.inner.store.erase_all_data().map_err(CmdError::from)?;
+        Ok(serde_json::json!({
+            "tables": report.tables,
+            "freedBytes": report.freed_bytes,
+            "restartRequired": true,
+        }))
+    }
+
     /// 恢复只"排期"，不在进程内换库：真正落地发生在下次启动 `Store::open` 之前。
     /// 返回 `restart_required=true` 是这条命令的正常结果，不是失败。
     pub fn stage_restore(&self, path: &std::path::Path) -> Result<serde_json::Value, CmdError> {
@@ -1470,7 +1490,16 @@ impl App {
     // ------------------------------------------------------------ 配置面 ---
 
     pub fn current_account(&self) -> Result<Option<AccountDto>, CmdError> {
-        Ok(ConfigRepository::active(&self.config())
+        // 读回给界面时**不看 `enabled`**（引擎那侧仍然看：关了就不跑，那是对的）。
+        // 用 `ConfigRepository::active()` 会连未启用的一起过滤掉 —— 于是用户一关
+        // 「启用同步」，`account` 就成 `null`：设置页表单被洗空、口令得重敲，
+        // 那个开关变成只能关不能开的单向门。而前端要靠这一位区分
+        // "未配置"与"配了但关了"（徽标两种都静止，但话不能说错）。
+        let cfg = self.config();
+        Ok(cfg
+            .accounts
+            .iter()
+            .find(|a| Some(&a.id) == cfg.active_account.as_ref())
             .map(account_dto)
             .map(|d| self.attach_caps(d)))
     }
@@ -1579,7 +1608,10 @@ impl App {
                 bypass: draft.bypass.unwrap_or_default(),
                 resolve_remote_dns: true,
             },
-            enabled: true,
+            enabled: draft
+                .enabled
+                .or_else(|| existing.map(|a| a.enabled))
+                .unwrap_or(true),
         };
         // 校验/落盘的规则全在 notera-config 里；host 只折叠错误码（原子写、拒绝覆盖损坏配置）。
         // 这一段任何一步失败，上面已经存进系统的那些口令都要抹掉：
@@ -1607,6 +1639,17 @@ impl App {
                 .map_err(|e| {
                     CmdError::of("invalid_account", false)
                         .with(serde_json::json!({ "why": e.to_string() }))
+                })?;
+            // 「启用」这一位**两边都要落**：`enabled` 只在配置文件里、而 `sync_accounts.enabled`
+            // 还是 1 的话，本地写入会继续给这台已被用户关掉的服务器排 outbox 行 ——
+            // 而引擎永不消费它，那一格「待发操作」永远归不了零（sync_surface.rs 早就钉过：
+            // 禁用账户不得继续排队，否则 outbox 无界增长）。
+            self.inner
+                .store
+                .set_account_enabled(&acct.id, acct.enabled)
+                .map_err(|e| {
+                    CmdError::of("invalid_account", false)
+                        .with(serde_json::json!({ "why": e.to_string() }))
                 })
         })();
         if persisted.is_err() {
@@ -1619,8 +1662,13 @@ impl App {
         persisted?;
         *self.inner.config.lock().unwrap() = cfg.clone();
         self.set_sync(|v| v.phase = Phase::Provisioning);
-        // 带上新账户的探测状态（刚配上 = 还没探过），界面才不会把"没探过"说成"不支持"
-        ConfigRepository::active(&cfg)
+        // 带上新账户的探测状态（刚配上 = 还没探过），界面才不会把"没探过"说成"不支持"。
+        // 与 `current_account` 同一口径：**按 id 取，不看 `enabled`** ——
+        // 否则"存一条关掉的账户"这一步会明明写成功了却回 `no_account`，
+        // 界面报"保存失败"，而配置其实已经改了（设置没生效 ≠ 设置没保存）。
+        cfg.accounts
+            .iter()
+            .find(|a| Some(&a.id) == cfg.active_account.as_ref())
             .map(account_dto)
             .map(|d| self.attach_caps(d))
             .ok_or_else(|| CmdError::of("no_account", false))
@@ -2811,6 +2859,101 @@ impl App {
 
     // ------------------------------------------------------------ 同步面 ---
 
+    /// **首帧之后**调用：把后台同步的生命周期交给宿主托管（桌面 / 移动 / dev 桥共用这一条）。
+    ///
+    /// 幂等：重复调用只有一条监督循环在跑。
+    pub fn enable_background_sync(&self) {
+        if self.inner.sync_supervisor.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let app = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("notera-sync".into())
+            .spawn(move || {
+                // 宿主自己带一条 current-thread 运行时：`dispatch` 是同步的
+                // （dev 桥连运行时都没有），把"起不起引擎"交给各壳去记，就会漏。
+                let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                else {
+                    tracing::error!("后台同步运行时起不来：这一台设备只能手动 sync-once");
+                    return;
+                };
+                rt.block_on(app.supervise_sync());
+            });
+        if spawned.is_err() {
+            self.inner.sync_supervisor.store(false, Ordering::SeqCst);
+            tracing::error!("后台同步监督线程起不来");
+        }
+    }
+
+    /// 每 2 秒看一眼「当前该不该有引擎」，该有而没有就起、不该有就停。
+    ///
+    /// 为什么是轮询而不是"配置变更事件"：变更点有三处（保存账户 / 删除账户 / 改启用位），
+    /// 走事件要每一处都记得发，**漏一处的后果就是"配好了却不同步"** —— 那是最难查的一类洞，
+    /// 而这一眼只读一次内存里的配置锁，成本可以忽略，且新出现的配置一定会被发现。
+    async fn supervise_sync(&self) {
+        let mut worker: Option<SyncWorker> = None;
+        let mut retry_at = std::time::Instant::now();
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let want = ConfigRepository::active(&self.config()).map(|a| a.id.clone());
+            let unchanged = match (&want, &worker) {
+                (Some(id), Some(w)) => &w.account_id == id,
+                (None, None) => true,
+                _ => false,
+            };
+            if unchanged {
+                continue;
+            }
+            if let Some(w) = worker.take() {
+                w.stop.store(true, Ordering::SeqCst);
+            }
+            let Some(id) = want else { continue };
+            if std::time::Instant::now() < retry_at {
+                continue;
+            }
+            match self.remote_for_sync().await {
+                Ok(Some(remote)) => match self.negotiate(&remote).await {
+                    Ok(()) => {
+                        // 引擎与附件循环**共用同一颗闸门**：一次配置变更（换服务器 / 删账户 /
+                        // 关启用）要两条一起停，留一条在跑就是"对着已经不要的服务器继续写"。
+                        let att_remote = Arc::clone(&remote);
+                        let host = self.clone();
+                        let sched = host.start_sync(remote);
+                        let stop = sched.stop_handle();
+                        let att = self.clone();
+                        let att_stop = Arc::clone(&stop);
+                        // SYNC-PROTOCOL §13：附件走自己那条循环，与文本轮次互不等待。
+                        tokio::spawn(async move { att.run_attachments(att_remote, att_stop).await });
+                        tokio::spawn(async move { sched.run().await });
+                        worker = Some(SyncWorker { account_id: id, stop });
+                        tracing::info!("后台同步引擎已随配置启动（不必重启）");
+                    }
+                    Err(key) => {
+                        self.emit(BusEvent::Toast {
+                            message_key: key.to_string(),
+                            level: "warn".into(),
+                        });
+                        retry_at = std::time::Instant::now() + Duration::from_secs(30);
+                    }
+                },
+                // 配好了但这一轮拿不到凭据（G38 选 B 之后每次重启都是这一形）：
+                // 不弹条、不刷屏，等用户去设置里补，下一拍自然接上。
+                Ok(None) => {
+                    retry_at = std::time::Instant::now() + Duration::from_secs(10);
+                }
+                Err(e) => {
+                    self.emit(BusEvent::Toast {
+                        message_key: e.message_key,
+                        level: "warn".into(),
+                    });
+                    retry_at = std::time::Instant::now() + Duration::from_secs(30);
+                }
+            }
+        }
+    }
+
     pub fn request_sync(&self) {
         self.inner.dirty_ticks.fetch_add(1, Ordering::SeqCst);
     }
@@ -3096,6 +3239,10 @@ fn account_dto(a: &AccountConfig) -> AccountDto {
         .into(),
         proxy_host: a.proxy.host.clone(),
         proxy_port: a.proxy.port,
+        // 代理用户名与 WebDAV 口令存在同一条凭据项里（`put(target, user, pass)`），
+        // 配置里只有引用 ⇒ 回传不了本体。按 `has_ca_pem` 那套既有口径回"存过没有"，
+        // 界面上给"已设置（留空则不改）"的占位，而不是每次重开把那一格洗成空。
+        proxy_has_username: a.proxy.username_ref.is_some(),
         bypass: a.proxy.bypass.clone(),
         enabled: a.enabled,
         has_credential: !a.credential_ref.is_empty(),
@@ -3754,6 +3901,13 @@ impl<R: notera_sync::RemotePort> notera_sync::RemotePort for RemoteBorrow<'_, R>
     }
 }
 
+/// 监督循环手里的那条引擎（缺口 G50）：记下它属于**哪条账户**，以及那颗一拉就让
+/// 文本轮次与附件轮次一起停的闸门。
+struct SyncWorker {
+    account_id: String,
+    stop: Arc<AtomicBool>,
+}
+
 /// 桌面 debounce 2.5s + 周期 25s + 事件触发（docs/SYNC-PROTOCOL.md §14）。
 pub struct Scheduler<R: notera_sync::RemotePort + 'static> {
     app: App,
@@ -3764,6 +3918,12 @@ pub struct Scheduler<R: notera_sync::RemotePort + 'static> {
 impl<R: notera_sync::RemotePort + 'static> Scheduler<R> {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// 交给调用方的那颗闸门（`App::supervise_sync` 用它与附件循环**共用同一颗** `Arc`）：
+    /// 配置一变，文本轮次与附件轮次一起收尾；留一条在跑就是"对着已经不要的服务器继续写"。
+    pub fn stop_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.stop)
     }
 
     /// 在后台任务里跑。空轮 = 1 请求 0 字节，因此 25s 轮询不构成负担。
@@ -5213,6 +5373,8 @@ mod tests {
             proxy_username: None,
             proxy_password: None,
             bypass: None,
+            // `None` = 这一格不改（与口令/PEM 同一套语义），落到"新建即启用"。
+            enabled: None,
         }
     }
 
@@ -5238,6 +5400,61 @@ mod tests {
             .unwrap();
     }
 
+    /// 「启用同步」那个勾选框必须真有效 —— 用户配的设置是唯一权威（2026-10-04 用户原话）。
+    ///
+    /// 这一条以前是**假的**：`AccountDraftCmd` 没有 `enabled` 字段（前端发了，serde 静默丢），
+    /// `configure_account` 又硬编 `enabled: true`，于是界面关了同步、引擎照跑。
+    /// 而 `current_account()` 走 `ConfigRepository::active()`（按 enabled 过滤），
+    /// 意味着"真把它关了"的话设置页会读回 `null` —— 表单被洗空、口令要重敲，
+    /// 那个开关就成了只能关不能开的单向门。两头都要修。
+    #[test]
+    fn the_enable_switch_is_persisted_respected_and_still_reads_back() {
+        let app = boot("enable-switch");
+        app.configure_account(draft("a", "https://dav.home.example/dav", Some("u")))
+            .unwrap();
+        assert!(
+            ConfigRepository::active(&app.config()).is_some(),
+            "启用时引擎那一侧要看得见这条账户（`active()` 就是 `sync_once` 用的那道门）"
+        );
+
+        let mut off = draft("a", "https://dav.home.example/dav", Some("u"));
+        off.enabled = Some(false);
+        let saved = app
+            .configure_account(off)
+            .expect("存一条**关掉**的账户不是错误：回 no_account 就等于对着已改好的配置说\"保存失败\"");
+        assert!(!saved.enabled, "存回来的那一位要说\"关着\"，否则界面下一拍又把它勾上");
+
+        let back = app.current_account().unwrap().expect("关了也得读得回来");
+        assert!(
+            !back.enabled && !back.base_url.is_empty(),
+            "读回的是那条账户本身，不是被 enabled 过滤掉的 null"
+        );
+        assert!(
+            ConfigRepository::active(&app.config()).is_none(),
+            "用户说关了 —— 引擎一侧必须真的停"
+        );
+
+        // 再打开：同一个账户、同一份口令引用，不必重敲
+        let mut on = draft("a", "https://dav.home.example/dav", Some("u"));
+        on.enabled = Some(true);
+        assert!(app.configure_account(on).unwrap().enabled, "开关要能双向");
+    }
+
+    /// 缺省（老客户端 / 编辑别的格子）不该顺手把已关的同步打开。
+    #[test]
+    fn an_absent_enabled_field_leaves_the_existing_switch_alone() {
+        let app = boot("enable-keep");
+        let mut off = draft("a", "https://dav.home.example/dav", Some("u"));
+        off.enabled = Some(false);
+        app.configure_account(off).unwrap();
+        // 第二次保存不带 `enabled`（只改标签那种编辑）
+        app.configure_account(draft("a", "https://dav.home.example/dav", Some("u")))
+            .unwrap();
+        assert!(
+            !app.current_account().unwrap().expect("在").enabled,
+            "没发这一位 = 不改这一位，不能悄悄给用户打开"
+        );
+    }
     /// 没凭据就绝不装适配器，而且**本地写入照常**（不变式 I8）。
     #[test]
     fn sync_remote_without_credentials_leaves_local_writes_working() {

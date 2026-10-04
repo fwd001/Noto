@@ -118,6 +118,10 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
             };
             match notera_host::devserver::start(app.clone(), port) {
                 Ok(_srv) => {
+                    // dev 桥以前只转发命令面，**没有任何调度器** ⇒ 浏览器里点"立即同步"
+                    // 永远等不到事件回流（G50 的那一颗圈在 dev 下反而更好复现）。
+                    // 打开托管之后，lane 测到的才是产品那条真链路。
+                    app.enable_background_sync();
                     println!(
                         "dev 桥已启动: http://127.0.0.1:{port}  (数据目录 {})",
                         dir.display()

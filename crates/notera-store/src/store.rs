@@ -79,6 +79,33 @@ impl Default for Edit {
     }
 }
 
+pub struct EraseReport {
+    /// 清掉了多少张表的数据（不含 FTS 影子表与 `meta`）。
+    pub tables: usize,
+    /// 从磁盘上回收的附件字节。
+    pub freed_bytes: u64,
+}
+
+/// 「清除一切」要清掉的表。
+///
+/// 刻意**不含** `meta`：用户版本与设备 id 属于"这台设备"，清掉会让迁移从头重跑，
+/// 而迁移是按版本号单向推进的 —— 那会把一台已升级过的机器退回到旧schema。
+/// 也不含 FTS 影子表（它由触发器维护，要单独用`notes_fts` 的命令清）。
+const ERASE_TABLES: &[&str] = &[
+    "note_attachments",
+    "attachments",
+    "note_revisions",
+    "notes",
+    "folders",
+    "tombstones",
+    "sync_conflicts",
+    "sync_operations",
+    "sync_remote_index",
+    "sync_state",
+    "sync_accounts",
+    "settings",
+];
+
 pub struct Store {
     pub(crate) paths: StorePaths,
     pub(crate) device: DeviceId,
@@ -116,7 +143,13 @@ impl Store {
 
         let mut conn = crate::pool::open_write_conn(&db)?;
         let report = migrate::migrate(&mut conn, &db)?;
-        let device = bootstrap(&mut conn, &device_id)?;
+        let device = {
+            // 事务改由调用方持有：`erase_all_data` 要在自己那一笔写事务里复用同一个引导逻辑。
+            let tx = conn.transaction()?;
+            let device = bootstrap(&tx, &device_id)?;
+            tx.commit()?;
+            device
+        };
 
         let mut store = Store {
             paths: StorePaths {
@@ -158,6 +191,62 @@ impl Store {
 
     pub fn attachments_dir(&self) -> &Path {
         &self.paths.attachments
+    }
+
+    /// 恢复到「刚装好、还没建过任何东西」的状态。
+    ///
+    /// 用户要的是"清除一切数据恢复初始化"，所以**库内与磁盘都要清**：
+    /// - 库内：清掉全部 13 张数据表 + FTS 影子表，**保留 schema 与 `meta`** ——
+    ///   用户版本号与设备 id 属于"这台设备"，删掉会让迁移从头再跑一遍。
+    /// - 磁盘：附件是内容寻址的独立文件（`blob_path`），库清了它们会变成孤儿字节。
+    ///   按 §11 的处置口径，**只删确实无引用的**，不做"整目录清空" ——
+    ///   那样会连带删掉隔离区里等待重传的副本。
+    ///
+    /// 单事务：任一表清失败整体回滚，绝不留下"清了一半"的库。
+    /// 返回清掉的行数与字节，供界面如实显示"清了什么"。
+    pub fn erase_all_data(&self) -> Result<EraseReport, StoreError> {
+        // 引用计数先算：哪些 blob 真的没人要了（清库后必然是 0 个引用，
+        // 但先算再清能让"删磁盘"这一步有个明确的判据，而不是"库里没了就算没人要"）。
+        let live: Vec<String> = self.with_read(|conn| {
+            let mut stmt = conn.prepare("SELECT sha256 FROM attachments")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r?);
+            }
+            Ok(out)
+        })?;
+        let device = self.device.clone();
+        self.write_tx(|conn, _now| {
+            // 外键是级联的，但**显式列出每一张**而不是靠 cascade：
+            // 少清一张表的后果是"重置完了但还有旧数据"，那比重置失败更难解释。
+            for table in ERASE_TABLES {
+                conn.execute(&format!("DELETE FROM {table}"), [])?;
+            }
+            // FTS 影子表要单独清：`notes` 上的触发器只管增删改，
+            // 直接 DELETE 不会同步影子表，残留的索引项会让搜索命中已不存在的笔记。
+            conn.execute("DELETE FROM notes_fts", [])?;
+            // 清完必须重新落到「刚装好」那一格，而不是"空到不能用"：
+            // 默认本与本地哨兵账户都是**引导期种下的角色实体**，一起删掉的后果是
+            // ① 清除之后新建笔记连落点都没有（要等重启），② `all_accounts()` 返回空
+            // ⇒ 本地写入**静默不入 outbox**（I8），用户清完接着记的那几条永远同步不出去。
+            // 复用 `bootstrap` 而不是再抄一份 INSERT：这两行"是什么"只有一处权威。
+            bootstrap(conn, &device)?;
+            Ok(())
+        })?;
+        let mut freed = 0u64;
+        for sha in &live {
+            let p = self.blob_path(sha);
+            if let Ok(meta) = std::fs::metadata(&p) {
+                freed += meta.len();
+                // 删不掉就留着（可能有进程正打开它），它现在是孤儿但无害。
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+        Ok(EraseReport {
+            tables: ERASE_TABLES.len(),
+            freed_bytes: freed,
+        })
     }
 
     /// 本次 open 实际应用的迁移。`applied` 为空 = 幂等重开，未动 schema。
@@ -1802,10 +1891,15 @@ fn sample_trigrams(conn: &Connection, n: usize) -> Result<Vec<String>, StoreErro
 
 // ------------------------------------------------------------------ 引导 ---
 
-fn bootstrap(conn: &mut Connection, device_id: &DeviceId) -> Result<DeviceId, StoreError> {
+/// 种下「刚装好」那一格需要的行（meta / 本地哨兵账户 / 默认本）。
+///
+/// **事务由调用方持有**：`open` 自己起一笔，`erase_all_data` 在自己的写事务里复用它。
+/// 复用而不是再抄一份的理由见 `erase_all_data` 上面那段：清完必须还能记笔记、
+/// 而且新笔记要照样留痕（I8），而这两样正是默认本与哨兵账户提供的。
+fn bootstrap(conn: &Connection, device_id: &DeviceId) -> Result<DeviceId, StoreError> {
     let now = Timestamp::new(chrono::Utc::now());
     let device = device_id.to_string();
-    let tx = conn.transaction()?;
+    let tx = conn;
     if rows::meta_get(&tx, META_CREATED_AT)?.is_none() {
         rows::meta_set(&tx, META_CREATED_AT, now.as_str())?;
     }
@@ -1874,7 +1968,6 @@ fn bootstrap(conn: &mut Connection, device_id: &DeviceId) -> Result<DeviceId, St
             Some(&hash),
         )?;
     }
-    tx.commit()?;
     Ok(device_id.clone())
 }
 

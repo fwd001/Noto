@@ -276,59 +276,10 @@ pub fn run() {
                 let _ = w.set_focus();
             }
             // 窗口已经出首帧，**这时**才允许碰网络（PLATFORM.md §3）。
-            // 没配服务器或凭据还没接入钥匙串 → 引擎不启动，本地照常写（I8）。
-            match app.sync_remote() {
-                Ok(Some(_)) => {
-                    // 协商在启动调度器**之前**：两个库指向同一目录、或服务器上的
-                    // 协议区间不相交时，必须一次都不写，而不是先同步了再解释。
-                    let host = app.as_ref().clone();
-                    tauri::async_runtime::spawn(async move {
-                        // §5「首次连接与每日一次」：探测必须在装适配器**之前**完成，
-                        // 否则这次会话仍按保守默认写，探到的能力要等下次启动才生效。
-                        let remote = match host.remote_for_sync().await {
-                            Ok(Some(r)) => r,
-                            // 配置在启动期间被改掉（拔了账户）：静默退回"只用本地"。
-                            Ok(None) => return,
-                            Err(e) => {
-                                host.emit(BusEvent::Toast {
-                                    message_key: e.message_key,
-                                    level: "warn".into(),
-                                });
-                                return;
-                            }
-                        };
-                        match host.negotiate(&remote).await {
-                            Ok(()) => {
-                                // 附件走自己的循环（§13）：与文本轮次互不等待、互不阻塞，
-                                // 一个 20 MB 的图片不该让文字同步停下来。
-                                let att = host.clone();
-                                let att_remote = std::sync::Arc::clone(&remote);
-                                tauri::async_runtime::spawn(async move {
-                                    att.run_attachments(
-                                        att_remote,
-                                        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
-                                            false,
-                                        )),
-                                    )
-                                    .await;
-                                });
-                                host.start_sync(remote).run().await
-                            }
-                            Err(key) => {
-                                host.emit(BusEvent::Toast {
-                                    message_key: key.to_string(),
-                                    level: "warn".into(),
-                                });
-                            }
-                        }
-                    });
-                }
-                Ok(None) => {}
-                Err(e) => app.emit(BusEvent::Toast {
-                    message_key: e.message_key,
-                    level: "warn".into(),
-                }),
-            }
+            // 引擎的生命周期交给宿主托管（缺口 G50）：以前这里是"开机那一刻配好才起、
+            // 且只起一次"，于是全新安装填好 WebDAV 之后点同步，徽标会停在"正在同步"
+            // 直到重启 —— 而界面那句文案写的是"配好凭据后会自动开始同步"。
+            app.enable_background_sync();
             Ok(())
         })
         .build(tauri::generate_context!())
