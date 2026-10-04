@@ -24,7 +24,8 @@ struct Tmp(PathBuf);
 impl Tmp {
     fn new(tag: &str) -> Self {
         let n = SEQ.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("notera-autostart-{tag}-{}-{n}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("notera-autostart-{tag}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
@@ -83,10 +84,7 @@ async fn configuring_an_account_starts_the_engine_without_a_restart() {
 
     // 配好（**不重启**、不发 sync_now、不调 sync-once）
     app.configure_account(draft(&url)).expect("配置账户");
-    let put_seen = wait_until(30, || {
-        srv.request_log().iter().any(|r| r.method == "PUT")
-    })
-    .await;
+    let put_seen = wait_until(30, || srv.request_log().iter().any(|r| r.method == "PUT")).await;
     let log = srv.request_log();
     assert!(
         put_seen,
@@ -127,7 +125,6 @@ async fn removing_the_account_stops_the_engine_without_a_restart() {
     assert_eq!(
         before, after,
         "删掉账户之后还在打服务器（{} → {} 条）—— 那台服务器的数据归谁说了算已经不清楚了",
-        before,
-        after
+        before, after
     );
 }

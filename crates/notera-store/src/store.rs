@@ -1900,16 +1900,16 @@ fn bootstrap(conn: &Connection, device_id: &DeviceId) -> Result<DeviceId, StoreE
     let now = Timestamp::new(chrono::Utc::now());
     let device = device_id.to_string();
     let tx = conn;
-    if rows::meta_get(&tx, META_CREATED_AT)?.is_none() {
-        rows::meta_set(&tx, META_CREATED_AT, now.as_str())?;
+    if rows::meta_get(tx, META_CREATED_AT)?.is_none() {
+        rows::meta_set(tx, META_CREATED_AT, now.as_str())?;
     }
-    if rows::meta_get(&tx, META_INSTALL_ID)?.is_none() {
-        rows::meta_set(&tx, META_INSTALL_ID, &EntityId::new().to_string())?;
+    if rows::meta_get(tx, META_INSTALL_ID)?.is_none() {
+        rows::meta_set(tx, META_INSTALL_ID, &EntityId::new().to_string())?;
     }
     // meta.device_id 记录本机安装身份；每次 open 以调用方给出的为准（device_id 由 host 拥有）。
-    rows::meta_set(&tx, META_DEVICE_ID, &device)?;
-    if rows::meta_get(&tx, META_SEARCH_GEN)?.is_none() {
-        rows::meta_set(&tx, META_SEARCH_GEN, "0")?;
+    rows::meta_set(tx, META_DEVICE_ID, &device)?;
+    if rows::meta_get(tx, META_SEARCH_GEN)?.is_none() {
+        rows::meta_set(tx, META_SEARCH_GEN, "0")?;
     }
     // 哨兵账户：outbox.account_id 是 NOT NULL FK，而本地写入必须留痕（I8：不依赖网络可达）。
     // enabled=0 —— 未配置真实远端时，待办只落库不外发。
@@ -1926,17 +1926,17 @@ fn bootstrap(conn: &Connection, device_id: &DeviceId) -> Result<DeviceId, StoreE
     // 默认本（DATA-MODEL §9：文件夹删除不级联，笔记移入默认本）。
     // 判据必须是"库里有没有 system_kind='default' 的行"，而不是只看 meta 缓存：
     // 升级上来的旧库 / 被外部改过 meta 的库都可能没有 cached_root_id，只看 meta 会造出第二个默认本。
-    let cached_ok = match rows::meta_get(&tx, META_CACHED_ROOT)? {
+    let cached_ok = match rows::meta_get(tx, META_CACHED_ROOT)? {
         Some(cached) => match EntityId::parse(&cached) {
-            Ok(id) => rows::read_folder(&tx, &id)?.is_some(),
+            Ok(id) => rows::read_folder(tx, &id)?.is_some(),
             Err(_) => false,
         },
         None => false,
     };
     if cached_ok {
         // 已有且可用：什么都不做（幂等）
-    } else if let Some(existing) = existing_default_folder(&tx)? {
-        rows::meta_set(&tx, META_CACHED_ROOT, &existing.to_string())?;
+    } else if let Some(existing) = existing_default_folder(tx)? {
+        rows::meta_set(tx, META_CACHED_ROOT, &existing.to_string())?;
     } else {
         // 固定 id：默认本是角色实体，不是"本机第一次开机时随手造的一个文件夹"。
         // 用随机 id 的话两台设备各公告一条，远端清单里就有两条 system_kind='default'
@@ -1957,9 +1957,9 @@ fn bootstrap(conn: &Connection, device_id: &DeviceId) -> Result<DeviceId, StoreE
              VALUES (?1,NULL,?2,NULL,'default',0,?3,0,NULL,0,?4,?5,?5,NULL,NULL,?6,?6)",
             params![id.as_str(), DEFAULT_FOLDER_NAME, rev.get() as i64, hash, now.as_str(), device],
         )?;
-        rows::meta_set(&tx, META_CACHED_ROOT, &id.to_string())?;
+        rows::meta_set(tx, META_CACHED_ROOT, &id.to_string())?;
         rows::enqueue(
-            &tx,
+            tx,
             now.as_str(),
             EntityKind::Folder,
             &id,

@@ -8,13 +8,12 @@
 
 use notera_crypto::{KeyVault, UnlockMethod, RECOVERY_WORDS};
 
-fn key_of(n: u8) -> [u8; 32] {
-    let mut k = [0u8; 32];
-    for (i, slot) in k.iter_mut().enumerate() {
-        *slot = n.wrapping_mul(31).wrapping_add(i as u8);
-    }
-    k
-}
+// 这里原来有一个 `key_of(n)` 造出来的"期望密钥"，以及一条
+// `assert_eq!(&k[..], &k[..])`（注释自己写着"占位：确保 k 被用上"）。
+// 那条断言**两边是同一个变量**，永远不会红 —— 按 §45「不会红的断言比没有断言更糟」
+// 和它下面那条"避免 unused 警告"的理由（用一条假断言去喂编译器）一起删掉，
+// 连 `key_of` 一起：它与 `from_passphrase` 的派生毫无关系，比不出任何真结论。
+// 这个测试真正在盯的是"恢复码逐词往返必须拿回同一把 master"，那一条留着。
 
 #[test]
 fn recovery_phrase_is_24_known_words() {
@@ -42,14 +41,11 @@ fn recovery_roundtrip_is_byte_exact() {
 fn recovery_roundtrip_holds_for_many_keys() {
     // 只测一把会漏掉"位打包对某些字节才正确"这类错，所以铺开若干把。
     for n in [0u8, 1, 7, 42, 128, 200, 254, 255] {
-        let mut k = key_of(n);
-        // 直接改写 vault 的 master 不可行（字段私有），所以走 create + 替换主密钥的等价路径：
         // 用 passphrase 造一把可预期的，再验它的恢复码往返。
         let v = KeyVault::from_passphrase(&[n; 8], [n; 16]).expect("派生");
         let phrase = v.recovery_phrase();
         let back = KeyVault::from_recovery_phrase(&phrase, *v.salt()).expect("解开");
         assert_eq!(back.master(), v.master(), "n={n} 的往返必须逐字节相同");
-        assert_eq!(&k[..], &k[..], "占位：确保 k 被用上，避免 unused 警告");
     }
 }
 

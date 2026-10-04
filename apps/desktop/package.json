@@ -1,7 +1,7 @@
 {
   "name": "notera-desktop",
   "private": true,
-  "version": "0.0.62",
+  "version": "0.0.63",
   "type": "module",
   "packageManager": "pnpm@12.5.1",
   "description": "Notera 前端（Vue 3 + TypeScript + Vite）：三栏 UI + 富文本编辑器 + 同步徽标（4 结果 + 1 静止）",

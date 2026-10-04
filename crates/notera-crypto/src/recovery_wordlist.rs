@@ -1,8 +1,14 @@
-// BIP-39 英文词表（2048 词，公开标准）。由 scripts/gen-recovery-wordlist.mjs 从官方源生成，请勿手改。
+// BIP-39 英文词表（2048 词，公开标准）。
 //
 // 这张表是**协议的一部分**：换表 = 旧恢复码永久作废。它是纯常量，所以内联在此
 // 而不是 `include_str!` —— 后者会多一个"干净检出漏文件"的失败面（§45 那类假绿）。
-pub const RECOVERY_WORDLIST: [&str; 2048] = [
+//
+// ⚠ 以前这里写着"由 scripts/gen-recovery-wordlist.mjs 从官方源生成，请勿手改"，
+//   但那个脚本**从来不在仓库里**（`git log --all --` 也没有它）。一句指向不存在文件的
+//   "请勿手改"会把这份表变成既不能重现也不能修改的东西 —— 所以按事实改成：
+//   **这份文件就是唯一权威**；要引入生成器，就得连"它必须输出 `static`（clippy 的
+//   `large_const_arrays` 在 `-D warnings` 下会红）"一起写进来，否则重跑一次就把门禁打回红的。
+pub static RECOVERY_WORDLIST: [&str; 2048] = [
     "abandon", "ability", "able", "about", "above", "absent", "absorb", "abstract", "absurd",
     "abuse", "access", "accident", "account", "accuse", "achieve", "acid", "acoustic", "acquire",
     "across", "act", "action", "actor", "actress", "actual", "adapt", "add", "addict", "address",

@@ -1560,6 +1560,44 @@ Rust `cargo test --workspace` **672 通过 / 0 失败 / 6 ignored**（90 个 res
 647 → 672 = 这批新增的 `erase_all.rs` 1 + `auto_start_sync.rs` 2 + `notera-host --lib` 的启用位 2 +
 E2EE 那两本 `key_vault.rs`/`sealed_e2ee.rs` 的若干条）。
 
+### 修复（2026-10-04 推上去之后 CI 红了这一批：0.0.62 → 0.0.63）
+
+- **CI 在 `main` 上连红两次，两条根因都是"本机只跑了门禁的子集"（版本 0.0.62 → 0.0.63）**
+  - 现象：推完 9 个 commit，`PR 门禁` 两次都在 **55 秒 / 1 分 6 秒**就挂（正常一轮要 20–25 分钟），
+    而"没自动打包、也没建 Release"是**另一件事**：`release.yml` 只挂 `push: tags v*` 与
+    `release: published`，我按"发布由你验收"只留了本地 tag 没推 ⇒ 触发条件本身没发生。
+  - 根因一：CI 的阻断步骤里有 `cargo fmt --all --check`，而我本机跑的是
+    test / vue-tsc / eslint / arch-check 这一套，**没有 fmt**。复现就是本机 `FMT_EXIT=1`，
+    diff 落在这批新写的 `notera-host/src/lib.rs` 与 `auto_start_sync.rs` 上。
+  - 根因二：`cargo clippy --workspace --all-targets -- -D warnings` 也阻断，本机同样没跑。
+    它先红在上一轮那批 E2EE 文件上（那批之前**未提交**，所以 CI 从没见过它们），
+    修掉那两条之后又露出 13 条 `needless_borrow` —— 是**我把 `bootstrap` 的事务交给调用方**
+    那次改动带出来的（`tx` 从 `Transaction` 变成 `&Connection`，`&tx` 就成了 `&&Connection`）。
+  - 教训按 §45 记在这儿而不是藏在心里：**"我跑过门禁"必须等于"CI 那份清单我逐条跑过"**，
+    子集绿灯当全量子集用，就是把红门禁推上去还自以为交付了。
+- **恢复码校验那位不足 8 位时会 panic（`vault.rs`；随这一批修掉）**
+  - 旧写法 `for k in 0..8 { tail_idx[k] }`：`tail_idx` 是按 11 位切出来的尾块，
+    用户手抄错词数时它可能不足 8 个元素 ⇒ **越界 panic**。这是"用户输入"那条路径，
+    该回一句"校验不过（抄错或顺序错）"而不是崩。改成切片迭代器之后，少几位就算不出
+    期望的校验值，自然落到那句具名错误。（clippy 的 `needless_range_loop` 只是把它逼出来的入口，
+    修的是真缺陷，不是为了让门禁闭嘴。）
+- **删掉一条永远不会红的断言（`notera-crypto/tests/key_vault.rs`）**
+  - `assert_eq!(&k[..], &k[..], "占位：确保 k 被用上，避免 unused 警告")` —— 两边是同一个变量，
+    按 §45「不会红的断言比没有断言更糟」直接删，连只喂这条断言的 `key_of` 一起删。
+    这个测试真正在盯的东西留着：恢复码逐词往返必须拿回同一把 master。
+  - ⚠ 顺带记一个**门禁缺口**：`arch-check` 那条只盯「或」断言，`assert_eq!(x, x)` 这种自比它扫不出来，
+    所以一条假断言能过全部现有门禁。补法（下次动 `arch-check` 时一并做）：
+    在测试面里查"`assert_*` 的两个实参是不是同一个表达式"。
+- **`recovery_wordlist.rs` 的注释改成真话**：它写着"由 `scripts/gen-recovery-wordlist.mjs`
+  从官方源生成，请勿手改"，而那个脚本**从来不在仓库里**（`git log --all --` 也没有）。
+  一句指向不存在文件的"请勿手改"会让这张协议表既不能重现也不能修改。现在写明这份文件是唯一权威，
+  以及将来若引入生成器必须输出 `static`（`large_const_arrays` 在 `-D warnings` 下会红）。
+
+读数（这一批把 CI 那份清单逐条本机跑过，GNU 工具链）：`cargo fmt --all --check` 0、
+`cargo clippy --workspace --all-targets -- -D warnings` 0、`pnpm build` 0（产物 232.53 kB / gzip 78.85 kB）、
+`pnpm audit --audit-level=high` 0、`audit-rust-deps` 判据自测与全量各 0、
+`cargo test --workspace -- --test-threads=1` 见下面那行、前端 285/31、`vue-tsc` 0、`eslint` 0、arch-check 32/32。
+
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
 - **G38 同步在 macOS / Linux / Android 上配不出来：口令只允许进 OS 凭据库，而那三个平台没接**（2026-09-30 按 §45 扫出来；状态 = **未修，等口径拍板**；三条出路写在 PRODUCTION-READINESS §7）
   - 事实链：`credential_store::available()` 就是 `cfg!(windows)`，`put()` 在非 Windows 直接 `Unavailable`，而

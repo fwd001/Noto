@@ -228,8 +228,12 @@ fn key_from_words(words: &[String; RECOVERY_WORDS]) -> Result<[u8; KEY_LEN], Cry
         .next()
         .ok_or_else(|| CryptoError::Malformed("恢复码长度不对".into()))?;
     let mut got = 0usize;
-    for k in 0..8 {
-        got |= (tail_idx[k] as usize) << (7 - k);
+    // 走切片迭代器而不是 `0..8` 下标（clippy 的 needless_range_loop）。
+    // 顺带修掉一个真可达的 panic：`tail_idx` 是按 11 位切出来的，用户手抄错词数时
+    // 它可能不足 8 个元素，旧写法 `tail_idx[k]` 会当场越界 —— 而这是**用户输入**那条路，
+    // 该回一句"校验不过"而不是崩。现在少几位就算不出 want，落到下面那句具名错误。
+    for (k, bit) in tail_idx.iter().take(8).enumerate() {
+        got |= (*bit as usize) << (7 - k);
     }
     if got != want as usize {
         return Err(CryptoError::Malformed(

@@ -2925,9 +2925,14 @@ impl App {
                         let att = self.clone();
                         let att_stop = Arc::clone(&stop);
                         // SYNC-PROTOCOL §13：附件走自己那条循环，与文本轮次互不等待。
-                        tokio::spawn(async move { att.run_attachments(att_remote, att_stop).await });
+                        tokio::spawn(
+                            async move { att.run_attachments(att_remote, att_stop).await },
+                        );
                         tokio::spawn(async move { sched.run().await });
-                        worker = Some(SyncWorker { account_id: id, stop });
+                        worker = Some(SyncWorker {
+                            account_id: id,
+                            stop,
+                        });
                         tracing::info!("后台同步引擎已随配置启动（不必重启）");
                     }
                     Err(key) => {
@@ -5419,10 +5424,13 @@ mod tests {
 
         let mut off = draft("a", "https://dav.home.example/dav", Some("u"));
         off.enabled = Some(false);
-        let saved = app
-            .configure_account(off)
-            .expect("存一条**关掉**的账户不是错误：回 no_account 就等于对着已改好的配置说\"保存失败\"");
-        assert!(!saved.enabled, "存回来的那一位要说\"关着\"，否则界面下一拍又把它勾上");
+        let saved = app.configure_account(off).expect(
+            "存一条**关掉**的账户不是错误：回 no_account 就等于对着已改好的配置说\"保存失败\"",
+        );
+        assert!(
+            !saved.enabled,
+            "存回来的那一位要说\"关着\"，否则界面下一拍又把它勾上"
+        );
 
         let back = app.current_account().unwrap().expect("关了也得读得回来");
         assert!(
