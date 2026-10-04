@@ -186,7 +186,6 @@ onBeforeUnmount(() => {
         >
           <div class="row-item__main">
             <p class="row-item__title">
-              <span v-if="entry.pinned" class="row-item__pin" aria-hidden="true">✓</span>
               {{ entry.title }}
             </p>
             <p v-if="entry.snippetHtml" class="row-item__snippet" v-html="entry.snippetHtml" />
@@ -198,17 +197,20 @@ onBeforeUnmount(() => {
               <span v-if="conflicts.contended.has(entry.id)" class="row-item__contended" data-testid="row-contended" :title="t('list.contendedNote')" :aria-label="t('list.contendedNote')">⚠</span>
               <span>{{ formatWhen(entry.updatedAt) }}</span>
             </span>
+            <button
+              v-if="!notes.inTrash"
+              type="button"
+              class="row-item__pin"
+              :class="{ 'row-item__pin--on': entry.pinned }"
+              data-testid="note-pin-toggle"
+              :aria-pressed="entry.pinned ? 'true' : 'false'"
+              :aria-label="entry.pinned ? t('list.unpin') : t('list.pin')"
+              :title="entry.pinned ? t('list.unpin') : t('list.pin')"
+              @click.stop="notes.setPinned(entry.id, !entry.pinned)"
+            >
+              {{ entry.pinned ? '●' : '○' }}
+            </button>
             <span class="row-item__actions">
-              <button
-                v-if="!notes.inTrash"
-                type="button"
-                class="btn btn--quiet btn--icon"
-                :aria-label="entry.pinned ? t('list.unpin') : t('list.pin')"
-                :title="entry.pinned ? t('list.unpin') : t('list.pin')"
-                @click.stop="notes.setPinned(entry.id, !entry.pinned)"
-              >
-                ◎
-              </button>
               <button
                 v-if="!notes.inTrash"
                 type="button"
@@ -300,9 +302,34 @@ onBeforeUnmount(() => {
   color: var(--text-primary);
 }
 
+/* 置顶那颗点：**常显**，且状态用图形本身表达（空心 ↔ 实心 + 主色）。
+   此前它藏在 `.row-item__actions` 里（父级 opacity:0，只有悬停才出现），
+   点完唯一的反馈是标题前多一个 ✓ —— 用户读不到"这颗点改了什么"。
+   父级 opacity 是压不住的（子元素无法把自己从 opacity:0 里救回来），
+   所以这颗必须搬到 `__actions` 外面，而不是在里面加一条覆盖。 */
 .row-item__pin {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--touch-min);
+  min-height: var(--touch-min);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-2);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.row-item__pin:hover {
+  color: var(--text-secondary);
+}
+
+.row-item__pin--on {
   color: var(--accent);
-  margin-right: var(--space-1);
 }
 
 .row-item__summary,
@@ -330,7 +357,7 @@ onBeforeUnmount(() => {
 .row-item__side {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: var(--space-2);
 }
 
@@ -338,6 +365,8 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  /* 那颗点搬到 meta 之后，靠这一条把 meta 顶到行首，右侧留给置顶 + 悬浮操作。 */
+  margin-inline-end: auto;
   font-size: var(--text-xs);
   color: var(--text-muted);
 }
