@@ -23,6 +23,9 @@ function ensureNode(value: unknown): FolderNode | null {
     ...(typeof raw.noteCount === 'number' ? { noteCount: raw.noteCount } : {}),
     ...(typeof raw.sortOrder === 'number' ? { sortOrder: raw.sortOrder } : {}),
     ...(typeof raw.color === 'string' ? { color: raw.color } : {}),
+    // 这一格必须由核心决定，不能在这里凭名字猜："默认"是用户可改的显示名，
+    // 而 systemKind 才是角色。丢了它，默认本上就会长出三颗点了必报错的按钮。
+    systemKind: typeof raw.systemKind === 'string' ? raw.systemKind : null,
   };
 }
 

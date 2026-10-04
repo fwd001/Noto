@@ -27,6 +27,15 @@ const padLeft = computed(() => `calc(var(--space-2) + ${props.depth} * var(--spa
 
 const moveTargets = computed<FlatFolder[]>(() => folders.flat.filter((entry) => entry.node.id !== movingId.value && !isUnderMoving(entry)));
 
+/**
+ * 核心对 `systemKind` 非空的文件夹一律拒绝改名/移动/删除（`assert_folder_writable`）。
+ * 界面无凭据地摆出这三颗，用户点下去得到的是一句 Constraint 错 —— 所以按钮的可见性
+ * 跟着核心的判据走，而不是另立一套"看起来像默认本"的猜测。
+ */
+function isSystem(node: FolderNode): boolean {
+  return typeof node.systemKind === 'string' && node.systemKind.length > 0;
+}
+
 function isUnderMoving(entry: FlatFolder): boolean {
   const moving = movingId.value;
   if (!moving) return false;
@@ -120,29 +129,16 @@ function isActive(id: string | null): boolean {
         </button>
 
         <div class="tree__tools">
-          <button type="button" class="btn btn--quiet btn--icon" :title="t('sidebar.rename')" :aria-label="t('sidebar.rename')" @click="beginRename(node.id, node.name)">
+          <button v-if="!isSystem(node)" type="button" class="btn btn--quiet btn--icon" data-testid="folder-rename" :title="t('sidebar.rename')" :aria-label="t('sidebar.rename')" @click="beginRename(node.id, node.name)">
             ✎
           </button>
           <button type="button" class="btn btn--quiet btn--icon" :data-testid="`folder-new-sub-${node.id}`" :title="t('sidebar.newSubfolder')" :aria-label="t('sidebar.newSubfolder')" @click="beginCreate(node.id)">
             ＋
           </button>
-          <button
-            type="button"
-            class="btn btn--quiet btn--icon"
-            :aria-expanded="movingId === node.id ? 'true' : 'false'"
-            :title="t('sidebar.moveTo')"
-            :aria-label="t('sidebar.moveTo')"
-            @click="movingId = movingId === node.id ? null : node.id"
-          >
+          <button v-if="!isSystem(node)" type="button" class="btn btn--quiet btn--icon" data-testid="folder-move" :aria-expanded="movingId === node.id ? 'true' : 'false'" :title="t('sidebar.moveTo')" :aria-label="t('sidebar.moveTo')" @click="movingId = movingId === node.id ? null : node.id">
             ⇄
           </button>
-          <button
-            type="button"
-            class="btn btn--quiet btn--icon"
-            :title="t('sidebar.deleteFolder')"
-            :aria-label="t('sidebar.deleteFolder')"
-            @click="confirmingDelete = confirmingDelete === node.id ? null : node.id"
-          >
+          <button v-if="!isSystem(node)" type="button" class="btn btn--quiet btn--icon" data-testid="folder-delete" :title="t('sidebar.deleteFolder')" :aria-label="t('sidebar.deleteFolder')" @click="confirmingDelete = confirmingDelete === node.id ? null : node.id">
             ⌫
           </button>
         </div>

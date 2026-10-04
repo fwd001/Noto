@@ -90,6 +90,13 @@ export interface Folder {
   parentId: Uuid | null;
   name: string;
   color?: string | null;
+  /**
+   * 角色标记（核心 `FolderDto.systemKind`）。默认本是 `'default'`，普通文件夹是 null。
+   * 核心对**非 null 的那一类**拒绝改名/移动/删除，所以界面必须按它决定要不要给按钮 ——
+   * 此前 DTO 一直发着这一格，前端类型却没声明、`ensureNode` 也没往下带，
+   * 于是"默认本"上那三颗按钮点了只回一句 Constraint 错。
+   */
+  systemKind?: string | null;
   sortOrder?: number;
   rev?: number;
   createdAt?: Rfc3339;

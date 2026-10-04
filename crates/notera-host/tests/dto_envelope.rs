@@ -227,3 +227,53 @@ fn the_gate_reads_real_serialized_output() {
         );
     }
 }
+
+/// `systemKind` 必须在**线格式**里看得见，而且默认本的值就是 `"default"`。
+///
+/// 这一格此前核心一直在发、前端类型没声明也没往下带，于是"默认本"上长出
+/// 改名/移动/删除三颗按钮 —— 点下去得到的全是 `assert_folder_writable` 的拒绝。
+/// 界面唯一的凭据就是这个键，所以钉在真 `dispatch` 的输出上，而不是 Rust 字段名。
+#[test]
+fn folder_wire_carries_system_kind_for_the_default_folder() {
+    let dir = Tmp::new("syskind");
+    let app = App::boot(dir.path()).expect("核心启动");
+    let mine = call(
+        &app,
+        "create_folder",
+        json!({ "parentId": Value::Null, "name": "工作" }),
+    );
+    let folders = call(&app, "list_folders", json!({}));
+    let all = folders.as_array().expect("list_folders 该回数组");
+
+    let default = all
+        .iter()
+        .find(|f| f["systemKind"].as_str() == Some("default"))
+        .expect("树里找不到 systemKind=\"default\" 的默认本：界面就没法藏那三颗按钮");
+    assert_eq!(
+        default["id"].as_str(),
+        Some(notera_store::DEFAULT_FOLDER_ID),
+        "默认本的 id 不是写死的那一个（角色实体不该由开机时间决定）"
+    );
+
+    let mine_id = mine["id"].as_str().unwrap();
+    let normal = all
+        .iter()
+        .find(|f| f["id"].as_str() == Some(mine_id))
+        .expect("刚建的文件夹没出现在树里");
+    assert!(
+        normal.get("systemKind").is_some(),
+        "普通文件夹的载荷里没有 systemKind 这一格：前端只能凭名字猜默认本"
+    );
+    assert!(
+        normal["systemKind"].is_null(),
+        "普通文件夹的 systemKind 不是 null：{normal}"
+    );
+
+    // 核心那条守卫也得真的在：删默认本必须被拒（否则界面藏按钮只是遮丑）。
+    let err = dispatch(&app, "delete_folder", json!({ "id": default["id"] }))
+        .expect_err("默认本居然删得掉，界面藏按钮只是遮丑");
+    assert_eq!(
+        err.code, "constraint",
+        "拒绝默认本删除的错误码变了：{err:?}"
+    );
+}
