@@ -11,7 +11,7 @@ Notera · Phase 0 交付评审件 · 2026-09-25
 
 做一款 **local-first 跨平台个人笔记软件**：体验接近 Apple Notes，但数据存在用户自有的 WebDAV 服务器上，并支持 App 级代理。
 
-用户动作链只有五步：安装 → 打开 → 直接写 → 自动保存 → 自动同步。同步机制（WebDAV/Revision/Manifest/Tombstone/ETag/Pull/Push/Merge/Conflict）全部是实现细节，用户只看到 `✓已同步 / ↻正在同步 / ○离线 / !同步失败` 四态。
+用户动作链只有五步：安装 → 打开 → 直接写 → 自动保存 →（配好并启用之后）自动同步。同步机制（WebDAV/Revision/Manifest/Tombstone/ETag/Pull/Push/Merge/Conflict）全部是实现细节，用户只看到 `✓已同步 / ↻正在同步 / ○离线 / !同步失败` 四格同步结果，外加一格静止的 `·未配置同步 / 同步已关闭`。
 
 裁决优先级（不可重排）：`数据安全 > 同步正确性 > 稳定性 > 用户体验 > 原生平台体验 > 性能 > 可维护性 > 新功能`。
 

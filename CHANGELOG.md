@@ -1470,6 +1470,96 @@
 - dev 桥的 Origin 校验用前缀匹配，`http://127.0.0.1.evil.example` 可通过
 - `Tauri` 壳配置里 `bundle.targets` 含协议外的取值，构建脚本直接失败
 
+### 修复与新增（2026-10-04 这一批：0.0.58 → 0.0.62）
+
+> 起因是用户一句话：「我没有配置同步咋一点击未同步就开始转了 …… 默认我自己安装应该没有同步，
+> 一切以我配置的设置为主」，加上「设计界 2 列 3 列长度对不齐不好看」。
+> 顺着这两句把同步的全部流程与设置面逐条对到代码上，翻出 **G46–G57** 十二条，
+> 全部按"每条都有真机读数 + 撤掉修复即红的变异"办（台账见 `docs/PRODUCTION-READINESS.md`）。
+> 这批还顺手托管了上一轮留下的未提交代码（`清除一切数据`、E2EE 库层、三份 spec、出包脚本），
+> 逐件判过有用/没用：**有用的都在这几条里，没用的（7 条没有 call site 的界面文案）删掉了**。
+
+- **没配同步时点一下徽标就进"正在同步"，而且那一转是永久的（缺口 G46 / G51，§1 级；版本 0.0.58 → 0.0.59）**
+  - 根因不在状态机，在**一条没人守的调用边**：`sync_now` 命令只做 `dirty_ticks += 1` 就回 `null`
+    （HTTP 200，**从不回错** —— 实测），而调度器只在"开机那一刻已配好账户"时 spawn 一次
+    ⇒ 没有任何事件来把 `syncing` 带走。真机差分：空库点一下，连采 12 秒**全是 `syncing`**、
+    `aria-busy=true`、控制台 0 error；F5 同形。于是那条写着"核心会回 `no_account`"的注释
+    与它下面那条永远进不去的兜底，一起被搬到了**门口**：`syncNow()` 先判配置再决定要不要亮灯。
+  - 静止态现在说清是**哪一种**静止：`未配置同步` / `同步已关闭` / 缺凭据那句具名原因；
+    而那句"为什么"以前只活在 `aria-live` 与 `title` 里，屏幕上根本看不见（G51，
+    `foldSyncEvent` 的 `case 'offline'` 还把 `messageKey` 一律清成 `null`）。
+  - 顺带把 `foldSyncEvent` 补成**全函数**：少 `idle` 那一支时，`'idle'` 会掉进 `default` 变成
+    "同步失败" —— 把"没在同步"报成"同步坏了"，正是用户投诉的那类谎。
+  - 文档口径一并钉平（原来 `ARCHITECTURE-MAP §6` 写"不得增加第 5 态"，代码早就在用 `idle`；
+    README/ARCHITECTURE/ARCHITECTURE-REVIEW 的用户动线那句"安装 → … → 自动同步"没有"配了才同步"这个前提）。
+  - 门禁：`src/syncClickGate.spec.ts` 6 条（挂真 App，断言打在"这一次 `sync_now` 发没发"与
+    "徽标进没进 syncing"两层，**修前 6/6 全红**）；真机复跑 `scripts/verify-sync-idle.mjs`
+    ⇒ `点击前=idle · 12 秒唯一值=idle · sync_now 请求数 0 · 设置页已打开 · 0 error`。
+- **设置页那个「启用同步」勾选框是个空控件：用户关掉了，同步照跑（缺口 G47，§1 级；版本 0.0.59 → 0.0.60）**
+  - 前端一直在发 `enabled`，而 `AccountDraftCmd` **没有这个字段** ⇒ serde 静默丢掉，
+    `configure_account` 再硬编 `enabled: true`。第二层坑是修第一层才露出来的：
+    `current_account()` 走按 `enabled` 过滤的 `active()` ⇒ 真关掉之后设置页表单被洗空、
+    口令要重敲，那个开关成了**只能关不能开的单向门**；而保存一条关掉的账户会明明写成功了
+    却回 `no_account`（对着已改好的配置说"保存失败"）。
+  - 修法：`enabled: Option<bool>`（缺省 = 不改，与口令/PEM 同一套语义）；按 id 读回给界面
+    （引擎那侧照旧看 `enabled`）；并且把这一位**同时落到 `sync_accounts.enabled`** ——
+    只改配置文件不改账上的行，本地写入会继续给这台关掉的服务器排 outbox（无界增长，
+    而"待发操作"永远归不了零 = 用户眼里的"同步卡住了"）。
+  - 门禁：`notera-host` 两条新测试；**变异 M-G47a**（还原成硬编 `true`）⇒ 两条都红。
+    真机（重新出核）：关着 → 徽标 `· 同步已关闭`、连采 6 秒静止、`sync_now` **0 次**、0 error。
+- **「清除一切数据」之后库是空到不能用，而不是"刚装好"（缺口 G52；版本 0.0.60 内一并修掉）**
+  - `ERASE_TABLES` 连 `folders` 与 `sync_accounts` 一起清了，而这两张表里有引导期种下的
+    **默认本**与**本地哨兵账户** ⇒ 重启之前新建笔记没有落点，且 `all_accounts()` 返回空、
+    本地写入**静默不入 outbox**（违反 I8）。修法是让 `bootstrap` 的事务由调用方持有、
+    清完之后复用同一个 `bootstrap`，而不是再抄一份 INSERT。
+  - 门禁：`crates/notera-store/tests/erase_all.rs`（**修前红在 `必须存在默认本` panic**）。
+- **配好同步账户之后不重启就开始同步；移动壳以前从来没有起过引擎（缺口 G50 / G57；版本 0.0.60）**
+  - 用户拍板：文案保持「配好凭据后会自动开始同步」⇒ 那就必须真做到。生命周期从壳里收进宿主：
+    `App::enable_background_sync()` 起一条监督循环，每 2 秒读一次"当前该不该有引擎"，
+    该有而没有就起、不该有就停；文本轮次与附件轮次共用同一颗 `stop`（新增 `Scheduler::stop_handle()`）。
+    桌面壳那段一次性 spawn 换成一句调用；**移动壳补上这一句**（此前 Android 配好也永远不上传）；
+    `notera-cli serve` 也接上 ⇒ 浏览器 lane 测的才是产品那条真链路。
+  - 门禁：`crates/notera-host/tests/auto_start_sync.rs` 两条，判据打在结果上（不重启、不手动 sync-once、
+    不发 sync_now）：没配账户时服务器一条请求都收不到；配好后 30 秒内必有 `PUT` 且 `pending_ops` 归零、
+    徽标 `synced`；删账户之后请求数不再增长。**变异 M-G50a**（托管改成空函数）⇒ 两条都红。
+- **设置页"2 列 3 列长度对不齐"；820–1179 那一档侧栏够不着（缺口 G48 / G49；版本 0.0.60 → 0.0.61）**
+  - 旧写法 `auto-fit minmax(360px,1fr)` + `align-items:start` 实测：900/1100 出 2 列、1440 出 3 列、
+    **1800 出 4 列**，六张卡片底边落在六个不同的地方。照 Obsidian / Notion / Apple Notes 的口径
+    改成**一栏到底 + 行宽封顶 760px + 粘性分节导航**。
+  - 同批翻出更重的一条：两栏那一档侧栏整块在视口外（`x=-269`），而唯一的 ☰ 长在侧栏**自己内部**、
+    列表栏那颗又只在 `isCompact` 才出现 ⇒ 文件夹 / 同步 / 设置 整档够不着；根因是"一块面板两套
+    可见性机制"（三栏看 `data-sidebar`、两栏看 `data-drawer`），标题栏那颗 ☰ 在两栏档是按下去
+    什么都不动的空控件。修法：`sidebarShown` / `sidebarInline` 一位定真相，`toggleSidebar()` 按布局
+    落到对的位上，列表栏那颗的条件改成 `!sidebarInline`。
+  - 门禁：新增 `scripts/verify-layout.mjs`（真 chromium 逐档量**渲染后的几何**）；
+    **变异 M-G48a**（还原成 `auto-fit`）⇒ 四档全部红在"左缘不是同一个值"。
+- **一批"按下去不是它说的那件事"的控件与字段（缺口 G53 / G54 / G55 / G56；版本 0.0.61）**
+  - 代理口令**根本没发出去**（`toWire` 不 emit，核心收得到）⇒ 需要代理认证的服务器在界面上配不出来；
+    代理用户名只写不读 ⇒ 每次重开被洗空（改按 `hasCredential`/`hasCaPem` 那套"存过没有"的口径）。
+  - 核心早就有 `remove_account`（连系统凭据一起抹），界面上**没有任何入口** ⇒ 想停掉同步只有
+    "清除一切数据"那一条路（连正文一起删）。补上「删除同步账户」+ 两道确认，文案明说不动笔记。
+  - 冲突页那颗「打开笔记」实际会 `resolve` 掉这条分歧 —— 只读意图变成了**替用户做一个不可见的裁决**；
+    编辑器空白的「重试」在大多数情况下是**保证无效**的（`editor.open(id)` 的早退条件正好被命中）。
+  - `SearchHit` 两侧不是一套：核心回 `title`，TS 声明的是核心从没发过的 `titleHit`/`matchStarts`
+    —— 类型与 mock 一起绿灯、真产物缺的那格没人看（本仓踩过两次的同一形状）。
+  - 顺手删掉 7 条**没有 call site 的界面文案**（`settings.cleared` 那批，背后都是被砍掉却没清干净的
+    动作）。反向那条"登记了没人用"的门禁**故意没做**，理由与要补什么写在 `i18n.spec.ts` 里。
+- **E2EE 库层落地但界面无入口：信封密封 + KeyVault（版本 0.0.61 → 0.0.62）**
+  - 上一轮未提交的这批判过：**留下**。`ADR-0002` 早就在信封 v1 里预留了 `enc`，
+    `SYNC-PROTOCOL` 把"开启 E2EE"定为次版本；`notera-sync/src/sealed.rs` 插在引擎与 WebDAV 之间
+    （上行前 seal、下行后 open，解不开一律拒收不入库），`notera-crypto/src/vault.rs` 是钥匙库 + 恢复词。
+  - 关键的一点是它**默认不改线格式**：`vault` 为 `None` 时 `seal_outgoing` 原样返回明文
+    ⇒ 没启用加密的设备照样能读能写，不会一开就把自已锁在外面。
+  - ⚠ **诚实的边界**：`set_vault` 目前**没有任何生产 call site**（没有界面、没有命令）
+    ⇒ 产品上等于"没开"。留着的理由是它是 ADR-0002 的既定下一步、且带着自己的测试
+    （`key_vault.rs` / `sealed_e2ee.rs`），不是半成品冒充功能：台账按"库层已就绪、界面未接"记。
+
+读数（这批全部在 2026-10-04 本机实测）：前端 **285 通过（31 文件）**、`vue-tsc` 0 错、`eslint` 0 输出、
+arch-check **32/32**（其中一条 `erase_not_confirmed` 缺文案的红是这批顺手补掉的）、check-versions 一致；
+Rust `cargo test --workspace` **672 通过 / 0 失败 / 6 ignored**（90 个 result 行，`WS_EXIT=0`；
+647 → 672 = 这批新增的 `erase_all.rs` 1 + `auto_start_sync.rs` 2 + `notera-host --lib` 的启用位 2 +
+E2EE 那两本 `key_vault.rs`/`sealed_e2ee.rs` 的若干条）。
+
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
 - **G38 同步在 macOS / Linux / Android 上配不出来：口令只允许进 OS 凭据库，而那三个平台没接**（2026-09-30 按 §45 扫出来；状态 = **未修，等口径拍板**；三条出路写在 PRODUCTION-READINESS §7）
   - 事实链：`credential_store::available()` 就是 `cfg!(windows)`，`put()` 在非 Windows 直接 `Unavailable`，而

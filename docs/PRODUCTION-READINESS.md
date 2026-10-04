@@ -691,6 +691,205 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
     store 那层两条：正向"关掉、清正文、`inTrash` 落回 false"（修前红在 `expected 'note-aaaa' to be null`）
     + 反向腿"永久删除的是别的那一篇时，不许把当前这篇一起关掉"。
 
+- **G46 没配同步时点一下徽标就进"正在同步"，而且那一转是永久的（2026-10-04 用户报，同日量出并修掉；状态 = **VERIFIED**）**
+  - **用户原话**：「我没有配置同步咋一点击未同步就开始转了 …… 默认我自己安装应该没有同步，一切以我配置的设置为主」。
+  - **真机差分**（`.logs/repro-click-spin.mjs`，dev 桥 + 真 chromium + 全新空库）：
+    核心 `/cmd/account` = `null`；点击前徽标 `idle`（"未配置同步"）；**点一下之后连采 24 次 / 12 秒 = 全 `syncing`**，
+    `aria-busy=true`，控制台 0 error；F5 同形。⇒ 不是"闪一下"，是**停在谎话上直到重启**。
+  - **根因是一条没人守的调用边，不是状态机少一格**（三处独立证据，全部读到原文）：
+    ① `crates/notera-host/src/commands.rs:654` 的 `sync_now` 只做 `app.request_sync()`（= `dirty_ticks += 1`）
+      然后回 `Value::Null` —— **它从不回错**（实测 HTTP 200 / 20 ms）；
+    ② 于是 `stores/sync.ts` 里那条 `bridge.code === 'no_account'` 的兜底是**死代码**（永远进不去）；
+    ③ 调度器 `Scheduler` 只在壳里"首帧之后、那一刻已配好账户"时 spawn 一次
+      （`apps/desktop/src-tauri/src/lib.rs:280`，`devserver` 那侧根本没有），
+      没配账户 = **没有任何消费者** = 永远不会有一条 `BusEvent::Sync` 来把 `syncing` 带走。
+    而 `syncNow()` 第一件做的事是 `markBusy(true)` ⇒ **先亮灯，后看有没有电**。
+  - **修法（守位置从 catch 搬到门口）**：`syncNow()` 在 `markBusy` 之前判 `settings.syncActive`，
+    不允许就直接落 `idle` 并返回（不发请求、不亮灯）；`foldSyncEvent` 补 `case 'idle'`
+    （旧写法下 `'idle'` 会掉进 `default` 变成"同步失败"—— 把"没在同步"报成"同步坏了"）；
+    `SyncBadge` 那一次点击在静止态把用户带去**设置页**（点了不落空），store 不偷偷换视图。
+    ②那条死兜底**留着**：核心那侧的具名码是真存在的（`sync_once` 回 `no_account`），别的调用方撞上时仍要接住。
+  - **门禁**：`src/syncClickGate.spec.ts` 6 条（**挂真 App + 真 store，断言打在"这一次 `sync_now` 发没发"与"徽标进没进 syncing"两层**，
+    不是切源码形状）—— 修前 **6/6 全红**（红在 `expected 'syncing' not to be 'syncing'`）；修后整仓 **283 通过 / 31 文件**。
+    真机复跑 `.logs/verify-click-idle.mjs`：`点击前=idle · 点击后 12 秒唯一值=idle · sync_now 请求数 启动=0 点击后=0 · 设置页已打开 · 0 error`。
+  - **顺带把文档口径钉平**（这条是"文档说的和代码做的不是一回事"那一族的第 N 次）：
+    `ARCHITECTURE-MAP.md §6` 原来写"同步 4 态，**不得增加第 5 态**"，而代码与 `CI-CD.md` 早就在用 `idle`；
+    `README.md` / `ARCHITECTURE.md` / `ARCHITECTURE-REVIEW.md` 的用户动线那句"安装 → … → 自动同步"没有"配了才同步"这个前提。
+    四处已统一成「**4 格同步结果 + 1 格静止的"没在同步"，静止那格绝不转圈**」与「装完是干净的」，
+    `stores/sync.ts` 头部那句自相矛盾的"绝不出现第 5 态"一并改掉。
+
+- **G47 设置页那个「启用同步」勾选框是个空控件：用户关掉了，同步照跑（2026-10-04 量出并修掉；状态 = **VERIFIED**）**
+  - **形状**：前端一直在发这一位（`sync/accountWire.ts:76` `enabled: draft.enabled !== false`），
+    而 `AccountDraftCmd`（`commands.rs:346-379`）**没有这个字段** ⇒ serde 静默丢掉，
+    `configure_account` 又把 `enabled` **硬编成 `true`**（原 `lib.rs:1599`）⇒ 界面上取消勾选、保存、回执"已保存"，
+    核心那侧仍然是启用状态。这条正是用户那句「一切以我配置的设置为主」被当面绕过的样子。
+  - **第二层坑（修第一层才会露出来）**：`current_account()` 走 `ConfigRepository::active()`，而它按 `enabled` 过滤
+    ⇒ 真把开关拨到"关"之后，`account` 命令回 `null`：设置页表单被洗空、口令得重敲，
+    **那个开关就成了只能关不能开的单向门**；而 `configure_account` 的返回值也走 `active()`，
+    于是"存一条关掉的账户"会明明写成功了却回 `no_account`（对着已改好的配置说"保存失败"）。
+  - **修法**：`AccountDraftCmd.enabled: Option<bool>`（缺省 = 不改，与口令/PEM 同一套语义，
+    所以"编辑标签"不会顺手把已关的同步打开）；按 id 取回给界面（**不看 `enabled`**，引擎那侧照旧看）；
+    并且把这一位**同时落到 `sync_accounts.enabled`** —— 只改配置文件不改账上的行，
+    本地写入会继续给这台关掉的服务器排 outbox（`sync_surface.rs` 早钉过：禁用账户不得再排队，否则无界增长，
+    而"待发操作"那一格永远归不了零 = 用户眼里的"同步卡住了"）。
+  - **门禁**：`notera-host` 两条新测试（"关了要真停 + 还读得回来 + 再打得开"、"缺省这一位不许改原值"）。
+    **变异 M-G47a**（把 `enabled` 还原成硬编 `true`）⇒ **两条都红**，`second_enabled_account_…` 那条照旧绿
+    （红话不同 ⇒ 不是整片塌，是这两条真在盯这一位）。修后 `-p notera-host --lib` **52 通过**、`--test credential_session` **7 通过**。
+  - **前端那一半**：门控读的是新的 `settings.syncActive`（= 配了 **且** 开着），不再读 `hasAccount`（那只说"配过"）；
+    静止态的文案分两句：`未配置同步` vs `同步已关闭`（关着却说"未配置"是另一句假话 —— 与 G38 那族同形）。
+    启动那条自动同步同样改成判 `syncActive`。
+  - **留一处不精确，写下来别忘**：`sync_once` 在"配了但关着"这一形仍然回 `no_account`
+    （那句文案是"还没有配置同步服务器"），而账户明明配着 —— 与 G38 当年"两种情况折成一句假话"同一形。
+    界面这一侧走不到这条路（门控在发请求之前就拦了），所以本轮**没有**为它新登记一条错误码
+    （新码要进 `error.*` 表 + `i18n.spec.ts` 那张手抄的 `COMMAND_CODES`，属于扩面而不是修缺陷）。
+    要收的话，与 G50 一起拍：CLI `sync-once` 在禁用态该说"同步已关闭"。
+
+- **G52 「清除一切数据」之后库是**空到不能用**，不是"刚装好"（2026-10-04 核托管代码时量出并修掉；状态 = **VERIFIED**）**
+  - **形状**：`Store::erase_all_data` 按表 `DELETE`，而 `ERASE_TABLES` 里包含 `folders` 与 `sync_accounts`
+    —— 这两张表里有两行是**引导期种下的角色实体**：默认本（`system_kind='default'`，固定 id）
+    与本地哨兵账户（`LOCAL_ACCOUNT_ID`，`enabled=0`）。一起删掉之后，在用户真的重启之前：
+    ① 新建笔记**没有落点**（DATA-MODEL §9 的"删文件夹不级联，笔记移入默认本"没有默认本可移）；
+    ② `all_accounts()` 返回空 ⇒ 本地写入**静默不入 outbox**（违反 I8「提交即入 outbox，不等网络」）——
+    用户清完库接着记的那几条**永远不会同步出去**，而界面只说了一句"请重启应用"。
+  - **修法**：`bootstrap` 改成**事务由调用方持有**（`open` 自己起一笔；`erase_all_data` 在自己的写事务里
+    复用同一个 `bootstrap`），而不是再抄一份 INSERT —— "这两行是什么"只留一处权威。
+  - **门禁**：`crates/notera-store/tests/erase_all.rs`（清完 → 默认本还在 → 能建笔记 →
+    这一条当场排进 outbox）。**修前红在 `必须存在默认本` panic**，修后绿；
+    全量 `cargo test --workspace --lib` 0 失败（这条改动碰的是每次开库都走的路径，所以整树复跑过）。
+
+- **G53 代理的两格凭据：口令根本没发出去，用户名只写不读（2026-10-04 核托管代码时对账发现并修掉；状态 = **VERIFIED**）**
+  - **形状**：设置页有「代理用户名 / 代理口令」两格，核心 `AccountDraftCmd` 也**收**这两个字段，
+    但 `sync/accountWire.ts` 的 `toWire` 只发 `proxyUsername`、**从不发 `proxyPassword`**
+    ⇒ 需要代理认证的服务器（内网常见）在界面上配不出来，且没有任何报错。
+    反向也缺：`AccountDto` 没有 `proxy_username`，而 `draftFromWire` 去读它
+    ⇒ 那一格每次重开设置页都被洗成空（用户会以为没存住，再敲一遍）。
+  - **修法**：`toWire` 补 `if (proxy.password) wire.proxyPassword = …`（与 WebDAV 口令同一套"留空 = 不改"）；
+    代理用户名存在凭据项里（与它的口令同一条），配置里只有引用 ⇒ 回传不了本体，
+    于是按仓里既有的 `hasCredential` / `hasCaPem` 口径回 `proxyHasUsername: bool`，
+    界面上那一格给"已设置（留空则不改）"的占位，而不是每次被洗空。
+  - **门禁**：`accountWire.spec.ts` 的契约那批仍然绿（它钉的就是"哪些格发得出去、哪些格回得来"）。
+    ⚠ 这一族的**根**是"两侧各自 remember"——字段级线格式检查目前只对 `StatsDto` 有（`arch-check.mjs`），
+    所以这类漂移还能静默发生，已记在下面的"门禁缺口"里。
+
+- **G54 想停掉同步只能连笔记一起删：核心有 `remove_account`，界面上没有任何入口（2026-10-04 发现并补上；状态 = **VERIFIED**）**
+  - **形状**：`commands.rs` 的 `remove_account` 与 `App::remove_account`（连系统凭据库一起抹）
+    实现完整、有 Rust 测试在用，但 `grep -rn remove_account apps/desktop/src` = **0 处**。
+    于是"我不想再同步了"在界面上只有一条路：设置页那个「清除一切数据」（**连正文一起删**）。
+    两件事差得远 —— 换服务器、换测试盘、临时停同步，都不该赔上笔记。
+  - **修法**：`Commands.removeAccount` + `settings.removeAccount()`（成功后把 `account` 落回 null、
+    draft 复位、刷统计）+ 设置页同步那一格下的「删除同步账户」，两道确认与「清除一切」同一形，
+    文案明说"只停同步，**不删任何笔记**"，并指向真正删库的那一颗。
+  - **顺带**：`sync_status` / `set_pref` / `get_prefs` 三条命令也是"核心有、界面从不叫"
+    （`sync_status` 是 `pending_ops`/`open_conflicts`/`message_key` 唯一的正规来源；
+    prefs 那两条被 localStorage 顶掉了）。本轮只把**用户会撞上的**这一条（删账户）接上，
+    另三条留作"要么接上要么删掉"的待办，不假装它们有用。
+
+- **G55 两颗"按下去不是它说的那件事"的控件：冲突页的「打开笔记」和编辑器空白的「重试」（2026-10-04 发现并修掉；状态 = **VERIFIED**）**
+  - **冲突页**：那颗按钮的文案是 `conflict.openNote`（"打开笔记"），`@click` 却调 `act('manualMerge')`
+    —— 而 `act` 会先 `conflicts.resolve(...)` **把这条分歧裁决掉并关掉卡片**，然后才打开笔记。
+    于是"我先看看正文长什么样"这个**只读意图**的实际效果是**替用户做了一个不可见的裁决**。
+    修法：拆出 `openOnly()`（只 `setMode` + `editor.open` + 回工作区，不 resolve），
+    「手动合并」那颗仍走 `act('manualMerge')`。
+  - **编辑器空白的「重试」**：`@click="notes.selectedId && editor.open(notes.selectedId)"`，
+    而 `editor.open(id)` 第一句是 `if (!force && id === noteId.value) return`
+    ⇒ 那块空白出现的条件本身就是"这一篇已经选中了"，所以这颗按钮在大多数情况下是**保证无效**的。
+    `force` 参数早就有（G44 那批加的），这里没传。修法：`editor.open(id, true)` + 给它 `data-testid`。
+  - **为什么这两条值得单独记**：它们都能过现有的所有门禁 —— `arch-check` 那条只查"控件有没有可读名字"，
+    不查"按下去有没有后果"。判据形状见下面的"门禁缺口"。
+
+- **G56 `SearchHit` 两侧不是一套字段（2026-10-04 对账发现并修掉；状态 = **VERIFIED**）**
+  - 核心回 `title: String`（`SearchHitDto`），前端 TS 声明的却是 `titleHit?: boolean` 与
+    `matchStarts?: number[]`（核心**从来没发过**），并且**没有** `title`。
+    两个幻影字段没有任何生产 call site，只有 `notes.spec.ts` 的假数据里写着 `titleHit: true`
+    —— 于是单测与类型一起绿灯，真产物里缺的那一格没人看（这正是本仓踩过两次的跨语言契约形状）。
+  - 修法：TS 改成与核心一致（`title: string`），删掉两个幻影字段，测试假数据同步改成 `title`。
+
+- **G57 移动壳从来没有启动过同步引擎（2026-10-04 发现，随 G50 一起修掉；状态 = **VERIFIED**）**
+  - `apps/mobile/src-tauri/src/lib.rs` 的 `setup()` 只做四件事：定数据目录 → `App::boot` →
+    `pump_events` → `manage(Shell)`。**没有任何一条起调度器/附件循环的代码**
+    （那句 `start_sync(...).run()` 只写在桌面壳里）。
+    ⇒ Android 上配好 WebDAV 之后笔记永远出不了本机，而界面照样有"立即同步"、照样会亮"正在同步"。
+  - 修法：随 G50 的宿主托管一句 `app.enable_background_sync()` 就接上了（这正是把生命周期收进
+    宿主的理由之一：两个壳共用一条路，就不会再有一个有一个没有）。
+  - ⚠ **真机那一格仍然 BLOCKED**：本轮只有代码与编译层证据，没有 Android 设备可读真机
+    （与 G38 的"真机那格"同一状态）。要结案需要一台设备上的动线：配好 → 不重启 → 另一台收得到。
+  - **真机读数（重新出核之后按命令面 + 界面各量一遍）**：
+    命令面 `configure_account{enabled:false}` → 回 `enabled=false`（修前回 `true` 或直接 `no_account`）；
+    关着的时候 `account` → 仍回那条账户（修前 `null` ⇒ 表单洗空）；**不带 `enabled` 再存一次**（只改别的格子那种编辑）
+    → 仍是 `false`（不许被悄悄打开）；再传 `true` → 打开。核对完 `remove_account` 清场，`account` 回到 `null`。
+    界面那一形（真 chromium + 真核，配好但关掉）：启动连采 6 秒徽标唯一值 `idle`、文案 `· 同步已关闭`、
+    **`sync_now` 请求数 0**、点一下仍然 `idle`、控制台 0 error。截图 `docs/evidence/uat/23-sync-disabled.png`。
+
+- **G48 设置页"2 列 3 列长度对不齐"（用户原话；2026-10-04 量出并修掉；状态 = **VERIFIED**）**
+  - **量的是渲染后的几何**（`.logs/measure-ui.mjs`）：旧写法 `repeat(auto-fit, minmax(min(360px,100%),1fr))` + `align-items:start`
+    的实际后果 —— 视口 900/1100 出 **2 列**、1440 出 **3 列**、1800 出 **4 列**；
+    同批 6 张卡片的真实高度是 892 / 331 / 253 / 649 / 172 / 532，底边落在 977 / 416 / 338 / 1642 / 1164 / 1525
+    **六个不同的地方** ⇒ 每列底部都是台阶，短卡片下面是一整片空白。
+  - **修法（照知名笔记软件的口径）**：Obsidian / Notion 的设置页是"分类 + 单列内容"，Apple Notes / UpNote 的偏好窗口是**一栏分组**，
+    没有一家是瀑布。所以：一栏到底 + 行宽封顶 `min(760px,100%)` 居中（字段不再在 1800 下被拉成扫不到尾的横线），
+    另加一条 **粘性分节导航**（≥1180 出现，窄屏藏起来不挤正文）补掉"单列变长"的那一笔代价。
+  - **门禁**：新增 `scripts/verify-layout.mjs`（真 chromium，逐档量几何）：
+    修后 900/1100/1440/1800 **四档全部 `x` 单值、`w=760` 单值、0 console error**；
+    **变异 M-G48a**（把 `grid-template-columns` 还原成 `auto-fit minmax(360px,1fr)`）⇒ **四档全部红在"左缘不是同一个值"**
+    （`x ∈ [70,458]` / `[170,558]` / `[562,950]` / `[742,1130]`）—— 门禁对修法敏感，不是"扫到 0 项"那种绿。
+
+- **G49 820–1179 那一档，侧栏在屏幕外而没有任何入口（2026-10-04 量出并修掉；状态 = **VERIFIED**）**
+  - **读数**：宽 1100 时 `.pane--sidebar` 的矩形是 `x=-269 right=-21`（整块在视口外），
+    侧栏里那颗「设置」在 `x=-256` ⇒ `inView=false`；而列表栏那颗 ☰ 的条件是 `v-if="shell.isCompact"`，
+    `isCompact` 只在**单栏**（<820）为真 ⇒ 那一档**既看不见侧栏、也没有抽屉把手**。
+  - **根因是"一块面板两套可见性机制"**：三栏看 `data-sidebar`、两栏/单栏看 `data-drawer`，
+    而 `toggleSidebar()` 只翻前者 ⇒ 标题栏那颗 ☰ 在两栏档是**按下去什么都不动的空控件**
+    （与本轮 G47 那个勾选框同一族：控件与状态之间那条边没人接）。
+  - **修法**：`shell` 里加 `sidebarShown`（按布局取那一档真正生效的位）与 `sidebarInline`（侧栏是否占着版面）；
+    `toggleSidebar()` 在非三栏时改的是抽屉位；列表栏那颗 ☰ 的条件改成 `v-if="!sidebarInline"`；
+    侧栏内部那颗收成/展开用**同一颗**按钮（抽屉态时它就是"关掉"）。三处标签统一读 `sidebarShown`，不再各读各的位。
+  - **门禁**：`scripts/verify-layout.mjs` 第②条 —— 侧栏不在版面上时"侧栏外必须有 ☰"且"点它侧栏真的进视口、
+    「设置」那一行可点"（900/1100 两档实测 `{"sideInView":true,"navInView":true}`）。
+
+- **G50 中途配好同步账户，本轮不会启动引擎 —— 要重启（2026-10-04 梳理流程时量出，同日按用户拍板修掉；状态 = **VERIFIED**）**
+  - **形状**：调度器只在壳的 `setup()`（`apps/desktop/src-tauri/src/lib.rs:280-331`）里 spawn **一次**，
+    条件是"那一刻 `sync_remote()` 已经是 `Some`"；`configure_account` 全程不碰调度器，也没有"配置变了"的事件。
+    ⇒ 全新安装 → 填好 WebDAV → 保存（保存路径末尾还主动调了一次 `sync.syncNow()`）→
+    命令回 `null`、没人消费、**徽标停在"正在同步"直到重启**。`devserver` 那侧更是完全没有调度器。
+  - **这与界面自己说的话矛盾**：`i18n.ts` 的 `sync.needsCredentials` 写的是
+    "笔记照常保存在本机，**配好凭据后会自动开始同步**" —— 今天这句话只有重启之后才成立。
+  - **用户拍板**（2026-10-04）：文案保持「配好凭据后会自动开始同步」⇒ 那就必须真做到，不能靠重启。
+  - **修法（把生命周期从壳里收进宿主）**：`App::enable_background_sync()` 起一条**监督循环**
+    （宿主自带一条 current-thread tokio 运行时，跑在 `notera-sync` 线程上）：每 2 秒读一次
+    "当前该不该有引擎"（判据就是 `sync_once` 用的那一条 `ConfigRepository::active()`），
+    该有而没有就 `remote_for_sync → negotiate → start_sync`，不该有就把那颗共用的 `stop` 拉下来。
+    为什么轮询而不是"配置变更事件"：变更点有三处（保存 / 删除 / 改启用位），走事件要每处都记得发，
+    **漏一处的后果就是"配好了却不同步"** —— 那是最难查的一类洞；而这一眼只读内存里的配置锁，
+    成本可忽略，且新出现的配置一定会被发现。文本轮次与附件轮次**共用同一颗 `Arc<AtomicBool>`**
+    （新增 `Scheduler::stop_handle()`），配置一变两条一起收尾，不会留一条对着已经不要的服务器继续写。
+  - **三个壳与 dev 桥都接上了**：桌面壳把原来那段"首帧之后按那一刻的配置起一次"整块换成一句
+    `enable_background_sync()`；**移动壳以前从来没有起过引擎**（那句 spawn 只写在桌面壳里
+    —— 也就是 Android 上配好 WebDAV 也永远不上传，见 G57）；`notera-cli serve` 也接上，
+    于是浏览器 lane 测的才是产品那条真链路，而不是"dev 下永远不会有事件回流"的假象。
+  - **门禁**：`crates/notera-host/tests/auto_start_sync.rs` 两条，判据全打在**结果**上
+    （全程不重启、不手动 `sync-once`、不发 `sync_now`）：
+    ① 没配账户时服务器**一条请求都不该收到**（"装完是干净的"这条底线连网络动作一起管住），
+    配好之后 30 秒内必须收到 `PUT`，且 `sync_status.pending_ops` 归零、徽标落到 `synced`；
+    ② 删掉账户之后服务器请求数**不再增长**。
+    **变异 M-G50a**（把 `enable_background_sync` 改成空函数）⇒ **两条都红**
+    （第二条红在它自己的前置"引擎没起来"，不是靠后面的断言勉强失败）。
+
+- **G51 核心报"缺凭据/协议不匹配"时，那个原因在界面上被丢掉，只剩"离线"两个字（2026-10-04 梳理同步流程时对账发现；状态 = **VERIFIED**）**
+  - **文档说**：`PROXY.md §7` "徽标停在『需要凭据』"、`TEST-PLAN.md` FT-CRED-09 同口径；
+    **核心也确实发了**：`Badge::Offline` + 具名 `message_key`（`Phase::NeedsCredentials`、`sync.protocol_mismatch` 那几处）。
+  - **界面这一侧漏接**：`foldSyncEvent` 的 `case 'offline'` 把 `messageKey` 一律清成 `null`
+    ⇒ 那句"为什么"根本进不了状态；而即便进来了，旧模板也只把它放进 `.visually-hidden`（`aria-live`）与 `title`
+    ⇒ **屏幕上仍然只有"离线"**。用户既不知道是口令没了（G38 选 B 之后每次重启都是这一形），也不知道去哪儿修。
+  - **修法**：`case 'offline'` 保留 `signal.messageKey ?? signal.errorCode`；`SyncBadge` 增一格**看得见**的
+    `data-testid="sync-detail"`（占满一行的小字，不挤右侧的重试按钮）。
+  - **门禁**：`syncClickGate.spec.ts` 那条"原因必须看得见"—— **它写出来的当场就是红的**
+    （红在 `"为什么"那一格根本没渲染`），这才带出上面那个 `messageKey` 被清的缺陷；
+    修后整仓 **284 通过 / 31 文件**，`vue-tsc` 0 错、`eslint` 0 输出、`arch-check` **32/32**。
+  - **顺带清掉的一条红门禁**：`arch-check` 的 `hygiene:rust-error-codes-registered` 在 0.0.58 这批是**红的**
+    （`erase_not_confirmed` 没有 `error.*` 文案，界面会退成通用兜底 —— 而这条码恰恰属于"不可撤销"那个命令，
+    用户最需要一句明确的"这次没删任何东西"）。已补文案，32/32 回到绿。
+
+
 - **G43 置顶/移到文件夹之后再打字，那几个字消失并弹一句"在别处被改动了（`edit_note → 400 stale_edit`）；2026-10-02 登记，2026-10-02 定位并修掉，状态 = **VERIFIED（0.0.55）**）**
   - **登记时那句根因是错的，先更正这一条**：原文写的是"连按新建时编辑器还停在上一篇，输入落进上一篇并按旧 rev
     提交"。那是从一条 400 反推出来的**猜测**。这次按 §45 拿真机量了两条侦察：

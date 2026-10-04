@@ -1,0 +1,11 @@
+{
+  "before": "idle",
+  "after": "idle",
+  "series": [
+    "idle"
+  ],
+  "syncAtBoot": 0,
+  "syncAfterClick": 0,
+  "settingsOpen": true,
+  "errors": []
+}

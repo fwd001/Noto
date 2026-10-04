@@ -395,6 +395,83 @@ CI 必须运行的四类检查（映射到 job）：
 
 ## 产物与发布
 
+### 数据目录：安装版与开发版天然隔离
+
+用户反馈「我自己安装应该和开发环境隔离」—— **这一条本来就成立**，但没写下来，
+所以要在这里钉住（免得哪天有人为了"方便调试"把两边指到同一个库）：
+
+| 场景 | 数据目录 | 由谁决定 |
+| --- | --- | --- |
+| 装在机器上的 Notera | `%LOCALAPPDATA%\<应用名>\`（Windows 上的 `app_data_dir()`） | 没设 `NOTERA_DATA_DIR` 时走系统默认 |
+| dev 桥（浏览器连真核心） | `NOTERA_DATA_DIR` 指定的那一格，惯例是 `.logs/<lane>-data` | `crates/notera-host/src/devserver.rs` |
+| CI 出包 | 与CI 自己的 runner 目录 | 同上 |
+
+`apps/desktop/src-tauri/src/lib.rs` 里的口径是 **`NOTERA_DATA_DIR` 优先，否则 `app_data_dir()`**，
+而 `notera serve`（dev 桥）也认同一个变量 ⇒ 两者天然不同库。
+
+⚠ **开发时永远显式给 `NOTERA_DATA_DIR`**。不显式的话，dev 桥会落到 `app_data_dir()`，
+于是"调试"读到的是**用户真实的数据** —— 用户自己造的测试笔记会出现在开发者眼前，
+而清库操作会**真的删掉用户的数据**。
+
+### 装完应该是「干净的」：同步只在你配了之后才动
+
+用户反馈「我没设置 webdav 服务，它却一直转」。根因是启动路径上有一句
+**无条件的** `sync.syncNow()`：没配账户时核心回 `no_account`，而那条错误
+**不会把徽标从"正在同步"带走** ⇒ 装完第一次打开，侧栏那颗徽标就在转，
+而且用户没配同步，那颗圈在暗示"有东西在上传"。
+
+现在的口径（三层都守着）：
+
+1. **前端**（`App.vue` 启动块）：`loadAccount().then(() => hasAccount ? syncNow() : markNoAccount())`。
+   必须等 `loadAccount()` 落地再判 `hasAccount` —— 不等的话它还是 `false`，
+   用户配好了却不同步。
+2. **徽标**（`stores/sync.ts`）：第五态 `idle`，字形 `·`（**静止**，不是转圈），
+   初始态也是 `idle` —— 首帧并没有同步在跑，写 `syncing` 等于开口就说谎。
+3. **核心**（`src-tauri/src/lib.rs`）：`Ok(None) => {}` 守卫 —— 无账户就不启动引擎，
+   两个 `tokio::interval` 轮次（20s 附件 / 25s 文本）也只在有 remote 时才起。
+
+**状态优先级：链接不可达 > 未配置同步。** 本地服务都连不上时，界面能不能读到笔记
+还没保证，此时报"未配置同步"是**转移焦点**（用户会去设置里翻同步，而真正的问题是服务没起）。
+而且 `unreachable` 的字形 `○` 同样是静止的，不违反"没配就静止"这条要求。
+
+
+
+CI 出包要推 tag。「改完想在自己机器上装一下看看」此前只能手抄一长串命令，
+而那串命令里有两个不写就会踩的坑。现在固化成一条命令：
+
+```bash
+cd apps/desktop
+npm run dist -- --list    # 只说当前平台会出什么、缺什么前置（不构建）
+npm run dist              # 认平台出包
+npm run dist -- --bundles nsis        # 覆盖该平台的默认格式
+npm run dist -- --target aarch64      # 覆盖 target
+npm run dist -- --android             # 出 APK（需 ANDROID_HOME + NDK + JDK 17）
+```
+
+实现在 `scripts/build-dist.mjs`。它把 CI（`.github/workflows/release.yml`）里跑通过的形状搬回本机：
+
+| 平台 | 默认 bundles | 说明 |
+| --- | --- | --- |
+| Windows x64 | `nsis,msi` | **必须钉 `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu`**（见下） |
+| macOS | `dmg,app` | 未签名未公证，首次打开需在系统设置里手动允许 |
+| Linux | `deb` | CI 未验过；本机第一次出可能还要装系统依赖 |
+| Android | `.apk`（debug 签名） | 走 `--android`；需 NDK + JDK 17，debug keystore 无需证书 |
+
+**不做跨平台打包**：macOS 的 `.dmg` 需要 hdiutil、Android 的 `.apk` 需要 NDK+JDK，
+在 Windows 上跑 `--bundles dmg` 得到的不是 dmg。⇒ 另两个平台请推 tag 走 CI。
+
+三个必须知道的坑（都是本机实测撞出来的，不是抄文档）：
+
+1. **`RUSTUP_TOOLCHAIN` 必须在 env 里**，只给 `--target` 不够 —— build script 与
+   proc macro 永远按 **host triple** 编，本机 host 是 msvc ⇒ 它会去找被 Git Bash
+   coreutils 顶掉的 `link.exe`，报一串"第三方 crate 编不过"（CI-CD §Windows 工具链决策）。
+2. **`pnpm` 必须在 PATH 里**。`tauri.conf.json` 的 `beforeBuildCommand` 是 `pnpm build`，
+   而 tauri 用 `cmd /S /C` 起它 —— 继承的是本脚本的 `env`。CI 上 pnpm 由
+   `pnpm/action-setup` 装（天然在 PATH），本机装在 npm 全局目录里，不在时那一步会红成
+   `'pnpm' 不是内部或外部命令`。脚本会**试着执行 `pnpm -v`** 来判断（不靠 PATH 字符串匹配 ——
+   Windows 的 PATH 里那个路径可能是大写、可能是 `C:\...` 也可能是 `/c/...`，匹配会漏）。
+3. **出包前先跑类型检查**（`vue-tsc --noEmit`），不过就停 —— 不然装上去是坏的。
+
 ### 命名约定：`Notera-<version>-<platform>-<arch|triple>[.<ext>]`
 
 | 产物 | 文件名 | 内部必须可查到的元数据 |
