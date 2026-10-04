@@ -18,9 +18,17 @@
 
 ## 项目状态
 
-**Phase 0（架构）已完成，等待人工审核。审核通过前不写业务代码。**
+**开发线 0.0.62（未发布）**：Phase 0 的架构审核早已通过，产品代码在 2026-09 起持续落地——
+桌面壳、三栏界面、富文本编辑器、WebDAV 同步引擎、附件断点续传、备份/导出/导入、回收站两级删除，
+都在仓库里并带着自己的门禁。**第一版还没发布，不承诺历史兼容**（迁移可以直接改表结构）。
 
-当前仓库里只有：架构文档、可交互契约图、技术可行性探针。**没有**产品代码 —— 这是刻意的。
+> 这一段以前写的是"Phase 0 已完成、审核通过前不写业务代码、仓库里没有产品代码"。
+> 那是 2026-09 之前的事实，留着会让下一个读的人判断错方向 —— 按"文档说的必须与代码做的
+> 是同一句话"这条口径改掉，改动过程记在 `docs/PRODUCTION-READINESS.md`。
+
+当前门禁基线（2026-10-04 本机实测）：`cargo test --workspace` **672 通过 / 0 失败 / 6 ignored**、
+前端 **285 通过（31 文件）**、`vue-tsc` 0 错、`eslint` 0 输出、`arch-check` 32/32、`check-versions` 一致。
+还差的都在 `docs/PRODUCTION-READINESS.md` 的缺口表里（G1–G57），状态不是 VERIFIED 的一律不当作已完成。
 
 优先级顺序（决策冲突时按此裁决）：
 
@@ -95,7 +103,7 @@ cargo +stable-x86_64-pc-windows-gnu run -q --manifest-path tools/feasibility-pro
 | MSVC 链接器 | ❌ | 未装 VS Build Tools；且 PATH 中 `link.exe` 被 Git coreutils 版顶替 |
 | WebView2 运行时 | ✅ | 独立运行时 150.0.4078.105 已安装（此前误判为缺失：只查了 Edge 浏览器目录） |
 | JDK / Android SDK / NDK | ❌ | 无法本地出 APK |
-| GitHub 可达性 | ❌ | Actions 无法观察，CI 验证标 BLOCKED |
+| GitHub 可达性 | ✅ | `git ls-remote origin` 通（2026-10-04 复核）。此前这行写 ❌/"CI 验证标 BLOCKED" 是 0.0.2x 的旧事实：CI 已经真跑过并把读数贴回来看，见 `docs/CI-CD.md` 与 `docs/PRODUCTION-READINESS.md` |
 | crates.io / npm registry | ✅ | 依赖可解析 |
 
 Phase 1–3（Local Core / Sync / Proxy）的全部验证不依赖 GUI，因此不受上述限制阻塞；GUI 与安装包验证从 Phase 4 起依赖 CI 通道。
