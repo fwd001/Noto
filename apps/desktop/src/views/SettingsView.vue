@@ -3,6 +3,8 @@
 import { computed, onMounted, ref } from 'vue';
 import SyncBadge from '../components/SyncBadge.vue';
 import AppSelect from '../components/ui/AppSelect.vue';
+import AppCheckbox from '../components/ui/AppCheckbox.vue';
+import AppRange from '../components/ui/AppRange.vue';
 import { currentTransport } from '../api/bridge';
 import type { ProxyMode, TlsPolicyKind } from '../api/types';
 import { useSettingsStore } from '../stores/settings';
@@ -429,10 +431,9 @@ function jumpTo(id: string): void {
             <textarea v-model="bypassText" class="textarea" rows="3" spellcheck="false" />
           </label>
 
-          <label class="row">
-            <input id="account-enabled" v-model="settings.draft.enabled" type="checkbox" class="checkbox" />
-            <span>{{ t('settings.enabled') }}</span>
-          </label>
+          <div class="row">
+            <AppCheckbox v-model="settings.draft.enabled" :label="t('settings.enabled')" testid="account-enabled" />
+          </div>
 
           <div class="row">
             <button type="submit" class="btn btn--primary" :disabled="settings.accountSaving" data-testid="account-save">{{ t('settings.save') }}</button>
@@ -525,28 +526,26 @@ function jumpTo(id: string): void {
             </button>
           </div>
 
-          <label class="field">
+          <div class="field">
             <span>{{ t('settings.fontScale') }} · {{ settings.prefs.fontScale.toFixed(2) }}</span>
-            <input
-              type="range"
+            <AppRange
+              :model-value="settings.prefs.fontScale"
               :min="FONT_SCALE_MIN"
               :max="FONT_SCALE_MAX"
-              step="0.05"
-              :value="settings.prefs.fontScale"
-              data-testid="font-scale"
-              @input="settings.setFontScale(Number(($event.target as HTMLInputElement).value))"
+              :step="0.05"
+              :label="t('settings.fontScale')"
+              testid="font-scale"
+              @update:model-value="settings.setFontScale(Number($event))"
             />
-          </label>
+          </div>
 
-          <label v-if="settings.caps.transparency" class="row" data-testid="pref-transparency">
-            <input v-model="settings.prefs.transparency" type="checkbox" class="checkbox" />
-            <span>{{ t('settings.transparency') }}</span>
-          </label>
+          <div v-if="settings.caps.transparency" class="row" data-testid="pref-transparency">
+            <AppCheckbox v-model="settings.prefs.transparency" :label="t('settings.transparency')" testid="transparency-toggle" />
+          </div>
 
-          <label v-if="settings.caps.tray" class="row">
-            <input v-model="settings.prefs.trayHint" type="checkbox" class="checkbox" data-testid="tray-toggle" />
-            <span>{{ t('settings.trayHint') }}</span>
-          </label>
+          <div v-if="settings.caps.tray" class="row">
+            <AppCheckbox v-model="settings.prefs.trayHint" :label="t('settings.trayHint')" testid="tray-toggle" />
+          </div>
           <p v-else class="field-hint">{{ t('settings.trayUnavailable') }}</p>
 
           <p class="field-hint">{{ t('settings.path') }}：{{ transportLabel }}</p>
@@ -559,20 +558,21 @@ function jumpTo(id: string): void {
             <input v-model="outPath" class="input" type="text" spellcheck="false" data-testid="export-path" :placeholder="t('settings.exportPathHint')" />
           </label>
           <div class="field">
-            <label class="pick">
-              <input type="checkbox" data-testid="export-scoped" :checked="exportScoped" @change="toggleScoped((($event.target as HTMLInputElement).checked))" />
-              <span class="text-sm">{{ t('settings.exportScoped') }}</span>
-            </label>
+            <AppCheckbox
+              :model-value="exportScoped"
+              :label="t('settings.exportScoped')"
+              testid="export-scoped"
+              @update:model-value="toggleScoped($event)"
+            />
             <div v-if="exportScoped" class="folder-pick" data-testid="export-folder-list">
-              <label v-for="f in folders.flat" :key="f.node.id" class="pick" :style="{ paddingLeft: `${0.5 + f.depth * 0.75}rem` }">
-                <input
-                  type="checkbox"
-                  :data-testid="`export-folder-${f.node.id}`"
-                  :checked="pickedFolders.includes(f.node.id)"
-                  @change="togglePicked(f.node.id)"
+              <div v-for="f in folders.flat" :key="f.node.id" class="pick" :style="{ paddingLeft: `${0.5 + f.depth * 0.75}rem` }">
+                <AppCheckbox
+                  :model-value="pickedFolders.includes(f.node.id)"
+                  :label="f.node.name"
+                  :testid="`export-folder-${f.node.id}`"
+                  @update:model-value="togglePicked(f.node.id)"
                 />
-                <span class="text-sm">{{ f.node.name }}</span>
-              </label>
+              </div>
               <p class="field-hint">{{ t('settings.exportScopedHint') }}</p>
             </div>
           </div>
@@ -886,11 +886,6 @@ function jumpTo(id: string): void {
   color: var(--text-secondary);
 }
 
-.checkbox {
-  width: 22px;
-  height: 22px;
-  accent-color: var(--accent);
-}
 .erase-confirm {
   margin-top: var(--space-2);
   padding: var(--space-3);

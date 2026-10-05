@@ -35,6 +35,8 @@
  *  ⑰ 触屏档通扫四个视图（列表 / 侧栏抽屉 / 四行编辑器 / 设置）：**不许有"看不见却接得住点击"的控件**。
  *     这是 G65/G66 那一族的通判据 —— 按"有效不透明度"（祖先链上乘积，opacity 不继承）+ 中心命中算，
  *     只在触屏档判。它第一跑就逮到编辑器那一格：四行的笔记里，非当前那 3 行各留一颗看不见的 44×44 拖拽靶。
+ *  ⑱ 设置页不许再留**系统画的控件**（第 ⑪ 条）：每颗 checkbox / range 的 computed `appearance` 必须是 none、
+ *     整行命中区 ≥44、滑杆填色走我们自己的 CSS 变量；1440 与 390 两档各量一次，触屏档再按一次 End 验效果。
  *
  * 前置（脚本不管，由调用方起）：
  *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
@@ -1233,6 +1235,79 @@ const TRAP_SCAN = () => {
   await sp.screenshot({ path: `${OUT}/31-touch-traps-390.png` });
   await sctx.close();
   await purgeByTitle(MARK);
+}
+
+/**
+ * ⑱ 设置页不许再留**系统画的控件**（第 ⑪ 条：「按钮 / Input / 弹窗这些都用统一样式的组件，
+ * 两端 UI 要一致」）。
+ *
+ * 为什么必须量而不是读代码：`accent-color` 这类写法**看着像已经换肤了**，其实只改了颜色 ——
+ * 方框的形状、圆角、尺寸仍是操作系统画的，Windows 与 macOS 上是两个不同的控件；
+ * 而默认那一颗只有 13×13，摸都摸不准。判据因此打在**渲染后的 computed `appearance`** 与
+ * 真实行高上，两档视口各量一次（1440 桌面 / 390 触屏）。
+ */
+{
+  const scan = () => {
+    const boxes = [...document.querySelectorAll('input[type="checkbox"]')];
+    const ranges = [...document.querySelectorAll('input[type="range"]')];
+    const all = [...boxes, ...ranges];
+    return {
+      n: all.length,
+      native: all.filter((el) => getComputedStyle(el).appearance !== 'none').map((el) => `${el.type}:${el.getAttribute('data-testid') || '?'}`),
+      rows: boxes.map((el) => Math.round(el.closest('label')?.getBoundingClientRect().height ?? 0)),
+      rangeH: ranges.map((el) => Math.round(el.getBoundingClientRect().height)),
+      fills: ranges.map((el) => getComputedStyle(el).getPropertyValue('--app-range-fill').trim()),
+    };
+  };
+
+  for (const [width, touch] of [[1440, false], [390, true]]) {
+    const sctx = await browser.newContext(
+      touch
+        ? { viewport: { width, height: 844 }, hasTouch: true, isMobile: true }
+        : { viewport: { width, height: 950 } },
+    );
+    const sp = await sctx.newPage();
+    const sErrors = [];
+    sp.on('pageerror', (e) => sErrors.push(String(e).slice(0, 140)));
+    sp.on('console', (m) => { if (m.type() === 'error') sErrors.push(m.text().slice(0, 140)); });
+    await sp.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await sp.waitForSelector('[data-testid^="note-row-"]', { timeout: 15000 });
+    await sp.waitForTimeout(1200);
+    if (touch) {
+      await sp.evaluate(() => document.querySelector('[data-testid="sidebar-handle"], [data-testid="open-sidebar"]')?.click());
+      await sp.waitForTimeout(600);
+    }
+    await sp.click('[data-testid="nav-settings"]');
+    await sp.waitForTimeout(900);
+    // 导出那一格要先展开，否则清单里没有文件夹那一排，"全都不是系统控件"会少扫好几颗
+    await sp.click('[data-testid="export-scoped"]');
+    await sp.waitForTimeout(500);
+
+    const got = await sp.evaluate(scan);
+    check(`宽 ${width} · 设置页的清单不是空的（否则"没有系统控件"是空判据）`, got.n >= 4, JSON.stringify(got));
+    check(`宽 ${width} · 设置页没有一颗还在用系统绘制（computed appearance 必须是 none）`, got.native.length === 0, JSON.stringify(got.native));
+    check(`宽 ${width} · 每颗复选框的整行都是命中区（≥44，§6 触摸下限；点文案也要能切换）`, got.rows.length > 0 && got.rows.every((h) => h >= 44), JSON.stringify(got.rows));
+    check(`宽 ${width} · 滑杆本体高度够按（触屏 ≥44，桌面 ≥24）`, got.rangeH.length === 1 && got.rangeH[0] >= (touch ? 44 : 24), JSON.stringify(got.rangeH));
+    check(`宽 ${width} · 滑杆已走过的那一段由我们填色（CSS 变量在控件上，不是系统那套）`, got.fills.length === 1 && /%$/.test(got.fills[0]), JSON.stringify(got.fills));
+
+    if (touch) {
+      // 效果腿：真按一次键盘（不程序化塞 value —— 那会绕过浏览器自己的 input 事件）
+      const before = await sp.evaluate(() => document.querySelector('input[type="range"]')?.value ?? '');
+      await sp.focus('input[type="range"]');
+      await sp.keyboard.press('End');
+      await sp.waitForTimeout(600);
+      const after = await sp.evaluate(() => {
+        const el = document.querySelector('input[type="range"]');
+        const readout = el?.closest('.field')?.querySelector('span')?.innerText ?? '';
+        return { v: el?.value ?? '', max: el?.max ?? '', readout, fill: el ? getComputedStyle(el).getPropertyValue('--app-range-fill').trim() : '' };
+      });
+      check('触屏按 End：滑杆真的走到最大、读数与填色都跟着变（控件写的那一位就是被读的那一位）', after.v === after.max && after.v !== before && after.fill === '100%', JSON.stringify({ before, after }));
+    }
+    check(`宽 ${width} · ⑱ 这一腿 console error 为零`, sErrors.length === 0, sErrors.slice(0, 3).join(' | '));
+    notes.push(`     设置页控件通扫 宽 ${width}：${JSON.stringify(got)}`);
+    await sp.screenshot({ path: `${OUT}/32-native-controls-${width}.png` });
+    await sctx.close();
+  }
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
