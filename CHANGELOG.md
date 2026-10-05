@@ -1965,6 +1965,32 @@ E2EE 那两本 `key_vault.rs`/`sealed_e2ee.rs` 的若干条）。
     无障碍状态与持久化都对，**画面上那颗点没变**，用户看到的还是"点了没反应"。
     （这也是本项目第一次给"状态反馈类"判据配正对照；此前 ⑤ 那一族只断"该显的显了"。）
 
+### 修复（2026-10-05 这批：0.0.73 → 0.0.74）
+
+- **缺口 G72：折进 `attrs` 的嵌套块文字"存着、搜不到、也不进字数"**（第 ⑩ 条"匹配笔记里面**所有的**关键字"）
+  - 形状：本模型是扁平的，`Block::from_value` 遇到嵌套块（表格那一类 `tableRow`/`tableCell`）会把它们
+    **折进 `attrs.nodes`**，注释承诺"一个字节都不丢" —— 那说的是**存储**。派生列（`extract`）只读
+    `content`，于是那些字进了文档、进了 `doc` 列，却**不进 `plain_text`、不进 FTS 索引、不进 `char_count`、
+    也不进 `summary`**：文档里明明有，搜索回 0 条。
+  - 实测（真核心，走 `create_note` → `search`）：八种块各埋一个哨兵词，修前
+    `heading / paragraph / blockquote / codeBlock / orderedList / bulletList / checklistItem` 七种全命中，
+    **`table` 那一种回 `[]`**；修后八种全命中（同一份探针、同一个真产物）。
+  - 修法：`extract` 里给每个块算"自己的行内文本 + 折进 `attrs` 的嵌套文本"（`collect_text` 递归收
+    JSON 里的 `"text"` 字符串，只走 `attrs` 所以与 `content` 不重叠、不会重复计），
+    `title`/`summary`/`char_count` 都改用这一个函数 —— **派生列只有一处算法**，不留第二份会分叉的口径。
+  - 判据先红后绿：`notera-richtext/src/tests.rs::folded_nested_text_is_not_invisible_to_the_derived_columns`
+    第一跑红在 `plain_text == "表外的一行\n"`（表格那半行字整个不见了）。
+    我自己那条 `char_count` 的期望值先算错了（写成 ≥11，真值 10）—— **红过一次不等于判据一开始就对**，
+    按实改成 `assert_eq!(10)`。
+  - 全工作区 **613 通过 / 1 失败**，那一条是 `latency_injection_delays_responses`（墙钟判据，本机并发下已知会抖）——
+    单独连跑两次各 1/1 通过，与本次改动无关，按实记在这儿。
+    `clippy -p notera-richtext -p notera-store -p notera-host -p notera-cli --all-targets -D warnings` 0/0；
+    `cargo fmt --check` 0；brand / icons / versions 三闸各 0。
+  - **一条环境事实要记**：全量 `cargo clippy --workspace --all-targets` 这次在 `notera-mobile` 的 build script
+    上撞到 `os error 32（另一个程序正在使用此文件）` —— 本机有一个 `notera-desktop.exe`（PID 155068）在跑，
+    那不是我这轮起的，**没去动它**（按"只按 PID 杀自己起的进程"那条口径）。所以上面那条 clippy 是**缩到四个受影响 crate** 跑的数，
+    全量那一支得等那个窗口关掉再补一次；CI 上没这个锁，会照常跑全量。
+
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
 - **G70 导出那一排还按"深度"缩进，与侧栏的"只有一层"口径不一致**（2026-10-05 扫 ⑱ 那批时从截图里看见；状态 = **待拍板**）
   - 事实：`SettingsView` 的导出文件夹清单是全站唯一还读 `f.depth` 的地方（`paddingLeft: 0.5 + depth*0.75rem`），

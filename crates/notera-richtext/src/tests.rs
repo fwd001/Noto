@@ -401,6 +401,35 @@ fn extract_detects_attachment_refs_in_blocks_and_marks() {
 }
 
 #[test]
+fn folded_nested_text_is_not_invisible_to_the_derived_columns() {
+    // 本模型是扁平的：嵌套块（表格那一类）会被折进 `attrs.nodes`，那里的注释承诺"一个字节都不丢"。
+    // 可派生列只看 `content` ⇒ 那些字**存在文档里，却搜不到、也不进字数** —— 与第 ⑩ 条
+    // "匹配笔记里面所有的关键字"直接冲突（实测：给一张表建笔记，搜表格里的词回 0 条）。
+    let d = parse(
+        &doc(vec![
+            para("p1aaaa", "表外的一行"),
+            json!({
+                "id": "tb1aaaa", "type": "table",
+                "content": [{ "type": "tableRow", "content": [{ "type": "tableCell", "content": [{ "text": "表格里的字" }] }] }]
+            }),
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    let x = extract(&d);
+    assert!(
+        x.plain_text.contains("表格里的字"),
+        "折进 attrs 的嵌套文本必须进派生列：{:?}",
+        x.plain_text
+    );
+    assert_eq!(
+        x.char_count, 10,
+        "字数得把两边都算上（表外的一行 5 + 表格里的字 5，换行与空格不计）：{}",
+        x.char_count
+    );
+}
+
+#[test]
 fn title_truncation_is_charwise_for_cjk() {
     let long: String = "测".repeat(300);
     let d = parse(&doc(vec![para("p1aaaa", &long)]).to_string()).unwrap();

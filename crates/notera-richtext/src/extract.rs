@@ -25,6 +25,50 @@ const TITLE_MAX: usize = 200;
 /// `summary` 截断长度（§7.1：200 字符）。
 const SUMMARY_MAX: usize = 200;
 
+/// 一个块该算进派生列的**全部**文字：自己的行内文本 + 折进 `attrs` 的嵌套块文本。
+///
+/// `model.rs` 把嵌套块（表格那一类）折进 `attrs.nodes`，承诺的是"存储上一个字节都不丢"；
+/// 而派生列只读 `content` 的话，那些字就**存在文档里、搜不到、也不进字数** ——
+/// 用户第 ⑩ 条要的是"匹配笔记里面所有的关键字"，这一格不能靠"编辑器现在还不产表格"过关：
+/// 同步对端与导入都可能送来带嵌套的文档，而丢字是静默的。
+fn block_text(b: &Block) -> String {
+    let mut s = b.plain_text();
+    let mut folded = String::new();
+    for v in b.attrs.values() {
+        collect_text(v, &mut folded);
+    }
+    let folded = folded.trim();
+    if !folded.is_empty() {
+        if !s.trim().is_empty() {
+            s.push(' ');
+        }
+        s.push_str(folded);
+    }
+    s
+}
+
+/// 递归收集 JSON 里所有 `"text"` 字段的字符串。只走 `attrs`（`content` 由 `plain_text` 管），
+/// 所以不会重复计一遍；非字符串值与键名一起被 `_ => {}` 挡掉。
+fn collect_text(v: &serde_json::Value, out: &mut String) {
+    match v {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(t)) = map.get("text") {
+                out.push_str(t);
+                out.push(' ');
+            }
+            for x in map.values() {
+                collect_text(x, out);
+            }
+        }
+        serde_json::Value::Array(a) => {
+            for x in a {
+                collect_text(x, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// 单向导出：文档 → 派生列。纯函数，不失败。
 pub fn extract(doc: &Document) -> Extracted {
     let mut plain = String::new();
@@ -32,21 +76,21 @@ pub fn extract(doc: &Document) -> Extracted {
         if i > 0 {
             plain.push('\n');
         }
-        plain.push_str(&b.plain_text());
+        plain.push_str(&block_text(b));
     }
 
     // title：第一个 heading，否则第一个非空 text 节点。
     let title_idx = doc
         .content
         .iter()
-        .position(|b| b.type_ == BlockType::Heading && !b.plain_text().trim().is_empty())
+        .position(|b| b.type_ == BlockType::Heading && !block_text(b).trim().is_empty())
         .or_else(|| {
             doc.content
                 .iter()
-                .position(|b| !b.plain_text().trim().is_empty())
+                .position(|b| !block_text(b).trim().is_empty())
         });
     let title = title_idx
-        .map(|i| truncate_chars(doc.content[i].plain_text().trim(), TITLE_MAX))
+        .map(|i| truncate_chars(block_text(&doc.content[i]).trim(), TITLE_MAX))
         .unwrap_or_default();
 
     // summary：plain_text **跳过标题**取前 200 字符（列表预览不该重复标题一遍）。
@@ -60,7 +104,7 @@ pub fn extract(doc: &Document) -> Extracted {
                 if j > 0 {
                     s.push('\n');
                 }
-                s.push_str(&b.plain_text());
+                s.push_str(&block_text(b));
             }
             s
         }
