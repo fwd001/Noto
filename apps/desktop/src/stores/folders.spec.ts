@@ -47,4 +47,18 @@ describe('后端给的嵌套树', () => {
     const built = buildTree([loop]);
     expect(built.map((n) => n.id)).toEqual(['x']);
   });
+
+  /**
+   * 0.0.66（缺口 G63）起这是一格**可达状态**：核心交给界面的那一排不再含回收站里的文件夹，
+   * 而对端把某个父级打成墓碑时不会替本机重新挂子层（`apply` 只写 `deleted_at`）。
+   * 于是"父不在这一排里、子还在"必须顶到最上面 —— 静默丢掉就是"文件夹连同里面的笔记一起消失"。
+   */
+  it('父不在这一排里（被回收站滤掉）时，子层顶到最上面而不是消失', async () => {
+    stubLocalService({ list_folders: () => [treeNode('root', null, '默认本'), treeNode('kid', 'gone', '无父的子层')] });
+    const folders = useFolderStore();
+    await folders.load();
+    expect(folders.flat.map((entry) => `${entry.depth}:${entry.node.name}`).sort()).toEqual(
+      ['0:无父的子层', '0:默认本'].sort(),
+    );
+  });
 });
