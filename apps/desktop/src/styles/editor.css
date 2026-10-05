@@ -134,6 +134,10 @@
     opacity: 0;
   }
 
+  /* 「当前这一行」必须压过上面那条：它的权重是 0-3-0，而单写 `.nb-handles--on` 只有 0-1-0。
+     触屏点过的行会一直停在 :hover（sticky hover，Chromium 移动端的既有行为），于是恰恰是该露
+     出来的那一行被按住 —— 实测 `opacity:0` 却 `hitIsGrip:true`：看不见、却能拖，等于没有入口。 */
+  .nb-block:hover .nb-handles--on,
   .nb-handles--on {
     opacity: 1;
   }

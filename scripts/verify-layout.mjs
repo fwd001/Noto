@@ -30,6 +30,8 @@
  *  ⑮ 触屏那一档（`hover: none`）：只在 hover 露面的那两簇控件必须常驻、且真点得着（第 ④×⑨ 条）。
  *     修前实测 390×844 触屏：侧栏那簇 `opacity:0` + `pointer-events:none` ⇒ 手机上"改名/删除"根本不存在；
  *     列表行那簇 `opacity:0` 却仍吃点击 ⇒ 看不见却能点着，是隐形陷阱。桌面一侧不许变（⑤ 钉的是那个形状）。
+ *  ⑯ 触屏**真拖一行**（第 ③×⑨ 条）：点过的那行把手要看得见（`opacity:1`）、≥44×44 且中心命中自己，
+ *     然后用 CDP 真发一段 touch 序列把它拖到最上面 —— 判据打在**核心里存的那份顺序**上，不只打 DOM。
  *
  * 前置（脚本不管，由调用方起）：
  *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
@@ -1028,6 +1030,122 @@ for (const width of WIDTHS) {
   check('⑮ 这一腿 console error 为零', tErrors.length === 0, tErrors.slice(0, 3).join(' | '));
   notes.push(`     触屏实测 390×844：侧栏工具 ${JSON.stringify(state.tools)}，行动作 ${JSON.stringify(state.actions)}，就地改名 ${JSON.stringify(inline)}`);
   await tctx.close();
+}
+
+/**
+ * ⑯ 触屏**真的拖动一行**（第 ③ 条"每一行还能拖动上下行" × 第 ⑨ 条的移动端）。
+ *
+ * 为什么单独一条腿：⑮ 只量了"控件在不在、点得着吗"，而这一条要量的是**效果** ——
+ * 把手看不见却能拖（修前实测 `opacity:0` + `hitIsGrip:true`）是一种"自动化全绿、人却找不到入口"的形状；
+ * 反过来"看得见"也不等于"拖得动"：HTML5 DnD 在触摸端基本不触发，所以这里用 CDP 真发 touch 序列，
+ * 再把**核心里存的那份顺序**读回来对账（不是只看 DOM 重排了）。
+ */
+{
+  const MARK = '拖排夹具';
+  await purgeByTitle(MARK); // 上一轮如果崩在中途，先把它自己的残留清掉再量
+  const lines = [`${MARK} 甲`, `${MARK} 乙`, `${MARK} 丙`, `${MARK} 丁`];
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: { v: 1, content: lines.map((text, i) => ({ id: `dg${i}${stamp}`, type: 'paragraph', content: [{ text }] })) },
+  });
+  const dragId = made?.id;
+  const dctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const dp = await dctx.newPage();
+  const dErrors = [];
+  dp.on('pageerror', (e) => dErrors.push(String(e).slice(0, 140)));
+  dp.on('console', (m) => { if (m.type() === 'error') dErrors.push(m.text().slice(0, 140)); });
+  await dp.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await dp.waitForSelector('[data-testid^="note-row-"]', { timeout: 15000 });
+  await dp.waitForTimeout(1200);
+  for (const r of await dp.$$('[data-testid^="note-row-"]')) {
+    if ((await r.innerText()).includes(MARK)) { await r.tap(); break; }
+  }
+  await dp.waitForSelector('.nb-block .nb-content', { timeout: 15000 });
+  await dp.waitForTimeout(1000);
+
+  // 点第 3 行：触屏没有 hover，"当前这一行"是唯一该露出把手的地方
+  const hit3 = await dp.$$eval('.nb-block', (els) => {
+    const r = els[2].getBoundingClientRect();
+    return { x: Math.round(r.left + r.width * 0.5), y: Math.round(r.top + r.height / 2) };
+  });
+  await dp.touchscreen.tap(hit3.x, hit3.y);
+  await dp.waitForTimeout(500);
+
+  const grip = await dp.evaluate(() => {
+    const on = document.querySelector('.nb-handles--on');
+    const g = on?.querySelector('[data-testid="drag-handle"]');
+    if (!g) return { missing: true };
+    const cs = getComputedStyle(g.closest('.nb-handles'));
+    const r = g.getBoundingClientRect();
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return {
+      opacity: cs.opacity,
+      w: Math.round(r.width),
+      h: Math.round(r.height),
+      gx: Math.round(r.left + r.width / 2),
+      gy: Math.round(r.top + r.height / 2),
+      hitIsGrip: top === g,
+      onRow: g.closest('.nb-block')?.innerText.trim().slice(0, 12),
+    };
+  });
+  check('触屏：点过的那一行把手要**看得见**（看不见却能拖 = 自动化全绿、人找不到入口）', !grip.missing && grip.opacity === '1', JSON.stringify(grip));
+  check('触屏：把手本身可命中且不小于 44×44（§6 的触摸下限）', !grip.missing && grip.hitIsGrip === true && grip.w >= 44 && grip.h >= 44, JSON.stringify(grip));
+
+  // 只取正文那一格：`.nb-block` 的 innerText 会带上把手那颗 ⠿ 与行首符号，跟核心存的字符串对不上
+  const texts = () => dp.$$eval('.nb-block', (els) => els.map((e) => (e.querySelector('.nb-content')?.innerText ?? '').replace(/\s+/g, ' ').trim()));
+  const before = await texts();
+  check('夹具真的给了四行（不然"顺序变了"会是空判据）', before.length === 4, JSON.stringify(before));
+
+  // 真发一段触摸序列（不是 page.mouse：那是 pointerType=mouse，量的就不是同一条路了）
+  const cdp = await dctx.newCDPSession(dp);
+  const to = await dp.$$eval('.nb-block', (els) => {
+    const r = els[0].getBoundingClientRect();
+    return { x: Math.round(r.left + r.width * 0.5), y: Math.round(r.top + 2) };
+  });
+  const send = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
+  let dragErr = '';
+  try {
+    await send('touchStart', grip.gx, grip.gy);
+    for (let i = 1; i <= 8; i += 1) {
+      await send('touchMove', Math.round(grip.gx + (to.x - grip.gx) * (i / 8)), Math.round(grip.gy + (to.y - grip.gy) * (i / 8)));
+      await dp.waitForTimeout(50);
+    }
+    await send('touchEnd');
+  } catch (e) {
+    dragErr = String(e).split('\n')[0].slice(0, 120);
+  }
+  await dp.waitForTimeout(600);
+  const after = await texts();
+  check(`触屏拖一把：第 3 行真的排到最上面（${before[2] ?? '?'} → 首位）`, dragErr === '' && after[0] === before[2] && after.length === 4, JSON.stringify({ before, after, dragErr }));
+
+  // 效果要落到核心，不是只重排了 DOM：轮询等自动保存那一程走完。
+  // **这一条的牙要说准**：它是"屏幕与库一致"的守卫，不是"拖拽这一步自己会写库"的证明 ——
+  // 两次变异（掐 `replaceBlocks` 里那次 `debouncedSave()`、把 `commitDrop` 换成只改本地状态）
+  // 都没能让它红，因为编辑器还有别的持久化路径（失焦 flush 那一类）会补上这一笔。
+  // 也就是说这条**测得到"拖完崩在半路"，测不到"拖这一步没发写"**，写台账时不许按后者吹。
+  let coreOrder = [];
+  for (let i = 0; i < 12; i += 1) {
+    const got = await cmd('get_note', { id: dragId });
+    coreOrder = (got?.doc?.content ?? []).map((b) => (b.content ?? []).map((s) => s.text).join(''));
+    if (coreOrder[0] === after[0] && coreOrder.length === 4) break;
+    await dp.waitForTimeout(400);
+  }
+  check('拖完的顺序**落进了核心**（读回存的那份，不是只看 DOM 变了）', coreOrder.join('|') === after.join('|'), JSON.stringify({ dom: after, core: coreOrder }));
+  check('⑯ 这一腿 console error 为零', dErrors.length === 0, dErrors.slice(0, 3).join(' | '));
+  await dp.screenshot({ path: `${OUT}/30-touch-drag-390.png` });
+  notes.push(`     触屏拖动实测：把手 ${JSON.stringify(grip)}；顺序 ${before.join(' → ')} ⇒ ${after.join(' → ')}；核心 ${coreOrder.join(' → ')}`);
+  await dctx.close();
+  await purgeByTitle(MARK);
+}
+
+/** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
+async function purgeByTitle(prefix) {
+  for (const trash of [false, true]) {
+    const rows = await cmd('list_notes', { folderId: null, trash });
+    for (const n of Array.isArray(rows) ? rows : []) {
+      if ((n.title ?? '').startsWith(prefix)) await cmd('purge_note', { id: n.id });
+    }
+  }
 }
 
 await browser.close();
