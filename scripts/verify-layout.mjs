@@ -12,11 +12,16 @@
  *  ④ **一个视图只有一层滚动条**：文档本身不许滚（外层滚上去底下是空白，用户那句），
  *     而内容必须全部落在内层那一栏的滚动范围里（滚到底能看见最后一张卡 = 不是靠遮丑）。
  *     修前 1280×900 设置页实测两层：文档 177px + `.settings__body` 2002px。
+ *  ④′ ④ 那句是「各个界面」，不是「设置页」：逐个视图（全部/废纸篓/搜索/编辑器/冲突/设置）扫，
+ *     并且判据从"比 height 差"换成"**真的去滚它**"（`scrollTop = 99999` 再读回来）—— 老写法量不到
+ *     `overflow:hidden` 的根被焦点滚走的那种隐形滚动区（实测 950/800/700 三档分别有 167/317/417px）。
  *  ⑤ 置顶那颗点**不悬停也在**：算出来的 opacity 必须是 1，而同行的删除那颗必须是 0
  *     （后者是正对照 —— 否则"量到 1"可能只是因为整套 hover 规则没生效）。
  *  ⑥–⑨（本轮 UX 批加的四条，判据都打在渲染后的几何或真调用上）：
  *     ⑥ 宽屏只有一颗把手且收起后回得来；⑦ 页面上没有原生 `<select>`、面板是我们画的；
- *     ⑧ 删除确认是**悬浮层** —— 打开它不许把下面任何一行顶走；⑨ 文件夹平铺成一层，
+ *     ⑧ 删除确认是**悬浮层** —— 打开它不许把下面任何一行顶走；⑧′ 而那颗"确认"必须**真的删掉**：
+ *     界面上那一行少一行、核心也不再把它交给界面（缺口 G63 就是从这一格空档里漏出去的）；
+ *     ⑨ 文件夹平铺成一层，
  *     历史子层不许因为"不渲染层级"就找不到，且"移动到父级"/"在这下面新建"两颗要真的没了。
  *  ⑩ 快捷新建的模板：真点一次，核心里只多一篇、落库载荷第一块是空段落，编辑器真画出三行待办。
  *
@@ -45,6 +50,18 @@ async function cmd(name, args = {}) {
   return res.json();
 }
 
+/** 核心给界面的 `list_folders` 是一棵树（子层嵌在 `children`），要按 id 找东西就得先摊平。 */
+function flattenFolders(nodes, out = []) {
+  for (const n of Array.isArray(nodes) ? nodes : []) {
+    out.push(n);
+    flattenFolders(n.children, out);
+  }
+  return out;
+}
+
+/** 每次跑的当批戳：待删夹具的名字带上它，免得和上一轮留下的墓碑看起来是同一格。 */
+const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '');
+
 /**
  * ⑤ 那一腿要列表里**真的有一篇**，否则"那颗点可见"会退化成"什么都没量到"。
  * 夹具直接经真核心写入（不是往页面里塞 DOM）—— 列表那一行是核心给的。
@@ -61,23 +78,63 @@ async function ensureSeededNote() {
   if (!pinned || pinned.id !== id) throw new Error(`置顶夹具失败：${JSON.stringify(pinned).slice(0, 120)}`);
 
   // ⑧ 那一腿要一个"可以删"的文件夹 —— 默认本上没有删除入口（那是 P0 那条修复本身）。
-  const folders = await cmd('list_folders', {});
-  const plain = Array.isArray(folders) ? folders.find((f) => f.systemKind == null && f.parentId == null) : null;
+  // ⚠ 核心给的 `list_folders` 是**一棵树**（子层嵌在 `children` 里），不是一排。
+  //   早先这里按顶层数组找子层，于是每跑一次门禁都以为"子层不存在"而新建一个 ——
+  //   开发库里就这么堆出了 9 个同名 `布局夹具子`，而判据照样全绿（拍平之后它们确实"都还在"）。
+  //   夹具自己也得有"复用而不是再造"的判据，否则它既是判据又是污染源。
+  const folders = flattenFolders(await cmd('list_folders', {}));
+  const plain = folders.find((f) => f.systemKind == null && f.parentId == null);
   const folderId = plain?.id ?? (await cmd('create_folder', { parentId: null, name: '布局夹具本' }))?.id;
   if (!folderId) throw new Error('造不出一个普通文件夹：⑧ 那条判据无从量起');
 
   // ⑨ 那一腿要一个**历史嵌套**的子层：拍平之后它必须还在（不能因为不渲染层级就消失），
-  // 而且与父级同一左缘。先查再造，免得每次跑门禁都多堆一个文件夹。
-  const hasChild = Array.isArray(folders) && folders.some((f) => f.parentId === folderId);
-  const childId = hasChild
-    ? folders.find((f) => f.parentId === folderId).id
-    : (await cmd('create_folder', { parentId: folderId, name: '布局夹具子' }))?.id;
+  //    而且与父级同一左缘。先查再造，免得每次跑门禁都多堆一个文件夹。
+  const existingChild = folders.find((f) => f.parentId === folderId);
+  const childId = existingChild?.id ?? (await cmd('create_folder', { parentId: folderId, name: '布局夹具子' }))?.id;
   if (!childId) throw new Error('造不出历史子层：⑨ 那条"拍平不许丢文件夹"的判据无从量起');
-  return { noteId: id, folderId, childId };
+
+  // ⑧′ 那一腿要一颗**可以被真删掉**的本：每次跑现造现删，不许复用（复用过的就在回收站里了）。
+  //    代价是每次留下一条文件夹墓碑 —— 核心目前没有 purge_folder / restore_folder 命令。
+  const sacrifice = await cmd('create_folder', { parentId: null, name: `布局夹具删 ${stamp}` });
+  if (!sacrifice?.id) throw new Error(`造不出待删的文件夹：${JSON.stringify(sacrifice).slice(0, 120)}`);
+  return { noteId: id, folderId, childId, sacrificeId: sacrifice.id };
+}
+
+/**
+ * ④′ 的夹具：把每一栏都**真的压到要滚**。
+ * 扫到"这一栏没有第二层滚动条"可能是两件事：量过了且对，或者压根没内容可滚 ——
+ * 后者不算检查过。所以这里造 30 篇（列表溢出）、删 14 篇（废纸篓溢出）、
+ * 再造一篇 60 段的长文（编辑区溢出），搜索用同一批命中。
+ * 先按标题前缀清掉上一轮的：这条门禁会反复跑，不许每次多堆 30 篇。
+ */
+async function ensureScrollFixtures() {
+  const MARK = '滚动夹具';
+  for (const trash of [false, true]) {
+    const rows = await cmd('list_notes', { folderId: null, trash });
+    for (const n of Array.isArray(rows) ? rows : []) {
+      if ((n.title ?? '').startsWith(MARK)) await cmd('purge_note', { id: n.id });
+    }
+  }
+  const para = (text) => ({ type: 'paragraph', content: [{ text }] });
+  const doc = (lines) => ({ v: 1, content: lines.map((text, i) => ({ id: `fx${String(i).padStart(3, '0')}${String(Date.now()).slice(-4)}`, ...para(text) })) });
+  const ids = [];
+  for (let i = 0; i < 30; i += 1) {
+    const r = await cmd('create_note', { folderId: null, doc: doc([`${MARK}：这一行要够长，把列表那一栏撑到必须滚 ${i}`]) });
+    if (r?.id) ids.push(r.id);
+  }
+  const long = await cmd('create_note', {
+    folderId: null,
+    doc: doc(Array.from({ length: 60 }, (_, i) => `${MARK} 长文第 ${i} 段：编辑区这一栏要真的能滚起来，否则"只有一层"是空判据`)),
+  });
+  for (const id of ids.slice(0, 14)) await cmd('delete_note', { id });
+  if (ids.length < 30 || !long?.id) throw new Error(`④′ 的夹具造不出来：列表 ${ids.length}/30，长文 ${long?.id ?? '无'}`);
+  return { ids, longId: long.id };
 }
 
 let seed;
+let fx;
 try {
+  fx = await ensureScrollFixtures();
   seed = await ensureSeededNote();
 } catch (e) {
   console.error(`布局门禁的前置不满足：${e.message}\n要先起：cargo run -p notera-cli -- --data-dir <目录> serve --port 17323`);
@@ -92,6 +149,60 @@ const notes = [];
 function check(name, ok, detail) {
   (ok ? notes : failures).push(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` —— ${detail}` : ''}`);
 }
+
+/**
+ * ④′ 的探针。四件事一次量完，全部打在渲染后的几何上：
+ *  · **根那一格能不能被滚**（`scrollTop = 99999` 再读回来）—— 不许只比 scrollHeight/clientHeight：
+ *    上一版就是这么算出"外层 0px"却量不到 body 被焦点滚走的 167px（`overflow:hidden` 的格子
+ *    照样能被焦点/scrollIntoView 滚，这才是用户那句"滚上去底下是空白"剩下的那一半）。
+ *  · 版心的盒子必须正好等于视口（多出来的那一截就是没人能看见、也没人能滚回来的死区）。
+ *  · 同一栏里不许有两层**在流**的滚动区互相套着（悬浮层按 P1 那条不参与排版，故排除 fixed/absolute）。
+ *  · 每一层滚到底时，它的最后一格必须真的进视口 —— 挡住"靠遮丑过关"。
+ */
+const LAYER_SCAN = async () => {
+  const b = document.body;
+  const de = document.scrollingElement ?? document.documentElement;
+  b.scrollTop = 99999;
+  const bodyShift = b.scrollTop;
+  b.scrollTop = 0;
+  de.scrollTop = 99999;
+  const docShift = de.scrollTop;
+  de.scrollTop = 0;
+  const shell = document.querySelector('.app-shell');
+  const hits = [];
+  for (const el of document.querySelectorAll('.app-shell *')) {
+    const cs = getComputedStyle(el);
+    if (!/(auto|scroll)/.test(cs.overflowY)) continue;
+    if (cs.position === 'fixed' || cs.position === 'absolute') continue;
+    const over = el.scrollHeight - el.clientHeight;
+    if (over <= 1) continue;
+    const pane = el.closest('.pane');
+    hits.push({ el, col: pane ? pane.className.replace('pane ', '').slice(0, 18) : '(根)', cls: String(el.className).split(' ').slice(0, 2).join('.') || el.tagName.toLowerCase(), over });
+  }
+  const layers = [];
+  for (const h of hits) {
+    h.el.scrollTop = h.over;
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const last = h.el.lastElementChild;
+    const lr = last?.getBoundingClientRect();
+    layers.push({ col: h.col, cls: h.cls, over: h.over, lastCls: last ? (String(last.className).split(' ')[0] || last.tagName.toLowerCase()) : null, lastBottom: lr ? Math.round(lr.bottom) : null, vh: window.innerHeight });
+    h.el.scrollTop = 0;
+  }
+  const nested = [];
+  for (const a of hits) {
+    for (const c of hits) {
+      if (a !== c && a.el.contains(c.el)) nested.push(`${a.col}/${a.cls} ⊃ ${c.col}/${c.cls}`);
+    }
+  }
+  return {
+    bodyShift,
+    docShift,
+    shellH: shell ? Math.round(shell.getBoundingClientRect().height) : null,
+    innerH: window.innerHeight,
+    layers,
+    nested,
+  };
+};
 
 for (const width of WIDTHS) {
   const errors = [];
@@ -232,6 +343,33 @@ for (const width of WIDTHS) {
     await page.waitForTimeout(200);
     const closed = await page.evaluate(() => document.querySelectorAll('[data-testid="app-popover-panel"]').length);
     check(`宽 ${width}：Esc 关得掉那层确认`, closed === 0, `残留 ${closed} 个面板`);
+
+    // ⑧′ 决定类按钮要验**效果**，光验"悬浮层画对了"不够。这一格以前是空的，
+    //     而它底下正藏着缺口 G63：软删掉的文件夹仍然留在 `list_folders` 交给界面那一排里 ——
+    //     用户点完"确认删除"，那一行还在原地。所以这里两边都量：界面上那一行、以及核心还认不认它。
+    //     只在 1440 跑一遍：它是行为判据，那颗待删的本一轮只有一份。
+    if (width === 1440) {
+      const before = await page.evaluate(() => document.querySelectorAll('[data-testid="folder-row"]').length);
+      const victim = page.locator('.tree__row', { has: page.locator(`[data-testid="folder-${seed.sacrificeId}"]`) });
+      check(`宽 ${width}：待删那一行本来在界面上`, (await victim.count()) === 1, `实到 ${await victim.count()} 行`);
+      await victim.hover();
+      await page.waitForTimeout(150);
+      await victim.locator('[data-testid="folder-delete"]').click();
+      await page.waitForTimeout(300);
+      await page.locator('[data-testid="app-popover-panel"] [data-testid="folder-delete-confirm"]').click();
+      await page.waitForTimeout(900);
+      const after = await page.evaluate((id) => ({
+        row: Boolean(document.querySelector(`[data-testid="folder-${id}"]`)),
+        rows: document.querySelectorAll('[data-testid="folder-row"]').length,
+      }), seed.sacrificeId);
+      const coreIds = flattenFolders(await cmd('list_folders', {})).map((f) => f.id);
+      check(
+        `宽 ${width}：确认删除之后那一行真的从界面上没了（核心也不再把它交给界面）`,
+        !after.row && after.rows === before - 1 && !coreIds.includes(seed.sacrificeId),
+        JSON.stringify({ ...after, before, 核心还认它: coreIds.includes(seed.sacrificeId) }),
+      );
+      notes.push(`     确认删除实测：界面 ${before} → ${after.rows} 行，那一行还在=${after.row}，核心列表含它=${coreIds.includes(seed.sacrificeId)}`);
+    }
   }
 
   // ⑨ 文件夹只剩一层：所有行同一左缘，且层级 UI（"移动到父级"/"在这下面新建"）确实没了。
@@ -343,14 +481,23 @@ for (const width of WIDTHS) {
       const cs = getComputedStyle(el);
       return /(auto|scroll)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 1;
     });
+    const byCol = {};
+    for (const el of inner) {
+      const col = el.closest('.pane')?.className.replace('pane ', '').slice(0, 18) ?? '(根)';
+      (byCol[col] ??= []).push({ cls: String(el.className).slice(0, 40), over: el.scrollHeight - el.clientHeight });
+    }
     return {
       docOverflow: de.scrollHeight - de.clientHeight,
-      innerCount: inner.length,
-      inner: inner.map((el) => ({ cls: String(el.className).slice(0, 40), over: el.scrollHeight - el.clientHeight })),
+      byCol,
+      worst: Math.max(0, ...Object.values(byCol).map((v) => v.length)),
     };
   });
   check(`宽 ${width}：文档不滚（外层那一条没了）`, layers.docOverflow === 0, JSON.stringify(layers));
-  check(`宽 ${width}：设置页恰好一层滚动条`, layers.innerCount === 1, JSON.stringify(layers.inner));
+  // 「只有一层」的主语是**一栏**，不是整屏。侧栏排到 11 个文件夹时它自己那一栏本来就该能滚 ——
+  // 老写法 `innerCount === 1` 把这两件事混在一起，④′ 逐个视图扫的第一跑就是这样撞红的：
+  // 红的是判据写错了，不是界面错了（那条 55px 是侧栏的一层，不是第二层）。
+  check(`宽 ${width}：设置那一栏恰好一层滚动条`, (layers.byCol.settings ?? []).length === 1, JSON.stringify(layers.byCol));
+  check(`宽 ${width}：任何一栏都不许多于一层滚动条`, layers.worst <= 1, JSON.stringify(layers.byCol));
 
   const lastCard = await page.evaluate(async () => {
     const el = document.querySelector('.settings__body');
@@ -374,6 +521,62 @@ for (const width of WIDTHS) {
   );
   notes.push(`     宽 ${width} 内层滚动 ${lastCard.scrolledTo}/${lastCard.maxScroll}px · 末卡底 ${lastCard.lastBottom} vs 视口 ${lastCard.vh}`);
   await page.evaluate(() => { document.querySelector('.settings__body').scrollTop = 0; });
+
+  // ④′ 用户那句是「各个界面有滚动条的应该只有一层」，不是一句"设置页"。
+  //     上一版这条判据只在设置页量了一次，而且只看 `scrollingElement` 的 height 差 ——
+  //     于是"根那一格其实还能被焦点滚走 167px"这一整族都从判据底下滑过去了。
+  //     这里逐个视图扫，且把最后一格留在设置页，好让下面的 ⑦ 从同一份起点开始。
+  const VIEWS = [
+    ['全部笔记', async () => { await page.evaluate(() => document.querySelector('[data-testid="nav-all"]').click()); }, true, null],
+    ['废纸篓', async () => { await page.evaluate(() => document.querySelector('[data-testid="nav-trash"]').click()); }, true, null],
+    ['搜索结果', async () => {
+      await page.evaluate(() => document.querySelector('[data-testid="nav-all"]').click());
+      await page.waitForTimeout(500);
+      const si = page.locator('[data-testid="search-input"]');
+      if (await si.count() > 0 && (await si.isVisible())) await si.fill('滚动夹具');
+      await page.waitForTimeout(1000);
+    }, true, null],
+    ['编辑器', async () => {
+      await page.evaluate(() => document.querySelector('[data-testid="nav-all"]').click());
+      await page.waitForTimeout(500);
+      const si = page.locator('[data-testid="search-input"]');
+      if (await si.count() > 0 && (await si.isVisible())) await si.fill('');
+      await page.waitForTimeout(600);
+      await page.evaluate((id) => {
+        const row = document.querySelector(`[data-testid="note-row-${id}"]`);
+        row?.scrollIntoView({ block: 'center' });
+        row?.click();
+      }, fx.longId);
+      await page.waitForTimeout(1200);
+    }, true, 'editor'],
+    // 冲突那一格没有对端就造不出条目，所以这里只要求"根不许滚 + 不许嵌套"，
+    // 不许把它当成"检查过了"：读数是 0 层，判据在这一格确实是空的，如实写出来。
+    ['冲突', async () => { await page.evaluate(() => document.querySelector('[data-testid="nav-conflicts"]').click()); }, false, null],
+    ['设置', async () => { await page.evaluate(() => document.querySelector('[data-testid="nav-settings"]').click()); }, true, 'settings'],
+  ];
+  for (const [i, entry] of VIEWS.entries()) {
+    const [label, go, expectOverflow, expectCol] = entry;
+    await go();
+    const s = await page.evaluate(LAYER_SCAN);
+    const nm = `宽 ${width} · ${label}`;
+    check(`${nm}：根那一格不许留隐形滚动区（body 与文档都滚不动）`, s.bodyShift === 0 && s.docShift === 0, JSON.stringify({ bodyShift: s.bodyShift, docShift: s.docShift }));
+    check(`${nm}：版心盒子等于视口（多出来那一截谁也看不见、也滚不回来）`, s.shellH === s.innerH, JSON.stringify({ shellH: s.shellH, innerH: s.innerH }));
+    check(`${nm}：同一栏不许两层在流的滚动区互相套着`, s.nested.length === 0, JSON.stringify(s.nested));
+    const blind = s.layers.filter((l) => l.lastBottom !== null && l.lastBottom > l.vh + 2);
+    check(`${nm}：每层滚到底时最后一格都进视口（不是靠遮丑）`, blind.length === 0, JSON.stringify(blind));
+    if (expectOverflow) {
+      check(`${nm}：夹具确实把这一栏压到溢出（否则上面四条是"没量到"）`, s.layers.length >= 1, JSON.stringify(s.layers));
+    } else {
+      notes.push(`     ${nm}：这一格本批造不出溢出内容（要两台设备/对端才有条目），四条判据里只有前两条在这里有牙`);
+    }
+    if (expectCol) {
+      check(`${nm}：溢出的是 ${expectCol} 那一栏（夹具没白造）`, s.layers.some((l) => l.col.includes(expectCol)), JSON.stringify(s.layers.map((l) => l.col)));
+    }
+    notes.push(`     ${nm} 在流的滚动层 = ${JSON.stringify(s.layers.map((l) => `${l.col}/${l.cls} ${l.over}px，滚到底末格底 ${l.lastBottom}/视口 ${l.vh}`))}`);
+    await page.screenshot({ path: `${OUT}/24-layers-${width}-${['all', 'trash', 'search', 'editor', 'conflicts', 'settings'][i]}.png` });
+  }
+  await page.evaluate(() => document.querySelector('[data-testid="nav-settings"]').click());
+  await page.waitForTimeout(900);
 
   // ⑦ 下拉：不许再有原生 <select>（它的面板由操作系统画 ⇒ 两端不可能一致），
   //    换成无头库之后面板是我们 DOM 里的节点，于是"画得对不对、在不在视口里"可量。
@@ -574,6 +777,8 @@ for (const width of WIDTHS) {
 }
 
 await browser.close();
+// 夹具清干净：这条门禁反复跑，不许每次往开发库里多堆 31 篇。
+for (const id of [...fx.ids, fx.longId]) await cmd('purge_note', { id });
 console.log(notes.join('\n'));
 console.log(failures.length ? `\n${failures.join('\n')}\n>>> 布局门禁 FAIL` : '\n>>> 布局门禁 PASS');
 process.exit(failures.length ? 1 : 0);

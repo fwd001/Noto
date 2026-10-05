@@ -118,6 +118,15 @@ button {
   height: var(--app-vh);
   min-height: 0;
   background: var(--bg-canvas);
+  /* 上面那两条 `overflow: hidden` 只挡住了**滚动条**，没挡住**滚动区**：可聚焦的后代在折线以下时，
+     Chromium 会把它的可滚动溢出继续往上传到根（实测设置页那颗同步徽标画在 y=1095，
+     body.scrollHeight 1117 / clientHeight 950 —— 窗口 950/800/700 三档分别能被滚走
+     167/317/417 px，夹具加多之后是 211 px；焦点一滚就把整个壳顶上去、底下留白，
+     正是用户那句「外层滚上去底下是空白」还剩的那半：那条判据当年只看 scrollingElement
+     的 height 差，于是把"没有滚动条"当成了"不能滚"）。
+     壳的盒子本来就 == 视口，所以这一裁只切掉原本就看不见的部分；`position: fixed` 的层
+     （toasts / 工具条菜单）不在裁剪盒的包含块里 —— transform/filter/contain 实测全是 none。 */
+  overflow: hidden;
 }
 
 .app-body {

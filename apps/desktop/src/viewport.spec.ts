@@ -142,6 +142,21 @@ describe('样式那一侧真的在读这两个变量', () => {
     expect(block.slice(0, 220)).toContain('height: var(--app-vh)');
   });
 
+  it('外壳自己那一格要裁掉 —— 只裁 html/body 挡不住隐形滚动区', () => {
+    // `overflow: hidden` 的格子仍然能被焦点/scrollIntoView 滚。折线以下只要有一个**可聚焦**的格子
+    // （实测是设置卡片里那颗同步徽标，y=1117 那一档），它的可滚动溢出就会往上传到根：
+    // 视口 950/800/700 时 body 分别能被滚走 167/317/417 px，底下留白、又没有滚动条。
+    // 壳的盒子本来就等于视口，所以裁在这里只切掉原本就看不见的部分。
+    // （1440×950 实测：那颗徽标画在 y=1095，body.scrollHeight 1117 而 clientHeight 950）
+    const css = read('styles/base.css');
+    const from = css.slice(css.indexOf('.app-shell'));
+    // 只在这条规则自己的花括号里找：写成 `slice(0, 900)` 会把下一条 `.pane { overflow: hidden }`
+    // 一起捞进来 —— 变异自查时就是这样假绿的（把 .app-shell 那格删掉，测试照样过）。
+    const rule = from.slice(0, from.indexOf('}'));
+    expect(rule).toContain('height: var(--app-vh)');
+    expect(rule).toContain('overflow: hidden');
+  });
+
   it(':root 给了兜底值，JS 没跑起来也不能没有高度', () => {
     const css = read('styles/base.css');
     expect(css).toMatch(/--app-vh:\s*100dvh/);
