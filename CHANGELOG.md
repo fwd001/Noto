@@ -1599,6 +1599,110 @@ E2EE 那两本 `key_vault.rs`/`sealed_e2ee.rs` 的若干条）。
 `cargo test --workspace -- --test-threads=1`（CI 那条原样命令）**672 通过 / 0 失败 / 6 ignored**、90 个 `test result` 行、
 前端 285/31、`vue-tsc` 0、`eslint` 0、arch-check 32/32。
 
+### 修复与新增（2026-10-04 深夜到 10-05 这批 UX/产品改造：0.0.63 → 0.0.64）
+
+这批是用户一次性提的 13 条界面与产品口径，逐条修、逐条提交（12 个 commit），每条都带实测。下面按"用户原话 → 真实根因 → 读数"记。
+
+- **应用是个灰方块：占位图标生成器一直在交白卷（`e38cc60`）**
+  - 根因不是配置：`icons/` 里那 12 张 PNG 是全同一色的占位图，`tauri.conf.json` 老老实实引用着它们 ⇒
+    配置看起来没毛病，屏幕上就是灰块。换成真正的品牌标记（圆角方形 + 渐变 + N 字），两壳全套产物重生成。
+  - 门禁改成**读像素**：`scripts/check-icons.mjs` 自己解 PNG（zlib inflate + 5 种 un-filter）与 ICO 帧，
+    断言"至少 6 个量化色、主色不超过不透明像素的 92%、四角透明、ico ≥5 帧且含 16/32/48/256、icns ≥10 KB、
+    两壳 icon.png 一致"。**"文件在"不再是证据**，灰方块从此不可能再骗过门禁。
+- **改名 Noto，但 identifier 故意留 `app.notera`（`c471fac`）**
+  - 可见层（productName、窗口标题、`<title>`、菜单、托盘提示、界面文案）统一成 Noto；
+    `identifier` 是**数据目录的键**，改它等于把用户的库留在原地不管 ⇒ 明写在配置注释里，不许"顺手统一"。
+  - `scripts/check-brand.mjs` 扫 96 个文件里的字面 "Notera"，并钉住这六个派生位置一致。
+- **默认本以前能改名/移动/删除，点下去得到的是一句 Constraint 错（`70c5f85`）**
+  - 跨语言契约掉了一格：核心一直在发 `systemKind`，前端 `ensureNode` 把它**丢掉了**，
+    于是界面凭"看起来像默认本"猜，猜错就摆出三颗无效的按钮。修法是让按钮的可见性跟着核心的
+    `assert_folder_writable` 判据走，前端补读 `systemKind`。
+  - 验的是真序列化输出：`notera-host/tests/dto_envelope.rs` 新增一条，从真 `dispatch` 里断
+    默认本的 `systemKind == "default"`、普通本为 `null`，且对默认本 `delete_folder` 回 `constraint`。
+- **置顶那颗小圆点点了没变化，只有左上角一个对勾（`c06cd4f`）**
+  - 根因是 CSS 上不可能实现：那颗点长在 hover 层的**子元素**里，父级 `opacity:0` 时子元素无论怎么写
+    都不可能出现。改成：常显、图形本身表状态（`○` ↔ `●`）、`aria-pressed` 跟着翻，去掉标题前那个 ✓。
+  - 布局门禁第 ⑤ 腿量的是**算出来的 opacity**：常显那颗必须 1，同一行的删除那颗必须 0（后者是正对照，
+    否则"量到 1"可能只是整套 hover 规则没生效）。另加 ≥44×44 的触摸目标下限。
+- **设置页两层滚动条，外层滚上去底下是空白（`f4818b5`）**
+  - 真读数（1280×900）：文档 177px + `.settings__body` 2002px 两层。改成 `html,body{overflow:hidden}`
+    让文档不参与滚动，滚动只留在各栏 `.pane-body` 那一层。
+  - 不是遮丑：第 ④ 腿同时断"滚到底能完整看见最后一张卡"（末卡底 929 vs 视口 950）——内容真的够得着。
+- **两端标题栏与侧栏把手：折起之后下面一层还有一个折起（`4370b99`）**
+  - 一屏上本来有四颗竞争的把手（标题栏一颗、侧栏内部一颗、主区左上角一颗、列表头一颗），而 macOS 的
+    `overlay` 只是前端**声称**的，壳那边从来没实现过 ⇒ 状态栏下面那一行是空的。
+  - 现在按 `drawsTitleBar(caps)` 唯一决定归哪一颗：两端都自绘（用户拍的"真一致，风险高"），窄屏另算抽屉。
+    第 ⑥ 腿量"开着/收起时全屏幕都只有一颗把手"，用 testid 集合而不是 DOM 是否存在。
+- **右下角那个下拉是系统控件 ⇒ 换无头组件（`b62f57f`）**
+  - 原生 `<select>` 的面板由操作系统画，Win/Mac 永远不可能一致，而且**在 DOM 外面 ⇒ 任何测试都量不到**。
+    换成 Headless UI（`AppSelect`/`AppPopover`/`AppDialog` 三个共用一份实现），四格原生 select 全部退场。
+  - 选库的账要记：本来要用 reka-ui，但 pnpm 12.5.1 拒绝 vue-demi 的 postinstall，
+    `install --frozen-lockfile` 直接退出 1，而 `onlyBuiltDependencies`/`ignoredBuiltDependencies` 都压不住它
+    （试过三种写法）。Headless UI 的依赖链里没有安装脚本 ⇒ 换它，不是因为它更流行。
+  - 第 ⑦ 腿：`document.querySelectorAll('select').length === 0`，且 TLS 面板是我们画的、4 项、完整在视口内。
+  - 代价按债记着没藏：主包 216 kB → 281 kB（gzip 94 kB）。
+- **文件夹操作全部改成悬浮层 / 就地输入，默认本不给删除入口（`467fe16`、`9b11374`、`5baac05`）**
+  - 确认删除那层以前**参与排版**：打开它会把下面两行顶走（侧栏 scrollHeight 536 → 492），
+    就是用户那句"而不是底下占了一个"。工具层改成绝对定位浮在行上，静止态 `pointer-events:none`
+    （否则透明按钮盖住名字的点击区），面板开着时用 `:has([aria-expanded='true'])` 不许收回去。
+  - 这里有一条**必须诚实记下的假红**：把 `.tree__tools` 从 `absolute` 改成 `static` 做变异时，
+    第 ⑧ 腿没有红 —— 行的 `min-height` 把它吸收了。结论是"下面一行都没动"那句断言与
+    `position`/`inView` 两句是冗余的，不吹成"三条都拦得住"。
+  - 子文件夹整条撤掉：列表拍平成一层，历史子层仍显示（不因为"不渲染层级"就找不到里面的笔记），
+    `移动到父级` 与 `在这下面新建` 两颗连同 store 里的 `move()` 一起删干净（不留兼容壳）。
+    `create_folder`/`move_folder` 的核心侧仍只由 UI 挡 `parentId` —— 这条留在待决里问用户。
+  - 新建文件夹改弹窗（输入框在层里，不再"底下突然冒一行"），编辑器去掉行首那颗 `+`
+    （回车就是新起一行，那颗 `+` 是第三种做同一件事的入口），工具条收成四颗标记。
+- **搜索：精准 + 模糊同时跑，且"匹配所有关键字"以前是假的（`235342c`）**
+  - 真缺陷：老写法每段各取 `limit*4` 条再在 Rust 里交集 ⇒ 某段命中太多时，两个词都在的那条被窗口截掉。
+    具象读数：5000 篇里那篇同时含「同步」「机制」但最旧的笔记，`{text:"同步 机制", limit:1}` 回 `[]`。
+  - 修法是把 AND 下推进**一条 SQL**（≥3 字的段合成一个 MATCH 表达式，≤2 字的段各挂一个 LIKE 条件），
+    LIMIT 因此重新变安全；正文推迟到最后那一页才取。
+  - 模糊档 = 这一段的**每一个三字串**都在同一篇里，允许中间隔话；精准档要连着。两档同跑，精准在前。
+    ≤2 字没有 trigram token ⇒ 不放宽；**不是编辑距离容错**，这条不在范围内也明写在文档里。
+  - 效率不是偏好：先写过一版"为了正确不限条数"，实测 p95 = 149 ms，那是把正确性换成慢；
+    下推之后 p50 = 10.4 / p95 = 20.9 / max = 22.1 ms（5000 篇、debug 构建）。新加的
+    `notera-store/tests/search_latency.rs` 每轮 `cargo test` 重算，预算 p50 ≤ 40 ms、p95 ≤ 80 ms。
+  - ⚠ 预算为什么不敢更紧：**把 LIMIT 放大 400 倍的变异只让 p95 涨到 37.4 ms，门禁照绿** ——
+    时间抓不住 2 倍级，卡太紧就成 CI 噪声。2 倍级交给 `tier_sql` 的四条形状单测（实测它当场把
+    `LIMIT 28` 抓红）。这一条是这批里最重要的一次方法论收获。
+  - 调用边也在真 host 那臂上验过：`search {text:"数据同步协议"}` 回 2 条，order 精准→模糊，
+    只含「同步协」的那篇没进来，DTO 键仍是 noteId/score/snippetHtml/title。
+- **快捷新建给模板，默认那颗仍然是一页空白（`c0f617e`）**
+  - 用户口径「默认的模板要非常简洁，一进去就是请输入标题和正文」。▾ 那层只列「待办清单 / 会议记录」，
+    不把"空白"列第二遍。
+  - 关键一条：**每个模板的第一块一律留空段落**。标题是从正文第一行推出来的（`extract.rs:38`），
+    模板占了第一行就等于用户的标题被模板文字顶掉。变异自测：把 todo 的首块换成 `labeled('待办')`
+    ⇒ 三条同红，读数 `{title:"待办", firstText:1, visible:"none"}`，正是要拦的形状。
+  - 布局门禁第 ⑩ 腿真点一次 ▾：核心里只多一篇、落库载荷首块 content 长度为 0、
+    编辑器真画出 `.nb-check` ×3 且第一行挂着那句占位语。
+- **移动端输入框弹起（`e762a99`）**
+  - 这一条以前只在 PLATFORM.md §8 的"预留"清单里，没有实现也没有读数。根因是**两端行为不一样**：
+    Android 带 `adjustResize`，键盘一弹 `innerHeight` 就变；iOS **不改布局视口**，只改可视视口 ⇒
+    `window.resize` + `height:100%` 那套永远收不到"键盘占了 300px"。
+  - 契约：`--app-vh = min(visualViewport.height, innerHeight)`、`--app-kb = max(0, inner - vv.height - offsetTop)`；
+    只听 window.resize 不够（iOS 常只发 visualViewport 的 scroll），`--app-kb` 是给 `position:fixed`
+    那一层用的（浮层相对布局视口定位，不跟着缩）。同一份实现两端共用（移动壳嵌的就是 desktop/dist）。
+  - 第 ⑪ 腿真浏览器量渲染几何：版心 `844 → 544 → 844` 而 `innerHeight` 全程 844，toast 底边
+    `812 → 512`。变异自测：`.app-shell` 退回 `height:100%` ⇒ 这一腿红，读数
+    `vhVar=544px / shellH=844` —— 抓的是"变量设了而样式没读"那一族。
+- **本地库的版本策略：这一批**没有**改代码，只是把账对清**
+  - 用户那句"建立数据库版本，每一次升级都会初始化"其实早就在：`PRAGMA user_version` 是唯一版本载体，
+    `SUPPORTED_SCHEMA_VERSION` 由迁移条数**派生**（不手维护），迁移 forward-only、单个事务、
+    失败不推进；库版本比程序新 ⇒ `ReadOnly`，绝不降级写回。
+  - 四条既有单测就是它的门：`empty_db_migrates_to_latest_and_tables_exist`（新装即初始化到当前版本）、
+    `reopening_does_not_reapply_migrations_or_duplicate_bootstrap`、
+    `upgrade_from_a_real_v2_database_backs_up_and_keeps_data`、
+    `future_db_version_opens_read_only_and_is_never_downgraded`。
+  - "第一版未上线 ⇒ 不承诺历史兼容"这条口径落在版本策略那节：迁移可以直接改表结构，不写兼容层。
+  - 所以这一格**不假装是新做出来的功能**：读过的判据、测过的形状，原样记在这儿。
+
+全批门禁（2026-10-05 本机 GNU 工具链独占机器实测）：`cargo test --workspace` **684 通过 / 0 失败 / 6 ignored**
+（647 → 684 = 这批 37 条：搜索 10（含延迟门禁 1）+ 各条 UI 契约 spec + `dto_envelope` 的 systemKind 那条）；
+`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 均 0；
+前端 **332 单测 / 39 文件**、typecheck、lint、build、arch-check 32 条均 0；
+`node scripts/verify-layout.mjs` 四档桌面视口 + 移动端那一腿全 PASS。
+
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
 - **G38 同步在 macOS / Linux / Android 上配不出来：口令只允许进 OS 凭据库，而那三个平台没接**（2026-09-30 按 §45 扫出来；状态 = **未修，等口径拍板**；三条出路写在 PRODUCTION-READINESS §7）
   - 事实链：`credential_store::available()` 就是 `cfg!(windows)`，`put()` 在非 Windows 直接 `Unavailable`，而
@@ -1669,6 +1773,10 @@ E2EE 那两本 `key_vault.rs`/`sealed_e2ee.rs` 的若干条）。
 - P11（删除 vs 修改）里服务器那一版同样从没来到本机：采纳只在 `UpdateUpdate` 走（删除 vs 修改若自动采纳，等于替用户决定"要不要复活"，§5 明确这必须由用户选）。后果是这张卡片的左栏能给出本机那一版（副本），右栏只有一句哈希 —— 用户是在"看不到对方改了什么"的情况下决定删还是不删。补它需要给 P11 也取记录并另设一处可读的存放位置，属 §9 评审范围
 - **P11 里服务器那一版同样从没来到本机**：采纳只在 `UpdateUpdate` 走（删除 vs 修改若自动采纳就等于替用户决定"要不要复活"，§5 明确这必须由用户选）。后果是这张卡片的左栏能给出本机那版（副本），右栏只有一句哈希 —— 用户是在"看不到对方改了什么"的情况下决定删还是不删。补它需要给 P11 也取记录并另设一处可读的存放位置，属 §9 评审范围
 - macOS/Android/iOS 产物、签名与真机后台同步预算未在本机验证（`[BLOCKED]` 需要对应硬件与证书）
+- **G58 macOS 自绘标题栏那一行没在真机验过**（2026-10-04 这批；状态 = **BLOCKED，本机无 Mac**）：`titleBarStyle: "Overlay"` + `hiddenTitle` 与 `set_decorations(false)` 的取舍是按"两端真一致"拍的，判据（一屏只一颗把手、红绿灯区不挡交互）只能在 macos runner 或真机上量。Windows 侧已有读数。
+- **G59 iOS 软键盘的时序与 `offsetTop` 行为没在真机验过**（2026-10-05 这批；状态 = **只到"链路"级**）：`--app-vh/--app-kb` 的形状在桌面 Chromium 用"只缩可视视口"模拟量过（版心 844→544→844、toast 底 812→512），Android 各厂商 resize 差异同样没设备。见 PLATFORM.md §8.1 / §12。
+- **G60 核心侧不拒 `parentId`，"只有一层文件夹"目前只有 UI 在挡**（2026-10-05 这批；状态 = **待拍板**）：拍平之后界面不再发 `parentId`，但 `create_folder`/`move_folder` 仍接受它 ⇒ 走同步对端或以后哪个入口漏了判，子层还会回来。要不要在 `assert_folder_writable` 旁边再加一条深度约束，属产品口径，不代用户决定。
+- **G61 换无头组件把主包抬了 65 kB（gzip +12 kB），没有体积门禁**（2026-10-04 这批；状态 = **记着的债**）：216 kB → 281 kB。当前只有 `pnpm build` 的输出可看，没人拦回归。
 - `ARCHITECTURE-REVIEW.md` §14 的 D1–D10 仍待人工决定
 
 
