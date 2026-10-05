@@ -26,6 +26,7 @@
  *  ⑩ 快捷新建的模板：真点一次，核心里只多一篇、落库载荷第一块是空段落，编辑器真画出三行待办。
  *  ⑬ 「文字大小 / 文字颜色」那两层菜单在**手机宽**（390）下也要完整可见、点得着，且点了真画出来
  *     （⑫ 只在 1440 量过，而工具条本身横向可滚 ⇒ 少一次钳位就是 G29 那一族）。
+ *  ⑭ 每一层浮层（模板 / 两处下拉 / 选区工具条）在 390 与 1440 两档都不许出界 —— G64 那一族的通判据。
  *
  * 前置（脚本不管，由调用方起）：
  *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
@@ -864,6 +865,94 @@ for (const width of WIDTHS) {
   check('⑬ 这一腿 console error 为零', nErrors.length === 0, nErrors.slice(0, 3).join(' | '));
   notes.push(`     手机宽（390×844）字号/颜色实测 ${JSON.stringify(painted)}`);
   await narrow.close();
+}
+
+/**
+ * ⑭ 每一层**浮起来的东西**都不许出界（G64 那一族的通判据）。
+ *
+ * ⑬ 钉的是工具条那两层菜单，而同一族还有四格：快捷新建模板的 AppPopover、选中文字浮出的
+ * 那条选区工具条、编辑器头那格文件夹下拉、设置页那四格下拉。它们的定位方式各不相同
+ * （JS 算坐标 / absolute / Headless UI 自己排），所以"会不会有一格在窄屏上画到屏幕外"
+ * 不能靠一处修好就推定全体没事 —— 每一格各自量一次，两档宽度各一次。
+ * 判据打在 `right <= innerWidth && left >= 0` 与"选项中心点命中的是面板自己"，
+ * 不打在"面板在 DOM 里"（那是 G29 已经犯过的错）。
+ */
+{
+  const OVERLAYS = [
+    { label: '快捷新建模板', trigger: '[data-testid="new-note-templates"]', panel: '[data-testid="app-popover-panel"]' },
+    { label: '编辑器文件夹下拉', trigger: '[data-testid="editor-pane"] .app-select', panel: '[data-testid="app-select-panel"]' },
+    { label: '设置页 TLS 下拉', trigger: '[data-testid="account-tls"]', panel: '[data-testid="app-select-panel"]', needSettings: true },
+  ];
+  for (const width of [390, 1440]) {
+    const p = await browser.newPage({ viewport: { width, height: 844 } });
+    const oErrors = [];
+    p.on('pageerror', (e) => oErrors.push(String(e).slice(0, 140)));
+    p.on('console', (m) => { if (m.type() === 'error') oErrors.push(m.text().slice(0, 140)); });
+    await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await p.waitForSelector('[data-testid="sidebar"]', { timeout: 15000 });
+    await p.waitForTimeout(1800);
+
+    const readPanel = (sel) => p.evaluate((s) => {
+      const el = document.querySelector(s);
+      if (!el) return { missing: true };
+      const r = el.getBoundingClientRect();
+      const it = el.querySelector('button, [role="option"], .btn');
+      let hits = false;
+      if (it) {
+        const b = it.getBoundingClientRect();
+        const h = document.elementFromPoint(Math.round(b.left + b.width / 2), Math.round(b.top + b.height / 2));
+        hits = Boolean(h && el.contains(h));
+      }
+      return { left: Math.round(r.left), right: Math.round(r.right), vw: window.innerWidth, inside: r.left >= 0 && r.right <= window.innerWidth, itemHits: hits };
+    }, sel);
+
+    for (const o of OVERLAYS) {
+      if (o.needSettings) await p.evaluate(() => document.querySelector('[data-testid="nav-settings"]')?.click());
+      else await p.evaluate(() => document.querySelector('[data-testid="nav-all"]')?.click());
+      await p.waitForTimeout(900);
+      if (o.trigger.includes('editor-pane')) {
+        await p.click('[data-testid^="note-row-"]').catch(() => {});
+        await p.waitForTimeout(1100);
+      }
+      await p.evaluate((t) => document.querySelector(t)?.click(), o.trigger);
+      await p.waitForTimeout(450);
+      const m = await readPanel(o.panel);
+      check(`宽 ${width} · ${o.label}：浮层完整在视口内、选项点得着`, !m.missing && m.inside === true && m.itemHits === true, JSON.stringify(m));
+      if (!m.missing) notes.push(`     浮层落点 宽 ${width} ${o.label}：${m.left}..${m.right}（视口 ${m.vw}）`);
+      await p.keyboard.press('Escape');
+      await p.waitForTimeout(250);
+    }
+
+    // 选区工具条：左边与靠右各选一次（它是跟着选区跑的，最坏情况在右缘）
+    await p.evaluate(() => document.querySelector('[data-testid="nav-all"]')?.click());
+    await p.waitForTimeout(700);
+    await p.click('[data-testid^="note-row-"]').catch(() => {});
+    await p.waitForTimeout(1100);
+    for (const side of ['left', 'right']) {
+      await p.evaluate(() => window.getSelection()?.removeAllRanges());
+      const at = await p.evaluate((which) => {
+        const blocks = Array.from(document.querySelectorAll('.nb-block .nb-content'));
+        const el = which === 'left' ? blocks[0] : blocks[blocks.length - 1];
+        if (!el) return null;
+        // 要按**文字实际排到的右缘**取点：编辑区有 `--editor-measure` 那个宽度上限，
+        // 拿块的盒子右缘去点会点到空白处（没有选区 ⇒ 那条工具条本来就不该出现）。
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const tr = range.getBoundingClientRect();
+        if (tr.width < 20) return null;
+        return { x: which === 'left' ? Math.round(tr.left + 12) : Math.round(tr.right - 12), y: Math.round(tr.top + 8) };
+      }, side);
+      if (!at) break;
+      await p.mouse.dblclick(at.x, at.y);
+      await p.waitForTimeout(700);
+      const m = await readPanel('[data-testid="selection-bar"]');
+      check(`宽 ${width} · 选区工具条（在${side === 'left' ? '行首' : '行尾'}选）：完整在视口内、按钮点得着`, !m.missing && m.inside === true && m.itemHits === true, JSON.stringify({ at, ...m }));
+      if (!m.missing) notes.push(`     浮层落点 宽 ${width} 选区工具条/${side}：${m.left}..${m.right}（视口 ${m.vw}）`);
+    }
+    check(`宽 ${width} · ⑭ 这一腿 console error 为零`, oErrors.length === 0, oErrors.slice(0, 3).join(' | '));
+    await p.screenshot({ path: `${OUT}/28-overlays-${width}.png` });
+    await p.close();
+  }
 }
 
 await browser.close();
