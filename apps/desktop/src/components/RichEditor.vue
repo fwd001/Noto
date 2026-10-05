@@ -40,6 +40,7 @@ import {
   type TextBlockType,
 } from '../editor/model';
 import { useEditorStore } from '../stores/editor';
+import { useShellStore } from '../stores/shell';
 import type { Inline } from '../api/types';
 import { t } from '../i18n';
 
@@ -66,6 +67,7 @@ function attrInRange(content: readonly Inline[], start: number, end: number, kin
 }
 
 const store = useEditorStore();
+const shell = useShellStore();
 
 const docEl = ref<HTMLElement | null>(null);
 const blocks = computed(() => store.blocks);
@@ -542,6 +544,28 @@ watch(
     if (!role) return;
     store.clearAttachRequest();
     onAttach(role);
+  },
+);
+
+/**
+ * 软键盘弹起（或收起）之后，把**正在编辑那一行**带回可视区。
+ *
+ * `shell` 已经让版心跟着可视视口缩了（iOS 的键盘不改 `innerHeight`，只改 `visualViewport`），
+ * 但缩完之后**没人管光标**：编辑区那一栏从底下被截掉 300 px，焦点行如果本来就在下面那一段，
+ * 它就留在键盘底下 —— 字还在打，屏幕上看不见（390×844 实测：焦点行底 734 vs 版心 544，
+ * 而 `scrollTop` 一动没动）。这里只补"滚回来看得见的地方"这一句，焦点与选区都不碰。
+ */
+watch(
+  () => shell.keyboardInset,
+  async () => {
+    await nextTick();
+    const el = document.activeElement;
+    const root = docEl.value;
+    if (!(el instanceof HTMLElement) || !root?.contains(el)) return;
+    const box = root.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    if (r.top >= box.top && r.bottom <= box.bottom) return; // 本来就看得见，不许乱跳
+    el.scrollIntoView({ block: 'center', behavior: 'auto' });
   },
 );
 

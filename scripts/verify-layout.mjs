@@ -37,6 +37,8 @@
  *     只在触屏档判。它第一跑就逮到编辑器那一格：四行的笔记里，非当前那 3 行各留一颗看不见的 44×44 拖拽靶。
  *  ⑱ 设置页不许再留**系统画的控件**（第 ⑪ 条）：每颗 checkbox / range 的 computed `appearance` 必须是 none、
  *     整行命中区 ≥44、滑杆填色走我们自己的 CSS 变量；1440 与 390 两档各量一次，触屏档再按一次 End 验效果。
+ *  ⑲ 软键盘弹起之后，**正在编辑那一行必须还在编辑区可视范围里**（第 ⑨ 条）：焦点落在下缘那一行 →
+ *     把可视视口缩 300 px → 行底要回到编辑区底之上，且 `scrollTop` 必须是应用自己动的（不许靠运气）。
  *
  * 前置（脚本不管，由调用方起）：
  *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
@@ -1308,6 +1310,106 @@ const TRAP_SCAN = () => {
     await sp.screenshot({ path: `${OUT}/32-native-controls-${width}.png` });
     await sctx.close();
   }
+}
+
+/**
+ * ⑲ 软键盘弹起之后，**正在编辑那一行要还看得见**（第 ⑨ 条那句"输入框弹起带来的体验"）。
+ *
+ * 键盘那条腿（③ 那一格）只量了版心缩没缩、toast 抬没抬 —— 而用户在手机上做的事是**打字**：
+ * 编辑区从底下被截掉 300 px 之后，焦点行如果本来就在下面那一段，它就留在键盘底下。
+ * 修前实测（390×844、40 段的笔记、焦点落在编辑区下缘那一行）：行底 734 而编辑区底只有 425，
+ * 且 `scrollTop` 一动没动（1005 → 1005）⇒ 字还在打，屏幕上看不见。
+ *
+ * 两处仪器自己的坑也记在这儿，因为它们都会把这条腿变成假绿：
+ *  ① 移动仿真下 `visualViewport.height` 是原生 getter，**直接赋值会被静默丢掉** ⇒ 必须 `defineProperty`；
+ *  ② 拿 `innerHeight` 找"最下面那一行"会找到移动端 tab bar 上（点上去命中的是「新建笔记」）
+ *     ⇒ 只能在 `.editor-scroll` 自己的矩形里挑。
+ */
+{
+  const KB = 300;
+  const MARK = '键盘夹具';
+  await purgeByTitle(MARK);
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: {
+      v: 1,
+      content: Array.from({ length: 40 }, (_, i) => `${MARK} 第 ${String(i).padStart(2, '0')} 段`).map((text, i) => ({
+        id: `kb${i}${stamp}`,
+        type: 'paragraph',
+        content: [{ text }],
+      })),
+    },
+  });
+  const kctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const kp = await kctx.newPage();
+  const kErrors = [];
+  kp.on('pageerror', (e) => kErrors.push(String(e).slice(0, 140)));
+  kp.on('console', (m) => { if (m.type() === 'error') kErrors.push(m.text().slice(0, 140)); });
+  await kp.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await kp.waitForSelector('[data-testid^="note-row-"]', { timeout: 15000 });
+  await kp.waitForTimeout(1500);
+  for (const r of await kp.$$('[data-testid^="note-row-"]')) {
+    if ((await r.innerText()).includes(MARK)) { await r.tap(); break; }
+  }
+  await kp.waitForSelector('.nb-block .nb-content', { timeout: 15000 });
+  await kp.waitForTimeout(1000);
+
+  await kp.evaluate(() => [...document.querySelectorAll('.nb-block')][24].scrollIntoView({ block: 'start' }));
+  await kp.waitForTimeout(500);
+  const aim = await kp.evaluate(() => {
+    const box = document.querySelector('.editor-scroll').getBoundingClientRect();
+    const els = [...document.querySelectorAll('.nb-block')];
+    let best = -1;
+    let lowest = -1;
+    els.forEach((el, i) => {
+      const r = el.getBoundingClientRect();
+      if (r.top > box.top && r.bottom < box.bottom - 4 && r.bottom > lowest) { lowest = r.bottom; best = i; }
+    });
+    const r = els[best].getBoundingClientRect();
+    return { i: best, x: Math.round(r.left + 40), y: Math.round(r.top + r.height / 2) };
+  });
+  await kp.touchscreen.tap(aim.x, aim.y);
+  await kp.waitForTimeout(500);
+
+  const caret = () => kp.evaluate(() => {
+    const scroller = document.querySelector('.editor-scroll');
+    const focused = document.activeElement?.closest?.('.nb-block') ?? null;
+    const r = focused?.getBoundingClientRect();
+    return {
+      idx: focused ? [...scroller.querySelectorAll('.nb-block')].indexOf(focused) : -1,
+      rowBottom: r ? Math.round(r.bottom) : null,
+      editorBottom: Math.round(scroller.getBoundingClientRect().bottom),
+      scrollTop: Math.round(scroller.scrollTop),
+      vv: Math.round(window.visualViewport.height),
+      text: (focused?.querySelector('.nb-content')?.innerText ?? '').slice(0, 14),
+    };
+  });
+  const before = await caret();
+  check(`触屏：焦点真的落在挑中的那一行（${aim.i}）—— 否则下面全是空判据`, before.idx === aim.i && before.rowBottom !== null, JSON.stringify({ aim, before }));
+
+  await kp.evaluate((kb) => {
+    Object.defineProperty(window.visualViewport, 'height', { value: window.innerHeight - kb, configurable: true });
+    window.visualViewport.dispatchEvent(new Event('resize'));
+  }, KB);
+  await kp.waitForTimeout(700);
+  const during = await caret();
+  check('仪器自检：可视视口那一格真的被改小了（没改到就是量了个假的）', during.vv === 844 - KB, JSON.stringify({ vv: during.vv }));
+  check('键盘弹起：正在编辑那一行回到编辑区可视范围里（不许留在键盘底下）', during.rowBottom !== null && during.rowBottom <= during.editorBottom + 2, JSON.stringify({ before, during }));
+  check('键盘弹起：是**应用自己滚的**（scrollTop 必须动，不许靠"那一行本来就在上面"混过去）', during.scrollTop !== before.scrollTop, JSON.stringify({ from: before.scrollTop, to: during.scrollTop }));
+
+  await kp.evaluate(() => {
+    Object.defineProperty(window.visualViewport, 'height', { value: window.innerHeight, configurable: true });
+    window.visualViewport.dispatchEvent(new Event('resize'));
+  });
+  await kp.waitForTimeout(700);
+  const after = await caret();
+  check('键盘收起：焦点还在同一行，且那一行仍然看得见（不许跳走）', after.idx === before.idx && after.rowBottom !== null && after.rowBottom <= after.editorBottom + 2, JSON.stringify(after));
+  check('⑲ 这一腿 console error 为零', kErrors.length === 0, kErrors.slice(0, 3).join(' | '));
+  notes.push(`     键盘弹起实测 390×844：焦点行底 ${before.rowBottom}（编辑区底 ${before.editorBottom}）→ 弹起 ${during.rowBottom}（编辑区底 ${during.editorBottom}，scrollTop ${before.scrollTop}→${during.scrollTop}）→ 收起 ${after.rowBottom}`);
+  await kp.screenshot({ path: `${OUT}/33-keyboard-caret-390.png` });
+  await kctx.close();
+  await cmd('delete_note', { id: made.id });
+  await purgeByTitle(MARK);
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
