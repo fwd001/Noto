@@ -32,6 +32,9 @@
  *     列表行那簇 `opacity:0` 却仍吃点击 ⇒ 看不见却能点着，是隐形陷阱。桌面一侧不许变（⑤ 钉的是那个形状）。
  *  ⑯ 触屏**真拖一行**（第 ③×⑨ 条）：点过的那行把手要看得见（`opacity:1`）、≥44×44 且中心命中自己，
  *     然后用 CDP 真发一段 touch 序列把它拖到最上面 —— 判据打在**核心里存的那份顺序**上，不只打 DOM。
+ *  ⑰ 触屏档通扫四个视图（列表 / 侧栏抽屉 / 四行编辑器 / 设置）：**不许有"看不见却接得住点击"的控件**。
+ *     这是 G65/G66 那一族的通判据 —— 按"有效不透明度"（祖先链上乘积，opacity 不继承）+ 中心命中算，
+ *     只在触屏档判。它第一跑就逮到编辑器那一格：四行的笔记里，非当前那 3 行各留一颗看不见的 44×44 拖拽靶。
  *
  * 前置（脚本不管，由调用方起）：
  *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
@@ -1135,6 +1138,100 @@ for (const width of WIDTHS) {
   await dp.screenshot({ path: `${OUT}/30-touch-drag-390.png` });
   notes.push(`     触屏拖动实测：把手 ${JSON.stringify(grip)}；顺序 ${before.join(' → ')} ⇒ ${after.join(' → ')}；核心 ${coreOrder.join(' → ')}`);
   await dctx.close();
+  await purgeByTitle(MARK);
+}
+
+/**
+ * ⑰ 触屏那一档的通扫：**页面上不许存在"看不见、中心却正好被它自己接住"的交互控件**。
+ *
+ * 这一条是 G65/G66 那一族的通判据（一次只修一簇 = 下一簇还会回来）：
+ * `opacity:0` 只关掉绘制，**不关掉命中** —— 于是控件还在原地吃点击，只是人看不见。
+ * 判据打在"有效不透明度"上而不是控件自己的 `opacity`：CSS 的 opacity **不继承**，
+ * 一个 `opacity:0` 的容器把整块藏起来时，里面那颗按钮自己的 computed opacity 仍然是 1 ——
+ * 只看自己那一层会把恰好那一格筛掉（第一版探针就是这么假绿的）。
+ * 只在触屏档判：桌面那一档悬停会把它们露出来，"看不见却能点"在那一侧不成立。
+ */
+const TRAP_SCAN = () => {
+  const eff = (el) => {
+    let v = 1;
+    for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.display === 'none' || cs.visibility === 'hidden') return 1; // 根本不渲染，不算陷阱
+      v *= parseFloat(cs.opacity);
+      if (v < 0.05) return v;
+    }
+    return v;
+  };
+  const out = [];
+  const sel = 'button, input, select, textarea, a[href], [role="button"], [tabindex]:not([tabindex="-1"])';
+  for (const el of document.querySelectorAll(sel)) {
+    const r = el.getBoundingClientRect();
+    if (r.width < 8 || r.height < 8) continue;
+    if (r.right < 0 || r.bottom < 0 || r.left > innerWidth || r.top > innerHeight) continue;
+    if (eff(el) >= 0.05) continue;
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    if (top && (top === el || el.contains(top))) {
+      out.push(`${el.tagName.toLowerCase()}.${(el.className || '').toString().split(' ')[0]}[${el.getAttribute('data-testid') || ''}]`);
+    }
+  }
+  return out;
+};
+
+{
+  const MARK = '通扫夹具';
+  await purgeByTitle(MARK);
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: { v: 1, content: ['一', '二', '三', '四'].map((t, i) => ({ id: `ts${i}${stamp}`, type: 'paragraph', content: [{ text: `${MARK} ${t}` }] })) },
+  });
+  const sctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const sp = await sctx.newPage();
+  const sErrors = [];
+  sp.on('pageerror', (e) => sErrors.push(String(e).slice(0, 140)));
+  sp.on('console', (m) => { if (m.type() === 'error') sErrors.push(m.text().slice(0, 140)); });
+  await sp.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await sp.waitForSelector('[data-testid^="note-row-"]', { timeout: 15000 });
+  await sp.waitForTimeout(1500);
+
+  const drawer = (want) => sp.evaluate((w) => {
+    const visible = (document.querySelector('[data-testid="sidebar"]')?.getBoundingClientRect().right ?? 0) > 40;
+    if (visible !== w) document.querySelector('[data-testid="sidebar-handle"], [data-testid="open-sidebar"]')?.click();
+  }, want);
+  const views = [['列表', async () => {}]];
+  views.push(['侧栏抽屉', async () => {
+    await drawer(true);
+    await sp.waitForTimeout(700);
+  }]);
+  views.push(['编辑器（四行）', async () => {
+    await drawer(false);
+    await sp.waitForTimeout(600);
+    for (const r of await sp.$$('[data-testid^="note-row-"]')) {
+      if ((await r.innerText()).includes(MARK)) { await r.tap(); break; }
+    }
+    await sp.waitForSelector('.nb-block .nb-content', { timeout: 15000 });
+    await sp.waitForTimeout(900);
+  }]);
+  views.push(['设置', async () => {
+    await drawer(true);
+    await sp.waitForTimeout(600);
+    await sp.evaluate(() => document.querySelector('[data-testid="nav-settings"]')?.click());
+    await sp.waitForTimeout(900);
+  }]);
+
+  const seen = {};
+  let editorBlocks = 0;
+  for (const [name, go] of views) {
+    await go();
+    if (name.startsWith('编辑器')) editorBlocks = await sp.$$eval('.nb-block', (els) => els.length);
+    seen[name] = await sp.evaluate(TRAP_SCAN);
+    check(`触屏 · ${name}：没有"看不见却接得住点击"的控件（G65/G66 那一族的通判据）`, seen[name].length === 0, JSON.stringify(seen[name]));
+  }
+  // 扫到 0 个 ≠ 检查过：这一格判据的全部力气来自"非当前行"，只有一行的笔记会让它恒真
+  check('触屏 · 编辑器那一格真的摊开四行（否则上面那条"陷阱 0 个"是空判据）', editorBlocks === 4, JSON.stringify({ editorBlocks }));
+  check('⑰ 这一腿 console error 为零', sErrors.length === 0, sErrors.slice(0, 3).join(' | '));
+  notes.push(`     触屏陷阱通扫：${JSON.stringify(seen)}`);
+  await sp.screenshot({ path: `${OUT}/31-touch-traps-390.png` });
+  await sctx.close();
   await purgeByTitle(MARK);
 }
 

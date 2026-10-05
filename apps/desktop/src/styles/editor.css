@@ -134,12 +134,21 @@
     opacity: 0;
   }
 
+  /* 反过来，**藏起来的把手不许继续吃点击**：`opacity:0` 只关绘制、不关命中，而触屏档没有 hover
+     会把它补回来 —— 于是其它每一行左边都留着一颗看不见的 44×44 拖拽靶（四行的笔记实测 3 颗），
+     点在它上面会静默把那一行拖走。桌面那一档不进这条 media：那里指针一进这一行就把它露出来了。
+     顺序要紧：这一条必须写在下面那条**之前** —— 两个选择器同为 0-1-0，写后面会把当前行也一起关掉。 */
+  .nb-handles {
+    pointer-events: none;
+  }
+
   /* 「当前这一行」必须压过上面那条：它的权重是 0-3-0，而单写 `.nb-handles--on` 只有 0-1-0。
      触屏点过的行会一直停在 :hover（sticky hover，Chromium 移动端的既有行为），于是恰恰是该露
      出来的那一行被按住 —— 实测 `opacity:0` 却 `hitIsGrip:true`：看不见、却能拖，等于没有入口。 */
   .nb-block:hover .nb-handles--on,
   .nb-handles--on {
     opacity: 1;
+    pointer-events: auto;
   }
 }
 
