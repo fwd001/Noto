@@ -489,7 +489,16 @@ impl App {
     }
 
     pub fn list_folders(&self) -> Result<Vec<FolderDto>, CmdError> {
-        let all = self.inner.store.list_folders()?;
+        // 回收站里的那一排不交给界面。`Store::list_folders` 带着它们是故意的 ——
+        // 同步层要把"删掉了"这个事实传播出去（`syncml::all_records`），所以在 store 那一层
+        // 动刀会连带把同步的一半切掉；这一刀落在读模型上。
+        let all: Vec<_> = self
+            .inner
+            .store
+            .list_folders()?
+            .into_iter()
+            .filter(|f| f.deleted_at.is_none())
+            .collect();
         let mut counts: BTreeMap<String, u64> = BTreeMap::new();
         for f in &all {
             let n = self
@@ -5807,6 +5816,55 @@ mod tests {
                 .root_id
                 .as_deref(),
             root_a.as_deref()
+        );
+    }
+
+    /// 缺口 G63：`delete_folder` 是软删，而 `Store::list_folders` **故意**带着回收站里的那一排
+    /// （同步层要把"删掉了"这个事实传播出去，见 `syncml::all_records`）。以前界面直接吃了这一整排，
+    /// 于是用户点完"确认删除"，侧栏那一行还在原地。这一刀只能落在**读模型**上：
+    /// 在 store 那一层过滤就会连带把同步那一半也切掉。
+    #[test]
+    fn trashed_folders_leave_the_ui_list_but_still_ride_the_sync_feed() {
+        fn ids(dtos: &[FolderDto], out: &mut Vec<String>) {
+            for f in dtos {
+                out.push(f.id.clone());
+                ids(&f.children, out);
+            }
+        }
+        let app = boot("trash-folder-read-model");
+        let parent = app.store().create_folder(None, "归档本").unwrap();
+        let child = app
+            .store()
+            .create_folder(Some(&parent.id), "归档本子层")
+            .unwrap();
+
+        let mut before = Vec::new();
+        ids(&app.list_folders().unwrap(), &mut before);
+        assert!(
+            before.contains(&child.id.to_string()),
+            "夹具没生效：新建的子层本来就该在列表里，{before:?}"
+        );
+
+        app.store().delete_folder(&child.id).unwrap();
+        app.store().delete_folder(&parent.id).unwrap();
+
+        let mut after = Vec::new();
+        ids(&app.list_folders().unwrap(), &mut after);
+        assert!(
+            !after.contains(&child.id.to_string()) && !after.contains(&parent.id.to_string()),
+            "回收站里的那一排不许再交给界面，实际列表 {after:?}"
+        );
+        let default_id = app.default_folder_id().unwrap().to_string();
+        assert!(
+            after.contains(&default_id),
+            "默认本不许被这一刀一起挡掉（没选文件夹时的落点靠它），实际列表 {after:?}"
+        );
+
+        // 另外一半：删除这个事实必须还在导出/同步的载荷里，否则对面永远不知道要删。
+        let blob = serde_json::to_string(&app.store().all_records().unwrap()).unwrap();
+        assert!(
+            blob.contains(child.id.as_str()),
+            "删掉的文件夹必须还随同步走，实际载荷没有 {child:?}"
         );
     }
 }
