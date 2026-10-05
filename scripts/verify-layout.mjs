@@ -408,6 +408,80 @@ for (const width of WIDTHS) {
   await page.close();
 }
 
+/**
+ * ⑪ 移动端键盘（用户那句「要考虑好移动端的这种体验，就是输入框弹起带来的这种体验」）。
+ *
+ * 桌面 Chromium 没有软键盘，所以这里在应用挂载**之前**把 `visualViewport` 换成一个可控的假对象，
+ * 然后把它的 height 缩 300px 并 dispatch resize —— 这正是 iOS 上键盘弹起时的形状：
+ * **`innerHeight` 一动不动，只有可视视口变**。判据打在渲染后的几何上（版心的 rect 高度），
+ * 不打在"变量设了没有"上：设了而样式没读，是这个项目反复踩过的第二种空控件。
+ *
+ * ⚠ 这一腿验的是"链路接对了"，不等于 iOS 真机验收（真键盘的时序、offsetTop 的行为要设备）。
+ */
+{
+  const KB = 300;
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const kbPage = await ctx.newPage();
+  const kbErrors = [];
+  kbPage.on('pageerror', (e) => kbErrors.push(String(e).slice(0, 160)));
+  kbPage.on('console', (m) => { if (m.type() === 'error') kbErrors.push(m.text().slice(0, 160)); });
+  await kbPage.addInitScript(() => {
+    const fake = Object.assign(new EventTarget(), { height: window.innerHeight, offsetTop: 0 });
+    Object.defineProperty(window, 'visualViewport', { value: fake, configurable: true, writable: true });
+  });
+  await kbPage.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await kbPage.waitForSelector('.app-shell', { timeout: 15000 });
+  await kbPage.waitForTimeout(1800);
+
+  const geom = () => kbPage.evaluate((kb) => {
+    const shell = document.querySelector('.app-shell').getBoundingClientRect();
+    const toast = document.querySelector('[data-testid="toast-host"]');
+    const cs = getComputedStyle(document.documentElement);
+    return {
+      shellH: Math.round(shell.height),
+      inner: window.innerHeight,
+      vvH: Math.round(window.visualViewport.height),
+      vhVar: cs.getPropertyValue('--app-vh').trim(),
+      kbVar: cs.getPropertyValue('--app-kb').trim(),
+      toastBottom: toast ? Math.round(toast.getBoundingClientRect().bottom) : null,
+      kb: kb,
+    };
+  }, KB);
+
+  const before = await geom();
+  check('移动端键盘：没键盘时版心就是整屏', before.shellH === 844 && before.kbVar === '0px', JSON.stringify(before));
+
+  await kbPage.evaluate((kb) => {
+    // 只有可视视口缩了 —— 故意不碰 innerHeight，那是 iOS 的真形状
+    window.visualViewport.height = window.innerHeight - kb;
+    window.visualViewport.dispatchEvent(new Event('resize'));
+  }, KB);
+  await kbPage.waitForTimeout(400);
+  const during = await geom();
+  check(
+    '移动端键盘：可视视口一缩，版心必须真的跟着缩（而 innerHeight 依旧不动）',
+    during.shellH === 544 && during.inner === 844 && during.kbVar === '300px',
+    JSON.stringify({ before: before.shellH, during }),
+  );
+  check(
+    '移动端键盘：浮层那一条也要抬到键盘之上',
+    during.toastBottom !== null && during.toastBottom <= during.shellH + 2,
+    JSON.stringify({ toastBottom: during.toastBottom, shellH: during.shellH }),
+  );
+  await kbPage.screenshot({ path: `${OUT}/22-keyboard-390.png` });
+
+  await kbPage.evaluate(() => {
+    window.visualViewport.height = window.innerHeight;
+    window.visualViewport.dispatchEvent(new Event('scroll')); // iOS 上也常只发 scroll
+  });
+  await kbPage.waitForTimeout(400);
+  const after = await geom();
+  check('移动端键盘：收起之后版心与浮层都复原', after.shellH === 844 && after.kbVar === '0px', JSON.stringify(after));
+  check('移动端键盘：这一腿 console error 为零', kbErrors.length === 0, kbErrors.slice(0, 3).join(' | '));
+  notes.push(`     移动端键盘实测 390×844：静止 ${before.shellH} → 弹起 ${during.shellH}（inner 恒 ${during.inner}）→ 收起 ${after.shellH}；toast 底 ${before.toastBottom} → ${during.toastBottom}`);
+  await ctx.close();
+}
+
 // ① 的另一半：**跨视口**不许换列（同一份内容在 900 与 1800 下卡片宽度差不能是"多塞一列"的量级）
 await browser.close();
 console.log(notes.join('\n'));

@@ -25,6 +25,8 @@ export const useShellStore = defineStore('shell', () => {
   const sidebarOpen = ref(true);
   const mobilePane = ref<MobilePane>('list');
   const reducedMotion = ref(false);
+  /** 键盘占掉的那一段高度（px）。0 = 键盘没弹起。由 `observeViewport()` 写。 */
+  const keyboardInset = ref(0);
   const drawerTarget = ref<'sidebar' | 'list' | null>(null);
 
   const layout = computed<LayoutMode>(() => layoutFor(width.value));
@@ -111,13 +113,40 @@ export const useShellStore = defineStore('shell', () => {
 
   function observeViewport(): () => void {
     if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return () => undefined;
-    const onResize = () => {
+    const root = typeof document === 'undefined' ? null : document.documentElement;
+    /**
+     * 版心的高度只认 `visualViewport`。
+     *
+     * iOS 的键盘**不改** `innerHeight`（那是布局视口），只改可视视口 —— 于是以前那套
+     * `window.resize` + `height: 100%` 在手机上永远收不到"键盘占了 300 px"这件事：
+     * 界面照旧占满整屏，光标那一行就在键盘底下。Android 会 resize，iOS 不会，
+     * 而 `visualViewport` 两端都说得准 ⇒ 只从它取，`innerHeight` 当没有它时的退路。
+     */
+    const sync = () => {
       width.value = window.innerWidth;
       height.value = window.innerHeight;
+      const vv = window.visualViewport;
+      const layout = window.innerHeight;
+      const visible = vv && Number.isFinite(vv.height) ? Math.min(vv.height, layout) : layout;
+      const inset = vv && Number.isFinite(vv.height) ? layout - vv.height - (vv.offsetTop ?? 0) : 0;
+      keyboardInset.value = Math.max(0, Math.round(inset));
+      root?.style.setProperty('--app-vh', `${Math.round(visible)}px`);
+      root?.style.setProperty('--app-kb', `${keyboardInset.value}px`);
     };
-    onResize();
-    window.addEventListener('resize', onResize, { passive: true });
+    sync();
+    window.addEventListener('resize', sync, { passive: true });
     let stopMotion: () => void = () => {};
+    let stopVv: () => void = () => {};
+    const vv = window.visualViewport;
+    if (vv && typeof vv.addEventListener === 'function') {
+      // iOS 上键盘弹出常只发 scroll（或两个都发），两个都听才不漏
+      vv.addEventListener('resize', sync);
+      vv.addEventListener('scroll', sync);
+      stopVv = () => {
+        vv.removeEventListener('resize', sync);
+        vv.removeEventListener('scroll', sync);
+      };
+    }
     if (typeof window.matchMedia === 'function') {
       const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
       const apply = (matches: boolean) => {
@@ -131,7 +160,8 @@ export const useShellStore = defineStore('shell', () => {
       }
     }
     return () => {
-      window.removeEventListener('resize', onResize);
+      window.removeEventListener('resize', sync);
+      stopVv();
       stopMotion();
     };
   }
@@ -143,6 +173,7 @@ export const useShellStore = defineStore('shell', () => {
     sidebarOpen,
     mobilePane,
     reducedMotion,
+    keyboardInset,
     drawerTarget,
     layout,
     isCompact,

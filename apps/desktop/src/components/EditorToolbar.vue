@@ -328,7 +328,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-width: 180px;
-  max-height: calc(100vh - 8px);
+  max-height: calc(var(--app-vh) - 8px);
   overflow-y: auto;
   padding: var(--space-1);
   background: var(--bg-raised);

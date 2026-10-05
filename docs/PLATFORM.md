@@ -189,6 +189,33 @@ trait SystemTheme    { fn current(&self) -> Theme; fn changes(&self) -> Stream<T
 
 预留的具体形式：`platform/ios/` 目录、`PlatformCaps` 的 iOS 实现位、`sync_state` 的账户无关主键、富文本模型的触摸命中尺寸（≥44 pt）—— 这些在 Phase 1 就按 iOS 约束实现，避免后期返工。
 
+### 8.1 版心与键盘（已实现，两端共用一份）
+
+上面那条「键盘避让」以前只写在预留清单里，现在有了实现与读数，因为**两端的行为不一样**：
+
+* Android（`adjustResize`）：键盘弹起时 WebView 自己缩 ⇒ `window.innerHeight` 会变小；
+* iOS：键盘**不改**布局视口，只改可视视口 —— `window.innerHeight` 与 `height: 100%` 的版心都纹丝不动，
+  光标那一行就永远在键盘底下。
+
+所以版心尺寸只有一个合法来源：`visualViewport`。契约是（`stores/shell.ts::observeViewport()` 写，`styles/base.css` 读）：
+
+```text
+--app-vh = min(visualViewport.height, innerHeight)   版心高度（兜底 100dvh）
+--app-kb = max(0, innerHeight - visualViewport.height - visualViewport.offsetTop)   键盘那一格
+```
+
+* 只监听 `window.resize` 不够 —— iOS 键盘常只发 `visualViewport` 的 `resize`/`scroll`，两个都听；
+* `--app-kb` 是给 `position: fixed` 那一层用的（浮层相对**布局视口**定位，不跟着版心缩），toast 因此抬 `+300px`；
+* 同一份实现在桌面端也成立：没有键盘时 `--app-kb = 0`，行为与改之前一致。
+
+实测（`scripts/verify-layout.mjs` 第 ⑪ 腿，390×844 真 Chromium，键盘用"只缩可视视口"的形状模拟）：
+版心 `844 → 544 → 844`，而 `innerHeight` 全程 844；toast 底边 `812 → 512 → 812`。
+变异自测：把 `.app-shell` 的高度退回 `100%` ⇒ 这一腿红，读数 `vhVar=544px / shellH=844` ——
+正是"变量设了而样式没读"那一族。
+
+⚠ **仍待真机**：iOS 软键盘的时序、`offsetTop` 的实际行为、以及焦点行自动滚到可视区，都需要设备；
+本机无 iOS 设备，那一格按 §12 记 BLOCKED。
+
 ---
 
 ## 9. Android
@@ -266,6 +293,7 @@ trait SystemTheme    { fn current(&self) -> Theme; fn changes(&self) -> Stream<T
 | macOS 出包 | ❌ 物理不可能 | ✅ `macos-14` | 只能 CI |
 | Android 出包 | ❌ 无 JDK/SDK/NDK | ✅ | 只能 CI |
 | iOS 出包 | ❌ | ✅（需证书） | 证书待决策 |
+| 移动端软键盘（§8.1） | ⚠ 只到"链路"级：桌面 Chromium 用"只缩可视视口"的形状量了版心 844→544→844 | ❌（无设备、无模拟器键盘） | **BLOCKED**：iOS 真键盘的时序与 `offsetTop` 行为、Android 各厂商 resize 差异，都要真设备验收 |
 | GitHub Actions 观察 | ❌ 不可达 | — | **BLOCKED**，见 CI-CD.md 交接协议 |
 
 结论：**Phase 1（Local Core）、Phase 2（Sync）、Phase 3（Proxy）的全部验证都不依赖 GUI**，可在本机完成；GUI 与安装包验证从 Phase 4 起依赖 CI 通道。这个划分让本机环境限制不阻塞前三阶段。

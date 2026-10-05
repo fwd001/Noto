@@ -16,6 +16,20 @@ body,
   margin: 0;
 }
 
+/**
+ * 版心尺寸。这两个变量**不是**设计值，所以不在 tokens.css：
+ * 它们是运行时从 `visualViewport` 量出来的几何（写在 `stores/shell.ts` 的 `observeViewport()`），
+ * 两套主题共用一份，且 `100dvh` 的兜底保证 JS 还没跑起来也有一屏高。
+ *
+ * 为什么非得看 `visualViewport`：iOS 的键盘**不改** `innerHeight`（那是布局视口），
+ * 只改可视视口 ⇒ 手机上 `height: 100%` 的壳在键盘弹起后照旧占满整屏，
+ * 光标那一行永远在键盘底下（用户那句「要考虑好输入框弹起带来的体验」）。
+ */
+:root {
+  --app-vh: 100dvh;
+  --app-kb: 0px;
+}
+
 /* 外壳自己占满视口，**文档永远不滚**：滚动只发生在各栏的 `.pane-body` 里。
    真读数（1280×900 设置页）：加上这条之前有两层滚动条 ——
    文档 177px + `.settings__body` 2002px；滚外层会把整个壳顶上去、底下露出约 260px 空白，
@@ -101,7 +115,7 @@ button {
 .app-shell {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: var(--app-vh);
   min-height: 0;
   background: var(--bg-canvas);
 }
@@ -522,7 +536,8 @@ button {
   z-index: 90;
   left: 50%;
   transform: translateX(-50%);
-  bottom: calc(var(--space-6) + env(safe-area-inset-bottom, 0px));
+  /* 键盘弹起时浮层要让位：toast 说"已保存"却压在键盘底下，等于没说。 */
+  bottom: calc(var(--space-6) + env(safe-area-inset-bottom, 0px) + var(--app-kb));
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
