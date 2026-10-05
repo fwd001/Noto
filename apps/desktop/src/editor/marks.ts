@@ -27,3 +27,50 @@ export const MARK_BUTTONS: readonly MarkButton[] = [
 export const TOOLBAR_MARK_BUTTONS: readonly MarkButton[] = MARK_BUTTONS.filter(
   (entry) => entry.kind === 'bold' || entry.kind === 'italic' || entry.kind === 'underline' || entry.kind === 'strike',
 );
+
+/**
+ * 「文字大小」的档位（用户口径里 Apple 便签那套就是几个档，不是自由字号）。
+ *
+ * 值用 **em 而不是 px**：应用有自己的全局字号缩放（设置里那一档），写死 px 会让
+ * "用户把字调大"这件事在这些行上失效。em 相对所在块的 font-size ⇒ 跟着缩放走。
+ *
+ * 表里**没有** `m`（标准）：标准就是"没有这个标记"。所以菜单里"标准"那颗发的是移除，
+ * 不是加一个 `step:'m'` —— 后者会在文档里留一个没有任何视觉效果的标记，
+ * 还白增一格内容哈希（同步侧每次都要为它算一遍）。
+ */
+export const FONT_SIZE_STEPS: Readonly<Record<string, string>> = Object.freeze({
+  s: '0.8em',
+  l: '1.3em',
+  xl: '1.7em',
+});
+
+export const FONT_SIZE_MENU: ReadonlyArray<{ step: string; label: MessageKey }> = [
+  { step: 's', label: 'tb.sizeSmall' },
+  { step: 'm', label: 'tb.sizeDefault' },
+  { step: 'l', label: 'tb.sizeLarge' },
+  { step: 'xl', label: 'tb.sizeHuge' },
+];
+
+/**
+ * 「文字颜色」的取值。**只存语义名，渲染成 `var(--ink-*)`**：
+ * 存十六进制会让浅色主题里选的深红在深色主题下糊成一片，而深浅两套 token 是各自调过对比度的。
+ * （导入的内容可能带裸 hex，渲染侧另外放行，见 `dom.ts` 的 `safeColor`。）
+ *
+ * 顺序即菜单顺序；第一项"默认色"= 移除标记，理由同字号的 `m`。
+ */
+export const INK_COLORS: Readonly<Record<string, string>> = Object.freeze({
+  red: 'var(--ink-red)',
+  orange: 'var(--ink-orange)',
+  green: 'var(--ink-green)',
+  blue: 'var(--ink-blue)',
+  violet: 'var(--ink-violet)',
+});
+
+export const INK_COLOR_MENU: ReadonlyArray<{ name: string; label: MessageKey }> = [
+  { name: 'default', label: 'tb.colorDefault' },
+  { name: 'red', label: 'tb.colorRed' },
+  { name: 'orange', label: 'tb.colorOrange' },
+  { name: 'green', label: 'tb.colorGreen' },
+  { name: 'blue', label: 'tb.colorBlue' },
+  { name: 'violet', label: 'tb.colorViolet' },
+];

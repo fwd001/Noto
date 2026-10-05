@@ -4,6 +4,7 @@
  * 这样未知样式也能原样往返（前向兼容），且不依赖浏览器的标签归一化行为。
  */
 import type { Inline, Mark } from '../api/types';
+import { FONT_SIZE_STEPS, INK_COLORS } from './marks';
 
 const MARK_TAG: Record<string, string> = {
   bold: 'strong',
@@ -89,6 +90,26 @@ function wrap(mark: Mark, inner: string): string {
       const color = safeColor(attrs.color);
       const style = color ? ` style="background-color:${color}"` : '';
       return `<mark data-mark="highlight"${data}${style}>${inner}</mark>`;
+    }
+    /**
+     * 字号：只认 `FONT_SIZE_STEPS` 里那三个档名。认不出就**整段不包**，
+     * 而不是留一个 `<span data-mark="fontSize">` —— 后者是"看着设了其实没效果"那一族，
+     * 文档里从此多了个没人能解释的标记。
+     */
+    case 'fontSize': {
+      const em = typeof attrs.step === 'string' ? FONT_SIZE_STEPS[attrs.step] : undefined;
+      if (!em) return inner;
+      return `<span data-mark="fontSize"${data} style="font-size:${em}">${inner}</span>`;
+    }
+    /**
+     * 颜色：优先语义名（渲染成 `var(--ink-*)` ⇒ 深浅主题各自成立），
+     * 其次放行导入内容里的裸十六进制（`safeColor` 只认 `#` 形状，别的样式一律丢掉）。
+     */
+    case 'color': {
+      const named = typeof attrs.name === 'string' ? INK_COLORS[attrs.name] : undefined;
+      const value = named ?? safeColor(attrs.color);
+      if (!value) return inner;
+      return `<span data-mark="color"${data} style="color:${value}">${inner}</span>`;
     }
     default: {
       const tag = MARK_TAG[mark.kind] ?? 'span';

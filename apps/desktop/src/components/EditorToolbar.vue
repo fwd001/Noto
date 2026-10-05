@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /** 编辑器工具条：全部动作以事件抛给 RichEditor（选区只有它知道）。 */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, type Ref } from 'vue';
 import { t } from '../i18n';
-import { TOOLBAR_MARK_BUTTONS } from '../editor/marks';
+import { TOOLBAR_MARK_BUTTONS, FONT_SIZE_MENU, INK_COLOR_MENU, INK_COLORS } from '../editor/marks';
 import { blockTypeLabel } from '../editor/labels';
 import type { TextBlockType } from '../editor/model';
 
@@ -14,12 +14,15 @@ const props = withDefaults(
     headingLevel?: number;
     indent?: number;
     canIndent?: boolean;
+    activeFontSize?: string | null;
+    activeColor?: string | null;
   }>(),
-  { disabled: false, activeMarks: () => [], blockType: 'paragraph', headingLevel: 1, indent: 0, canIndent: true },
+  { disabled: false, activeMarks: () => [], blockType: 'paragraph', headingLevel: 1, indent: 0, canIndent: true, activeFontSize: null, activeColor: null },
 );
 
 const emit = defineEmits<{
   (event: 'mark', kind: string, attrs?: Record<string, unknown>): void;
+  (event: 'unmark', kind: string): void;
   (event: 'type', type: TextBlockType): void;
   (event: 'heading', level: number): void;
   (event: 'indent', delta: number): void;
@@ -32,31 +35,6 @@ const emit = defineEmits<{
 
 const linkOpen = ref(false);
 const linkValue = ref('');
-const showTypeMenu = ref(false);
-
-/**
- * 类型菜单的落点。**为什么要在 JS 里算坐标**：工具条为了窄栏可滚是 `overflow-x: auto` 的容器，
- * 而 CSS 规定一个轴不是 visible 时另一个轴的 `visible` 会算成 `auto` —— 于是这条 53 px 高的横条
- * 把自己 `absolute` 定位的弹层**整个裁掉**了（缺口 G29：按钮进入展开态，屏幕上却没有任何菜单，
- * 点下去命中的是编辑区）。`position: fixed` 不经过这个裁剪盒，坐标由触发器的矩形算出来。
- */
-const typeWrap = ref<HTMLElement | null>(null);
-const menuEl = ref<HTMLElement | null>(null);
-const menuStyle = ref<Record<string, string>>({});
-const MENU_GAP = 4;
-
-async function toggleTypeMenu(): Promise<void> {
-  showTypeMenu.value = !showTypeMenu.value;
-  if (!showTypeMenu.value) return;
-  await nextTick(); // 高度要等弹层真的在 DOM 里才量得到
-  const wrap = typeWrap.value;
-  const pop = menuEl.value;
-  if (!wrap || !pop) return;
-  const r = wrap.getBoundingClientRect();
-  let top = r.bottom + MENU_GAP;
-  if (top + pop.offsetHeight > window.innerHeight - MENU_GAP) top = r.top - MENU_GAP - pop.offsetHeight;
-  menuStyle.value = { top: `${Math.round(Math.max(MENU_GAP, top))}px`, left: `${Math.round(r.left)}px` };
-}
 
 /**
  * 块型 → 文案键的表在 `editor/labels.ts`（全项目一份）。这里只留调用点：
@@ -80,14 +58,42 @@ function onMark(kind: string): void {
 }
 
 function pickType(value: TextBlockType): void {
-  showTypeMenu.value = false;
+  closeMenu();
   emit('type', value);
 }
 
 function pickHeading(level: number): void {
-  showTypeMenu.value = false;
+  closeMenu();
   emit('heading', level);
 }
+
+/**
+ * 「标准 / 默认色」不发一个 step='m' 的标记 —— 那会在文档里留下一个没有任何视觉效果的标记，
+ * 同步侧还白算一次内容哈希。它们发的是"去掉这一位"，由 RichEditor 用不带 exclusive 的
+ * toggle 实现（覆盖满整段 ⇒ 去掉，见 model.spec 里"整段已加粗时再切换等于取消"那条）。
+ */
+function pickSize(step: string): void {
+  closeMenu();
+  if (step === 'm') emit('unmark', 'fontSize');
+  else emit('mark', 'fontSize', { step });
+}
+
+function pickColor(name: string): void {
+  closeMenu();
+  if (name === 'default') emit('unmark', 'color');
+  else emit('mark', 'color', { name });
+}
+
+/** 菜单里"当前是哪一档"的判据：默认档 = 没有这个标记（不是有个 step='m' 的标记）。 */
+function currentSize(step: string): boolean {
+  return step === 'm' ? !props.activeFontSize : props.activeFontSize === step;
+}
+
+function currentColor(name: string): boolean {
+  return name === 'default' ? !props.activeColor : props.activeColor === name;
+}
+
+const activeInk = computed<string>(() => (props.activeColor ? (INK_COLORS[props.activeColor] ?? 'transparent') : 'transparent'));
 
 function applyLink(): void {
   const href = linkValue.value.trim();
@@ -103,9 +109,53 @@ function applyLink(): void {
  * 一句话说明这边还有东西。所以量出"右边还有没有"，交给 CSS 那道渐隐去说这句话。
  */
 const bar = ref<HTMLElement | null>(null);
+let barObserver: ResizeObserver | null = null;
 const moreRight = ref(false);
 const moreLeft = ref(false);
-let barObserver: ResizeObserver | null = null;
+/**
+ * 三个下拉（块型 / 文字大小 / 文字颜色）共用一份"锚定 + 翻转"逻辑，只有一个是开的。
+ *
+ * **为什么要在 JS 里算坐标**：工具条为了窄栏可滚是 `overflow-x: auto` 的容器，
+ * 而 CSS 规定一个轴不是 visible 时另一个轴的 `visible` 会算成 `auto` —— 于是这条 53 px 高的横条
+ * 把自己 `absolute` 定位的弹层**整个裁掉**了（缺口 G29：按钮进入展开态，屏幕上却没有任何菜单，
+ * 点下去命中的是编辑区）。`position: fixed` 不经过这个裁剪盒，坐标由触发器的矩形算出来。
+ */
+type MenuName = 'type' | 'size' | 'color';
+
+const showMenu = ref<MenuName | null>(null);
+const wrapType = ref<HTMLElement | null>(null);
+const wrapSize = ref<HTMLElement | null>(null);
+const wrapColor = ref<HTMLElement | null>(null);
+const popType = ref<HTMLElement | null>(null);
+const popSize = ref<HTMLElement | null>(null);
+const popColor = ref<HTMLElement | null>(null);
+const menuStyle = ref<Record<string, string>>({});
+const MENU_GAP = 4;
+
+async function toggleMenu(name: MenuName): Promise<void> {
+  showMenu.value = showMenu.value === name ? null : name;
+  if (!showMenu.value) return;
+  await nextTick(); // 高度要等弹层真的在 DOM 里才量得到
+  // 每个菜单各用自己的 ref：三个弹层共用一个 ref 时，切档过程中"旧的置 null"可能发生在
+  // "新的赋值"之后，量到的是 null ⇒ 弹层没坐标，又回到 G29 那个"展开了但看不见"的形状。
+  const anchors: Record<MenuName, [Ref<HTMLElement | null>, Ref<HTMLElement | null>]> = {
+    type: [wrapType, popType],
+    size: [wrapSize, popSize],
+    color: [wrapColor, popColor],
+  };
+  const [wrapRef, popRef] = anchors[name];
+  const wrap = wrapRef.value;
+  const pop = popRef.value;
+  if (!wrap || !pop) return;
+  const r = wrap.getBoundingClientRect();
+  let top = r.bottom + MENU_GAP;
+  if (top + pop.offsetHeight > window.innerHeight - MENU_GAP) top = r.top - MENU_GAP - pop.offsetHeight;
+  menuStyle.value = { top: `${Math.round(Math.max(MENU_GAP, top))}px`, left: `${Math.round(r.left)}px` };
+}
+
+function closeMenu(): void {
+  showMenu.value = null;
+}
 
 function measureEdges(): void {
   const el = bar.value;
@@ -177,11 +227,11 @@ onBeforeUnmount(() => {
       {{ t('tb.link') }}
     </button>
 
-    <div ref="typeWrap" class="tb__menu-wrap">
-      <button type="button" class="tb__btn tb__btn--wide" :disabled="props.disabled" :aria-expanded="showTypeMenu ? 'true' : 'false'" @mousedown.prevent @click="toggleTypeMenu">
+    <div ref="wrapType" class="tb__menu-wrap">
+      <button type="button" class="tb__btn tb__btn--wide" :disabled="props.disabled" :aria-expanded="showMenu === 'type' ? 'true' : 'false'" @mousedown.prevent @click="toggleMenu('type')">
         {{ typeLabel }}
       </button>
-      <div v-if="showTypeMenu" ref="menuEl" class="tb__popover" :style="menuStyle" role="menu">
+      <div v-if="showMenu === 'type'" ref="popType" class="tb__popover" :style="menuStyle" role="menu">
         <button
           v-for="option in typeOptions"
           :key="option.value"
@@ -203,6 +253,72 @@ onBeforeUnmount(() => {
           @click="pickHeading(level)"
         >
           H{{ level }}
+        </button>
+      </div>
+    </div>
+
+    <!-- 「文字大小」「文字颜色」：用户那句「副文本选项应该像 Apple 便签那样只有几项，
+         可能就是文字大小、颜色啊」的两颗。菜单只有几个档，不是自由字号/取色器 ——
+         档位与色名只有一处真相（editor/marks.ts），渲染侧读同一份表（editor/dom.ts）。 -->
+    <div ref="wrapSize" class="tb__menu-wrap">
+      <button
+        type="button"
+        class="tb__btn tb__btn--wide"
+        data-testid="tb-size"
+        :disabled="props.disabled"
+        :title="t('tb.size')"
+        :aria-label="t('tb.size')"
+        :aria-expanded="showMenu === 'size' ? 'true' : 'false'"
+        @mousedown.prevent
+        @click="toggleMenu('size')"
+      >
+        A<span class="tb__size-hint">{{ props.activeFontSize ?? '' }}</span>
+      </button>
+      <div v-if="showMenu === 'size'" ref="popSize" class="tb__popover" :style="menuStyle" role="menu" data-testid="tb-size-menu">
+        <button
+          v-for="option in FONT_SIZE_MENU"
+          :key="option.step"
+          type="button"
+          role="menuitemradio"
+          class="tb__item"
+          :data-testid="`tb-size-${option.step}`"
+          :aria-checked="currentSize(option.step) ? 'true' : 'false'"
+          @mousedown.prevent
+          @click="pickSize(option.step)"
+        >
+          {{ t(option.label) }}
+        </button>
+      </div>
+    </div>
+
+    <div ref="wrapColor" class="tb__menu-wrap">
+      <button
+        type="button"
+        class="tb__btn tb__btn--wide"
+        data-testid="tb-color"
+        :disabled="props.disabled"
+        :title="t('tb.textColor')"
+        :aria-label="t('tb.textColor')"
+        :aria-expanded="showMenu === 'color' ? 'true' : 'false'"
+        @mousedown.prevent
+        @click="toggleMenu('color')"
+      >
+        A<span class="tb__ink" :style="{ background: activeInk }" aria-hidden="true" />
+      </button>
+      <div v-if="showMenu === 'color'" ref="popColor" class="tb__popover" :style="menuStyle" role="menu" data-testid="tb-color-menu">
+        <button
+          v-for="option in INK_COLOR_MENU"
+          :key="option.name"
+          type="button"
+          role="menuitemradio"
+          class="tb__item"
+          :data-testid="`tb-color-${option.name}`"
+          :aria-checked="currentColor(option.name) ? 'true' : 'false'"
+          @mousedown.prevent
+          @click="pickColor(option.name)"
+        >
+          <span class="tb__ink" :style="{ background: INK_COLORS[option.name] ?? 'transparent' }" aria-hidden="true" />
+          {{ t(option.label) }}
         </button>
       </div>
     </div>
@@ -354,6 +470,24 @@ onBeforeUnmount(() => {
   font-size: var(--text-sm);
   color: var(--text-secondary);
   padding-left: var(--space-5);
+}
+
+/* 色点：颜色这件事没法用文字说清，但也不能**只**用颜色说（无障碍里"仅靠颜色传达"不合格），
+   所以每颗后面都跟着一个中文色名。 */
+.tb__ink {
+  display: inline-block;
+  inline-size: var(--space-3);
+  block-size: var(--space-3);
+  margin-inline-end: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-1);
+  vertical-align: middle;
+}
+
+.tb__size-hint {
+  margin-inline-start: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
 }
 
 .tb__link {

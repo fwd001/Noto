@@ -41,6 +41,16 @@
   --danger-soft: #fbe4e6;
   --sync-idle: #5c6675;
 
+  /* 笔记正文的"文字颜色"（编辑器里那五颗）。存语义名、渲染成 var(--ink-*) ⇒
+     用户在浅色里选的深红，换到深色主题不会糊成一片。
+     对比度实测（WCAG，vs 面板 #ffffff）：红 6.64 / 橙 5.25 / 绿 5.38 / 蓝 7.76 / 紫 7.83，
+     最差的橙色 vs 画布 #eef1f6 也有 4.64:1 —— 全部 ≥ AA 正文的 4.5。 */
+  --ink-red: #b3202f;
+  --ink-orange: #a8560b;
+  --ink-green: #1e7a3c;
+  --ink-blue: #1f4fa3;
+  --ink-violet: #6b2fb3;
+
   /* 阴影 */
   --shadow-1: 0 1px 2px rgba(18, 24, 33, 0.08);
   --shadow-2: 0 2px 8px rgba(18, 24, 33, 0.1);
@@ -82,6 +92,13 @@
   --danger: #ff9aa4;
   --danger-soft: #3a1b20;
   --sync-idle: #9aa6b6;
+
+  /* 同一批语义名的深色版本（对比度实测 vs 面板 #151a21：红 8.04 / 橙 9.58 / 绿 11.05 / 蓝 9.50 / 紫 8.64） */
+  --ink-red: #ff8f9c;
+  --ink-orange: #f2b46a;
+  --ink-green: #7ee2a1;
+  --ink-blue: #8fc3ff;
+  --ink-violet: #c9a6ff;
 
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-2: 0 2px 10px rgba(0, 0, 0, 0.55);

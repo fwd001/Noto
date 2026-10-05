@@ -40,9 +40,30 @@ import {
   type TextBlockType,
 } from '../editor/model';
 import { useEditorStore } from '../stores/editor';
+import type { Inline } from '../api/types';
 import { t } from '../i18n';
 
-const MARK_KINDS = ['bold', 'italic', 'underline', 'strike', 'code', 'highlight', 'link'] as const;
+const MARK_KINDS = ['bold', 'italic', 'underline', 'strike', 'code', 'highlight', 'link', 'fontSize', 'color'] as const;
+
+/**
+ * 选区里这一档标记的属性值（"当前是哪一个字号 / 哪一种颜色"要给菜单里的
+ * `aria-checked` 用）。混合选区取先遇到的那个值 —— 这里要的是"该勾哪一项"，
+ * 不是"这批字符是不是完全同构"。
+ */
+function attrInRange(content: readonly Inline[], start: number, end: number, kind: string, key: string): string | null {
+  if (end <= start) return null;
+  let cursor = 0;
+  for (const inline of content) {
+    const from = cursor;
+    const to = cursor + inline.text.length;
+    cursor = to;
+    if (to <= start || from >= end) continue;
+    const mark = (inline.marks ?? []).find((m) => m.kind === kind);
+    const value = mark?.attrs?.[key];
+    if (typeof value === 'string') return value;
+  }
+  return null;
+}
 
 const store = useEditorStore();
 
@@ -53,6 +74,8 @@ const numbers = computed(() => orderedNumbers(blocks.value));
 const activeIndex = ref(0);
 const range = ref({ start: 0, end: 0 });
 const activeMarks = ref<string[]>([]);
+const activeFontSize = ref<string | null>(null);
+const activeColor = ref<string | null>(null);
 const charCount = computed(() => docCharCount(blocks.value));
 
 /** "/" 面板：查询串为 null 表示当前不是命令输入。选中项用键盘维护。 */
@@ -212,6 +235,8 @@ async function capture(index: number): Promise<void> {
     if (hasMarkInRange(block.content, range.value.start, range.value.end, kind)) marks.push(kind);
   }
   activeMarks.value = marks;
+  activeFontSize.value = attrInRange(block.content, range.value.start, range.value.end, 'fontSize', 'step');
+  activeColor.value = attrInRange(block.content, range.value.start, range.value.end, 'color', 'name');
   await updateSelBar(el);
 }
 
@@ -255,6 +280,8 @@ async function focusBlock(id: string, caret: number): Promise<void> {
     range.value = { start: caret, end: caret };
   }
   activeMarks.value = [];
+  activeFontSize.value = null;
+  activeColor.value = null;
 }
 
 async function run(edit: BlockEdit): Promise<void> {
@@ -280,6 +307,34 @@ function toggleMarkKind(kind: string): void {
     return;
   }
   run(applyMark(blocks.value, index, range.value, { kind }));
+}
+
+/**
+ * 带属性的样式档（字号 / 颜色）：先剥掉同类的旧值再放新的，所以"从大改成特大"是**替换**，
+ * 而不是叠两层（叠两层的渲染结果取决于顺序，同步到另一台设备上顺序一变就变样）。
+ */
+function applyStyledMark(kind: string, attrs: Record<string, unknown> | undefined): void {
+  const index = activeIndex.value;
+  const block = blocks.value[index];
+  if (!block || block.shape !== 'text') return;
+  run(applyMark(blocks.value, index, range.value, { kind, ...(attrs ? { attrs } : {}) }, [kind]));
+}
+
+/**
+ * 去掉一档样式（菜单里"标准 / 默认色"那颗）。走的是不带 exclusive 的 toggle：
+ * 整段都已有该样式时它就是把这一位摘掉，与"整段已加粗时再切换等于取消"同一条路。
+ */
+function removeStyledMark(kind: string): void {
+  const index = activeIndex.value;
+  const block = blocks.value[index];
+  if (!block || block.shape !== 'text') return;
+  run(applyMark(blocks.value, index, range.value, { kind }));
+}
+
+/** 工具条那三颗普通样式是开关，两颗带档位的（字号 / 颜色）是替换 —— 走两条路，别硬塞进一个 handler。 */
+function onMark(kind: string, attrs?: Record<string, unknown>): void {
+  if (kind === 'fontSize' || kind === 'color') applyStyledMark(kind, attrs);
+  else toggleMarkKind(kind);
 }
 
 async function onInput(index: number, event: Event): Promise<void> {
@@ -560,7 +615,10 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
       :heading-level="currentHeading"
       :indent="currentIndent"
       :can-indent="currentBlock?.shape === 'text'"
-      @mark="toggleMarkKind"
+      :active-font-size="activeFontSize"
+      :active-color="activeColor"
+      @mark="onMark"
+      @unmark="removeStyledMark"
       @type="onType"
       @heading="onHeading"
       @indent="onIndent"

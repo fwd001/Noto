@@ -483,6 +483,96 @@ for (const width of WIDTHS) {
 }
 
 // ① 的另一半：**跨视口**不许换列（同一份内容在 900 与 1800 下卡片宽度差不能是"多塞一列"的量级）
+/**
+ * ⑫ 「文字大小」「文字颜色」两颗控件（用户第 ③ 条）。
+ *
+ * 为什么不能只靠单测：这条链有三段 —— 控件发事件 → 模型存进 doc → 渲染层把 doc 画成样式。
+ * 单测各管一段，**中间断掉的那一段谁都不红**（本项目最常见的形状就是"控件在、点了没用"）。
+ * 所以这里用真浏览器走一遍：双击选一个词 → 点控件 → 量**渲染后的 computed style**。
+ */
+{
+  const kb = await browser.newPage({ viewport: { width: 1440, height: 950 } });
+  const kbErrors = [];
+  kb.on('pageerror', (e) => kbErrors.push(String(e).slice(0, 160)));
+  kb.on('console', (m) => { if (m.type() === 'error') kbErrors.push(m.text().slice(0, 160)); });
+  await kb.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await kb.waitForSelector('[data-testid^="note-row-"]', { timeout: 15000 });
+  await kb.click('[data-testid^="note-row-"]');
+  await kb.waitForSelector('.nb-block .nb-content', { timeout: 15000 });
+  await kb.waitForTimeout(800);
+
+  const baseFont = await kb.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.nb-block .nb-content')).fontSize));
+
+  // 双击选一个词（不靠程序化 Range：那会绕过浏览器自己的选区，量的就不是同一条路了）
+  await kb.dblclick('.nb-block .nb-content', { position: { x: 14, y: 8 } });
+  await kb.waitForTimeout(250);
+  await kb.click('[data-testid="tb-size"]');
+  await kb.waitForTimeout(250);
+  const sizeMenu = await kb.evaluate(() => {
+    const el = document.querySelector('[data-testid="tb-size-menu"]');
+    if (!el) return { missing: true };
+    const r = el.getBoundingClientRect();
+    return { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right), n: el.querySelectorAll('[role="menuitemradio"]').length };
+  });
+  check(
+    '字号菜单是我们画的浮层、4 档、完整在视口内（工具条那条 overflow 容器不许把它裁掉）',
+    !sizeMenu.missing && sizeMenu.n === 4 && sizeMenu.top >= 0 && sizeMenu.bottom <= 950 && sizeMenu.right <= 1440,
+    JSON.stringify(sizeMenu),
+  );
+  await kb.click('[data-testid="tb-size-xl"]');
+  await kb.waitForTimeout(500);
+  const sized = await kb.evaluate((base) => {
+    const el = document.querySelector('.nb-content span[data-mark="fontSize"]');
+    if (!el) return { missing: true, base };
+    const cs = getComputedStyle(el);
+    return { base, rendered: parseFloat(cs.fontSize), step: el.getAttribute('data-mark-attrs') };
+  }, baseFont);
+  check(
+    `点「特大」之后那一档真的画出来了（computed font-size = 1.7 × ${baseFont}px）`,
+    !sized.missing && Math.abs(sized.rendered - baseFont * 1.7) < 1,
+    JSON.stringify(sized),
+  );
+
+  await kb.dblclick('.nb-block .nb-content', { position: { x: 14, y: 8 } });
+  await kb.waitForTimeout(250);
+  await kb.click('[data-testid="tb-color"]');
+  await kb.waitForTimeout(250);
+  await kb.click('[data-testid="tb-color-red"]');
+  await kb.waitForTimeout(500);
+  const colored = await kb.evaluate(() => {
+    const el = document.querySelector('.nb-content span[data-mark="color"]');
+    if (!el) return { missing: true };
+    return { color: getComputedStyle(el).color, attrs: el.getAttribute('data-mark-attrs') };
+  });
+  check(
+    '点「红」之后渲染出来的是浅色主题那颗 --ink-red（走 token，不是写死的十六进制）',
+    !colored.missing && colored.color === 'rgb(179, 32, 47)',
+    JSON.stringify(colored),
+  );
+  await kb.screenshot({ path: `${OUT}/23-size-color-1440.png` });
+
+  // 正对照：菜单里"标准"发的是**移除**，画面上必须回到基准字号
+  await kb.dblclick('.nb-block .nb-content', { position: { x: 14, y: 8 } });
+  await kb.waitForTimeout(250);
+  await kb.click('[data-testid="tb-size"]');
+  await kb.waitForTimeout(250);
+  await kb.click('[data-testid="tb-size-m"]');
+  await kb.waitForTimeout(500);
+  const cleared = await kb.evaluate((base) => {
+    const marked = document.querySelector('.nb-content span[data-mark="fontSize"]');
+    const el = document.querySelector('.nb-block .nb-content');
+    return { stillMarked: Boolean(marked), rendered: parseFloat(getComputedStyle(el).fontSize), base };
+  }, baseFont);
+  check(
+    '选「标准」是摘掉这一档、字号回到基准（不许留一个没有视觉效果的标记）',
+    !cleared.stillMarked && Math.abs(cleared.rendered - baseFont) < 0.6,
+    JSON.stringify(cleared),
+  );
+  check('⑫ 这一腿 console error 为零', kbErrors.length === 0, kbErrors.slice(0, 3).join(' | '));
+  notes.push(`     字号/颜色实测：基准 ${baseFont}px → 特大 ${sized.rendered}px；红 = ${colored.color}；摘掉后回到 ${cleared.rendered}px`);
+  await kb.close();
+}
+
 await browser.close();
 console.log(notes.join('\n'));
 console.log(failures.length ? `\n${failures.join('\n')}\n>>> 布局门禁 FAIL` : '\n>>> 布局门禁 PASS');
