@@ -24,6 +24,8 @@
  *     ⑨ 文件夹平铺成一层，
  *     历史子层不许因为"不渲染层级"就找不到，且"移动到父级"/"在这下面新建"两颗要真的没了。
  *  ⑩ 快捷新建的模板：真点一次，核心里只多一篇、落库载荷第一块是空段落，编辑器真画出三行待办。
+ *  ⑬ 「文字大小 / 文字颜色」那两层菜单在**手机宽**（390）下也要完整可见、点得着，且点了真画出来
+ *     （⑫ 只在 1440 量过，而工具条本身横向可滚 ⇒ 少一次钳位就是 G29 那一族）。
  *
  * 前置（脚本不管，由调用方起）：
  *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
@@ -774,6 +776,94 @@ for (const width of WIDTHS) {
   check('⑫ 这一腿 console error 为零', kbErrors.length === 0, kbErrors.slice(0, 3).join(' | '));
   notes.push(`     字号/颜色实测：基准 ${baseFont}px → 特大 ${sized.rendered}px；红 = ${colored.color}；摘掉后回到 ${cleared.rendered}px`);
   await kb.close();
+}
+
+/**
+ * ⑬ 那两层菜单在**手机宽**下也要画得下、点得着（③ 的两颗控件 × ⑨ 的移动端 × ⑧ 的两端一致）。
+ * ⑫ 只在 1440 量过；工具条自己是横向可滚的（390 档实测 scrollWidth 797 / clientWidth 380），
+ * 菜单靠 fixed + 钳位/翻转落位 —— 少一次钳位就是 G29 那一族："按钮进入展开态，屏幕上却没有任何菜单"。
+ */
+{
+  const narrow = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const nErrors = [];
+  narrow.on('pageerror', (e) => nErrors.push(String(e).slice(0, 160)));
+  narrow.on('console', (m) => { if (m.type() === 'error') nErrors.push(m.text().slice(0, 160)); });
+  await narrow.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await narrow.waitForSelector('[data-testid^="note-row-"]', { timeout: 15000 });
+  await narrow.click('[data-testid^="note-row-"]');
+  await narrow.waitForSelector('.nb-block .nb-content', { timeout: 15000 });
+  await narrow.waitForTimeout(900);
+  const nBase = await narrow.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.nb-block .nb-content')).fontSize));
+
+  // 两种落点都要量：`rest` = 工具条不动（手机宽下这两颗本来就停在右缘附近，是用户第一次点到的形状），
+  // `end` = 把触发器滚到容器右缘（最坏情况）。缺口 G64 就是从 `rest` 这一档量出来的：
+  // 390 宽时字号菜单落在 301..481，出界 91px，菜单项中心点 elementFromPoint 直接是 null。
+  for (const [trigger, menu, label] of [['tb-size', 'tb-size-menu', '字号'], ['tb-color', 'tb-color-menu', '颜色']]) {
+    for (const place of ['rest', 'end']) {
+      await narrow.evaluate(([id, p]) => {
+        const bar = document.querySelector('.tb');
+        if (bar && p === 'rest') bar.scrollLeft = 0;
+        document.querySelector(`[data-testid="${id}"]`)?.scrollIntoView({ inline: p === 'rest' ? 'nearest' : 'end', block: 'nearest' });
+      }, [trigger, place]);
+      await narrow.waitForTimeout(300);
+      await narrow.dblclick('.nb-block .nb-content', { position: { x: 12, y: 8 } });
+      await narrow.waitForTimeout(250);
+      await narrow.click(`[data-testid="${trigger}"]`);
+      await narrow.waitForTimeout(400);
+      const m = await narrow.evaluate((id) => {
+        const el = document.querySelector(`[data-testid="${id}"]`);
+        if (!el) return { missing: true };
+        const r = el.getBoundingClientRect();
+        const it = el.querySelector('[role="menuitemradio"]');
+        const b = it.getBoundingClientRect();
+        const hit = document.elementFromPoint(Math.round(b.left + b.width / 2), Math.round(b.top + b.height / 2));
+        return {
+          top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right),
+          vw: window.innerWidth, overflowRight: Math.round(r.right - window.innerWidth),
+          n: el.querySelectorAll('[role="menuitemradio"]').length,
+          inView: r.left >= 0 && r.right <= window.innerWidth && r.top >= 0 && r.bottom <= window.innerHeight,
+          itemHitsItself: Boolean(hit && el.contains(hit)),
+          hit: hit ? `${hit.tagName.toLowerCase()}.${String(hit.className).split(' ')[0]}` : null,
+        };
+      }, menu);
+      check(
+        `${label}菜单 · 触发器在${place === 'rest' ? '静止位' : '容器右缘'}：完整在视口内且菜单项点得着`,
+        !m.missing && m.inView === true && m.itemHitsItself === true && m.n >= 4,
+        JSON.stringify(m),
+      );
+      notes.push(`     手机宽菜单落点 ${label}/${place}：${m.left}..${m.right}（视口 ${m.vw}，出界 ${m.overflowRight}px），首项命中 ${m.hit}`);
+      await narrow.click(`[data-testid="${trigger}"]`); // 再点一次收起，别把菜单留着影响下一档
+      await narrow.waitForTimeout(250);
+    }
+  }
+
+  await narrow.dblclick('.nb-block .nb-content', { position: { x: 12, y: 8 } });
+  await narrow.waitForTimeout(250);
+  await narrow.click('[data-testid="tb-size"]');
+  await narrow.waitForTimeout(300);
+  await narrow.click('[data-testid="tb-size-xl"]');
+  await narrow.waitForTimeout(500);
+  await narrow.dblclick('.nb-block .nb-content', { position: { x: 12, y: 8 } });
+  await narrow.waitForTimeout(250);
+  await narrow.click('[data-testid="tb-color"]');
+  await narrow.waitForTimeout(300);
+  await narrow.click('[data-testid="tb-color-red"]');
+  await narrow.waitForTimeout(600);
+
+  const painted = await narrow.evaluate((base) => {
+    const s = document.querySelector('.nb-content span[data-mark="fontSize"]');
+    const c = document.querySelector('.nb-content span[data-mark="color"]');
+    return { base, size: s ? parseFloat(getComputedStyle(s).fontSize) : null, color: c ? getComputedStyle(c).color : null };
+  }, nBase);
+  check(
+    `手机宽上点这两档也真的画出来了（基准 ${nBase}px → 特大 ${painted.size}px；红 = ${painted.color}）`,
+    painted.size !== null && Math.abs(painted.size - nBase * 1.7) < 1 && painted.color === 'rgb(179, 32, 47)',
+    JSON.stringify(painted),
+  );
+  await narrow.screenshot({ path: `${OUT}/26-narrow-menus-390.png` });
+  check('⑬ 这一腿 console error 为零', nErrors.length === 0, nErrors.slice(0, 3).join(' | '));
+  notes.push(`     手机宽（390×844）字号/颜色实测 ${JSON.stringify(painted)}`);
+  await narrow.close();
 }
 
 await browser.close();

@@ -150,7 +150,15 @@ async function toggleMenu(name: MenuName): Promise<void> {
   const r = wrap.getBoundingClientRect();
   let top = r.bottom + MENU_GAP;
   if (top + pop.offsetHeight > window.innerHeight - MENU_GAP) top = r.top - MENU_GAP - pop.offsetHeight;
-  menuStyle.value = { top: `${Math.round(Math.max(MENU_GAP, top))}px`, left: `${Math.round(r.left)}px` };
+  // 横向也要钳位。弹层是 `fixed`，不经过工具条那个裁剪盒 ⇒ 触发器停在容器右缘时，菜单会直接画到
+  // 屏幕外（缺口 G64：390 宽实测字号菜单 301..481、颜色菜单 306..486，出界 91/96 px，
+  // 菜单项中心的 `elementFromPoint` 是 null —— 人看不到也点不着，而 Playwright 会自己滚进去，
+  // 所以"能点到"这一条单靠自动化是量不出来的）。
+  const left = Math.min(r.left, window.innerWidth - MENU_GAP - pop.offsetWidth);
+  menuStyle.value = {
+    top: `${Math.round(Math.max(MENU_GAP, top))}px`,
+    left: `${Math.round(Math.max(MENU_GAP, left))}px`,
+  };
 }
 
 function closeMenu(): void {
