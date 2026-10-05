@@ -41,6 +41,9 @@
  *     把可视视口缩 300 px → 行底要回到编辑区底之上，且 `scrollTop` 必须是应用自己动的（不许靠运气）。
  *  ⑳ 打开任何**就地输入 / 确认浮层**都不许改变其他行的 top（第 ④ 句"悬浮层的层级 / 在原来那一行里输出"）：
  *     三个面各量一次 —— 就地改名、文件夹删除确认、笔记永久删除确认，并各配一条样本量判据。
+ *  ㉑ 置顶那颗点**点了要看得出变了**（第 ⑦ 条）：○ 与 ● 必须同时存在（正对照），真点一次走 ○→●→○，
+ *     每步对 glyph / aria-pressed / 计算色，并回核心读 `pinned` 那一位。⑤ 只钉了"常显 + 已置顶读得出 ●"，
+ *     那颗点若永远画 ●，⑤ 两条照样全绿 —— 这就是这腿存在的理由。
  *
  * 前置（脚本不管，由调用方起）：
  *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
@@ -1490,6 +1493,70 @@ const TRAP_SCAN = () => {
   check('⑳ 这一腿 console error 为零', oErrors.length === 0, oErrors.slice(0, 3).join(' | '));
   await op.screenshot({ path: `${OUT}/34-inplace-overlays-1440.png` });
   await octx.close();
+}
+
+/**
+ * ㉑ 置顶那颗点**点了要看得出变了**（第 ⑦ 条原话："点击之后那个小圆点好像没有什么变化，
+ * 它只有一个左上角只有一个对勾，这种不太好"）。
+ *
+ * 第 ⑤ 腿钉的是"那颗常显 + 已置顶读得出 ●"，但那两句**放在一起仍然可能被同一个形状满足**：
+ * 如果那颗点永远画 ●，⑤ 的两条照样全绿。所以这里补的是正对照 —— 同一时刻必须存在
+ * 一枚读得出"未置顶"的 ○，并且**真点一次**走完 ○→●→○ 一个来回，
+ * 每步都对三样东西： glyph / `aria-pressed` / 计算后的颜色，最后再回核心读 `pinned` 那一位
+ * （界面写的那一位必须就是被读的那一位，见 [[verify-the-call-edge-not-just-the-callees-tests]]）。
+ */
+{
+  const MARK = '置顶往返夹具';
+  await purgeByTitle(MARK);
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: { v: 1, content: [{ id: `pn${stamp}`, type: 'paragraph', content: [{ text: `${MARK} 正文` }] }] },
+  });
+  const pctx = await browser.newContext({ viewport: { width: 1440, height: 950 } });
+  const pp = await pctx.newPage();
+  const pErrors = [];
+  pp.on('pageerror', (e) => pErrors.push(String(e).slice(0, 140)));
+  pp.on('console', (m) => { if (m.type() === 'error') pErrors.push(m.text().slice(0, 140)); });
+  await pp.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await pp.waitForSelector('[data-testid^="note-row-"]', { timeout: 15000 });
+  await pp.waitForTimeout(1500);
+
+  const readDot = () => pp.evaluate((id) => {
+    const row = document.querySelector(`[data-testid="note-row-${id}"]`);
+    if (!row) return { missing: 'row' };
+    const dot = row.querySelector('[data-testid="note-pin-toggle"]');
+    if (!dot) return { missing: 'dot' };
+    return { glyph: dot.textContent.trim(), pressed: dot.getAttribute('aria-pressed'), color: getComputedStyle(dot).color, on: dot.classList.contains('row-item__pin--on') };
+  }, made.id);
+  const corePinned = async () => {
+    const rows = await cmd('list_notes', { folderId: null, trash: false });
+    const hit = (Array.isArray(rows) ? rows : []).find((n) => n.id === made.id);
+    return hit ? hit.pinned === true : 'row-gone';
+  };
+
+  const off = await readDot();
+  check('新笔记那一颗读得出"未置顶"（○ + aria-pressed=false —— 这是⑤缺的那枚正对照）', off.glyph === '○' && off.pressed === 'false' && off.on === false, JSON.stringify(off));
+  const seedDot = await pp.evaluate((id) => {
+    const d = document.querySelector(`[data-testid="note-row-${id}"] [data-testid="note-pin-toggle"]`);
+    return d ? { glyph: d.textContent.trim(), color: getComputedStyle(d).color } : { missing: true };
+  }, seedNoteId);
+  check('同一时刻列表里两枚点长得不一样（● 与 ○ 并存，否则"点了没变化"还会回来）', seedDot.glyph === '●' && seedDot.glyph !== off.glyph, JSON.stringify({ seedDot, off }));
+
+  await pp.click(`[data-testid="note-row-${made.id}"] [data-testid="note-pin-toggle"]`);
+  await pp.waitForTimeout(900);
+  const on = await readDot();
+  check('点一次：同一颗变成"已置顶"，glyph 与颜色都跟着变（不是只换 aria）', on.glyph === '●' && on.pressed === 'true' && on.on === true && on.color !== off.color, JSON.stringify({ off, on }));
+  check('点一次：置顶这一位**真的落进核心**（回读 list_notes 的 pinned）', (await corePinned()) === true, JSON.stringify(await corePinned()));
+  check('置顶之后那一行不许从列表里消失（换组不是搬家搬没）', on.missing !== 'row', JSON.stringify(on));
+
+  await pp.click(`[data-testid="note-row-${made.id}"] [data-testid="note-pin-toggle"]`);
+  await pp.waitForTimeout(900);
+  const back = await readDot();
+  check('再点一次回到未置顶（一个来回不留半截状态）', back.glyph === '○' && back.pressed === 'false' && (await corePinned()) === false, JSON.stringify(back));
+  check('㉑ 这一腿 console error 为零', pErrors.length === 0, pErrors.slice(0, 3).join(' | '));
+  notes.push(`     置顶往返实测：${off.glyph}/${off.color} → ${on.glyph}/${on.color} → ${back.glyph}，核心 pinned true→false`);
+  await pctx.close();
+  await purgeByTitle(MARK);
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
