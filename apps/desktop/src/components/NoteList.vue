@@ -412,6 +412,15 @@ function createFrom(tpl: NoteTemplate): void {
   opacity: 1;
 }
 
+/* 触屏没有 hover：这一族不常驻就是"手机上看不见、却能点着"（`opacity:0` 仍然吃点击，
+   实测 `hasTouch` 那一档 `pointer-events` 还是 `auto`）—— 那是隐形陷阱，比看不见更糟。
+   它们本来就在 flex 流里占着位子，所以露出来不改变布局。 */
+@media (hover: none) {
+  .row-item__actions {
+    opacity: 1;
+  }
+}
+
 .row-item__actions .btn {
   /* A11Y-04 的下限就是 44pt，这两颗此前是 32×32（台账里挂"待查"那条）。
      不拿"视觉小"当理由：命不中就是误触，§6 明令禁止的那一类。 */

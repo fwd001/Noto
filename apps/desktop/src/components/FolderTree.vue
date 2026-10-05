@@ -216,6 +216,20 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
   pointer-events: auto;
 }
 
+/* 触屏没有 hover 这回事：不常驻就是"改名/删除这两颗在手机上根本不存在"
+   （实测 `hasTouch` 那一档 `opacity:0` 且 `pointer-events:none` —— 连点都点不到）。
+   名字那一片要让出工具占的宽度，否则常驻之后会盖住最后一个字。 */
+@media (hover: none) {
+  .tree__tools {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .tree__name {
+    padding-right: 6.5rem;
+  }
+}
+
 .tree__confirm-text {
   margin: 0;
   color: var(--text-secondary);

@@ -27,6 +27,9 @@
  *  ⑬ 「文字大小 / 文字颜色」那两层菜单在**手机宽**（390）下也要完整可见、点得着，且点了真画出来
  *     （⑫ 只在 1440 量过，而工具条本身横向可滚 ⇒ 少一次钳位就是 G29 那一族）。
  *  ⑭ 每一层浮层（模板 / 两处下拉 / 选区工具条）在 390 与 1440 两档都不许出界 —— G64 那一族的通判据。
+ *  ⑮ 触屏那一档（`hover: none`）：只在 hover 露面的那两簇控件必须常驻、且真点得着（第 ④×⑨ 条）。
+ *     修前实测 390×844 触屏：侧栏那簇 `opacity:0` + `pointer-events:none` ⇒ 手机上"改名/删除"根本不存在；
+ *     列表行那簇 `opacity:0` 却仍吃点击 ⇒ 看不见却能点着，是隐形陷阱。桌面一侧不许变（⑤ 钉的是那个形状）。
  *
  * 前置（脚本不管，由调用方起）：
  *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
@@ -953,6 +956,78 @@ for (const width of WIDTHS) {
     await p.screenshot({ path: `${OUT}/28-overlays-${width}.png` });
     await p.close();
   }
+}
+
+/**
+ * ⑮ 触屏那一档（`hover: none`）：只在 hover 露面的那两簇控件必须常驻、且真点得着（第 ④×⑨ 条）。
+ *
+ * 修前的读数：侧栏那簇 `opacity:0` 且 `pointer-events:none` ⇒ 手机上"改名/删除"这两颗**根本不存在**；
+ * 列表行那簇更糟 —— `opacity:0` 却仍然吃点击 ⇒ 看不见却能点着，是隐形陷阱。
+ * 桌面一侧不许变：那里仍是悬停才露面（⑤ 那条判据钉的就是这个形状）。
+ */
+{
+  const tctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const tp = await tctx.newPage();
+  const tErrors = [];
+  tp.on('pageerror', (e) => tErrors.push(String(e).slice(0, 140)));
+  tp.on('console', (m) => { if (m.type() === 'error') tErrors.push(m.text().slice(0, 140)); });
+  await tp.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await tp.waitForSelector('[data-testid="sidebar"]', { timeout: 15000 });
+  await tp.waitForTimeout(2000);
+  // 390 档侧栏是关着的抽屉：不先拉开，量到的是"在屏幕外"而不是"看不见"
+  await tp.evaluate(() => document.querySelector('[data-testid="sidebar-handle"], [data-testid="open-sidebar"]')?.click());
+  await tp.waitForTimeout(700);
+
+  const state = await tp.evaluate(() => {
+    const pick = (sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return null;
+      const cs = getComputedStyle(el);
+      return { opacity: cs.opacity, pe: cs.pointerEvents };
+    };
+    return {
+      hoverNone: window.matchMedia('(hover: none)').matches,
+      coarse: window.matchMedia('(pointer: coarse)').matches,
+      tools: pick('.tree__tools'),
+      actions: pick('.row-item__actions'),
+    };
+  });
+  check('触屏模拟本身要成立（hover:none 与 pointer:coarse 都要为真，否则下面两条是空判据）', state.hoverNone === true && state.coarse === true, JSON.stringify(state));
+  check('触屏：侧栏那簇工具常驻且可点（不常驻 = 手机上没有改名/删除）', state.tools?.opacity === '1' && state.tools?.pe === 'auto', JSON.stringify(state.tools));
+  check('触屏：列表行的动作簇要露出来（opacity:0 却吃点击 = 隐形陷阱）', state.actions?.opacity === '1', JSON.stringify(state.actions));
+
+  // "点得着"要打在命中测试上，不是打在"DOM 里有这颗按钮"上：不常驻时真正接住这一下的是
+  // 名字那颗（`pointer-events: none` 的透明工具条让位）， mutate 一次就是下面这条先红。
+  const hit = await tp.evaluate(() => {
+    const b = document.querySelector('[data-testid="folder-rename"]');
+    if (!b) return { missing: true };
+    const r = b.getBoundingClientRect();
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return { w: Math.round(r.width), hitEl: top?.tagName?.toLowerCase(), isBtn: top === b };
+  });
+  check('触屏：改名那颗的中心真的被它自己接住（不是名字按钮替它接 —— 那就是点不到）', !hit.missing && hit.isBtn === true, JSON.stringify(hit));
+
+  // 点下去这一步要"红了就继续"：整个脚本挂在 tap 上会跳过后面的夹具清理，
+  // 开发库里每次多堆 31 篇，下一轮的读数就不是它自己了。
+  let tapFailed = '';
+  try {
+    await tp.tap('[data-testid="folder-rename"]', { timeout: 5000 });
+  } catch (e) {
+    tapFailed = String(e).split('\n')[0].slice(0, 120);
+  }
+  check('触屏：点「改名」这一下真发得出去（不许靠名字那颗代点）', tapFailed === '', tapFailed);
+  await tp.waitForTimeout(700);
+  const inline = await tp.evaluate(() => {
+    const el = document.querySelector('[data-testid="folder-rename-input"]');
+    if (!el) return { missing: true };
+    const r = el.getBoundingClientRect();
+    return { w: Math.round(r.width), focused: document.activeElement === el, value: el.value };
+  });
+  check('触屏点「改名」真长出就地输入框（带现名、拿到焦点 —— 用户那句"在原始的那个内容行里输出"）', !inline.missing && inline.focused === true && inline.w > 60 && (inline.value ?? '').length > 0, JSON.stringify(inline));
+  await tp.screenshot({ path: `${OUT}/29-touch-tools-390.png` });
+  check('⑮ 这一腿 console error 为零', tErrors.length === 0, tErrors.slice(0, 3).join(' | '));
+  notes.push(`     触屏实测 390×844：侧栏工具 ${JSON.stringify(state.tools)}，行动作 ${JSON.stringify(state.actions)}，就地改名 ${JSON.stringify(inline)}`);
+  await tctx.close();
 }
 
 await browser.close();
