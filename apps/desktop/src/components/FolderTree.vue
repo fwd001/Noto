@@ -240,9 +240,25 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
   gap: var(--space-1);
 }
 
+/* 就地改名那一格：**盖在原位上**，不排在名字下面。
+   用户第 ④ 条原话是"在原始的那个内容行里输出，而不是底下突然补充一个新的行"——
+   以前这个 input 是 `.tree__row` 的**兄弟**且在流内，点一下 ✎ 会把整个 li 撑高：
+   实测三排文件夹的间距从 `44,44` 变成 `96,44`（中间被插进 52 px），下面每一排都往下跳。
+   现在 li 是定位父级，input 绝对定位压在名字那一行上（DOM 里它在后面 ⇒ 画在上面，
+   工具层那两颗也被它盖住 —— 编辑态不该还能点删除）。 */
+.tree__item {
+  position: relative;
+}
+
 .tree__input {
-  margin: var(--space-1) var(--space-3);
-  width: calc(100% - var(--space-6));
+  position: absolute;
+  top: 50%;
+  right: var(--space-3);
+  left: var(--space-3);
+  width: auto;
+  margin: 0;
+  transform: translateY(-50%);
+  background: var(--bg-raised);
 }
 
 .tree__empty {

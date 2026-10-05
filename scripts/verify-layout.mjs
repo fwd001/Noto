@@ -39,6 +39,8 @@
  *     整行命中区 ≥44、滑杆填色走我们自己的 CSS 变量；1440 与 390 两档各量一次，触屏档再按一次 End 验效果。
  *  ⑲ 软键盘弹起之后，**正在编辑那一行必须还在编辑区可视范围里**（第 ⑨ 条）：焦点落在下缘那一行 →
  *     把可视视口缩 300 px → 行底要回到编辑区底之上，且 `scrollTop` 必须是应用自己动的（不许靠运气）。
+ *  ⑳ 打开任何**就地输入 / 确认浮层**都不许改变其他行的 top（第 ④ 句"悬浮层的层级 / 在原来那一行里输出"）：
+ *     三个面各量一次 —— 就地改名、文件夹删除确认、笔记永久删除确认，并各配一条样本量判据。
  *
  * 前置（脚本不管，由调用方起）：
  *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
@@ -1410,6 +1412,84 @@ const TRAP_SCAN = () => {
   await kctx.close();
   await cmd('delete_note', { id: made.id });
   await purgeByTitle(MARK);
+}
+
+/**
+ * ⑳ **打开任何就地输入 / 确认浮层，都不许把别的行顶走**（第 ④ 条那句"悬浮窗的层级，
+ * 而不是底下占了一个"，以及"在原始的那个内容行里输出，而不是底下突然补充一个新的行"）。
+ *
+ * 第 ⑧ 腿只量了文件夹那一格；这一条把同一句判据扫遍三个面：就地改名、文件夹删除确认、
+ * 笔记永久删除确认。量的都是**其他行的 top 有没有动** —— 不是"浮层在不在 DOM 里"。
+ */
+{
+  const octx = await browser.newContext({ viewport: { width: 1440, height: 950 } });
+  const op = await octx.newPage();
+  const oErrors = [];
+  op.on('pageerror', (e) => oErrors.push(String(e).slice(0, 140)));
+  op.on('console', (m) => { if (m.type() === 'error') oErrors.push(m.text().slice(0, 140)); });
+  await op.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await op.waitForSelector('[data-testid="folder-row"]', { timeout: 15000 });
+  await op.waitForTimeout(1500);
+
+  // 判"有没有被顶走"要看**相邻行之间的间距**，不是行的绝对位置：
+  // 绝对位置会被滚动混进来（点击时 Playwright 会把目标滚进视野，而 `overflow:hidden` 的容器
+  // 也能被滚 —— 第一版就把"整体 +44 而间距没变"读成了缺陷，那是滚动不是布局）。
+  // 间距只有"中间被插进东西"才会变 —— 那正是用户那句"底下突然补充一个新的行"的形状。
+  const tops = (sel) => op.$$eval(sel, (els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
+  const gaps = (t) => t.slice(1).map((v, i) => v - t[i]);
+  const overlay = (sel) => op.evaluate((s) => {
+    const el = document.querySelector(s);
+    if (!el) return { missing: true };
+    const r = el.getBoundingClientRect();
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return { h: Math.round(r.height), w: Math.round(r.width), focused: document.activeElement === el, hit: Boolean(top && el.contains(top)) };
+  }, sel);
+  const same = (a, b) => {
+    const ga = gaps(a);
+    const gb = gaps(b);
+    return ga.length === gb.length && ga.every((v, i) => v === gb[i]);
+  };
+
+  const folders = await tops('[data-testid="folder-row"]');
+  check('⑳ 样本量：侧栏至少三排文件夹（否则"没位移"可以是空判据）', folders.length >= 3, JSON.stringify(folders));
+
+  // 桌面那一档工具是 hover 才露面的（静止态 `pointer-events: none`，⑤ 钉的就是这个形状），
+  // 不先悬停就会点不到那颗 ✎（命中的是底下的名字按钮）—— 悬停本身就是用户的动作，不是绕路。
+  await op.hover('[data-testid="folder-row"]');
+  await op.waitForTimeout(300);
+  await op.click('[data-testid="folder-rename"]');
+  await op.waitForTimeout(500);
+  const afterRename = await tops('[data-testid="folder-row"]');
+  const renameBox = await overlay('[data-testid="folder-rename-input"]');
+  check('就地改名不许把下面每一排顶下去（用户那句"而不是底下突然补充一个新的行"）', same(folders, afterRename), JSON.stringify({ before: folders, after: afterRename }));
+  check('就地改名要长在原来那一行上（有高度、拿到焦点、中心命中它自己）', !renameBox.missing && renameBox.h > 12 && renameBox.focused === true && renameBox.hit === true, JSON.stringify(renameBox));
+  await op.keyboard.press('Escape');
+  await op.waitForTimeout(400);
+
+  await op.hover('[data-testid="folder-row"]');
+  await op.waitForTimeout(300);
+  await op.click('[data-testid="folder-delete"]');
+  await op.waitForTimeout(500);
+  const afterDel = await tops('[data-testid="folder-row"]');
+  const delBox = await overlay('[data-testid="folder-delete-confirm"]');
+  check('文件夹"确认删除"是悬浮层：打开它不许改变任何一排的位置', same(folders, afterDel), JSON.stringify({ before: folders, after: afterDel }));
+  check('文件夹"确认删除"那颗真的看得见、点得着', !delBox.missing && delBox.h > 12 && delBox.w > 12 && delBox.hit === true, JSON.stringify(delBox));
+  await op.keyboard.press('Escape');
+  await op.waitForTimeout(400);
+
+  await op.click('[data-testid="nav-trash"]');
+  await op.waitForTimeout(900);
+  const trashTops = await tops('[data-testid^="note-row-"]');
+  check('⑳ 样本量：回收站里至少三篇（同上，防空判据）', trashTops.length >= 3, JSON.stringify(trashTops.slice(0, 6)));
+  await op.click('[data-testid="purge-note"]');
+  await op.waitForTimeout(500);
+  const afterPurge = await tops('[data-testid^="note-row-"]');
+  const purgeBox = await overlay('[data-testid="purge-confirm"]');
+  check('笔记"永久删除"确认也是悬浮层：不许把下面每一篇顶下去', same(trashTops, afterPurge), JSON.stringify({ before: trashTops.slice(0, 6), after: afterPurge.slice(0, 6) }));
+  check('笔记"永久删除"那颗看得见、点得着', !purgeBox.missing && purgeBox.h > 12 && purgeBox.hit === true, JSON.stringify(purgeBox));
+  check('⑳ 这一腿 console error 为零', oErrors.length === 0, oErrors.slice(0, 3).join(' | '));
+  await op.screenshot({ path: `${OUT}/34-inplace-overlays-1440.png` });
+  await octx.close();
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
