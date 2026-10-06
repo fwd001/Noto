@@ -14,6 +14,8 @@ import { asBridgeError } from '../util/errors';
 import { emptyDoc } from '../editor/model';
 import { useEditorStore } from './editor';
 import { useSettingsStore } from './settings';
+import { useToastStore } from './toasts';
+import { t } from '../i18n';
 
 export type ListMode = { kind: 'all' } | { kind: 'folder'; folderId: string | null } | { kind: 'trash' };
 
@@ -279,6 +281,10 @@ export const useNoteStore = defineStore('notes', () => {
       await callCommand<null>(Commands.deleteNote, { id });
       refreshCounts();
       await load();
+      // §4.9「每条 Toast 要说清没有丢什么」。这一行从列表里消失是**读模型**的行为（软删之后不再投影，
+      // 缺口 G63 那一族），于是用户看到的只有"它没了"。恢复这条路是真的存在（`restore_note`），
+      // 所以这句话不是安慰，是事实陈述。
+      useToastStore().pushText(t('state.movedToTrash'), 'info');
     } catch (error) {
       errorKey.value = asBridgeError(error).messageKey;
     }

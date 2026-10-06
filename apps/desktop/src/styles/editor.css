@@ -228,6 +228,17 @@
   user-select: none;
 }
 
+/* 无序列表那一颗点：原来是 `•`（U+2022）—— 拿一个符号顶替图形，字号回退与基线都会随字体漂。
+   画出来，直径跟着正文字号走，仍落在原来那颗点的槽位上。 */
+.nb-gutter--dot::after {
+  content: '';
+  flex: 0 0 auto;
+  inline-size: 0.32em;
+  block-size: 0.32em;
+  border-radius: 50%;
+  background: currentColor;
+}
+
 .nb-check {
   appearance: none;
   -webkit-appearance: none;

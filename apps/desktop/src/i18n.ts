@@ -286,6 +286,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'link.unreachable': '未连接到本地服务。',
   'link.timeout': '本地服务响应超时，可以再试一次。',
   'state.inTrash': '这条在"最近删除"里，恢复后才能继续编辑。',
+  'state.movedToTrash': '已移到「最近删除」，随时可以恢复。',
   'conflict.resolvedNow': '这一条已处理好。',
   'error.fallback': '操作没有成功，可以稍后再试。',
   'error.offline': '当前离线，改动已保存在本机，恢复联网后会自动继续。',

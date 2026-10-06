@@ -338,8 +338,8 @@ onBeforeUnmount(() => {
     <button type="button" class="tb__btn tb__btn--wide" :disabled="props.disabled" :title="t('tb.attach')" @mousedown.prevent @click="emit('attach', 'file')">{{ t('tb.attach') }}</button>
     <button type="button" class="tb__btn tb__btn--wide" :disabled="props.disabled" :title="t('editor.blockImage')" @mousedown.prevent @click="emit('attach', 'inline')">{{ t('editor.blockImage') }}</button>
     <span class="tb__spacer" />
-    <button type="button" class="tb__btn" :disabled="props.disabled" :title="t('tb.undo')" :aria-label="t('tb.undo')" @mousedown.prevent @click="emit('undo')">↶</button>
-    <button type="button" class="tb__btn" :disabled="props.disabled" :title="t('tb.redo')" :aria-label="t('tb.redo')" @mousedown.prevent @click="emit('redo')">↷</button>
+    <button type="button" class="tb__btn" :disabled="props.disabled" :title="t('tb.undo')" :aria-label="t('tb.undo')" @mousedown.prevent @click="emit('undo')"><AppIcon :size="18" name="undo" /></button>
+    <button type="button" class="tb__btn" :disabled="props.disabled" :title="t('tb.redo')" :aria-label="t('tb.redo')" @mousedown.prevent @click="emit('redo')"><AppIcon :size="18" name="redo" /></button>
 
     <form v-if="linkOpen" class="tb__link" @submit.prevent="applyLink">
       <input v-model="linkValue" class="input" type="url" :placeholder="t('tb.linkPrompt')" :aria-label="t('tb.linkPrompt')" />

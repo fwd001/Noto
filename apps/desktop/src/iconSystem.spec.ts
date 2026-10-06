@@ -21,7 +21,14 @@ const FILES = import.meta.glob<string>('../**/*.vue', {
 }) as Record<string, string>;
 
 /** §2 点名的那一批，加上这次替换掉的。 */
-const GLYPH = [...'☰↻⌫⇤⇥▾✎＋○●◎✓✔▤▦⠿★☆→‹›≡'];
+const GLYPH = [...'☰↻⌫⇤⇥▾✎＋○●◎✓✔▤▦⠿★☆→‹›≡×✕✖•'];
+
+/**
+ * 符号类（Sm/Sc/Sk/So）—— 拿一个符号当图标用这一族的本体。
+ * 枚举式黑名单永远少一个字符：这条门禁写完的同一晚，ToastHost 那颗 U+00D7 就从表缝里漏了出去
+ * → 由类别判据兜底，上面那张表只用来兜 <‹ ›> 那一类标点形状的。
+ */
+const SYMBOL = /\p{S}/u;
 
 function templateOf(text: string): string {
   const start = text.indexOf('<template');
@@ -40,13 +47,13 @@ describe('§2 图标必须是 SVG，不许是 Unicode 字形', () => {
     scanned += 1;
     for (const m of tpl.matchAll(/>([^<>]+)</g)) {
       const inner = (m[1] ?? '').trim();
-      if (inner.length === 1 && GLYPH.includes(inner)) {
+      if (inner.length === 1 && (GLYPH.includes(inner) || SYMBOL.test(inner))) {
         violations.push(`${file} 元素内容是一个字形「${inner}」`);
       }
     }
     for (const m of tpl.matchAll(/\b(?:icon|glyph)(?::|=)\s*=?\s*"([^"]*)"/g)) {
       const value = m[1] ?? '';
-      if ([...value].some((c) => GLYPH.includes(c))) {
+      if ([...value].some((c) => GLYPH.includes(c) || SYMBOL.test(c))) {
         violations.push(`${file} 图标位属性给了字形「${value}」`);
       }
     }

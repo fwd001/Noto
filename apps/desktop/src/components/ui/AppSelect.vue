@@ -10,6 +10,7 @@
  */
 import { computed } from 'vue';
 import { Listbox, ListboxButton, ListboxOption, ListboxOptions } from '@headlessui/vue';
+import AppIcon from './AppIcon.vue';
 
 export interface SelectOption {
   value: string;
@@ -43,7 +44,7 @@ const currentLabel = computed(
   >
     <ListboxButton class="app-select" :data-testid="props.testid" :aria-label="props.label">
       <span class="app-select__value">{{ currentLabel }}</span>
-      <span class="app-select__chevron" aria-hidden="true">⌄</span>
+      <AppIcon class="app-select__chevron" :size="16" name="chevron-down" />
     </ListboxButton>
 
     <ListboxOptions class="app-select__panel" data-testid="app-select-panel">

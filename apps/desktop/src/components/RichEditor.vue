@@ -716,7 +716,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
           </div>
 
           <span v-if="block.type === 'orderedList'" class="nb-gutter" aria-hidden="true">{{ numbers[index] }}.</span>
-          <span v-else-if="block.type === 'bulletList'" class="nb-gutter" aria-hidden="true">•</span>
+          <span v-else-if="block.type === 'bulletList'" class="nb-gutter nb-gutter--dot" aria-hidden="true" />
 
           <button
             v-if="block.type === 'checklistItem'"

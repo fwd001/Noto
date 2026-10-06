@@ -50,6 +50,12 @@
  *     且侧栏那一栏自己不许有可滚溢出（能滚的只能是里面那段）。
  *  ㉓ 附件那颗芯片要说得清"这台设备此刻有没有这份可用的字节"（G74）：真账 available 时一句都不许说（正对照）、
  *     注入 missing+present 必须出现「正在等待下载」与两颗动作、注入 missing+unknown 必须换成中性那句。
+ *  ㉕ §3.5 移动端底部胶囊栏：栏 64 / tab 56×52 / 主按钮 116×52 实心 --ink / 左右 12 底部 20 /
+ *     图标 20 标签 10px / 栏不参与文档流而内容区自己让出 ≥84；再验三颗"决定类"按钮的效果
+ *     （开抽屉、换页、核心里真多出一篇）与第四颗的反向那一格（没配账户点它绝不许转）。
+ *  ㉖ §4.9 交互状态规格：按钮四变体 × 五状态（胶囊圆角、主按钮实心 --ink、按下 scale(0.97)、
+ *     悬停 +6% 亮度、禁用 0.45、危险只换字与描边）、输入框"只读 ≠ 错误"两档各量各的、
+ *     Toast 底部居中 ≤520 只染边框且带一颗点得着的「知道了」。
  *
  * 前置（脚本不管，由调用方起）：
  *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
@@ -1860,7 +1866,12 @@ const TRAP_SCAN = () => {
       };
     };
     const body = document.querySelector('[data-testid="sidebar"] .pane-body');
+    // 状态 → 图标那一条**调用边**：五格表在 `ui/icons.ts`，但真正要成立的是"这一格渲染成了那枚、
+    // 且静止那格没在转"。表绿而组件没接上，是这一族反复出现的形状。
+    const sb = document.querySelector('[data-testid="syncbar"] svg');
     return {
+      syncIcon: sb?.getAttribute('data-icon') ?? '',
+      syncSpin: sb ? getComputedStyle(sb).animationName : '',
       syncbar: view('[data-testid="syncbar"]'),
       settings: view('[data-testid="nav-settings"]'),
       readout: view('[data-testid="library-readout"]'),
@@ -1882,6 +1893,8 @@ const TRAP_SCAN = () => {
   check('㉔ 里面那段文件夹列表确实溢出可滚（样本量判据：否则上一条只是"没内容可滚"的恒真）', shot.folderScrollY > 0, JSON.stringify(shot));
   check('㉔ 库读数要读出真数字（含"篇"和数字），不是空壳', /篇/.test(shot.readout.text ?? '') && /\d/.test(shot.readout.text ?? ''), JSON.stringify(shot.readout));
   check('㉔ 样本量：文件夹确实塞到 12 个（否则"没溢出"是恒真）', madeCount >= 12, JSON.stringify({ madeCount }));
+  check('㉔ 未配置那一格渲染成静止那枚云，且 animation-name 是 none（静止绝不像在忙，§2.3）',
+    shot.syncIcon === 'sync-idle' && shot.syncSpin === 'none', JSON.stringify({ icon: shot.syncIcon, spin: shot.syncSpin }));
   check('㉔ 这一腿 console error 为零', fErrors.length === 0, fErrors.slice(0, 3).join(' | '));
   notes.push(`     侧栏常驻实测：同步条=${JSON.stringify(shot.syncbar.text)}｜读数=${JSON.stringify(shot.readout.text)}｜侧栏溢出=${shot.sideOverflowY}px（视口 ${shot.viewportH}）`);
   await fp.screenshot({ path: `${OUT}/38-sidebar-pinned-520.png` });
@@ -1889,6 +1902,400 @@ const TRAP_SCAN = () => {
 
   const after = flattenFolders(await cmd('list_folders'));
   for (const f of after.filter((x) => (x.name ?? '').startsWith(MARK))) await cmd('delete_folder', { id: f.id });
+}
+
+/** 把 `rgb(a, b, c)` 那串算成 WCAG 相对亮度，再算两个颜色的对比度（§5 要给数字，不给"看着还行"）。 */
+function contrastRatio(fg, bg) {
+  const lum = (s) => {
+    const [r, g, b] = (s.match(/\d+(\.\d+)?/g) ?? ['0', '0', '0']).slice(0, 3).map((v) => {
+      const c = Number(v) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const [a, b] = [lum(fg), lum(bg)].sort((x, y) => y - x);
+  return (a + 0.05) / (b + 0.05);
+}
+
+/**
+ * ㉕ §3.5 移动端底部胶囊栏。这一格的规格**全是数字**（栏 64 / tab 56×52 / 主按钮 116×52 /
+ * 左右 12 / 底部 20 / 图标 20 / 标签 10px / 内容区让出 ≥84），所以整条腿打在量数上 ——
+ * 文字描述守不住这些数，只有量着才不会漂。
+ *
+ * 另外三条"决定类按钮要验效果"：菜单要真开抽屉、设置要真换页、新建要在**核心里**多出一篇
+ * （点完界面自己变一下不算数）。第四颗（同步）验的是反向那一格：没配账户时点它**绝不许转**。
+ */
+{
+  const bctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const bp = await bctx.newPage();
+  const bErrors = [];
+  bp.on('pageerror', (e) => bErrors.push(String(e).slice(0, 140)));
+  bp.on('console', (m) => { if (m.type() === 'error') bErrors.push(m.text().slice(0, 140)); });
+  await bp.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await bp.waitForSelector('[data-testid="dock"]', { timeout: 15000 });
+  await bp.waitForTimeout(1800);
+
+  const dock = await bp.evaluate(() => {
+    const d = document.querySelector('[data-testid="dock"]');
+    if (!d) return { missing: true };
+    const cs = getComputedStyle(d);
+    const r = d.getBoundingClientRect();
+    const box = (el) => {
+      const b = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+      const svg = el.querySelector('svg');
+      const label = el.querySelector('.dock__label');
+      const ib = svg ? svg.getBoundingClientRect() : null;
+      return {
+        id: el.getAttribute('data-testid'),
+        w: Math.round(b.width),
+        h: Math.round(b.height),
+        radius: getComputedStyle(el).borderRadius,
+        hitSelf: Boolean(hit && el.contains(hit)),
+        icon: svg?.getAttribute('data-icon') ?? '',
+        iconW: ib ? Math.round(ib.width) : -1,
+        iconH: ib ? Math.round(ib.height) : -1,
+        labelPx: label ? getComputedStyle(label).fontSize : '',
+        text: label?.textContent?.trim() ?? '',
+      };
+    };
+    const body = document.querySelector('.app-body');
+    const pane = document.querySelector('.pane--list') ?? document.querySelector('.app-body');
+    const glyph = document.querySelector('[data-testid="mobile-sync"] svg');
+    // 颜色一律跟**同一个页面里的 token 值**比，不写死三元组：token 换了色号，这条腿不该跟着改；
+    // 而"这里根本没用 token"（写死一个色值）才是这条判据要抓的东西。
+    const tok = (name) => {
+      const p = document.createElement('span');
+      p.style.color = `var(${name})`;
+      document.body.appendChild(p);
+      const v = getComputedStyle(p).color;
+      p.remove();
+      return v;
+    };
+    return {
+      tokLine: tok('--line'),
+      tokCanvas: tok('--canvas'),
+      tokInk: tok('--ink'),
+      position: cs.position,
+      h: Math.round(r.height),
+      radius: cs.borderRadius,
+      borderW: cs.borderTopWidth,
+      borderC: cs.borderTopColor,
+      bg: cs.backgroundColor,
+      left: Math.round(r.left),
+      rightGap: Math.round(window.innerWidth - r.right),
+      bottomGap: Math.round(window.innerHeight - r.bottom),
+      dockTop: Math.round(r.top),
+      bodyBottom: Math.round(body.getBoundingClientRect().bottom),
+      bodyPadBottom: Math.round(parseFloat(getComputedStyle(body).paddingBottom)),
+      paneBottom: Math.round(pane.getBoundingClientRect().bottom),
+      viewportH: window.innerHeight,
+      tabs: [...d.querySelectorAll('.dock__tab')].map(box),
+      primaryBg: d.querySelector('.dock__tab--primary') ? getComputedStyle(d.querySelector('.dock__tab--primary')).backgroundColor : '',
+      primaryColor: d.querySelector('.dock__tab--primary') ? getComputedStyle(d.querySelector('.dock__tab--primary')).color : '',
+      syncIcon: glyph?.getAttribute('data-icon') ?? '',
+      syncSpin: glyph ? getComputedStyle(glyph).animationName : '',
+      syncBadge: document.querySelector('[data-testid="mobile-sync"]')?.getAttribute('data-badge') ?? '',
+    };
+  });
+
+  check('㉕ 样本量：底栏正好四颗 tab（否则"每颗 56×52"可以是空判据）', dock.tabs?.length === 4, JSON.stringify(dock.tabs));
+  check('㉕ 仪器自检：三个 token 探针互不相同（有一条是"未定义→退回继承色"，比较就失去意义）',
+    new Set([dock.tokLine, dock.tokCanvas, dock.tokInk]).size === 3,
+    JSON.stringify({ line: dock.tokLine, canvas: dock.tokCanvas, ink: dock.tokInk }));
+  check('㉕ 栏：fixed、64 高、圆角 9999、1px --line 描边、--canvas 底（§3.5）',
+    dock.position === 'fixed' && dock.h === 64 && dock.radius === '9999px' && dock.borderW === '1px'
+      && dock.borderC === dock.tokLine && dock.bg === dock.tokCanvas,
+    JSON.stringify(dock));
+  check('㉕ 外层留白：左右各 12、底部 20（安全区内这一档就是 20）',
+    dock.left === 12 && dock.rightGap === 12 && dock.bottomGap === 20,
+    JSON.stringify({ left: dock.left, rightGap: dock.rightGap, bottomGap: dock.bottomGap }));
+  check('㉕ 栏**不参与文档流**：内容区仍然铺到视口底（栏要是占了位，这一条就量不到"浮层"了）',
+    dock.bodyBottom === dock.viewportH, JSON.stringify({ bodyBottom: dock.bodyBottom, viewportH: dock.viewportH }));
+  check('㉕ 内容区自己让出 ≥84px，且列表那一栏的底真的在栏顶之上（最后一行不许被压住）',
+    dock.bodyPadBottom >= 84 && dock.paneBottom <= dock.dockTop + 1,
+    JSON.stringify({ pad: dock.bodyPadBottom, paneBottom: dock.paneBottom, dockTop: dock.dockTop }));
+
+  const plain = (dock.tabs ?? []).filter((t) => t.id !== 'mobile-new');
+  const primary = (dock.tabs ?? []).find((t) => t.id === 'mobile-new');
+  check('㉕ 三颗普通 tab 各 56×52、胶囊圆角；主按钮 116×52（§3.5 的字面数）',
+    plain.length === 3 && plain.every((t) => t.w === 56 && t.h === 52 && t.radius === '9999px')
+      && primary?.w === 116 && primary?.h === 52,
+    JSON.stringify({ plain, primary }));
+  check('㉕ 每颗的中心被自己接住（不常驻、被栏的圆角裁掉、或被相邻那颗盖住都会红）',
+    (dock.tabs ?? []).every((t) => t.hitSelf === true), JSON.stringify(dock.tabs.map((t) => [t.id, t.hitSelf])));
+  // 注：会转的那枚，`getBoundingClientRect()` 量到的是**旋转后的外接框**（20 转 45° 是 28）。
+  // 这一档同步是静止那格（没配账户），所以量到的是真实尺寸；哪天它在转的时候这条红了，
+  // 先看的应该是"状态怎么变了"，不是"判据写错了"。
+  check('㉕ 图标 20×20、标签 10px（§3.5 + §1.5 底栏标签）',
+    (dock.tabs ?? []).every((t) => t.iconW === 20 && t.iconH === 20 && t.labelPx === '10px' && t.icon !== ''),
+    JSON.stringify(dock.tabs.map((t) => [t.id, t.icon, t.iconW, t.labelPx])));
+  check('㉕ 主按钮是实心 --ink，字色是 --canvas，且这一对的对比度够 AAA（§4.9 + §5）',
+    dock.primaryBg === dock.tokInk && dock.primaryColor === dock.tokCanvas
+      && contrastRatio(dock.primaryColor, dock.primaryBg) >= 7,
+    JSON.stringify({ bg: dock.primaryBg, fg: dock.primaryColor, ratio: Number(contrastRatio(dock.primaryColor, dock.primaryBg).toFixed(2)) }));
+  check('㉕ 没配账户时底栏那颗读的是"静止那格"，且**真的没在转**（§2.3 / §4.3 第五格）',
+    dock.syncBadge === 'idle' && dock.syncIcon === 'sync-idle' && dock.syncSpin === 'none',
+    JSON.stringify({ badge: dock.syncBadge, icon: dock.syncIcon, spin: dock.syncSpin }));
+
+  // —— 三条"决定类按钮验效果" ——
+  // 每一下都包一层：tap 不进去（被盖住 / pointer-events 关了 / 那颗根本不在）要**报成这一条红**，
+  // 而不是把整条门禁吊死在半路 —— 后面还有三条判据和夹具清理。
+  const tapSafe = async (sel) => {
+    try {
+      await bp.tap(sel, { timeout: 5000 });
+      return '';
+    } catch (e) {
+      return String(e).split('\n')[0].slice(0, 90);
+    }
+  };
+
+  const tapMenu = await tapSafe('[data-testid="mobile-sidebar"]');
+  await bp.waitForTimeout(600);
+  const drawerOpen = await bp.evaluate(() => document.querySelector('.app-shell')?.getAttribute('data-drawer'));
+  check('点「菜单」：抽屉真的拉开（读 app-shell 的 data-drawer，不读按钮自己变没变）',
+    tapMenu === '' && drawerOpen === 'sidebar', JSON.stringify({ tapMenu, drawerOpen }));
+  // 关抽屉：不能 tap 遮罩的**中心** —— 那一格正被抽屉自己盖着（遮罩在 260 宽的抽屉之下）。
+  // 打在最右边那条露出来的遮罩带上，才是用户真会点的那一下。
+  await bp.touchscreen.tap(360, 400);
+  await bp.waitForTimeout(500);
+  const drawerClosed = await bp.evaluate(() => document.querySelector('.app-shell')?.getAttribute('data-drawer'));
+  check('点抽屉外那条遮罩：真的收回去了（不收，后面几颗点的都是遮罩不是底栏）', drawerClosed === 'none', JSON.stringify({ drawerClosed }));
+
+  const tapSettings = await tapSafe('[data-testid="mobile-settings"]');
+  await bp.waitForTimeout(700);
+  const onSettings = await bp.evaluate(() => Boolean(document.querySelector('[data-testid="settings-back"]')));
+  check('点「设置」：真的换到了设置页（窄屏那页才有返回那颗，认它当路标）',
+    tapSettings === '' && onSettings === true, JSON.stringify({ tapSettings, onSettings }));
+  const tapBack = await tapSafe('[data-testid="settings-back"]');
+  await bp.waitForTimeout(700);
+  const leftSettings = await bp.evaluate(() => !document.querySelector('[data-testid="settings-back"]'));
+  check('点「返回」：真的回了笔记那一栏（单栏形态下这是唯一退路，它不管用人就困在设置页）',
+    tapBack === '' && leftSettings === true, JSON.stringify({ tapBack, leftSettings }));
+
+  const idsBefore = new Set((await cmd('list_notes', { folderId: null, trash: false })).map((n) => n.id));
+  const tapSync = await tapSafe('[data-testid="mobile-sync"]');
+  await bp.waitForTimeout(900);
+  const afterIdleTap = await bp.evaluate(() => {
+    const g = document.querySelector('[data-testid="mobile-sync"] svg');
+    return { icon: g?.getAttribute('data-icon') ?? '', spin: g ? getComputedStyle(g).animationName : '', badge: document.querySelector('[data-testid="mobile-sync"]')?.getAttribute('data-badge') ?? '' };
+  });
+  check('点「立即同步」但没配账户：那颗**不许**点亮成"正在同步"（用户原话那一格），也不许转',
+    tapSync === '' && afterIdleTap.badge === 'idle' && afterIdleTap.icon === 'sync-idle' && afterIdleTap.spin === 'none',
+    JSON.stringify({ tapSync, ...afterIdleTap }));
+
+  const tapNew = await tapSafe('[data-testid="mobile-new"]');
+  await bp.waitForTimeout(1200);
+  const rows = await cmd('list_notes', { folderId: null, trash: false });
+  const created = rows.filter((n) => !idsBefore.has(n.id));
+  const paneAfterNew = await bp.evaluate(() => document.querySelector('.app-shell')?.getAttribute('data-pane'));
+  check('点「新建」：核心里真的多出一篇，且窄屏切到了编辑器那一栏',
+    tapNew === '' && created.length === 1 && paneAfterNew === 'editor', JSON.stringify({ tapNew, made: created.map((n) => n.id), paneAfterNew }));
+  for (const n of created) await cmd('purge_note', { id: n.id });
+
+  check('㉕ 这一腿 console error 为零', bErrors.length === 0, bErrors.slice(0, 3).join(' | '));
+  notes.push(`     底栏实测：栏 ${dock.h} 高、留白 ${dock.left}/${dock.rightGap}/${dock.bottomGap}、tab ${JSON.stringify((dock.tabs ?? []).map((t) => `${t.w}×${t.h}`))}；内容让出 ${dock.bodyPadBottom}px，列表底 ${dock.paneBottom} vs 栏顶 ${dock.dockTop}`);
+  await bp.screenshot({ path: `${OUT}/39-dock-390.png` });
+  await bctx.close();
+}
+
+/**
+ * ㉖ §4.9 交互状态规格：按钮四变体 × 五状态、输入框"只读 ≠ 错误"、Toast 只染边框且带「知道了」。
+ *
+ * 判据一律打在**渲染后的 computed style**上，不打在"CSS 文件里有没有那一行"上 ——
+ * 状态样式最常见的糊法是"写着，但选择器没命中/被后一条盖掉"。
+ * 颜色一律与同一页里的 token 值比（`tok()`），不写死三元组。
+ */
+{
+  const MARK = '状态夹具';
+  const sctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const sp = await sctx.newPage();
+  const sErrors = [];
+  sp.on('pageerror', (e) => sErrors.push(String(e).slice(0, 140)));
+  sp.on('console', (m) => { if (m.type() === 'error') sErrors.push(m.text().slice(0, 140)); });
+  await sp.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await sp.waitForSelector('[data-testid="nav-settings"]', { timeout: 15000 });
+  await sp.click('[data-testid="nav-settings"]');
+  await sp.waitForTimeout(900);
+
+  const SNAP = () => sp.evaluate(() => {
+    const tok = (n) => {
+      const p = document.createElement('span');
+      p.style.color = `var(${n})`;
+      document.body.appendChild(p);
+      const v = getComputedStyle(p).color;
+      p.remove();
+      return v;
+    };
+    const pick = (sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return { missing: true };
+      const cs = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return {
+        bg: cs.backgroundColor,
+        fg: cs.color,
+        radius: cs.borderRadius,
+        borderC: cs.borderTopColor,
+        opacity: cs.opacity,
+        filter: cs.filter,
+        transform: cs.transform,
+        outline: `${cs.outlineWidth} ${cs.outlineStyle}`,
+        outlineColor: cs.outlineColor,
+        cursor: cs.cursor,
+        h: Math.round(r.height),
+        active: el.matches(':active'),
+        centered: Math.abs((r.left + r.right) / 2 - window.innerWidth / 2) <= 1,
+        hitSelf: Boolean(hit && el.contains(hit)),
+        placeholder: el.matches('input, textarea') ? getComputedStyle(el, '::placeholder').color : '',
+      };
+    };
+    const host = document.querySelector('[data-testid="toast-host"]');
+    return {
+      t: {
+        ink: tok('--ink'), canvas: tok('--canvas'), danger: tok('--danger'), mute: tok('--mute'),
+        surface: tok('--surface'), sunken: tok('--sunken'), accent: tok('--accent'), line: tok('--line'),
+      },
+      primary: pick('[data-testid="account-save"]'),
+      press: pick('[data-testid="new-folder"]'),
+      danger: pick('[data-testid="restore-db"]'),
+      input: pick('[data-testid="account-baseUrl"]'),
+      toastHost: host ? { w: Math.round(host.getBoundingClientRect().width), centered: Math.abs((host.getBoundingClientRect().left + host.getBoundingClientRect().right) / 2 - window.innerWidth / 2) <= 1 } : { missing: true },
+    };
+  });
+
+  const base = await SNAP();
+  check('㉖ 样本量：主按钮、危险按钮、输入框三颗都真在设置页上（否则下面全是空判据）',
+    base.primary.missing !== true && base.danger.missing !== true && base.input.missing !== true, JSON.stringify(base));
+  check('㉖ 主按钮：实心 --ink 底、--canvas 字、胶囊圆角，且这一对 ≥7:1（§4.9 + §5）',
+    base.primary.bg === base.t.ink && base.primary.fg === base.t.canvas && base.primary.radius === '9999px'
+      && contrastRatio(base.primary.fg, base.primary.bg) >= 7,
+    JSON.stringify({ ...base.primary, ratio: Number(contrastRatio(base.primary.fg, base.primary.bg).toFixed(2)) }));
+  check('㉖ 危险变体：文字与描边同转 --danger，**底是透明**（整块涂红会把"删这一条"画成"整页在报警"）',
+    base.danger.fg === base.t.danger && base.danger.borderC === base.t.danger && base.danger.bg === 'rgba(0, 0, 0, 0)',
+    JSON.stringify(base.danger));
+  check('㉖ 输入框占位用 --mute（§4.9 默认那一行）', base.input.placeholder === base.t.mute, JSON.stringify({ ph: base.input.placeholder, mute: base.t.mute }));
+
+  await sp.focus('[data-testid="account-baseUrl"]');
+  await sp.waitForTimeout(250);
+  const focused = await SNAP();
+  check('㉖ 输入框聚焦：2px --accent 外描边，且**底色不动**（以前顺手把 sunken 换成 canvas，看着像换了状态）',
+    focused.input.outline === '2px solid' && focused.input.outlineColor === focused.t.accent && focused.input.bg === focused.t.sunken,
+    JSON.stringify(focused.input));
+
+  // 两档**各量各的**：一条字段级校验不会同时是"只读"和"出错"，混在一起量等于没量。
+  await sp.evaluate(() => { document.querySelector('[data-testid="account-baseUrl"]').readOnly = true; });
+  const readOnly = await SNAP();
+  await sp.evaluate(() => { document.querySelector('[data-testid="account-baseUrl"]').readOnly = false; });
+  await sp.evaluate(() => { document.querySelector('[data-testid="account-baseUrl"]').setAttribute('aria-invalid', 'true'); });
+  const invalid = await SNAP();
+  await sp.evaluate(() => { document.querySelector('[data-testid="account-baseUrl"]').removeAttribute('aria-invalid'); });
+  check('㉖ 只读那一档：--surface 底 + --line 描边 + --mute 字，描边**不带 --danger**（只读不是错误）',
+    readOnly.input.bg === readOnly.t.surface && readOnly.input.fg === readOnly.t.mute
+      && readOnly.input.borderC === readOnly.t.line,
+    JSON.stringify({ bg: readOnly.input.bg, fg: readOnly.input.fg, border: readOnly.input.borderC }));
+  check('㉖ 错误那一档：描边转 --danger、底**不跟着换**（换底就成"这一格被系统接管了"）',
+    invalid.input.borderC === invalid.t.danger && invalid.input.bg === invalid.t.sunken,
+    JSON.stringify({ border: invalid.input.borderC, bg: invalid.input.bg }));
+  check('㉖ 只读与错误的计算结果必须**不是一套**（"两件不同的事"的形式化：两档读数逐字段比，全等就是没分开）',
+    JSON.stringify([readOnly.input.bg, readOnly.input.fg, readOnly.input.borderC])
+      !== JSON.stringify([invalid.input.bg, invalid.input.fg, invalid.input.borderC]),
+    JSON.stringify({ ro: [readOnly.input.bg, readOnly.input.fg, readOnly.input.borderC], err: [invalid.input.bg, invalid.input.fg, invalid.input.borderC] }));
+
+  // 按下这一档要**先把它滚进视野**：`mouse.move` 不像 `click` 会自动滚，
+  // 设置页那一颗在折线以下时，第一次量到的是"页面别处被按下"（读数 transform: none）。
+  // 也不能挑会提交的那颗：上一版挑了「保存账户」，mouse.down + mouse.up 就是一次真点击，
+  // 于是量到的 transform 里混进了一次真提交（核心回 400，界面上多出一条错误 toast）。
+  // 这里挑「新建文件夹」，并且**把手移到别处再抬起** —— click 只在同一元素上按下抬起才发。
+  await sp.$eval('[data-testid="new-folder"]', (el) => el.scrollIntoView({ block: 'center' }));
+  await sp.waitForTimeout(250);
+  const box = await sp.$eval('[data-testid="new-folder"]', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  });
+  await sp.mouse.move(box.x, box.y);
+  await sp.mouse.down();
+  await sp.waitForTimeout(200); // transform 是 120ms 的过渡，立刻读会读到"还没走到 0.97"
+  const pressed = await SNAP();
+  await sp.mouse.move(8, 8);
+  await sp.mouse.up();
+  // 抬起处与按下处不同，浏览器把 click 发给共同的祖先 ⇒ 这颗按钮的 @click 不该发。
+  // 真开了弹窗就按原路关掉（**不用 Escape**：这条快捷键会把我们从设置页弹回笔记那一栏，
+  // 下一档要 hover 的那颗当场消失，量到的是 30s 超时 —— 上一版就栽在这儿）。
+  const dlgOpen = await sp.evaluate(() => Boolean(document.querySelector('[data-testid="new-folder-dialog"]')));
+  if (dlgOpen) await sp.click('[data-testid="app-dialog-cancel"]');
+  await sp.waitForTimeout(300);
+  check('㉖ 按下那一档：transform 真的是 scale(0.97)，且这一下**没顺手把弹窗开出来**',
+    pressed.press.active === true && pressed.press.transform === 'matrix(0.97, 0, 0, 0.97, 0, 0)' && dlgOpen === false,
+    JSON.stringify({ active: pressed.press.active, transform: pressed.press.transform, dlgOpen }));
+
+  await sp.hover('[data-testid="account-save"]');
+  await sp.waitForTimeout(200);
+  const hovered = await SNAP();
+  check('㉖ 悬停那一档：主按钮走"亮度 +6%"，不是换一种底色',
+    hovered.primary.filter === 'brightness(1.06)', JSON.stringify({ filter: hovered.primary.filter }));
+
+  await sp.click('[data-testid="new-folder"]');
+  await sp.waitForTimeout(600);
+  const disabled = await sp.evaluate(() => {
+    const el = document.querySelector('[data-testid="app-dialog-confirm"]');
+    if (!el) return { missing: true };
+    const cs = getComputedStyle(el);
+    return { isDisabled: el.disabled, opacity: cs.opacity, cursor: cs.cursor };
+  });
+  check('㉖ 禁用那一档（空名字时弹窗那颗真的禁用）：opacity 0.45、cursor default',
+    disabled.isDisabled === true && disabled.opacity === '0.45' && disabled.cursor === 'default', JSON.stringify(disabled));
+  // 关弹窗走它自己的「取消」，不走 Escape —— Escape 在这条应用里还兼着"从设置页退回笔记那一栏"，
+  // 一按就把后面几档要量的那颗按钮从 DOM 里拿掉了。
+  await sp.click('[data-testid="app-dialog-cancel"]');
+  await sp.waitForTimeout(400);
+
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: { v: 1, content: [{ id: `st${stamp}`, type: 'paragraph', content: [{ text: `${MARK} ${stamp}` }] }] },
+  });
+  await sp.click('[data-testid="nav-all"]');
+  await sp.waitForTimeout(900);
+  await sp.click(`[data-testid="note-row-${made.id}"]`);
+  await sp.waitForTimeout(500);
+  // 不用 Backspace 触发：点开那一行会把焦点交给编辑区，`typing` 一真那条快捷键守卫就**故意不动作**
+  // （它不该把删除当成删字符）—— 于是"没 toast"量的会是键盘守卫，不是 toast 这一格。改点删除那颗。
+  await sp.click('[data-testid="trash-note"]');
+  await sp.waitForTimeout(800);
+  const trashed = (await cmd('list_notes', { folderId: null, trash: true })).some((n) => n.id === made.id);
+  const toast = await sp.evaluate(() => {
+    const el = document.querySelector('.toast');
+    if (!el) return { missing: true };
+    const cs = getComputedStyle(el);
+    const ack = el.querySelector('[data-testid="toast-ack"]');
+    const r = ack ? ack.getBoundingClientRect() : null;
+    const hit = r ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null;
+    return {
+      text: el.textContent?.trim().slice(0, 40) ?? '',
+      bg: cs.backgroundColor,
+      level: el.className,
+      ackText: ack?.textContent?.trim() ?? '',
+      ackH: r ? Math.round(r.height) : -1,
+      ackHit: Boolean(ack && hit && ack.contains(hit)),
+    };
+  });
+  const snapToast = await SNAP();
+  check('㉖ Toast：底部居中堆叠、最宽 520，且这一条是**真做了一件事**之后弹的（回核心读到它进了回收站）',
+    toast.missing !== true && trashed === true && snapToast.toastHost.centered === true && snapToast.toastHost.w <= 520,
+    JSON.stringify({ trashed, toast, host: snapToast.toastHost }));
+  check('㉖ Toast 只染边框，不整块染色：底色仍是 --canvas',
+    toast.bg === snapToast.t.canvas, JSON.stringify({ bg: toast.bg, canvas: snapToast.t.canvas, cls: toast.level }));
+  check('㉖ Toast 带一颗「知道了」，看得见点得着（≥44 高、中心命中自己）',
+    toast.ackText === '知道了' && toast.ackH >= 44 && toast.ackHit === true, JSON.stringify(toast));
+  check('㉖ 这条 toast 说清了"没有丢什么"（§4.9 的 ✅ 例子，不是"操作失败"那种兜底句）',
+    /最近删除/.test(toast.text) && /恢复/.test(toast.text), JSON.stringify({ text: toast.text }));
+  check('㉖ 这一腿 console error 为零', sErrors.length === 0, sErrors.slice(0, 3).join(' | '));
+  notes.push(`     §4.9 实测：主按钮 ${base.primary.fg} on ${base.primary.bg}（${contrastRatio(base.primary.fg, base.primary.bg).toFixed(2)}:1）、按下 ${pressed.press.transform}、悬停 ${hovered.primary.filter}、禁用 ${disabled.opacity}`);
+  await sp.screenshot({ path: `${OUT}/40-states-1440.png` });
+  await sctx.close();
+  await cmd('purge_note', { id: made.id });
+  await purgeByTitle(MARK);
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
