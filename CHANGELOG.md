@@ -2031,6 +2031,23 @@ E2EE 那两本 `key_vault.rs`/`sealed_e2ee.rs` 的若干条）。
     （"渲染成 `var(--ink-*)`"）被当成一次真引用 ⇒ 报出一个根本不存在的孤儿令牌。
     抹掉 `/* */` 与整行 `//` 之后红只剩 `--line` 那一条真的。**红先分清是产品红还是判据红**（同 [[verify-the-instrument-before-the-verdict]]）。
 
+### 工具（不改产品，不升版本）
+
+- **`scripts/check-tokens-intake.mjs`** —— 为接下来这件事先把尺子立好：设计师给的 `tokens.css` 落地时，
+  拿它对着现役契约量六条（A 消费中的 token 一个不许缺 / B 深浅对比度沿用 `tokens.spec.ts` 那 9 组配色对 /
+  C 不许 webfont / D `--touch-min` ≥44px / E 现行文件里的结构性规则（减少动效、两套主题）不许在新文件里消失 /
+  F 多出来与取值漂移的只报事实，供人决定改调用点还是改映射）。
+  - 正对照：`node scripts/check-tokens-intake.mjs apps/desktop/src/styles/tokens.css` ⇒ PASS，
+    读数 `消费的 69 个 token 全部有出处（候选文件提供 66 个，别处提供 3 个）`。
+    这"别处 3 个"是 `--app-vh` / `--app-kb`（base.css 有默认值、`stores/shell.ts` 运行时改写）与
+    `--app-range-fill`（组件挂在自己身上的内联样式）—— **判据不是写死名单，是去源码里量这个名字有没有出处**，
+    出处哪天消失这格就跟着消失。
+  - 牙证过五条臂：删 `--text-muted`（两处都删）→ 红在 A；`--text-primary` 改成接近背景 → 红在 B 三对；
+    塞 `@font-face` → 红在 C；`--touch-min: 24px` → 红在 D；抹掉 `prefers-reduced-motion` 块 → 红在 E 两条。
+  - 量出来的一条**有用的不对称**：只删 light 那一处（`--text-muted` 深色还在）时 **A 不红、B 红** ——
+    A 问的是"这个名字在任何一套主题里有没有出处"，B 才问"每一套主题各自算不算得出对比度"。
+    所以"只在一套主题里删了个 token"这种缺陷只能被 B 抓到，别指望 A。
+
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
 - **G70 导出那一排还按"深度"缩进，与侧栏的"只有一层"口径不一致**（2026-10-05 扫 ⑱ 那批时从截图里看见；状态 = **待拍板**）
   - 事实：`SettingsView` 的导出文件夹清单是全站唯一还读 `f.depth` 的地方（`paddingLeft: 0.5 + depth*0.75rem`），
