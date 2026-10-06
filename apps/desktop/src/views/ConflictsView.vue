@@ -147,13 +147,13 @@ onMounted(() => {
 }
 
 .conflicts__body {
-  padding: var(--space-4);
+  padding: var(--sp-4);
 }
 
 .conflicts__grid {
   display: grid;
   grid-template-columns: minmax(200px, 260px) minmax(0, 1fr);
-  gap: var(--space-4);
+  gap: var(--sp-4);
   align-items: start;
 }
 
@@ -163,7 +163,7 @@ onMounted(() => {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--sp-1);
 }
 
 .conflicts__item {
@@ -171,17 +171,17 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--space-1);
-  min-height: var(--touch-min);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-2);
+  gap: var(--sp-1);
+  min-height: var(--touch);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-card);
   border: 1px solid transparent;
   cursor: pointer;
   text-align: left;
 }
 
 .conflicts__item:hover {
-  background: var(--bg-hover);
+  background: var(--hover);
 }
 
 .conflicts__item[data-active='true'] {
@@ -196,24 +196,24 @@ onMounted(() => {
 .conflicts__panes {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
-  gap: var(--space-3);
+  gap: var(--sp-3);
 }
 
 .conflicts__pane {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-3);
-  background: var(--bg-raised);
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--canvas);
   min-width: 0;
 }
 
 .conflicts__pane figcaption {
   font-weight: 700;
   font-size: var(--text-sm);
-  color: var(--text-secondary);
+  color: var(--body);
 }
 
 .conflicts__text {
@@ -225,9 +225,9 @@ onMounted(() => {
   overflow-wrap: anywhere;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
-  background: var(--bg-sunken);
-  border-radius: var(--radius-2);
-  padding: var(--space-3);
+  background: var(--sunken);
+  border-radius: var(--r-card);
+  padding: var(--sp-3);
 }
 
 @media (max-width: 820px) {

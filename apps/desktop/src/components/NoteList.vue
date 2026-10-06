@@ -296,15 +296,15 @@ function createFrom(tpl: NoteTemplate): void {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
   cursor: pointer;
   box-sizing: border-box;
 }
 
 .row-item:hover {
-  background: var(--bg-hover);
+  background: var(--hover);
 }
 
 .row-item--selected {
@@ -328,7 +328,7 @@ function createFrom(tpl: NoteTemplate): void {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text-primary);
+  color: var(--ink);
 }
 
 /* 置顶那颗点：**常显**，且状态用图形本身表达（空心 ↔ 实心 + 主色）。
@@ -341,20 +341,20 @@ function createFrom(tpl: NoteTemplate): void {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: var(--touch-min);
-  min-height: var(--touch-min);
+  min-width: var(--touch);
+  min-height: var(--touch);
   padding: 0;
   border: 0;
-  border-radius: var(--radius-2);
+  border-radius: var(--r-card);
   background: transparent;
-  color: var(--text-muted);
+  color: var(--mute);
   font-size: var(--text-md);
   line-height: 1;
   cursor: pointer;
 }
 
 .row-item__pin:hover {
-  color: var(--text-secondary);
+  color: var(--body);
 }
 
 .row-item__pin--on {
@@ -364,7 +364,7 @@ function createFrom(tpl: NoteTemplate): void {
 .row-item__summary,
 .row-item__snippet {
   font-size: var(--text-sm);
-  color: var(--text-secondary);
+  color: var(--body);
   /* 同上：单行省略 + 行高封顶，父级固定高度时才不会被顶穿。 */
   line-height: 1.4;
   max-height: 1.4em;
@@ -374,8 +374,8 @@ function createFrom(tpl: NoteTemplate): void {
 }
 
 .row-item__snippet :deep(mark) {
-  background: var(--bg-highlight);
-  color: var(--text-primary);
+  background: var(--mark-bg);
+  color: var(--ink);
   border-radius: 2px;
 }
 
@@ -387,23 +387,23 @@ function createFrom(tpl: NoteTemplate): void {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: var(--space-2);
+  gap: var(--sp-2);
 }
 
 .row-item__meta {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--sp-2);
   /* 那颗点搬到 meta 之后，靠这一条把 meta 顶到行首，右侧留给置顶 + 悬浮操作。 */
   margin-inline-end: auto;
   font-size: var(--text-xs);
-  color: var(--text-muted);
+  color: var(--mute);
 }
 
 .row-item__actions {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--sp-1);
   opacity: 0;
 }
 
@@ -424,29 +424,29 @@ function createFrom(tpl: NoteTemplate): void {
 .row-item__actions .btn {
   /* A11Y-04 的下限就是 44pt，这两颗此前是 32×32（台账里挂"待查"那条）。
      不拿"视觉小"当理由：命不中就是误触，§6 明令禁止的那一类。 */
-  min-height: var(--touch-min);
-  min-width: var(--touch-min);
+  min-height: var(--touch);
+  min-width: var(--touch);
 }
 
 .row-item__confirm {
   position: absolute;
-  inset: var(--space-1);
+  inset: var(--sp-1);
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  background: var(--bg-raised);
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--canvas);
   border: 1px solid var(--danger);
-  border-radius: var(--radius-2);
+  border-radius: var(--r-card);
   box-shadow: var(--shadow-2);
   font-size: var(--text-sm);
   cursor: default;
 }
 
 .list-status {
-  padding: var(--space-2) var(--space-3);
+  padding: var(--sp-2) var(--sp-3);
   font-size: var(--text-sm);
-  color: var(--text-muted);
+  color: var(--mute);
   text-align: center;
   flex: 0 0 auto;
 }

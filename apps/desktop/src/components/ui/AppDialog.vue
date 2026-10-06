@@ -61,7 +61,7 @@ const emit = defineEmits<{ close: []; confirm: [] }>();
 .app-dialog__scrim {
   position: fixed;
   inset: 0;
-  background: var(--bg-overlay);
+  background: var(--overlay);
 }
 
 .app-dialog__center {
@@ -70,7 +70,7 @@ const emit = defineEmits<{ close: []; confirm: [] }>();
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--space-4);
+  padding: var(--sp-4);
   pointer-events: none;
 }
 
@@ -78,12 +78,12 @@ const emit = defineEmits<{ close: []; confirm: [] }>();
   pointer-events: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--sp-3);
   width: min(26rem, 100%);
-  padding: var(--space-4);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-3);
-  background: var(--bg-raised);
+  padding: var(--sp-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-card);
+  background: var(--canvas);
   box-shadow: var(--shadow-2);
 }
 
@@ -91,12 +91,12 @@ const emit = defineEmits<{ close: []; confirm: [] }>();
   margin: 0;
   font-size: var(--text-md);
   font-weight: 650;
-  color: var(--text-primary);
+  color: var(--ink);
 }
 
 .app-dialog__actions {
   display: flex;
   justify-content: flex-end;
-  gap: var(--space-2);
+  gap: var(--sp-2);
 }
 </style>

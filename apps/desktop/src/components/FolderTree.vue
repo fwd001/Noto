@@ -144,16 +144,16 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
 .tree__row {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
-  min-height: var(--touch-min);
+  gap: var(--sp-1);
+  min-height: var(--touch);
   /* 工具层浮在这一行之上（见 .tree__tools），所以这一行得是它的定位父级。
      注意这里**没有** padding-left：层级不再用缩进表达。 */
   position: relative;
-  padding-right: var(--space-2);
+  padding-right: var(--sp-2);
 }
 
 .tree__row:hover {
-  background: var(--bg-hover);
+  background: var(--hover);
 }
 
 .tree__row[data-active='true'] {
@@ -164,12 +164,12 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
   flex: 1;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  min-height: var(--touch-min);
+  gap: var(--sp-2);
+  min-height: var(--touch);
   text-align: left;
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-1);
-  color: var(--text-primary);
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-row);
+  color: var(--ink);
   cursor: pointer;
   min-width: 0;
 }
@@ -182,7 +182,7 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
 
 .tree__count {
   font-size: var(--text-xs);
-  color: var(--text-muted);
+  color: var(--mute);
 }
 
 .tree__tools {
@@ -197,11 +197,11 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
    */
   position: absolute;
   top: 0;
-  right: var(--space-2);
+  right: var(--sp-2);
   bottom: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--sp-1);
   opacity: 0;
   pointer-events: none;
 }
@@ -232,12 +232,12 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
 
 .tree__confirm-text {
   margin: 0;
-  color: var(--text-secondary);
+  color: var(--body);
 }
 
 .tree__confirm-row {
   display: flex;
-  gap: var(--space-1);
+  gap: var(--sp-1);
 }
 
 /* 就地改名那一格：**盖在原位上**，不排在名字下面。
@@ -253,15 +253,15 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
 .tree__input {
   position: absolute;
   top: 50%;
-  right: var(--space-3);
-  left: var(--space-3);
+  right: var(--sp-3);
+  left: var(--sp-3);
   width: auto;
   margin: 0;
   transform: translateY(-50%);
-  background: var(--bg-raised);
+  background: var(--canvas);
 }
 
 .tree__empty {
-  padding: var(--space-2) var(--space-3);
+  padding: var(--sp-2) var(--sp-3);
 }
 </style>

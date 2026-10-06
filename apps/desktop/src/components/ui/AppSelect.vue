@@ -65,14 +65,14 @@ const currentLabel = computed(
   display: inline-flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-2);
-  min-height: var(--touch-min);
+  gap: var(--sp-2);
+  min-height: var(--touch);
   min-width: 8.5rem;
-  padding: 0 var(--space-3);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-2);
-  background: var(--bg-raised);
-  color: var(--text-primary);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-card);
+  background: var(--canvas);
+  color: var(--ink);
   font: inherit;
   font-size: var(--text-sm);
   text-align: start;
@@ -80,8 +80,8 @@ const currentLabel = computed(
 }
 
 .app-select:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  background: var(--bg-hover);
+  border-color: var(--line-strong);
+  background: var(--hover);
 }
 
 .app-select:disabled {
@@ -98,7 +98,7 @@ const currentLabel = computed(
 
 .app-select__chevron {
   flex: 0 0 auto;
-  color: var(--text-muted);
+  color: var(--mute);
 }
 
 /* 面板画在我们这边：这一格就是"两端一致"的全部内容。
@@ -106,12 +106,12 @@ const currentLabel = computed(
 .app-select__panel {
   z-index: 90;
   max-height: 18rem;
-  margin: var(--space-1) 0;
-  padding: var(--space-1);
+  margin: var(--sp-1) 0;
+  padding: var(--sp-1);
   overflow: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-2);
-  background: var(--bg-raised, var(--bg-pane));
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-card);
+  background: var(--canvas, var(--canvas));
   box-shadow: var(--shadow-2);
   outline: none;
 }
@@ -119,16 +119,16 @@ const currentLabel = computed(
 .app-select__option {
   display: flex;
   align-items: center;
-  min-height: var(--touch-min);
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-1);
-  color: var(--text-primary);
+  min-height: var(--touch);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-row);
+  color: var(--ink);
   font-size: var(--text-sm);
   cursor: pointer;
 }
 
 .app-select__option[data-active='true'] {
-  background: var(--bg-hover);
+  background: var(--hover);
 }
 
 .app-select__option[data-selected='true'] {

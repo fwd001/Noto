@@ -351,10 +351,10 @@ onBeforeUnmount(() => {
 .tb {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-1) var(--space-2);
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-pane);
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  background: var(--canvas);
   overflow-x: auto;
   /* 窄栏里工具条横向可滚，但不给那条滚动条留位置：
      一个 17px 的常驻横条会把编辑区第一行整个顶下去，而工具条本来就能滚。 */
@@ -385,37 +385,37 @@ onBeforeUnmount(() => {
 .tb[data-more-right='true']::after {
   right: 0;
   margin-right: -28px; /* 别把 28px 加进可滚内容的长度里 */
-  background: linear-gradient(to right, transparent, var(--bg-pane));
+  background: linear-gradient(to right, transparent, var(--canvas));
 }
 
 .tb[data-more-left='true']::before {
   left: 0;
   margin-left: -28px;
-  background: linear-gradient(to left, transparent, var(--bg-pane));
+  background: linear-gradient(to left, transparent, var(--canvas));
 }
 
 .tb__btn {
   flex: 0 0 auto;
-  min-width: var(--touch-min);
-  min-height: var(--touch-min);
+  min-width: var(--touch);
+  min-height: var(--touch);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-2);
-  color: var(--text-secondary);
+  border-radius: var(--r-card);
+  color: var(--body);
   font-weight: 700;
   cursor: pointer;
   border: 1px solid transparent;
 }
 
 .tb__btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--hover);
+  color: var(--ink);
 }
 
 .tb__btn[aria-pressed='true'] {
   background: var(--accent-soft);
-  color: var(--text-primary);
+  color: var(--ink);
   border-color: var(--accent);
 }
 
@@ -430,14 +430,14 @@ onBeforeUnmount(() => {
 }
 
 .tb__btn--wide {
-  padding: 0 var(--space-2);
+  padding: 0 var(--sp-2);
   font-size: var(--text-sm);
   font-weight: 550;
 }
 
 .tb__spacer {
   flex: 1;
-  min-width: var(--space-2);
+  min-width: var(--sp-2);
 }
 
 .tb__menu-wrap {
@@ -454,54 +454,54 @@ onBeforeUnmount(() => {
   min-width: 180px;
   max-height: calc(var(--app-vh) - 8px);
   overflow-y: auto;
-  padding: var(--space-1);
-  background: var(--bg-raised);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-2);
+  padding: var(--sp-1);
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
   box-shadow: var(--shadow-3);
 }
 
 .tb__item {
-  min-height: var(--touch-min);
+  min-height: var(--touch);
   text-align: left;
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-1);
-  color: var(--text-primary);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-row);
+  color: var(--ink);
   cursor: pointer;
 }
 
 .tb__item:hover {
-  background: var(--bg-hover);
+  background: var(--hover);
 }
 
 .tb__item--sub {
   font-size: var(--text-sm);
-  color: var(--text-secondary);
-  padding-left: var(--space-5);
+  color: var(--body);
+  padding-left: var(--sp-6);
 }
 
 /* 色点：颜色这件事没法用文字说清，但也不能**只**用颜色说（无障碍里"仅靠颜色传达"不合格），
    所以每颗后面都跟着一个中文色名。 */
 .tb__ink {
   display: inline-block;
-  inline-size: var(--space-3);
-  block-size: var(--space-3);
-  margin-inline-end: var(--space-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-1);
+  inline-size: var(--sp-3);
+  block-size: var(--sp-3);
+  margin-inline-end: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-row);
   vertical-align: middle;
 }
 
 .tb__size-hint {
-  margin-inline-start: var(--space-1);
+  margin-inline-start: var(--sp-1);
   font-size: var(--text-xs);
-  color: var(--text-secondary);
+  color: var(--body);
 }
 
 .tb__link {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--sp-2);
   width: min(340px, 60vw);
 }
 </style>

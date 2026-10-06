@@ -73,39 +73,39 @@ function ratio(vars: Vars, foregroundKey: string, backgroundKey: string): number
   return contrast(foreground ?? '#000000', background ?? '#ffffff');
 }
 
-/** 别名（`--touch-min: var(--touch)`）要先解引用再断言，否则一次改名就把门禁弄成假红。 */
-function resolveToken(value: string | undefined, vars: Vars): string | undefined {
-  let out = value;
-  for (let i = 0; i < 6; i += 1) {
-    const m = out?.match(/^var\((--[\w-]+)\)$/);
-    if (!m) break;
-    const next = vars[m[1]];
-    if (next === undefined) break;
-    out = next;
-  }
-  return out;
-}
+/**
+ * 文字压在每一种面上的底线（v2 词汇）。
+ * §1.1 那张表只给了六组配色对 —— 那六组另有**逐位对账**的断言（见下面 V2_PAIRS），
+ * 这里补的是文档没列、但界面真会画出来的面：正文压在 hover/sunken/代码底/高亮底/骨架上
+ * 也必须 ≥7:1，语义色当文字用时 ≥4.5:1。
+ */
+const INK_SURFACES = ['--canvas', '--surface', '--sunken', '--hover', '--code-bg', '--mark-bg', '--unknown-bg', '--skeleton'];
 
 describe.each([
   ['浅色', light],
   ['深色', dark],
-])('%s 主题对比度', (_label, vars) => {
-  it('正文 ≥ 7:1（AAA）', () => {
-    expect(ratio(vars, '--text-primary', '--bg-pane')).toBeGreaterThanOrEqual(7);
-    expect(ratio(vars, '--text-primary', '--bg-canvas')).toBeGreaterThanOrEqual(7);
-    expect(ratio(vars, '--text-primary', '--bg-sunken')).toBeGreaterThanOrEqual(7);
-    expect(ratio(vars, '--text-primary', '--bg-raised')).toBeGreaterThanOrEqual(7);
+])('%s 主题对比度', (_label, bucket) => {
+  const vars = { ...shared, ...bucket };
+
+  it('正文压在每一种面上都 ≥ 7:1（AAA，§5 底线）', () => {
+    for (const bg of INK_SURFACES) {
+      expect(vars[bg], `${bg} 没定义`).toBeDefined();
+      expect(ratio(vars, '--ink', bg), `--ink on ${bg}`).toBeGreaterThanOrEqual(7);
+    }
   });
 
-  it('次级文字也 ≥ 7:1，弱文字 ≥ 4.5:1', () => {
-    expect(ratio(vars, '--text-secondary', '--bg-pane')).toBeGreaterThanOrEqual(7);
-    expect(ratio(vars, '--text-muted', '--bg-pane')).toBeGreaterThanOrEqual(4.5);
+  it('次要文字 ≥ 7:1，弱化文字 ≥ 4.5:1', () => {
+    for (const bg of ['--canvas', '--surface', '--sunken']) {
+      expect(ratio(vars, '--body', bg), `--body on ${bg}`).toBeGreaterThanOrEqual(7);
+      expect(ratio(vars, '--mute', bg), `--mute on ${bg}`).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
-  it('徽标色与按钮前景色 ≥ 4.5:1，链接可读', () => {
-    expect(ratio(vars, '--text-on-accent', '--accent')).toBeGreaterThanOrEqual(4.5);
-    expect(ratio(vars, '--text-link', '--bg-pane')).toBeGreaterThanOrEqual(4.5);
-    expect(ratio(vars, '--text-primary', '--bg-highlight')).toBeGreaterThanOrEqual(7);
+  it('语义色当文字用时 ≥ 4.5:1，压在强调色上的字也读得清', () => {
+    for (const c of ['--accent', '--danger', '--warn', '--ok']) {
+      expect(ratio(vars, c, '--canvas'), `${c} 压在 canvas 上`).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(ratio(vars, '--on-accent', '--accent')).toBeGreaterThanOrEqual(4.5);
   });
 });
 
@@ -117,10 +117,7 @@ describe('token 结构约束', () => {
   });
 
   it('字号缩放范围与共享 token 一致', () => {
-    // v2 把触摸目标改名为 `--touch`，`--touch-min` 只是过渡别名 —— 断言要打在**解析后的值**上，
-    // 否则一次安全的重命名会把门禁弄成假红（而假红会让人想去改数值，那才是真危险）。
-    expect(resolveToken(shared['--touch'], shared), '--touch 必须是 44px').toBe('44px');
-    expect(resolveToken(shared['--touch-min'], shared), '--touch-min 必须解析到同一个 44px').toBe('44px');
+    expect(shared['--touch'], '触摸目标下限必须是 44px（§5）').toBe('44px');
     expect(shared['--editor-font-scale']).toBe('1');
   });
 
@@ -134,22 +131,20 @@ describe('token 结构约束', () => {
   });
 
   it('按钮/输入/徽标的最小命中尺寸来自 token', () => {
-    expect(baseCss).toMatch(/\.btn\s*\{[\s\S]*?min-height:\s*var\(--touch-min\)/);
-    expect(baseCss).toMatch(/\.input[\s\S]*?min-height:\s*var\(--touch-min\)/);
-    expect(baseCss).toMatch(/\.badge\s*\{[\s\S]*?min-height:\s*var\(--touch-min\)/);
+    expect(baseCss).toMatch(/\.btn\s*\{[\s\S]*?min-height:\s*var\(--touch\)/);
+    expect(baseCss).toMatch(/\.input[\s\S]*?min-height:\s*var\(--touch\)/);
+    expect(baseCss).toMatch(/\.badge\s*\{[\s\S]*?min-height:\s*var\(--touch\)/);
   });
 
   it('尊重系统"减少动效"', () => {
     expect(tokensCss).toContain('prefers-reduced-motion');
-    expect(tokensCss).toMatch(/--dur-fast:\s*0ms/);
+    expect(tokensCss).toMatch(/--motion-fast:\s*0ms/);
   });
 
   it('字体只用系统字体栈', () => {
-    // v2 把栈放在 `--font`，`--font-ui` 是过渡别名 ⇒ 两处都要认得系统栈
     expect(shared['--font']).toMatch(/-apple-system/);
     expect(shared['--font']).toMatch(/Segoe UI/);
     expect(shared['--font'], '中文回退必须配好（§1.5）').toMatch(/PingFang SC|Microsoft YaHei|Source Han Sans SC/);
-    expect(resolveToken(shared['--font-ui'], shared)).toBe(shared['--font']);
     expect(tokensCss).not.toMatch(/@font-face|url\(/);
   });
 });
@@ -249,8 +244,8 @@ describe('token 引用完整性（每个 var(--x) 都要真有出处）', () => 
   it('两侧都真扫到了东西（否则下面两条是空转）', () => {
     expect(defined.size, '一个 token 定义都没扫到 ⇒ glob 或正则坏了').toBeGreaterThan(40);
     expect(bareUses.size, '一个 var() 消费都没扫到 ⇒ glob 或正则坏了').toBeGreaterThan(40);
-    expect(defined.has('--bg-pane'), '扫不到已知存在的 token，说明扫描范围不对').toBe(true);
-    expect(bareUses.has('--space-2'), '扫不到已知存在的消费点，说明扫描范围不对').toBe(true);
+    expect(defined.has('--canvas'), '扫不到已知存在的 token，说明扫描范围不对').toBe(true);
+    expect(bareUses.has('--sp-2'), '扫不到已知存在的消费点，说明扫描范围不对').toBe(true);
   });
 
   it('没有"引用了却没定义、也没兜底"的 token —— 那种声明整条作废，画面上什么都不会剩', () => {

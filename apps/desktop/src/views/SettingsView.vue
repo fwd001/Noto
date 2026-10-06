@@ -691,15 +691,15 @@ function jumpTo(id: string): void {
 
 .folder-pick {
   margin-top: 0.25rem;
-  border-left: 2px solid var(--border-subtle);
+  border-left: 2px solid var(--line);
   padding-left: 0.25rem;
 }
 
 .settings__body {
-  padding: var(--space-4);
+  padding: var(--sp-4);
   display: flex;
   align-items: flex-start;
-  gap: var(--space-5);
+  gap: var(--sp-6);
 }
 
 /* 分节导航：只在放得下的宽度出现（窄屏时那一栏会把正文挤窄，
@@ -711,24 +711,24 @@ function jumpTo(id: string): void {
   flex: 0 0 168px;
   width: 168px;
   flex-direction: column;
-  gap: var(--space-1);
-  padding-block: var(--space-2);
+  gap: var(--sp-1);
+  padding-block: var(--sp-2);
 }
 
 .settings__rail-item {
-  min-height: var(--touch-min);
-  padding: 0 var(--space-3);
+  min-height: var(--touch);
+  padding: 0 var(--sp-3);
   border: 0;
-  border-radius: var(--radius-1, 6px);
+  border-radius: var(--r-row, 6px);
   background: none;
-  color: var(--text-secondary);
+  color: var(--body);
   font-size: var(--text-sm);
   text-align: left;
 }
 
 .settings__rail-item:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--hover);
+  color: var(--ink);
 }
 
 @media (min-width: 1180px) {
@@ -755,7 +755,7 @@ function jumpTo(id: string): void {
 .settings__grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-4);
+  gap: var(--sp-4);
   width: min(760px, 100%);
   margin-inline: auto;
 }
@@ -763,11 +763,11 @@ function jumpTo(id: string): void {
 .card {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-4);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-3);
-  background: var(--bg-raised);
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--canvas);
   box-shadow: var(--shadow-1);
 }
 
@@ -782,29 +782,29 @@ function jumpTo(id: string): void {
 .card__title {
   font-size: var(--text-md);
   font-weight: 700;
-  margin-bottom: var(--space-2);
+  margin-bottom: var(--sp-2);
 }
 
 .caps {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-2);
-  background: var(--bg-sunken);
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--sunken);
 }
 
 .caps__title {
   font-size: var(--text-sm);
   font-weight: 600;
-  color: var(--text-secondary);
+  color: var(--body);
 }
 
 .caps__note {
   font-size: var(--text-sm);
   line-height: var(--leading-body);
-  color: var(--text-primary);
+  color: var(--ink);
 }
 
 /* S3 是本页少数"必须显眼"的提示：它讲的是覆盖风险，不是性能。 */
@@ -814,13 +814,13 @@ function jumpTo(id: string): void {
 }
 
 .caps__note--muted {
-  color: var(--text-muted);
+  color: var(--mute);
 }
 
 .caps__chips {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: var(--sp-2);
   list-style: none;
   margin: 0;
   padding: 0;
@@ -829,40 +829,40 @@ function jumpTo(id: string): void {
 .caps__chip {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
-  padding: 2px var(--space-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
+  gap: var(--sp-1);
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-chip);
   font-size: var(--text-xs);
 }
 
-/* on/off 只用已经在 tokens.spec.ts 里量过对比度的语义色，对新底 --bg-sunken 两者均 ≥4.5:1。 */
+/* on/off 只用已经在 tokens.spec.ts 里量过对比度的语义色，对新底 --sunken 两者均 ≥4.5:1。 */
 .caps__chip--on {
-  color: var(--success);
-  border-color: var(--success);
+  color: var(--ok);
+  border-color: var(--ok);
 }
 
 .caps__chip--off {
-  color: var(--text-muted);
+  color: var(--mute);
 }
 
 .caps__when {
   font-size: var(--text-xs);
-  color: var(--text-muted);
+  color: var(--mute);
 }
 
 .stats {
-  margin: var(--space-2) 0 0;
+  margin: var(--sp-2) 0 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--sp-1);
   font-size: var(--text-sm);
-  color: var(--text-secondary);
+  color: var(--body);
 }
 
 .stats dt {
   font-weight: 650;
-  color: var(--text-primary);
+  color: var(--ink);
 }
 
 .stats dd {
@@ -876,33 +876,33 @@ function jumpTo(id: string): void {
 }
 
 .keys td {
-  padding: var(--space-1) 0;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--sp-1) 0;
+  border-bottom: 1px solid var(--line);
 }
 
 .keys__combo {
   text-align: right;
   font-family: var(--font-mono);
-  color: var(--text-secondary);
+  color: var(--body);
 }
 
 .erase-confirm {
-  margin-top: var(--space-2);
-  padding: var(--space-3);
+  margin-top: var(--sp-2);
+  padding: var(--sp-3);
   border: 1px solid var(--danger);
   border-radius: 8px;
-  background: var(--bg-raised);
+  background: var(--canvas);
 }
 
 .erase-confirm__text {
-  margin: 0 0 var(--space-2);
+  margin: 0 0 var(--sp-2);
   font-size: var(--text-sm);
-  color: var(--text-primary);
+  color: var(--ink);
 }
 
 .erase-confirm__row {
   display: flex;
-  gap: var(--space-2);
+  gap: var(--sp-2);
   justify-content: flex-end;
 }
 

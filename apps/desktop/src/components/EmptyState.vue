@@ -22,6 +22,6 @@ withDefaults(
 <style scoped>
 .empty-state--compact {
   min-height: 140px;
-  padding: var(--space-5) var(--space-4);
+  padding: var(--sp-6) var(--sp-4);
 }
 </style>

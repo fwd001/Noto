@@ -55,7 +55,7 @@ describe('列表行高与溢出（用户截图：内容被下一行压住）', (
     expect(m, '必须显式声明 ROW_HEIGHT —— 虚拟滚动按它算偏移').not.toBeNull();
     const rowHeight = Number(m![1]);
     // 三行的实际高度：标题 text-base×1.35 + 摘要 text-sm×1.4 + 时间 text-xs×1.4
-    // + gap(var(--space-1)=4px，两处) + 上下 padding(var(--space-2)=8px，两处)。
+    // + gap(var(--sp-1)=4px，两处) + 上下 padding(var(--sp-2)=8px，两处)。
     // 实测装不下 76px（那正是被截图拍到的值），92px 有余量。
     // 若以后调了字号/间距，这条会先红 —— 那正是要人重新算一遍的时机。
     expect(rowHeight).toBeGreaterThanOrEqual(92);

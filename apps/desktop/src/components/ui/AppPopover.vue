@@ -60,20 +60,20 @@ const props = withDefaults(
 .app-popover__panel {
   z-index: 90;
   position: absolute;
-  top: calc(100% + var(--space-1));
+  top: calc(100% + var(--sp-1));
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--sp-1);
   min-width: 13rem;
   max-width: min(20rem, 80vw);
   max-height: 16rem;
-  padding: var(--space-2);
+  padding: var(--sp-2);
   overflow: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-2);
-  background: var(--bg-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-card);
+  background: var(--canvas);
   box-shadow: var(--shadow-2);
-  color: var(--text-primary);
+  color: var(--ink);
   font-size: var(--text-sm);
   text-align: start;
 }

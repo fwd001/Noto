@@ -75,7 +75,7 @@ function onClick(): void {
 .syncline {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--sp-2);
   flex-wrap: wrap;
 }
 
@@ -94,26 +94,26 @@ function onClick(): void {
 .syncline :deep(.badge) {
   width: 100%;
   justify-content: flex-start;
-  min-height: var(--touch-min);
-  padding: 0 var(--space-3);
+  min-height: var(--touch);
+  padding: 0 var(--sp-3);
   border: 0;
-  border-radius: var(--radius-1, 6px);
+  border-radius: var(--r-row, 6px);
   background: none;
   font-weight: 500;
 }
 
 .syncline :deep(.badge:hover) {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--hover);
+  color: var(--ink);
 }
 
 /* 占满一整行：状态那一行下面单独一句"为什么"，不去挤右侧的重试按钮。 */
 .syncline__detail {
   flex: 1 0 100%;
   margin: 0;
-  padding: 0 var(--space-3) var(--space-1);
+  padding: 0 var(--sp-3) var(--sp-1);
   font-size: var(--text-xs);
   line-height: var(--leading-body);
-  color: var(--text-muted);
+  color: var(--mute);
 }
 </style>

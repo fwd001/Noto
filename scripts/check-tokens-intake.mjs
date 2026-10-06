@@ -10,7 +10,7 @@
  *  A 界面正在消费的 token 一个都不许缺（缺了 = 那一处静默回退成无值，画出来是"没样式"）；
  *  B 深浅两套的对比度仍要够（沿用 tokens.spec.ts 那 7 组配色对，不另立口径）；
  *  C 不许引 webfont（离线可用是硬要求，字体只能系统栈）；
- *  D `--touch-min` 不许低于 44px（底线约束）；
+ *  D `--touch` 不许低于 44px（底线约束）；
  *  E 现行 tokens.css 里那些**结构性规则**（减少动效、两套主题都有）不许在新文件里消失；
  *  F 顺手列出"多出来的"和"取值漂移的"，供人决定改调用点还是改映射 —— 只报事实，不替人拍板。
  */
@@ -143,16 +143,23 @@ const HEX = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
 const failures = [];
 const notes = [];
+/**
+ * 配色对 = 界面真会画的组合（v2 词汇）。
+ * 前三组带文档给的期望值（设计稿 §1.1 那张表），其余只钉阈值 —— 文档没列但界面会画。
+ */
 const PAIRS = [
-  ['--text-primary', '--bg-canvas', 7],
-  ['--text-primary', '--bg-pane', 7],
-  ['--text-primary', '--bg-raised', 7],
-  ['--text-primary', '--bg-sunken', 7],
-  ['--text-secondary', '--bg-pane', 7],
-  ['--text-muted', '--bg-pane', 4.5],
-  ['--text-on-accent', '--accent', 4.5],
-  ['--text-link', '--bg-pane', 4.5],
-  ['--text-primary', '--bg-highlight', 7],
+  ['--ink', '--canvas', 7],
+  ['--ink', '--surface', 7],
+  ['--ink', '--sunken', 7],
+  ['--body', '--canvas', 7],
+  ['--mute', '--canvas', 4.5],
+  ['--mute', '--sunken', 4.5],
+  ['--on-accent', '--accent', 4.5],
+  ['--accent', '--canvas', 4.5],
+  ['--danger', '--canvas', 4.5],
+  ['--warn', '--canvas', 4.5],
+  ['--ok', '--canvas', 4.5],
+  ['--ink', '--mark-bg', 7],
 ];
 
 const candidateCss = readFileSync(targetAbs, 'utf8');
@@ -203,10 +210,10 @@ if (/@font-face|url\(/.test(candidateCss)) failures.push('C 候选文件里有 @
 else notes.push('C 没有 webfont 引用（系统字体栈这条守住了）');
 
 // D —— 触摸目标
-const touch = candidate.shared['--touch-min'] ?? candidate.light['--touch-min'];
-if (touch === undefined) failures.push(`D 候选文件没有 --touch-min（界面 ${consumed.get('--touch-min')?.length ?? 0} 处靠它撑 44px 命中区）`);
-else if (Number.parseFloat(touch) < 44) failures.push(`D --touch-min 是 ${touch}，底线是 44px`);
-else notes.push(`D --touch-min = ${touch}`);
+const touch = candidate.shared['--touch'] ?? candidate.light['--touch'];
+if (touch === undefined) failures.push(`D 候选文件没有 --touch（界面 ${consumed.get('--touch-min')?.length ?? 0} 处靠它撑 44px 命中区）`);
+else if (Number.parseFloat(touch) < 44) failures.push(`D --touch 是 ${touch}，底线是 44px`);
+else notes.push(`D --touch = ${touch}`);
 
 // E —— 结构性规则不许随着整文件替换消失
 const currentCss = read(CURRENT);

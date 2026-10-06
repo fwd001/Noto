@@ -51,13 +51,13 @@ defineExpose({ focus, clear });
   position: relative;
   display: flex;
   align-items: center;
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
 }
 
 .search__input {
-  padding-right: var(--space-7);
+  padding-right: var(--sp-12);
 }
 
 .search__input::-webkit-search-cancel-button {
@@ -66,6 +66,6 @@ defineExpose({ focus, clear });
 
 .search__clear {
   position: absolute;
-  right: var(--space-3);
+  right: var(--sp-3);
 }
 </style>

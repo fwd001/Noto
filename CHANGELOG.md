@@ -2105,6 +2105,36 @@ E2EE 那两本 `key_vault.rs`/`sealed_e2ee.rs` 的若干条）。
   （`settle()` 是固定微任务次数，徽标详情那一格可能踩在异步 toast/定时器后面）。**记下来，别当没看见。**
 - 门禁：362 前端单测 / 304 条布局判据（23 腿）/ typecheck / lint 全绿。
 
+### 界面重构 v2（2026-10-06 起，按设计稿 `Noto-界面设计规范.md` v2）· 第 2 刀：调用点全部迁到 v2 词汇
+
+- **506 处 `var(--旧名)` 换成 v2 名字**（20 个文件：`base.css` / `editor.css` / 各视图与组件），
+  另 24 处是"v2 没点名、但界面确实要用的附加位"改名（`--bg-code→--code-bg`、`--bg-highlight→--mark-bg`、
+  `--bg-skeleton→--skeleton`、`--bg-overlay→--overlay`、`--border-strong→--line-strong`、`--sync-idle→--mute`）。
+  **过渡别名一节已删除** —— 现在界面只说一套词汇，没有"两套名字指同一件事"的中间态。
+- 随改名生效的**尺度变化**（这些都是设计稿的数字，不是我调的）：侧栏 248→**260**、列表 336→**340**、
+  编辑器版心 68ch→**720px**、圆角 4/8/12/18→**6/10/10/9999**（§1.3 只许三种）、
+  动效 200ms→**220ms**、缓动换成 `cubic-bezier(0.2,0,0,1)`、正文行高 1.7→**1.8**。
+- **v2 没覆盖的附加位重新取值**（暖中性，跟着 `--canvas/#FFFFFF`、`--surface/#F6F5F2` 这套走）：
+  旧值是从蓝灰底（`#eef1f6` 一族）推的，混在 v2 的暖灰里会显脏。
+  五颗笔记正文颜色（`--ink-red…`）v2 没给 ⇒ 沿用，只把 `--ink-blue` 对齐到新 `--accent`（同屏两种蓝会显脏）。
+- **删掉 6 个零消费者的 token**（`--row-height`、`--row-height-compact`、`--toolbar-height`、`--bg-active`、
+  `--ring`、`--dur-slow`）—— 定义了但全站 `var()` 一次都没读，留着就是"看着是体系的一部分"的死值。
+  量法：逐个 `grep -c "var(--名字)"`，报的是**读数 0**，不是"我觉得没用"。
+- **契约同步升级**（`tokens.spec.ts`）：老的九组配色对（`--text-primary on --bg-pane` 那一套）随词汇一起退役，
+  换成 ① v2 §1.1 那六组的**逐位对账**（含文档给的数字，改一个字节就红）；
+  ② 界面真会画、文档没列的面：正文压在 `canvas/surface/sunken/hover/code-bg/mark-bg/unknown-bg/skeleton`
+  上全部 ≥7:1，次要 ≥7、弱化 ≥4.5，语义色当文字用（accent/danger/warn/ok）≥4.5；
+  ③ 命中尺寸那条从 `--touch-min` 改指 `--touch`（三处：btn / input / badge）。
+- **`check-tokens-intake.mjs` 也跟着改口径**：它原来钉的是 v1 词汇（`--text-primary on --bg-pane`…），
+  不改就会在每次交付核对时报一堆"名字不存在"的假落差。正对照（量现役 tokens.css）⇒ PASS，
+  `64 个消费全有出处（文件提供 61 + 别处 3）`，12 组配色全过。
+- **量出来的一个真实落差（要回给设计师）**：`docs/design/tokens.design-v2.css` 是**核心表，不是超集** ——
+  它没给界面真需要的十来个位（`--mark-bg`、`--code-bg`、`--skeleton`、`--overlay`、`--line-strong`、
+  `--accent-soft`、`--danger-soft`、`--text-inverse`、三档阴影、五颗正文颜色、字号阶梯、`--user-scale`）。
+  这些我在 `tokens.css` 里按 v2 的调子补了值，**属于我补的设计**，请设计师过一眼再定稿。
+- 门禁：362 前端单测 / **304 条布局判据全绿**（真读数已反映新色：置顶那颗 `○=rgb(107,106,98)` 是新 `--mute`、
+  `●=rgb(36,70,154)` 是新 `--accent`）/ typecheck / lint 全绿。
+
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
 - **G75 桌面壳一个 capability 都没有：`§6` 那句"系统文件对话框已接插件"在界面上的实际后果是 0**（2026-10-06 查"要不要现在接导出选择器"时撞出来的；状态 = **待一次真壳运行来分辨**）
   - 已经量到的三条事实：

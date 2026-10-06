@@ -142,57 +142,57 @@ function selectTrash(): void {
 
 .section-head {
   justify-content: space-between;
-  padding: var(--space-3) var(--space-3) var(--space-1);
-  min-height: var(--touch-min);
+  padding: var(--sp-3) var(--sp-3) var(--sp-1);
+  min-height: var(--touch);
 }
 
 .section-title {
   font-size: var(--text-xs);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--mute);
   font-weight: 700;
 }
 
 .side-nav,
 .side-sync,
 .side-foot {
-  padding: var(--space-2) var(--space-3);
+  padding: var(--sp-2) var(--sp-3);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--sp-1);
   flex: 0 0 auto;
 }
 
 .side-sync {
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--line);
 }
 
 /* 分区小标题（"同步"）。
    `.section-head` 原本给"文件夹"那块的用法是 `justify-content: space-between`
-   + `min-height: var(--touch-min)`，因为它右边要放一个"＋"按钮。
+   + `min-height: var(--touch)`，因为它右边要放一个"＋"按钮。
    同步这块右边没东西，若沿用那套就会**左对齐但占满一整行高度**，
    看起来又是一块空地。所以单列一个修饰符：只留上半padding、去掉 min-height，
    让它紧贴上面的分隔线、下面是内容 —— 与"文件夹"那条标题的视觉重量对齐。 */
 .section-head--sync {
   justify-content: flex-start;
   min-height: 0;
-  padding: var(--space-3) var(--space-3) var(--space-1);
+  padding: var(--sp-3) var(--sp-3) var(--sp-1);
 }
 
 .side-foot {
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--line);
 }
 
 .nav-btn {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-2);
-  min-height: var(--touch-min);
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-2);
-  color: var(--text-primary);
+  gap: var(--sp-2);
+  min-height: var(--touch);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-card);
+  color: var(--ink);
   text-align: left;
   cursor: pointer;
   font-size: var(--text-sm);
@@ -200,7 +200,7 @@ function selectTrash(): void {
 }
 
 .nav-btn:hover {
-  background: var(--bg-hover);
+  background: var(--hover);
 }
 
 .nav-btn[data-active='true'] {
@@ -209,7 +209,7 @@ function selectTrash(): void {
 
 .nav-btn__count {
   font-size: var(--text-xs);
-  color: var(--text-muted);
+  color: var(--mute);
 }
 
 .nav-btn__count--warn {
@@ -217,14 +217,14 @@ function selectTrash(): void {
 }
 
 .new-folder {
-  padding: var(--space-2) var(--space-3);
+  padding: var(--sp-2) var(--sp-3);
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--sp-2);
 }
 
 .side-error {
-  padding: var(--space-2) var(--space-3);
+  padding: var(--sp-2) var(--sp-3);
   color: var(--danger);
   font-size: var(--text-sm);
 }

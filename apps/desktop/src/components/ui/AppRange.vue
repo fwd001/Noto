@@ -54,7 +54,7 @@ const fillPercent = computed(() => {
 .app-range {
   display: flex;
   align-items: center;
-  min-height: var(--touch-min);
+  min-height: var(--touch);
 }
 
 .app-range__input {
@@ -69,11 +69,11 @@ const fillPercent = computed(() => {
 
 .app-range__input::-webkit-slider-runnable-track {
   height: 0.375rem;
-  border-radius: var(--radius-pill);
+  border-radius: var(--r-chip);
   background: linear-gradient(
     to right,
     var(--accent) 0 var(--app-range-fill),
-    var(--border-subtle) var(--app-range-fill) 100%
+    var(--line) var(--app-range-fill) 100%
   );
 }
 
@@ -83,9 +83,9 @@ const fillPercent = computed(() => {
   width: 1.25rem;
   height: 1.25rem;
   margin-top: -0.4375rem;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-pill);
-  background: var(--bg-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-chip);
+  background: var(--canvas);
 }
 
 .app-range__input:focus-visible {
@@ -93,14 +93,14 @@ const fillPercent = computed(() => {
 }
 
 .app-range__input:focus-visible::-webkit-slider-thumb {
-  outline: var(--focus-width) solid var(--border-focus);
+  outline: var(--focus-width) solid var(--accent);
   outline-offset: 2px;
 }
 
 /* 触摸端：滑块是要按住的，1.25rem 按不准 —— 放大到 1.75rem，轨道同步加粗 */
 @media (pointer: coarse) {
   .app-range__input {
-    height: var(--touch-min);
+    height: var(--touch);
   }
 
   .app-range__input::-webkit-slider-runnable-track {

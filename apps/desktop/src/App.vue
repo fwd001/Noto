@@ -321,14 +321,14 @@ onBeforeUnmount(() => {
 <style scoped>
 .boot-hint {
   position: fixed;
-  left: var(--space-3);
-  bottom: var(--space-3);
+  left: var(--sp-3);
+  bottom: var(--sp-3);
   z-index: 60;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-pill);
-  background: var(--bg-raised);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-chip);
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  color: var(--body);
   font-size: var(--text-xs);
 }
 </style>

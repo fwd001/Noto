@@ -688,7 +688,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
           :data-conflict="store.hasDraftConflict && index === 0 ? 'true' : 'false'"
           :data-drop="dropMarker(index)"
           :class="{ 'nb-block--drag': dragFrom === index }"
-          :style="{ marginLeft: `calc(${indentOf(block)} * var(--space-4))` }"
+          :style="{ marginLeft: `calc(${indentOf(block)} * var(--sp-4))` }"
         >
           <div
             v-if="!readOnly"
@@ -878,13 +878,13 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
 }
 
 .editor-note {
-  max-width: var(--editor-measure);
-  margin: var(--space-4) auto 0;
-  padding: var(--space-3);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-2);
-  background: var(--bg-sunken);
-  color: var(--text-secondary);
+  max-width: var(--measure);
+  margin: var(--sp-4) auto 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-card);
+  background: var(--sunken);
+  color: var(--body);
   font-size: var(--text-sm);
 }
 
@@ -892,16 +892,16 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-4);
-  border-top: 1px solid var(--border-subtle);
-  background: var(--bg-pane);
-  min-height: var(--touch-min);
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  border-top: 1px solid var(--line);
+  background: var(--canvas);
+  min-height: var(--touch);
 }
 
 .editor-corner [data-save-state='saving'],
 .editor-corner [data-save-state='pending'] {
-  color: var(--text-muted);
+  color: var(--mute);
 }
 
 .editor-corner [data-save-state='error'] {
@@ -909,7 +909,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
 }
 
 .editor-corner [data-save-state='saved'] {
-  color: var(--success);
+  color: var(--ok);
 }
 
 /* 浮动选区条：fixed 定位（坐标按视口算），层级压在正文与侧栏之上 */
@@ -918,11 +918,11 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
   z-index: 30;
   display: flex;
   align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-1);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-2);
-  background: var(--bg-raised);
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-card);
+  background: var(--canvas);
   box-shadow: var(--shadow-2);
 }
 
@@ -932,11 +932,11 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
   justify-content: center;
   min-width: 32px;
   height: 32px;
-  padding: 0 var(--space-2);
+  padding: 0 var(--sp-2);
   border: 0;
-  border-radius: var(--radius-1);
+  border-radius: var(--r-row);
   background: none;
-  color: var(--text-primary);
+  color: var(--ink);
   font: inherit;
   font-size: var(--text-sm);
   line-height: 1;
@@ -944,7 +944,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
 }
 
 .sel-bar__btn:hover {
-  background: var(--bg-hover);
+  background: var(--hover);
 }
 
 .sel-bar__btn--on {
@@ -953,14 +953,14 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
 }
 
 .sel-bar__btn:focus-visible {
-  outline: var(--focus-width) solid var(--border-focus);
+  outline: var(--focus-width) solid var(--accent);
   outline-offset: 1px;
 }
 
 @media (pointer: coarse) {
   .sel-bar__btn {
-    min-width: var(--touch-min);
-    height: var(--touch-min);
+    min-width: var(--touch);
+    height: var(--touch);
   }
 }
 </style>

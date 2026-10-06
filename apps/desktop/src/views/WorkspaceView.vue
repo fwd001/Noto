@@ -137,7 +137,7 @@ const folderChoices = computed(() => [
   flex: 1;
   min-width: 0;
   min-height: 0;
-  gap: var(--space-1);
+  gap: var(--sp-1);
 }
 
 /* 侧栏收起后留在原位的那颗「展开」：绝对定位在列表左缘，
@@ -148,25 +148,25 @@ const folderChoices = computed(() => [
    而不是从按钮底下钻出来。收起态下这块内边距是唯一的补偿。 */
 .workspace__reopen {
   position: absolute;
-  top: var(--space-2);
-  left: var(--space-2);
+  top: var(--sp-2);
+  left: var(--sp-2);
   z-index: 3;
   width: 36px;
   height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--bg-raised);
-  color: var(--text-secondary);
+  background: var(--canvas);
+  color: var(--body);
   cursor: pointer;
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
 }
 
 .workspace__reopen:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--hover);
+  color: var(--ink);
 }
 
 /* 收起态：给列表顶上一块与按钮等高的留白，标题不被压住。
@@ -178,7 +178,7 @@ const folderChoices = computed(() => [
 }
 
 /* 编辑器顶栏。
-   原来只有 `gap: var(--space-2)`（8px）+ `nowrap`，而这一栏里挤着
+   原来只有 `gap: var(--sp-2)`（8px）+ `nowrap`，而这一栏里挤着
    「未归类下拉 · 固定 · 删除」三件东西 —— 8px 间距让它们看着像**一串挤在一起的
    按钮**，而不是"这篇笔记的属性"（用户反馈"对不齐、层级乱"）。
 
@@ -186,7 +186,7 @@ const folderChoices = computed(() => [
    让左侧的标题+归属占住视觉主线 —— 与 Notion/Obsidian 的编辑器顶栏一致：
    左边是这篇是什么，右边是对它做什么。 */
 .editor-head {
-  gap: var(--space-2);
+  gap: var(--sp-2);
   flex-wrap: nowrap;
 }
 
@@ -194,16 +194,16 @@ const folderChoices = computed(() => [
 .editor-head__actions {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--sp-1);
   margin-left: auto;
-  padding-left: var(--space-2);
+  padding-left: var(--sp-2);
   flex: 0 0 auto;
 }
 
 .editor-head__folder {
   width: auto;
   max-width: 180px;
-  min-height: var(--touch-min);
+  min-height: var(--touch);
   font-size: var(--text-sm);
 }
 
@@ -213,7 +213,7 @@ const folderChoices = computed(() => [
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--space-3);
-  padding: var(--space-6);
+  gap: var(--sp-3);
+  padding: var(--sp-8);
 }
 </style>

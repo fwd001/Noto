@@ -41,13 +41,13 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
 </template>
 
 <style scoped>
-/* 整行都是命中区：`min-height` 用 --touch-min，所以手指点在文案上也能切换 */
+/* 整行都是命中区：`min-height` 用 --touch，所以手指点在文案上也能切换 */
 .app-check {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  min-height: var(--touch-min);
-  padding: var(--space-1) 0;
+  gap: var(--sp-2);
+  min-height: var(--touch);
+  padding: var(--sp-1) 0;
   cursor: pointer;
 }
 
@@ -60,13 +60,13 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
   width: 1.375rem;
   height: 1.375rem;
   margin: 0;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-1);
-  background: var(--bg-canvas);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-row);
+  background: var(--surface);
   cursor: pointer;
   transition:
-    background var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
+    background var(--motion-fast) var(--ease),
+    border-color var(--motion-fast) var(--ease);
 }
 
 /* 对勾是画出来的（一条转 45° 的边），不用字形：字体里那颗 ✓ 在两端宽度不同，
@@ -75,12 +75,12 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
   content: '';
   width: 0.6875rem;
   height: 0.375rem;
-  border: 2px solid var(--text-on-accent);
+  border: 2px solid var(--on-accent);
   border-top: 0;
   border-right: 0;
   transform: rotate(-45deg) scale(0);
   transform-origin: center;
-  transition: transform var(--dur-fast) var(--ease-out);
+  transition: transform var(--motion-fast) var(--ease);
 }
 
 .app-check__box:checked {
@@ -93,7 +93,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
 }
 
 .app-check__box:focus-visible {
-  outline: var(--focus-width) solid var(--border-focus);
+  outline: var(--focus-width) solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -103,7 +103,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
 }
 
 .app-check__text {
-  color: var(--text-primary);
+  color: var(--ink);
   font-size: var(--text-sm);
 }
 </style>
