@@ -44,6 +44,8 @@
  *  ㉑ 置顶那颗点**点了要看得出变了**（第 ⑦ 条）：○ 与 ● 必须同时存在（正对照），真点一次走 ○→●→○，
  *     每步对 glyph / aria-pressed / 计算色，并回核心读 `pinned` 那一位。⑤ 只钉了"常显 + 已置顶读得出 ●"，
  *     那颗点若永远画 ●，⑤ 两条照样全绿 —— 这就是这腿存在的理由。
+ *  ㉒ 「新建文件夹」那一格的正向一路（第 ④ 条）：弹窗是全局悬浮层（不许顶走任何一行）、打开就能打字、
+ *     空名字不许确认、**取消真的什么都没建**、回车建的在核心里读得回来且侧栏看得见那一行。
  *
  * 前置（脚本不管，由调用方起）：
  *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
@@ -1557,6 +1559,93 @@ const TRAP_SCAN = () => {
   notes.push(`     置顶往返实测：${off.glyph}/${off.color} → ${on.glyph}/${on.color} → ${back.glyph}，核心 pinned true→false`);
   await pctx.close();
   await purgeByTitle(MARK);
+}
+
+/**
+ * ㉒ 「新建文件夹」那颗 ＋ 走的是**弹窗输入**，而且这条决定要真的落到核心（第 ④ 条）。
+ *
+ * 第 ⑧ 腿钉的是"删除确认不许占排版"，第 ⑨ 腿钉的是"文件夹拍平成一层"，
+ * 但"新建"这一路此前只在第 ⑨ 腿里被反向验过（`folder-new-sub-` 那两颗要没了）。
+ * 这里补的是正向那一格：弹窗是悬浮层（不许顶走任何一行）、打开就能打字、
+ * 空名字不许确认、**取消真的什么都没建**、回车建的能在核心里读回来。
+ * 取消与确认都算"决定类按钮"——判据一律打在效果上（读核心那一排），不读弹窗关没关。
+ */
+{
+  const NAME = `弹窗夹具 ${stamp}`;
+  const xctx = await browser.newContext({ viewport: { width: 1440, height: 950 } });
+  const xp = await xctx.newPage();
+  const xErrors = [];
+  xp.on('pageerror', (e) => xErrors.push(String(e).slice(0, 140)));
+  xp.on('console', (m) => { if (m.type() === 'error') xErrors.push(m.text().slice(0, 140)); });
+  await xp.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await xp.waitForSelector('[data-testid="folder-row"]', { timeout: 15000 });
+  await xp.waitForTimeout(1500);
+
+  const coreNames = async () => {
+    const tree = await cmd('list_folders');
+    return flattenFolders(tree).map((f) => f.name);
+  };
+  const rowGaps = () => xp.$$eval('[data-testid="folder-row"]', (els) => {
+    const t = els.map((e) => Math.round(e.getBoundingClientRect().top));
+    return t.slice(1).map((v, i) => v - t[i]);
+  });
+  const before = await rowGaps();
+  const foldersBefore = await coreNames();
+
+  await xp.click('[data-testid="new-folder"]');
+  await xp.waitForTimeout(600);
+  const dlg = await xp.evaluate(() => {
+    const d = document.querySelector('[data-testid="new-folder-dialog"]');
+    if (!d) return { missing: true };
+    const r = d.getBoundingClientRect();
+    const side = document.querySelector('[data-testid="sidebar"]').getBoundingClientRect();
+    const scrim = document.querySelector('.app-dialog__scrim');
+    const scs = scrim ? getComputedStyle(scrim) : null;
+    const input = document.querySelector('[data-testid="new-folder-input"]');
+    const confirmBtn = document.querySelector('[data-testid="app-dialog-confirm"]');
+    const ir = input?.getBoundingClientRect();
+    const cx = Math.round(r.left + r.width / 2);
+    const top = document.elementFromPoint(cx, Math.round(r.top + r.height / 2));
+    return {
+      // 判"它是不是全局悬浮层"用三条设计无关的事实：面板中心落在侧栏之外、面板那一格最上面是它自己、
+      // 遮罩是 fixed。（第一版我断的是"面板自己的 position 必须是 fixed"—— 那是量错了对象：
+      // fixed 在 `.app-dialog__scrim` 与居中包层上，面板本来就是 static 的，红的是判据不是产品。）
+      outsideSidebar: cx > Math.round(side.right),
+      onTop: Boolean(top && d.contains(top)),
+      scrimFixed: scs?.position === 'fixed',
+      inputFocused: document.activeElement === input,
+      inputHit: Boolean(ir && (() => { const t = document.elementFromPoint(ir.left + ir.width / 2, ir.top + ir.height / 2); return t === input || input?.contains(t); })()),
+      confirmDisabled: confirmBtn?.disabled === true,
+    };
+  });
+  const afterOpen = await rowGaps();
+  check('新建文件夹是**全局悬浮弹窗**：面板在侧栏之外、盖在最上面、遮罩 fixed，且不许改变侧栏任何一行的间距', dlg.outsideSidebar === true && dlg.onTop === true && dlg.scrimFixed === true && JSON.stringify(before) === JSON.stringify(afterOpen), JSON.stringify({ dlg, before, afterOpen }));
+  check('弹窗打开就能直接打字（输入框拿到焦点、中心命中它自己）', dlg.inputFocused === true && dlg.inputHit === true, JSON.stringify(dlg));
+  check('空名字时「确认」是禁用的（不给建出一个空文件夹）', dlg.confirmDisabled === true, JSON.stringify(dlg));
+
+  await xp.keyboard.press('Escape');
+  await xp.waitForTimeout(600);
+  const cancelled = await coreNames();
+  check('取消这一路也要验效果：核心里一排文件夹不许多出一个', JSON.stringify(cancelled) === JSON.stringify(foldersBefore), JSON.stringify({ before: foldersBefore.length, after: cancelled.length, extra: cancelled.filter((n) => !foldersBefore.includes(n)) }));
+
+  await xp.click('[data-testid="new-folder"]');
+  await xp.waitForTimeout(500);
+  await xp.keyboard.type(NAME);
+  await xp.keyboard.press('Enter');
+  await xp.waitForTimeout(1200);
+  const created = await coreNames();
+  check(`回车那一下真的建出来了（核心里读得到「${NAME}」）`, created.includes(NAME), JSON.stringify({ added: created.filter((n) => !foldersBefore.includes(n)) }));
+  const rowShown = await xp.evaluate((name) => Array.from(document.querySelectorAll('[data-testid="folder-row"]')).some((r) => r.innerText.includes(name)), NAME);
+  check('建出来的那一行在侧栏看得见（核心有了但界面没刷新是同一族的老形状）', rowShown === true, JSON.stringify({ rowShown }));
+
+  // 清场：核心没有 purge_folder，软删之后读模型就不再看它（G63 那一格修的就是这条链）
+  const tree = await cmd('list_folders');
+  const hit = flattenFolders(tree).find((f) => f.name === NAME);
+  if (hit?.id) await cmd('delete_folder', { id: hit.id });
+  check('㉒ 这一腿 console error 为零', xErrors.length === 0, xErrors.slice(0, 3).join(' | '));
+  notes.push(`     新建文件夹弹窗实测：${JSON.stringify(dlg)}；行数 ${foldersBefore.length} → 取消后 ${cancelled.length} → 回车后 ${created.length}（含「${NAME}」=${created.includes(NAME)}）`);
+  await xp.screenshot({ path: `${OUT}/35-new-folder-dialog-1440.png` });
+  await xctx.close();
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
