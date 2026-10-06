@@ -44,6 +44,7 @@ import { useShellStore } from '../stores/shell';
 import type { Inline } from '../api/types';
 import { t, type MessageKey } from '../i18n';
 import { attachmentNotice } from '../editor/attachmentNotice';
+import AppIcon from './ui/AppIcon.vue';
 
 const MARK_KINDS = ['bold', 'italic', 'underline', 'strike', 'code', 'highlight', 'link', 'fontSize', 'color'] as const;
 
@@ -711,7 +712,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
               @pointerup="onGripPointerUp"
               @pointercancel="onGripPointerUp"
               @keydown="onGripKeydown(index, $event)"
-            >⠿</span>
+            ><AppIcon :size="18" name="drag-handle" /></span>
           </div>
 
           <span v-if="block.type === 'orderedList'" class="nb-gutter" aria-hidden="true">{{ numbers[index] }}.</span>
@@ -727,7 +728,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
             @mousedown.prevent
             @click="onCheckbox(block, index)"
           >
-            <span class="nb-check__box" aria-hidden="true">{{ isChecked(block) ? '✓' : '' }}</span>
+            <span class="nb-check__box" aria-hidden="true"><AppIcon v-if="isChecked(block)" :size="16" name="check" /></span>
           </button>
 
           <ul
@@ -775,7 +776,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
           <figure v-else-if="block.shape === 'image'" class="nb-media">
             <img v-if="imageSrc(block)" class="nb-image" :src="imageSrc(block) ?? undefined" :alt="stringAttr(block, 'alt') ?? ''" />
             <figcaption v-else class="nb-chip nb-chip--missing">
-              <span class="nb-chip__glyph" aria-hidden="true">▦</span>
+              <AppIcon class="nb-chip__glyph" :size="18" name="attach-image" />
               <span>{{ t('editor.imageMissing') }}</span>
               <span v-if="attachmentName(block)" class="nb-chip__meta">{{ attachmentName(block) }}</span>
               <button type="button" class="btn btn--quiet" data-testid="attachment-retry" @click="retryAttachment(block)">
@@ -789,7 +790,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
 
           <div v-else-if="block.shape === 'attachment'" class="nb-media">
             <span class="nb-chip" :class="{ 'nb-chip--missing': attachmentNoticeKey(block) !== null }">
-              <span class="nb-chip__glyph" aria-hidden="true">▤</span>
+              <AppIcon class="nb-chip__glyph" :size="18" name="attach-file" />
               <span>{{ attachmentName(block) || t('editor.blockAttachment') }}</span>
               <span v-if="formatSize(block.attrs.size)" class="nb-chip__meta">{{ formatSize(block.attrs.size) }}</span>
               <template v-if="attachmentNoticeKey(block)">

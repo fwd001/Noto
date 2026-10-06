@@ -70,6 +70,11 @@ function pinOf(wrapper: ReturnType<typeof mount>, id: string) {
   return wrapper.get(`[data-testid="note-row-${id}"]`).get('[data-testid="note-pin-toggle"]');
 }
 
+/** 那颗点里的 SVG 图标名（§2：图形本身表状态，现在是画出来的，不是字形）。 */
+function iconOf(pin: ReturnType<typeof pinOf>): string {
+  return pin.find('svg').attributes('data-icon') ?? '';
+}
+
 /** 那颗点的全部祖先 class（结构判据用得上）。 */
 function ancestorClasses(el: Element): string[] {
   const out: string[] = [];
@@ -100,8 +105,10 @@ describe('置顶那颗点：常显 + 状态写在图形上', () => {
     const off = pinOf(wrapper, PLAIN);
     expect(on.attributes('aria-pressed')).toBe('true');
     expect(off.attributes('aria-pressed')).toBe('false');
-    expect(on.text()).toBe('●');
-    expect(off.text()).toBe('○');
+    // §2：那颗点的图形现在是 SVG（不是 ●/○ 字形）⇒ 判据改读 `data-icon`，
+    //    语义没变：仍是"图形本身表状态"，只是不再依赖字体回退。
+    expect(iconOf(on)).toBe('pin-on');
+    expect(iconOf(off)).toBe('pin-off');
     expect(on.classes()).toContain('row-item__pin--on');
     expect(off.classes()).not.toContain('row-item__pin--on');
   });
@@ -115,7 +122,7 @@ describe('置顶那颗点：常显 + 状态写在图形上', () => {
     const calls = service.callsOf('set_note_pinned');
     expect(calls).toHaveLength(1);
     expect(calls[0].args).toMatchObject({ id: PLAIN, pinned: true });
-    expect(pinOf(wrapper, PLAIN).text()).toBe('●');
+    expect(iconOf(pinOf(wrapper, PLAIN))).toBe('pin-on');
     expect(pinOf(wrapper, PLAIN).classes()).toContain('row-item__pin--on');
   });
 
@@ -125,7 +132,7 @@ describe('置顶那颗点：常显 + 状态写在图形上', () => {
     await settle();
     const last = service.callsOf('set_note_pinned').at(-1);
     expect(last?.args).toMatchObject({ id: PINNED, pinned: false });
-    expect(pinOf(wrapper, PINNED).text()).toBe('○');
+    expect(iconOf(pinOf(wrapper, PINNED))).toBe('pin-off');
   });
 
   it('点那颗点不该顺手把这篇打开（点击不冒泡到行）', async () => {

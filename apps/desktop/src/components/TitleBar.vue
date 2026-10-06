@@ -11,6 +11,7 @@ import { shouldHideOnClose } from '../platform/caps';
 import { useSettingsStore } from '../stores/settings';
 import { useShellStore } from '../stores/shell';
 import { t } from '../i18n';
+import AppIcon from './ui/AppIcon.vue';
 
 const settings = useSettingsStore();
 const shell = useShellStore();
@@ -38,20 +39,20 @@ async function windowAction(action: 'minimize' | 'maximize' | 'close'): Promise<
   <header v-if="visible" class="titlebar" :class="{ 'titlebar--overlay': overlay }" data-testid="titlebar">
     <div class="titlebar__drag" data-tauri-drag-region>
       <button type="button" class="btn btn--quiet btn--icon" data-testid="sidebar-handle" :aria-label="t(shell.sidebarShown ? 'sidebar.collapse' : 'sidebar.expand')" @click="shell.toggleSidebar()">
-        ☰
+        <AppIcon :size="18" name="menu" />
       </button>
       <span class="titlebar__brand" data-tauri-drag-region>{{ t('app.name') }}</span>
       <span v-if="!overlay" class="titlebar__tagline text-sm text-muted" data-tauri-drag-region>{{ t('app.tagline') }}</span>
     </div>
     <div v-if="!overlay" class="titlebar__actions">
       <button type="button" class="titlebar__button" :aria-label="t('win.minimize')" :title="t('win.minimize')" @click="windowAction('minimize')">
-        ─
+        <AppIcon :size="18" name="win-min" />
       </button>
       <button type="button" class="titlebar__button" :aria-label="t('win.maximize')" :title="t('win.maximize')" @click="windowAction('maximize')">
-        ▢
+        <AppIcon :size="18" name="win-max" />
       </button>
       <button type="button" class="titlebar__button titlebar__button--close" :aria-label="t('win.close')" :title="t('win.close')" @click="windowAction('close')">
-        ×
+        <AppIcon :size="18" name="close" />
       </button>
     </div>
   </header>

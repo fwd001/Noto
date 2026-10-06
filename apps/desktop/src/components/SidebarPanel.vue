@@ -12,6 +12,7 @@ import { useConflictStore } from '../stores/conflicts';
 import { drawsTitleBar } from '../platform/caps';
 import { t, messageFor } from '../i18n';
 import { formatBytes, formatNumber } from '../util/format';
+import AppIcon from './ui/AppIcon.vue';
 
 const folders = useFolderStore();
 const notes = useNoteStore();
@@ -111,7 +112,7 @@ function selectTrash(): void {
     <div class="pane-body">
       <div class="section-head">
         <span class="section-title">{{ t('sidebar.folders') }}</span>
-        <button type="button" class="btn btn--quiet btn--icon" :aria-label="t('sidebar.newFolder')" data-testid="new-folder" @click="openNewFolder">＋</button>
+        <button type="button" class="btn btn--quiet btn--icon" :aria-label="t('sidebar.newFolder')" data-testid="new-folder" @click="openNewFolder"><AppIcon :size="18" name="plus" /></button>
       </div>
 
       <AppDialog

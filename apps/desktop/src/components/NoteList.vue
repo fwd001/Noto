@@ -5,6 +5,7 @@ import SearchField from './SearchField.vue';
 import EmptyState from './EmptyState.vue';
 import SkeletonRows from './SkeletonRows.vue';
 import AppPopover from './ui/AppPopover.vue';
+import AppIcon from './ui/AppIcon.vue';
 import { TEMPLATE_CHOICES, type NoteTemplate } from '../editor/templates';
 import { useNoteStore } from '../stores/notes';
 import { useEditorStore } from '../stores/editor';
@@ -158,7 +159,7 @@ function createFrom(tpl: NoteTemplate): void {
       </button>
       <!-- 那颗 ▾ 才是"快捷新建模板"。默认路径（上面那颗）保持**空白一页**，
            因为口径是"默认的模板要非常简洁，一进去就是请输入标题和正文"。 -->
-      <AppPopover icon="▾" testid="new-note-templates" :label="t('list.newFromTemplate')">
+      <AppPopover icon="chevron-down" testid="new-note-templates" :label="t('list.newFromTemplate')">
         <template #default="{ close }">
           <button
             v-for="tpl in TEMPLATE_CHOICES"
@@ -186,7 +187,7 @@ function createFrom(tpl: NoteTemplate): void {
 
       <EmptyState
         v-else-if="total === 0 && notes.hits === null"
-        :glyph="notes.errorKey ? '!' : '≡'"
+        :icon="notes.errorKey ? 'alert' : 'list'"
         :title="errorText || t('list.empty')"
         :hint="errorText ? '' : t('list.emptyHint')"
         data-testid="list-empty"
@@ -196,7 +197,7 @@ function createFrom(tpl: NoteTemplate): void {
         </button>
       </EmptyState>
 
-      <EmptyState v-else-if="total === 0" :glyph=" '?'" :title="t('list.noResults')" :hint="t('list.noResultsHint')" data-testid="search-empty" />
+      <EmptyState v-else-if="total === 0" icon="question" :title="t('list.noResults')" :hint="t('list.noResultsHint')" data-testid="search-empty" />
 
       <div v-else class="rows" :style="{ paddingTop: `${padTop}px`, paddingBottom: `${padBottom}px` }" role="list">
         <article
@@ -222,8 +223,8 @@ function createFrom(tpl: NoteTemplate): void {
           </div>
           <div class="row-item__side">
             <span class="row-item__meta">
-              <span v-if="entry.hasAttachment" :title="t('list.hasAttachment')" :aria-label="t('list.hasAttachment')">▤</span>
-              <span v-if="conflicts.contended.has(entry.id)" class="row-item__contended" data-testid="row-contended" :title="t('list.contendedNote')" :aria-label="t('list.contendedNote')">⚠</span>
+              <AppIcon v-if="entry.hasAttachment" :size="16" name="attach-file" :label="t('list.hasAttachment')" data-testid="row-has-attachment" />
+              <AppIcon v-if="conflicts.contended.has(entry.id)" class="row-item__contended" :size="16" name="warn" :label="t('list.contendedNote')" data-testid="row-contended" />
               <span>{{ formatWhen(entry.updatedAt) }}</span>
             </span>
             <button
@@ -237,7 +238,7 @@ function createFrom(tpl: NoteTemplate): void {
               :title="entry.pinned ? t('list.unpin') : t('list.pin')"
               @click.stop="notes.setPinned(entry.id, !entry.pinned)"
             >
-              {{ entry.pinned ? '●' : '○' }}
+              <AppIcon :name="entry.pinned ? 'pin-on' : 'pin-off'" :size="18" :testid="`pin-glyph-${entry.id}`" />
             </button>
             <span class="row-item__actions">
               <button
@@ -248,7 +249,7 @@ function createFrom(tpl: NoteTemplate): void {
                 :title="t('list.moveToTrash')"
                 @click.stop="notes.moveToTrash(entry.id)"
               >
-                ⌫
+                <AppIcon :size="18" name="trash" />
               </button>
               <button v-if="notes.inTrash" type="button" class="btn btn--quiet" :aria-label="t('list.restore')" data-testid="restore-note" @click.stop="notes.restore(entry.id)">
                 {{ t('list.restore') }}

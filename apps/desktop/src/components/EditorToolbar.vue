@@ -5,6 +5,7 @@ import { t } from '../i18n';
 import { TOOLBAR_MARK_BUTTONS, FONT_SIZE_MENU, INK_COLOR_MENU, INK_COLORS } from '../editor/marks';
 import { blockTypeLabel } from '../editor/labels';
 import type { TextBlockType } from '../editor/model';
+import AppIcon from './ui/AppIcon.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -331,9 +332,9 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <button type="button" class="tb__btn" :disabled="props.disabled || !props.canIndent" :title="t('tb.outdent')" :aria-label="t('tb.outdent')" @mousedown.prevent @click="emit('indent', -1)">⇤</button>
-    <button type="button" class="tb__btn" :disabled="props.disabled || !props.canIndent" :title="t('tb.indent')" :aria-label="t('tb.indent')" @mousedown.prevent @click="emit('indent', 1)">⇥</button>
-    <button type="button" class="tb__btn" :disabled="props.disabled" :title="t('tb.rule')" :aria-label="t('tb.rule')" @mousedown.prevent @click="emit('rule')">—</button>
+    <button type="button" class="tb__btn" :disabled="props.disabled || !props.canIndent" :title="t('tb.outdent')" :aria-label="t('tb.outdent')" @mousedown.prevent @click="emit('indent', -1)"><AppIcon :size="18" name="indent-out" /></button>
+    <button type="button" class="tb__btn" :disabled="props.disabled || !props.canIndent" :title="t('tb.indent')" :aria-label="t('tb.indent')" @mousedown.prevent @click="emit('indent', 1)"><AppIcon :size="18" name="indent-in" /></button>
+    <button type="button" class="tb__btn" :disabled="props.disabled" :title="t('tb.rule')" :aria-label="t('tb.rule')" @mousedown.prevent @click="emit('rule')"><AppIcon :size="18" name="rule" /></button>
     <button type="button" class="tb__btn tb__btn--wide" :disabled="props.disabled" :title="t('tb.attach')" @mousedown.prevent @click="emit('attach', 'file')">{{ t('tb.attach') }}</button>
     <button type="button" class="tb__btn tb__btn--wide" :disabled="props.disabled" :title="t('editor.blockImage')" @mousedown.prevent @click="emit('attach', 'inline')">{{ t('editor.blockImage') }}</button>
     <span class="tb__spacer" />

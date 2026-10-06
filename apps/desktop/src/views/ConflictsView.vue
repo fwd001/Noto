@@ -10,6 +10,7 @@ import { useShellStore } from '../stores/shell';
 import { t, messageFor } from '../i18n';
 import { formatWhen } from '../util/format';
 import type { ConflictCard } from '../api/types';
+import AppIcon from '../components/ui/AppIcon.vue';
 
 const conflicts = useConflictStore();
 const editor = useEditorStore();
@@ -71,7 +72,7 @@ onMounted(() => {
 <template>
   <section class="pane conflicts" :aria-label="t('conflict.title')" data-testid="conflicts-view">
     <div class="pane-header">
-      <button type="button" class="btn btn--quiet btn--icon" :aria-label="t('mobile.back')" @click="shell.goto('workspace')">‹</button>
+      <button type="button" class="btn btn--quiet btn--icon" :aria-label="t('mobile.back')" @click="shell.goto('workspace')"><AppIcon :size="18" name="arrow-back" /></button>
       <span class="pane-title">{{ t('conflict.title') }}</span>
       <span v-if="conflicts.count > 0" class="text-sm text-muted">{{ t('conflict.count', { count: conflicts.count }) }}</span>
     </div>
@@ -81,7 +82,7 @@ onMounted(() => {
     <div class="pane-body conflicts__body">
       <SkeletonRows v-if="conflicts.loading && cards.length === 0" :rows="3" />
 
-      <EmptyState v-else-if="cards.length === 0" glyph="✓" :title="t('conflict.empty')" :hint="t('conflict.emptyHint')" />
+      <EmptyState v-else-if="cards.length === 0" icon="check" :title="t('conflict.empty')" :hint="t('conflict.emptyHint')" />
 
       <div v-else class="conflicts__grid">
         <ul class="conflicts__list" role="listbox" :aria-label="t('conflict.title')">

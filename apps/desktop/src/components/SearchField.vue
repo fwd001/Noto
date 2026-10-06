@@ -2,6 +2,7 @@
 import { ref } from 'vue';
 import { useNoteStore } from '../stores/notes';
 import { t } from '../i18n';
+import AppIcon from './ui/AppIcon.vue';
 
 const notes = useNoteStore();
 const inputEl = ref<HTMLInputElement | null>(null);
@@ -41,7 +42,7 @@ defineExpose({ focus, clear });
       @keydown.escape.prevent="clear()"
     />
     <button v-if="notes.query" type="button" class="btn btn--quiet btn--icon search__clear" :aria-label="t('state.dismiss')" data-testid="search-clear" @click="clear">
-      ×
+      <AppIcon :size="18" name="close" />
     </button>
   </div>
 </template>

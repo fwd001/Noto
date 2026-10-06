@@ -1,6 +1,8 @@
 <script setup lang="ts">
 /** 同步徽标：用户可见的全部同步语义，只有那几格（协议细节一律折进来）。 */
 import { computed, onMounted, watch } from 'vue';
+import AppIcon from './ui/AppIcon.vue';
+import type { IconName } from './ui/icons';
 import { useSyncStore } from '../stores/sync';
 import { useShellStore } from '../stores/shell';
 import { t } from '../i18n';
@@ -8,17 +10,21 @@ import { t } from '../i18n';
 const sync = useSyncStore();
 const shell = useShellStore();
 
-const GLYPHS: Record<string, string> = {
-  synced: '✓',
-  syncing: '↻',
-  offline: '○',
-  failed: '!',
-  // 未配置账户：给一个**静止**的字形。转不停的圈会被读成"正在忙"，
-  // 而这里的事实是"没在同步" —— 字形必须说出来的话。
-  idle: '·',
+/**
+ * 同步五格 = **同一片云 + 不同内部徽标**（§2.3），全部 SVG。
+ * 以前这里是 `✓ ↻ ○ ! ·` 五个 Unicode 字形 —— §2 明令禁止：字形依赖各平台字体回退，
+ * Windows 与 macOS 必然长得不一样，而"第五格绝不能表现得像在忙"这件事是靠字形稳定才立得住的。
+ */
+const ICON_NAMES: Record<string, IconName> = {
+  synced: 'sync-synced',
+  syncing: 'sync-syncing',
+  offline: 'sync-offline',
+  failed: 'sync-failed',
+  // 未配置账户：静止的那格。转不停的圈会被读成"正在忙"，而这里的事实是"没在同步"。
+  idle: 'sync-idle',
 };
 
-const glyph = computed(() => GLYPHS[sync.badge] ?? '!');
+const iconName = computed<IconName>(() => ICON_NAMES[sync.badge] ?? 'sync-failed');
 const detailText = computed(() => (sync.detail ? `${sync.label} · ${sync.detail}` : sync.label));
 const title = computed(() => {
   if (sync.badge === 'failed') return t('sync.localReady');
@@ -69,7 +75,7 @@ watch(
       data-testid="sync-badge"
       @click="onClick()"
     >
-      <span class="syncbar__glyph" aria-hidden="true">{{ glyph }}</span>
+      <AppIcon class="syncbar__glyph" :name="iconName" :data-spin="sync.badge === 'syncing' ? 'true' : 'false'" />
       <span>{{ sync.label }}</span>
       <span v-if="sync.percent !== null" class="syncbar__progress">{{ t('sync.progress', { done: sync.percent, total: 100 }) }}</span>
     </button>
@@ -115,8 +121,18 @@ watch(
 
 .syncbar__glyph {
   width: 16px;
+  height: 16px;
   flex: 0 0 16px;
-  text-align: center;
+}
+
+/* §1.6 / §2.3：五格里**只有"正在同步"会转**，第五格绝对静止。1.4s linear infinite。 */
+.syncbar__glyph[data-spin='true'] {
+  animation: sync-spin 1.4s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+@keyframes sync-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* 五格各自的颜色（§2.3）：只有"正在同步"会动，第五格绝对静止 */

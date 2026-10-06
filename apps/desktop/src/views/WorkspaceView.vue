@@ -13,6 +13,7 @@ import { useSettingsStore } from '../stores/settings';
 import { useShellStore } from '../stores/shell';
 import { drawsTitleBar } from '../platform/caps';
 import { t } from '../i18n';
+import AppIcon from '../components/ui/AppIcon.vue';
 
 const editor = useEditorStore();
 const folders = useFolderStore();
@@ -62,14 +63,14 @@ const folderChoices = computed(() => [
       data-testid="open-sidebar"
       @click="shell.toggleSidebar()"
     >
-      ☰
+      <AppIcon :size="18" name="menu" />
     </button>
     <NoteList v-if="shell.listVisible" @open="shell.openEditor()" />
 
     <section v-if="shell.editorVisible" class="pane pane--editor" :aria-label="t('editor.pane')" data-testid="editor-pane">
       <div class="pane-header editor-head">
         <button v-if="shell.isCompact" type="button" class="btn btn--quiet btn--icon" :aria-label="t('mobile.back')" data-testid="back-to-list" @click="shell.backToList()">
-          ‹
+          <AppIcon :size="18" name="arrow-back" />
         </button>
         <span class="pane-title" :title="title">{{ title }}</span>
 
@@ -116,7 +117,7 @@ const folderChoices = computed(() => [
 
       <RichEditor v-else-if="editor.blocks.length > 0" :key="editor.noteId ?? 'empty'" />
 
-      <EmptyState v-else-if="notes.selectedId === null" glyph="✎" :title="t('list.empty')" :hint="t('state.boot')">
+      <EmptyState v-else-if="notes.selectedId === null" icon="pencil" :title="t('list.empty')" :hint="t('state.boot')">
         <button type="button" class="btn btn--primary" data-testid="first-new-note" @click="notes.create(notes.mode.kind === 'folder' ? notes.mode.folderId : null)">
           {{ t('list.newNote') }}
         </button>

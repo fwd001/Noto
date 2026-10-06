@@ -9,12 +9,14 @@
  * 手指/鼠标原位那点下去就点到别的东西了。
  */
 import { Popover, PopoverButton, PopoverPanel } from '@headlessui/vue';
+import AppIcon from './AppIcon.vue';
+import type { IconName } from './icons';
 
 const props = withDefaults(
   defineProps<{
     /** 触发按钮的可读名字（读屏与 title 都用它）。 */
     label: string;
-    icon: string;
+    icon: IconName;
     testid: string;
     align?: 'start' | 'end';
     disabled?: boolean;
@@ -34,7 +36,7 @@ const props = withDefaults(
         :aria-expanded="open ? 'true' : 'false'"
         :disabled="props.disabled"
       >
-        {{ props.icon }}
+        <AppIcon :size="18" :name="props.icon" />
       </PopoverButton>
 
       <!-- @click.stop：面板长在列表行里面，不挡住冒泡的话点面板会顺手把那一行打开。 -->

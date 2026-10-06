@@ -121,8 +121,10 @@ describe('未配置同步不该显示成"正在同步"（用户截图：一直�
     const types = read('api/types.ts');
     expect(types).toMatch(/SyncBadgeKind =[^;]*'idle'/);
     const badge = read('components/SyncBadge.vue');
-    const block = badge.slice(badge.indexOf('GLYPHS'), badge.indexOf('GLYPHS') + 300);
-    expect(block).toMatch(/idle:\s*'(?![↻])/); // 不是转圈
+    const block = badge.slice(badge.indexOf('ICON_NAMES'), badge.indexOf('ICON_NAMES') + 400);
+    // §2.3：五格里只有"正在同步"会动 ⇒ idle 不许指到 syncing 那枚云
+    expect(block).toMatch(/idle:\s*'sync-idle'/);
+    expect(block).not.toMatch(/idle:\s*'sync-syncing'/);
   });
 
   it('idle 有文案，且不是"正在同步"', () => {

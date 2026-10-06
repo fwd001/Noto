@@ -21,6 +21,7 @@ import { useNoteStore } from '../stores/notes';
 import { useShellStore } from '../stores/shell';
 import { t } from '../i18n';
 import type { FolderNode } from '../api/types';
+import AppIcon from './ui/AppIcon.vue';
 
 const folders = useFolderStore();
 const notes = useNoteStore();
@@ -97,11 +98,11 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
 
         <div class="tree__tools">
           <button v-if="!isSystem(row.node)" type="button" class="btn btn--quiet btn--icon" data-testid="folder-rename" :title="t('sidebar.rename')" :aria-label="t('sidebar.rename')" @click="beginRename(row.node.id, row.node.name)">
-            ✎
+            <AppIcon :size="16" name="pencil" />
           </button>
           <AppPopover
             v-if="!isSystem(row.node)"
-            icon="⌫"
+            icon="trash"
             testid="folder-delete"
             :label="t('sidebar.deleteFolder')"
           >

@@ -6,6 +6,7 @@ import { useNoteStore } from '../stores/notes';
 import { useSyncStore } from '../stores/sync';
 import { t, messageFor } from '../i18n';
 import { probeLink } from '../api/bridge';
+import AppIcon from './ui/AppIcon.vue';
 
 const sync = useSyncStore();
 const editor = useEditorStore();
@@ -37,7 +38,7 @@ async function reconnect(): Promise<void> {
     </div>
 
     <div v-else-if="showOffline" class="banner" data-testid="banner-offline">
-      <span aria-hidden="true">○</span>
+      <AppIcon :size="18" name="sync-offline" />
       <span>{{ t('state.offlineBanner') }}</span>
     </div>
 

@@ -41,9 +41,9 @@
  *     把可视视口缩 300 px → 行底要回到编辑区底之上，且 `scrollTop` 必须是应用自己动的（不许靠运气）。
  *  ⑳ 打开任何**就地输入 / 确认浮层**都不许改变其他行的 top（第 ④ 句"悬浮层的层级 / 在原来那一行里输出"）：
  *     三个面各量一次 —— 就地改名、文件夹删除确认、笔记永久删除确认，并各配一条样本量判据。
- *  ㉑ 置顶那颗点**点了要看得出变了**（第 ⑦ 条）：○ 与 ● 必须同时存在（正对照），真点一次走 ○→●→○，
- *     每步对 glyph / aria-pressed / 计算色，并回核心读 `pinned` 那一位。⑤ 只钉了"常显 + 已置顶读得出 ●"，
- *     那颗点若永远画 ●，⑤ 两条照样全绿 —— 这就是这腿存在的理由。
+ *  ㉑ 置顶那颗点**点了要看得出变了**（第 ⑦ 条）：`pin-off` 与 `pin-on` 必须同时存在（正对照），真点一次走
+ *     off→on→off，每步对图标名 / aria-pressed / 计算色，并回核心读 `pinned` 那一位。⑤ 只钉了"常显 + 已置顶读得出 on"，
+ *     那颗点若永远画 on，⑤ 两条照样全绿 —— 这就是这腿存在的理由。
  *  ㉒ 「新建文件夹」那一格的正向一路（第 ④ 条）：弹窗是全局悬浮层（不许顶走任何一行）、打开就能打字、
  *     空名字不许确认、**取消真的什么都没建**、回车建的在核心里读得回来且侧栏看得见那一行。
  *  ㉔ §3.2 侧栏常驻：矮窗口（520 高）里同步状态条 / 设置入口 / 库读数都要还在，
@@ -305,7 +305,7 @@ for (const width of WIDTHS) {
     const r = dot.getBoundingClientRect();
     return {
       dotOpacity: getComputedStyle(dot).opacity,
-      dotText: dot.textContent.trim(),
+      dotIcon: dot.querySelector('svg')?.getAttribute('data-icon') ?? '',
       dotPressed: dot.getAttribute('aria-pressed'),
       dotInActions: Boolean(dot.closest('.row-item__actions')),
       actionsOpacity: actions ? getComputedStyle(actions).opacity : null,
@@ -318,7 +318,7 @@ for (const width of WIDTHS) {
     pin.dotOpacity === '1' && pin.dotInActions === false && pin.dotInView === true && pin.actionsOpacity === '0',
     JSON.stringify(pin),
   );
-  check(`宽 ${width}：已置顶那颗读得出"已置顶"（● + aria-pressed=true）`, pin.dotText === '●' && pin.dotPressed === 'true', JSON.stringify(pin));
+  check(`宽 ${width}：已置顶那颗读得出"已置顶"（pin-on + aria-pressed=true）`, pin.dotIcon === 'pin-on' && pin.dotPressed === 'true', JSON.stringify(pin));
   check(`宽 ${width}：那颗点 ≥44×44（§6 触摸目标下限）`, Number(pin.dotSize?.[0]) >= 44 && Number(pin.dotSize?.[1]) >= 44, JSON.stringify(pin.dotSize));
 
   // ⑧ 确认层是悬浮的：打开它不许把下面任何一行顶走（用户那句"而不是底下占了一个"）
@@ -1023,7 +1023,9 @@ for (const width of WIDTHS) {
     if (!b) return { missing: true };
     const r = b.getBoundingClientRect();
     const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return { w: Math.round(r.width), hitEl: top?.tagName?.toLowerCase(), isBtn: top === b };
+    // `contains` 而不是 `===`：那颗图标现在是一棵 SVG，中心命中的是它 —— 仍是这颗按钮接住的。
+    // 判据没放宽：替它接住的那一颗（名字）不在这颗的子里，照样红。
+    return { w: Math.round(r.width), hitEl: top?.tagName?.toLowerCase(), isBtn: Boolean(top && b.contains(top)) };
   });
   check('触屏：改名那颗的中心真的被它自己接住（不是名字按钮替它接 —— 那就是点不到）', !hit.missing && hit.isBtn === true, JSON.stringify(hit));
 
@@ -1102,7 +1104,7 @@ for (const width of WIDTHS) {
       h: Math.round(r.height),
       gx: Math.round(r.left + r.width / 2),
       gy: Math.round(r.top + r.height / 2),
-      hitIsGrip: top === g,
+      hitIsGrip: Boolean(top && g.contains(top)),
       onRow: g.closest('.nb-block')?.innerText.trim().slice(0, 12),
     };
   });
@@ -1505,10 +1507,10 @@ const TRAP_SCAN = () => {
  * ㉑ 置顶那颗点**点了要看得出变了**（第 ⑦ 条原话："点击之后那个小圆点好像没有什么变化，
  * 它只有一个左上角只有一个对勾，这种不太好"）。
  *
- * 第 ⑤ 腿钉的是"那颗常显 + 已置顶读得出 ●"，但那两句**放在一起仍然可能被同一个形状满足**：
- * 如果那颗点永远画 ●，⑤ 的两条照样全绿。所以这里补的是正对照 —— 同一时刻必须存在
- * 一枚读得出"未置顶"的 ○，并且**真点一次**走完 ○→●→○ 一个来回，
- * 每步都对三样东西： glyph / `aria-pressed` / 计算后的颜色，最后再回核心读 `pinned` 那一位
+ * 第 ⑤ 腿钉的是"那颗常显 + 已置顶读得出 `pin-on`"，但那两句**放在一起仍然可能被同一个形状满足**：
+ * 如果那颗点永远画 `pin-on`，⑤ 的两条照样全绿。所以这里补的是正对照 —— 同一时刻必须存在
+ * 一枚读得出"未置顶"的 `pin-off`，并且**真点一次**走完 off→on→off 一个来回，
+ * 每步都对三样东西： `data-icon` / `aria-pressed` / 计算后的颜色，最后再回核心读 `pinned` 那一位
  * （界面写的那一位必须就是被读的那一位，见 [[verify-the-call-edge-not-just-the-callees-tests]]）。
  */
 {
@@ -1532,7 +1534,7 @@ const TRAP_SCAN = () => {
     if (!row) return { missing: 'row' };
     const dot = row.querySelector('[data-testid="note-pin-toggle"]');
     if (!dot) return { missing: 'dot' };
-    return { glyph: dot.textContent.trim(), pressed: dot.getAttribute('aria-pressed'), color: getComputedStyle(dot).color, on: dot.classList.contains('row-item__pin--on') };
+    return { glyph: dot.querySelector('svg')?.getAttribute('data-icon') ?? '', pressed: dot.getAttribute('aria-pressed'), color: getComputedStyle(dot).color, on: dot.classList.contains('row-item__pin--on') };
   }, made.id);
   const corePinned = async () => {
     const rows = await cmd('list_notes', { folderId: null, trash: false });
@@ -1541,21 +1543,21 @@ const TRAP_SCAN = () => {
   };
 
   const off = await readDot();
-  check('新笔记那一颗读得出"未置顶"（○ + aria-pressed=false —— 这是⑤缺的那枚正对照）', off.glyph === '○' && off.pressed === 'false' && off.on === false, JSON.stringify(off));
+  check('新笔记那一颗读得出"未置顶"（pin-off + aria-pressed=false —— 这是⑤缺的那枚正对照）', off.glyph === 'pin-off' && off.pressed === 'false' && off.on === false, JSON.stringify(off));
   const seedDot = await pp.evaluate((id) => {
     const d = document.querySelector(`[data-testid="note-row-${id}"] [data-testid="note-pin-toggle"]`);
-    return d ? { glyph: d.textContent.trim(), color: getComputedStyle(d).color } : { missing: true };
+    return d ? { glyph: d.querySelector('svg')?.getAttribute('data-icon') ?? '', color: getComputedStyle(d).color } : { missing: true };
   }, seedNoteId);
-  check('同一时刻列表里两枚点长得不一样（● 与 ○ 并存，否则"点了没变化"还会回来）', seedDot.glyph === '●' && seedDot.glyph !== off.glyph, JSON.stringify({ seedDot, off }));
+  check('同一时刻列表里两枚点长得不一样（on 与 off 并存，否则"点了没变化"还会回来）', seedDot.glyph === 'pin-on' && seedDot.glyph !== off.glyph, JSON.stringify({ seedDot, off }));
 
   /**
    * 点完之后**轮询到那颗点稳定**再判（最多 3s）。
    *
    * 为什么不是"等 900ms 读一次"：置顶会把这一行**换组**（置顶优先排序），
    * 换组在虚拟化列表里要重排窗口 —— 一次定长等待在行多时会读到换组前的那一帧，
-   * 于是报出"点了没变"（本轮就红过一次：读数 ○→○→●，而独立探针量同一颗是 ○→●→○、
+   * 于是报出"点了没变"（本轮就红过一次：读数 off→off→on，而独立探针量同一颗是 off→on→off、
    * 核心 true→false 全程对得上 ⇒ **红的是仪器，不是产品**）。
-   * 轮询不是放宽判据：最终仍要求 `●` 与 `aria-pressed=true`，只是给它稳定下来的时间。
+   * 轮询不是放宽判据：最终仍要求 `pin-on` 与 `aria-pressed=true`，只是给它稳定下来的时间。
    */
   const settleDot = async (wanted) => {
     let last = null;
@@ -1568,14 +1570,14 @@ const TRAP_SCAN = () => {
   };
 
   await pp.click(`[data-testid="note-row-${made.id}"] [data-testid="note-pin-toggle"]`);
-  const on = await settleDot('●');
-  check('点一次：同一颗变成"已置顶"，glyph 与颜色都跟着变（不是只换 aria）', on.glyph === '●' && on.pressed === 'true' && on.on === true && on.color !== off.color, JSON.stringify({ off, on }));
+  const on = await settleDot('pin-on');
+  check('点一次：同一颗变成"已置顶"，glyph 与颜色都跟着变（不是只换 aria）', on.glyph === 'pin-on' && on.pressed === 'true' && on.on === true && on.color !== off.color, JSON.stringify({ off, on }));
   check('点一次：置顶这一位**真的落进核心**（回读 list_notes 的 pinned）', (await corePinned()) === true, JSON.stringify(await corePinned()));
   check('置顶之后那一行不许从列表里消失（换组不是搬家搬没）', on.missing !== 'row', JSON.stringify(on));
 
   await pp.click(`[data-testid="note-row-${made.id}"] [data-testid="note-pin-toggle"]`);
-  const back = await settleDot('○');
-  check('再点一次回到未置顶（一个来回不留半截状态）', back.glyph === '○' && back.pressed === 'false' && (await corePinned()) === false, JSON.stringify(back));
+  const back = await settleDot('pin-off');
+  check('再点一次回到未置顶（一个来回不留半截状态）', back.glyph === 'pin-off' && back.pressed === 'false' && (await corePinned()) === false, JSON.stringify(back));
   check('㉑ 这一腿 console error 为零', pErrors.length === 0, pErrors.slice(0, 3).join(' | '));
   notes.push(`     置顶往返实测：${off.glyph}/${off.color} → ${on.glyph}/${on.color} → ${back.glyph}，核心 pinned true→false`);
   await pctx.close();

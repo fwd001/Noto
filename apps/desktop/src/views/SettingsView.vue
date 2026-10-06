@@ -19,6 +19,7 @@ import { t, messageFor } from '../i18n';
 import { formatBytes, formatNumber, formatWhen } from '../util/format';
 import { FONT_SCALE_MAX, FONT_SCALE_MIN, type ImportFilesReport, type ThemeMode } from '../stores/settings';
 import { capChips, capsState } from '../sync/serverCaps';
+import AppIcon from '../components/ui/AppIcon.vue';
 
 const settings = useSettingsStore();
 const sync = useSyncStore();
@@ -261,7 +262,7 @@ function jumpTo(id: string): void {
 <template>
   <section class="pane settings" :aria-label="t('settings.title')">
     <div class="pane-header">
-      <button type="button" class="btn btn--quiet btn--icon" :aria-label="t('mobile.back')" data-testid="settings-back" @click="shell.goto('workspace')">‹</button>
+      <button type="button" class="btn btn--quiet btn--icon" :aria-label="t('mobile.back')" data-testid="settings-back" @click="shell.goto('workspace')"><AppIcon :size="18" name="arrow-back" /></button>
       <span class="pane-title">{{ t('settings.title') }}</span>
       <SyncBadge />
     </div>
