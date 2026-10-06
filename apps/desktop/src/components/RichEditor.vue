@@ -42,7 +42,8 @@ import {
 import { useEditorStore } from '../stores/editor';
 import { useShellStore } from '../stores/shell';
 import type { Inline } from '../api/types';
-import { t } from '../i18n';
+import { t, type MessageKey } from '../i18n';
+import { attachmentNotice } from '../editor/attachmentNotice';
 
 const MARK_KINDS = ['bold', 'italic', 'underline', 'strike', 'code', 'highlight', 'link', 'fontSize', 'color'] as const;
 
@@ -212,9 +213,29 @@ function attachmentName(block: EditorBlock): string {
   return stringAttr(block, 'name') ?? stringAttr(block, 'fileName') ?? stringAttr(block, 'sha256')?.slice(0, 12) ?? '';
 }
 
-function attachmentMissing(block: EditorBlock): boolean {
-  if (store.attachmentState(stringAttr(block, 'ref')) === 'missing') return true;
-  return stringAttr(block, 'sha256') === undefined && stringAttr(block, 'ref') === undefined;
+/**
+ * 这颗附件芯片该说的那句话（`null` = 没什么要说）。
+ *
+ * 判据来自核心的那本账（`attachment_states`），**不是**"这次会话上传过没有"：
+ * 后者让从别的设备同步来、本机还没字节的附件画起来跟完好的一样 —— 既不说明缺，
+ * 也不给那两颗已存在的动作（G74）。
+ * 两个例外都要说：块里连内容键都没有（写坏了的引用），以及账说本机没有可用字节。
+ */
+function attachmentNoticeKey(block: EditorBlock): MessageKey | null {
+  const sha = stringAttr(block, 'sha256') ?? stringAttr(block, 'ref');
+  if (!sha) return 'editor.attachmentNotOnDevice';
+  const pair = store.attachmentLedger(sha);
+  if (pair) return attachmentNotice(pair);
+  // 账还没回（这篇刚打开、那次问账还在飞，或是本次会话刚传上的那颗）：
+  // 保留原有的"本次会话里它报过 missing"这一格判据 —— 加了新判据不该把已有信号弄丢。
+  if (store.attachmentState(stringAttr(block, 'ref')) === 'missing') return 'editor.attachmentNotOnDevice';
+  return null;
+}
+
+/** 模板里只做一次取值；空串表示这颗芯片没什么要说（`v-if` 已经把那一格挡住了）。 */
+function attachmentNoticeText(block: EditorBlock): string {
+  const key = attachmentNoticeKey(block);
+  return key ? t(key) : '';
 }
 
 function formatSize(value: unknown): string {
@@ -767,12 +788,12 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
           </figure>
 
           <div v-else-if="block.shape === 'attachment'" class="nb-media">
-            <span class="nb-chip" :class="{ 'nb-chip--missing': attachmentMissing(block) }">
+            <span class="nb-chip" :class="{ 'nb-chip--missing': attachmentNoticeKey(block) !== null }">
               <span class="nb-chip__glyph" aria-hidden="true">▤</span>
               <span>{{ attachmentName(block) || t('editor.blockAttachment') }}</span>
               <span v-if="formatSize(block.attrs.size)" class="nb-chip__meta">{{ formatSize(block.attrs.size) }}</span>
-              <template v-if="attachmentMissing(block)">
-                <span class="nb-chip__meta">{{ t('editor.attachmentMissing') }}</span>
+              <template v-if="attachmentNoticeKey(block)">
+                <span class="nb-chip__meta" data-testid="attachment-notice">{{ attachmentNoticeText(block) }}</span>
                 <button type="button" class="btn btn--quiet" data-testid="attachment-retry" @click="retryAttachment(block)">
                   {{ t('editor.attachmentRetry') }}
                 </button>

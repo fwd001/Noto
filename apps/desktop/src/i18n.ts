@@ -70,6 +70,9 @@ const MESSAGES: Record<MessageKey, string> = {
   'editor.versionTooNew': '这条笔记由更新版本的 Noto 保存，请升级后编辑（当前可查看）。',
   'editor.unknownBlock': '暂不支持的内容（已原样保留）',
   'editor.attachmentMissing': '附件不在这台设备上，正在等待下载',
+  // 本机不可用的其余各格（只有一半 / 校验不过 / 服务器那边也没有或坏了 / 连账都没有）。
+  // 刻意不说"正在等待下载"：那句话只在"本机没有 + 服务器有"时才是真话。
+  'editor.attachmentNotOnDevice': '这台设备上没有可用的这份附件',
   // 坏图/坏附件占位上的两个手动动作（2026-09-28 的决定：终态那一格必须给用户一个能点的东西）。
   // 界面只表达意图 —— 撤哪一半状态、要不要覆盖服务器，判断全在核心那两条命令里。
   'editor.attachmentRetry': '重试取回',

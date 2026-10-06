@@ -46,6 +46,8 @@
  *     那颗点若永远画 ●，⑤ 两条照样全绿 —— 这就是这腿存在的理由。
  *  ㉒ 「新建文件夹」那一格的正向一路（第 ④ 条）：弹窗是全局悬浮层（不许顶走任何一行）、打开就能打字、
  *     空名字不许确认、**取消真的什么都没建**、回车建的在核心里读得回来且侧栏看得见那一行。
+ *  ㉓ 附件那颗芯片要说得清"这台设备此刻有没有这份可用的字节"（G74）：真账 available 时一句都不许说（正对照）、
+ *     注入 missing+present 必须出现「正在等待下载」与两颗动作、注入 missing+unknown 必须换成中性那句。
  *
  * 前置（脚本不管，由调用方起）：
  *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
@@ -1646,6 +1648,122 @@ const TRAP_SCAN = () => {
   notes.push(`     新建文件夹弹窗实测：${JSON.stringify(dlg)}；行数 ${foldersBefore.length} → 取消后 ${cancelled.length} → 回车后 ${created.length}（含「${NAME}」=${created.includes(NAME)}）`);
   await xp.screenshot({ path: `${OUT}/35-new-folder-dialog-1440.png` });
   await xctx.close();
+}
+
+/**
+ * ㉓ 附件那颗芯片必须说得清"这台设备此刻有没有这份可用的字节"（§2.5 那条承诺 / G74）。
+ *
+ * 三格各钉一件事，缺一格就能被同一个形状糊过去：
+ *  A **放行到真核心**（不注入）⇒ 计数证明这一次读账真的发了出去，且真账说 available 时芯片一句都不许说。
+ *    第一版我把 A 写成"不注册路由、只看芯片没说话"⇒ 探针量到 `attachment_states` 被调 **0 次**，
+ *    也就是"什么都没做"和"做对了"在那一版里长得一模一样（同 [[mutation-test-every-gate]] 的"扫到 0 项"那条）。
+ *  B 注入 missing + present ⇒ 那句「正在等待下载」要真渲染出来，两颗动作按钮跟着在。
+ *  C 注入 missing + unknown ⇒ 必须换成那句中性的 —— 服务器还没问过就说"正在等待下载"是许愿。
+ *
+ * 夹具必须先有一段文字：笔记标题由第一个非空文本块派生，只有附件块的这一篇**在列表里没有可读名字**，
+ * 那一行永远点不中 ⇒ 整腿会退化成"编辑器根本没打开"的假绿（这一版就栽过）。
+ */
+{
+  const MARK = '附件账夹具';
+  await purgeByTitle(MARK);
+  const paraId = `ap${stamp}`.slice(0, 12);
+  const blockId = `aa${stamp}`.slice(0, 12);
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: {
+      v: 1,
+      content: [
+        { id: paraId, type: 'paragraph', content: [{ text: MARK }] },
+        { id: blockId, type: 'attachment', attrs: { name: `${MARK}.txt` } },
+      ],
+    },
+  });
+  const attached = await cmd('attach_file', {
+    noteId: made.id,
+    blockId,
+    role: 'file',
+    filename: `${MARK}.txt`,
+    mediaType: 'text/plain',
+    bytesBase64: Buffer.from(`${MARK} 的字节内容，够长以避免被当成空文件拒绝`).toString('base64'),
+  });
+  const sha = attached?.sha256;
+  check('㉓ 夹具要真有内容键（没附件就没法量这颗芯片）', typeof sha === 'string' && sha.length === 64, JSON.stringify(attached).slice(0, 160));
+  // 真 UI 就是这么落库的：attach_file 把内容键合进块属性，再随一次 edit_note 进 doc。
+  await cmd('edit_note', {
+    id: made.id,
+    expectedRev: attached?.rev ?? 1,
+    doc: {
+      v: 1,
+      content: [
+        { id: paraId, type: 'paragraph', content: [{ text: MARK }] },
+        { id: blockId, type: 'attachment', attrs: { role: 'file', pending: false, sha256: sha, ref: sha, size: attached?.size, mediaType: 'text/plain', name: `${MARK}.txt` } },
+      ],
+    },
+  });
+
+  let states = { calls: 0, realAnswer: null };
+  const openChip = async (injected) => {
+    states = { calls: 0, realAnswer: null };
+    const cctx = await browser.newContext({ viewport: { width: 1440, height: 950 } });
+    await cctx.route('**/cmd/attachment_states', async (route) => {
+      states.calls += 1;
+      if (injected) {
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(injected) });
+      }
+      const res = await route.fetch();
+      const body = await res.text();
+      states.realAnswer = body;
+      return route.fulfill({ status: 200, contentType: 'application/json', body });
+    });
+    const cp = await cctx.newPage();
+    const cErrors = [];
+    cp.on('pageerror', (e) => cErrors.push(String(e).slice(0, 140)));
+    cp.on('console', (m) => { if (m.type() === 'error') cErrors.push(m.text().slice(0, 140)); });
+    await cp.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await cp.waitForSelector('[data-testid^="note-row-"]', { timeout: 15000 });
+    await cp.waitForTimeout(1200);
+    let opened = false;
+    for (const r of await cp.$$('[data-testid^="note-row-"]')) {
+      if ((await r.innerText()).includes(MARK)) { await r.click(); opened = true; break; }
+    }
+    await cp.waitForTimeout(1800);
+    const chip = await cp.evaluate((mark) => {
+      const chipEl = document.querySelector('.nb-chip');
+      const notice = document.querySelector('[data-testid="attachment-notice"]');
+      const box = (el) => { if (!el) return null; const b = el.getBoundingClientRect(); return { w: Math.round(b.width), h: Math.round(b.height), visible: b.width > 0 && b.height > 0 }; };
+      return {
+        opened: Boolean(chipEl),
+        // 必须确认编辑器开的是**这一篇**：否则"芯片没说话"可能只是压根没打开。
+        rightNote: chipEl ? (chipEl.innerText ?? '').includes(mark) : false,
+        noticeText: notice ? (notice.innerText ?? '').trim() : null,
+        retry: box(document.querySelector('[data-testid="attachment-retry"]')),
+        reupload: box(document.querySelector('[data-testid="attachment-reupload"]')),
+        markedMissing: Boolean(document.querySelector('.nb-chip--missing')),
+      };
+    }, MARK);
+    return { chip, opened, cErrors, cp, cctx };
+  }
+
+  const a = await openChip(null);
+  const aCalls = states.calls;
+  check('A 打开这一篇要真的去问一次账（调用边，不是被调方的绿）', a.chip.opened && a.chip.rightNote && states.calls >= 1, JSON.stringify({ chip: a.chip, calls: states.calls }));
+  check('A 真账说本机有好字节时，那颗芯片一句都不许说（正对照）', JSON.parse(states.realAnswer ?? '[]').some((r) => r.sha256 === sha && r.localState === 'available') && a.chip.noticeText === null && a.chip.retry === null && a.chip.markedMissing === false, JSON.stringify({ real: states.realAnswer, chip: a.chip }));
+  await a.cp.screenshot({ path: `${OUT}/36-attach-ledger-available-1440.png` });
+  await a.cctx.close();
+
+  const b = await openChip([{ sha256: sha, localState: 'missing', remoteState: 'present' }]);
+  check('B 本机缺 + 服务器有 ⇒ 必须真渲染出那句「正在等待下载」，两颗动作按钮跟着在且看得见', b.chip.noticeText === '附件不在这台设备上，正在等待下载' && b.chip.retry?.visible === true && b.chip.reupload?.visible === true && b.chip.markedMissing === true, JSON.stringify(b.chip));
+  await b.cp.screenshot({ path: `${OUT}/37-attach-ledger-missing-1440.png` });
+  await b.cctx.close();
+
+  const c = await openChip([{ sha256: sha, localState: 'missing', remoteState: 'unknown' }]);
+  check('C 服务器还没问过 ⇒ 换成那句中性说法，不许许愿"正在等待下载"（这一句里不许出现"下载"）', c.chip.noticeText === '这台设备上没有可用的这份附件' && !c.chip.noticeText.includes('下载'), JSON.stringify(c.chip));
+  await c.cctx.close();
+
+  check('㉓ 这一腿 console error 为零（注入回音不许把界面弄出报错）', [...a.cErrors, ...b.cErrors, ...c.cErrors].length === 0, [...a.cErrors, ...b.cErrors, ...c.cErrors].slice(0, 3).join(' | '));
+  notes.push(`     附件账实测：A 真核心回音 ${JSON.stringify(a.chip.noticeText)}（问账 ${aCalls} 次）｜B(missing/present) ${JSON.stringify(b.chip.noticeText)}｜C(missing/unknown) ${JSON.stringify(c.chip.noticeText)}`);
+  await cmd('purge_note', { id: made.id });
+  await purgeByTitle(MARK);
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */

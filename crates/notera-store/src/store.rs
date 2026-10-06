@@ -925,6 +925,46 @@ impl Store {
         .unwrap_or_else(|| ("absent".into(), "absent".into()))
     }
 
+    /// 一次问清一批对象**在这台设备上**的账（编辑器打开一篇笔记时用，见 host 的
+    /// `attachment_states`）。为什么要有批量这一条：单 sha 版要开 N 个只读事务，
+    /// 而"打开一篇有几十张图的笔记"正是它最常被调到的场景。
+    ///
+    /// 语义与 `attachment_for_state` 逐字一致：没登记过的那一行回 `("absent","absent")`，
+    /// 且**每个请求的 sha 都要出现在返回里**（缺一个就意味着界面把它当成"没这个附件"）。
+    /// 顺序与去重后的输入顺序一致；空输入回空表。
+    pub fn attachment_states(&self, shas: &[String]) -> Vec<(String, String, String)> {
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let uniq: Vec<String> = shas
+            .iter()
+            .map(|s| s.as_str())
+            .filter(|s| !s.is_empty() && seen.insert(*s))
+            .map(String::from)
+            .collect();
+        if uniq.is_empty() {
+            return Vec::new();
+        }
+        self.with_read(|c| {
+            let mut stmt =
+                c.prepare("SELECT local_state, remote_state FROM attachments WHERE sha256 = ?1")?;
+            let mut out = Vec::with_capacity(uniq.len());
+            for sha in &uniq {
+                let pair = stmt
+                    .query_row([sha.as_str()], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                    })
+                    .optional()?;
+                let (local, remote) = pair.unwrap_or_else(|| ("absent".into(), "absent".into()));
+                out.push((sha.clone(), local, remote));
+            }
+            Ok(out)
+        })
+        .unwrap_or_else(|_| {
+            uniq.into_iter()
+                .map(|s| (s, "absent".into(), "absent".into()))
+                .collect()
+        })
+    }
+
     pub fn blob_path(&self, sha256: &str) -> PathBuf {
         blob_path(&self.paths.attachments, sha256)
     }

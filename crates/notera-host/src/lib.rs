@@ -870,6 +870,29 @@ impl App {
         Ok(self.inner.store.stats()?.into())
     }
 
+    /// 编辑器打开一篇笔记时，一次问清"这篇引用的每个对象，本机账上到底是什么状态"。
+    ///
+    /// 为什么要有这一条：此前界面上只有图片那一支能表达"这份字节不在这台设备上"
+    /// （它靠的是"取字节失败 ⇒ 没有 URL ⇒ 画占位"这个副作用），而文件附件那颗芯片
+    /// 只认识**本次会话里刚上传过**的对象 —— 于是从别的设备同步过来、本机还没字节的附件
+    /// 画起来跟完好的一样，既不说明缺、也不给那两颗已存在的动作。
+    ///
+    /// 这里只**报账**，不替界面判断该显示哪句话：`local_state` / `remote_state` 的词汇
+    /// 与 `attachment_retry` 返回的那一对逐字相同（同一个 DTO），前端不许据此长第二台状态机。
+    pub fn attachment_states(&self, shas: &[String]) -> Result<Vec<AttachmentStateDto>, CmdError> {
+        Ok(self
+            .inner
+            .store
+            .attachment_states(shas)
+            .into_iter()
+            .map(|(sha256, local_state, remote_state)| AttachmentStateDto {
+                sha256,
+                local_state,
+                remote_state,
+            })
+            .collect())
+    }
+
     pub fn open_conflicts(&self) -> Result<Vec<ConflictDto>, CmdError> {
         let rows = self.inner.store.open_conflicts()?;
         rows.into_iter().map(|r| self.to_conflict_dto(r)).collect()
@@ -5731,6 +5754,62 @@ mod tests {
             "available",
             "别人的缺失不能牵连已存在的附件"
         );
+    }
+
+    /// 读侧那批附件状态位的**线上契约**：TS 那边按 `localState` / `remoteState` 读，
+    /// 名字漂了就是一片静默 undefined（本仓在 kind 词汇上漂过两次）。
+    /// 三条各钉一件事：问过的每个 sha 都要有回音（少一个界面就当"这附件不存在"）、
+    /// 没登记过的那行必须回 absent/absent（这是唯一哨兵）、以及键名逐字是 camelCase。
+    #[test]
+    fn attachment_states_answers_every_asked_sha_with_wire_camel_case_keys() {
+        let app = boot("att-states");
+        let known = notera_core::ContentHash::of(b"known-blob")
+            .as_str()
+            .replace("sha256:", "");
+        let ghost = notera_core::ContentHash::of(b"never-registered")
+            .as_str()
+            .replace("sha256:", "");
+        app.store()
+            .register_remote_attachment(&known, 10, "image/png")
+            .expect("登记一个已知附件");
+
+        let rep = commands::dispatch(
+            &app,
+            "attachment_states",
+            json!({ "shas": [known, ghost.clone(), known.clone(), ""] }),
+        )
+        .expect("attachment_states 必须存在（这条曾经只有前端在调，核心没有）");
+        let items = rep
+            .as_array()
+            .unwrap_or_else(|| panic!("要回一个数组：{rep:?}"));
+        assert_eq!(items.len(), 2, "去重 + 丢空串之后必须正好两个：{rep:?}");
+        for item in items {
+            let mut keys: Vec<String> = item.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            assert_eq!(
+                keys,
+                vec!["localState", "remoteState", "sha256"],
+                "键名要与 attachment_retry 那一个 DTO 逐字相同：{item:?}"
+            );
+        }
+        let by_sha: std::collections::HashMap<String, (String, String)> = items
+            .iter()
+            .map(|i| {
+                (
+                    i["sha256"].as_str().unwrap().to_string(),
+                    (
+                        i["localState"].as_str().unwrap().to_string(),
+                        i["remoteState"].as_str().unwrap().to_string(),
+                    ),
+                )
+            })
+            .collect();
+        assert_eq!(
+            by_sha[&ghost],
+            ("absent".into(), "absent".into()),
+            "没登记过的那个必须回那对唯一哨兵，而不是被静默省略"
+        );
+        assert!(by_sha.contains_key(&known), "登记过的那个要有回音");
     }
 
     /// SYNC-PROTOCOL §2：两个库指到同一个目录时必须**停手**，而不是把两库并成一库。

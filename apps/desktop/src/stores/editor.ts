@@ -103,10 +103,16 @@ export const useEditorStore = defineStore('editor', () => {
     blocks.value = docToBlocks(note.doc);
     // 图片块里的 `sha256` 只是内容键 —— 显示要另外把字节取回来变成 data URL。
     // 取不到就显示占位（INV：附件不阻塞正文），所以这里不 await、不抛错。
+    // 同时一次问清这篇引用到的每个对象在本机的账：文件附件那颗芯片不取字节（一颗芯片
+    // 的显示判据不该触发 32 MiB 读盘），它只能靠这本账说话。
+    const referenced: string[] = [];
     for (const block of blocks.value) {
       const sha = typeof block.attrs?.sha256 === 'string' ? block.attrs.sha256 : null;
-      if (sha && block.shape === 'image') void ensureAttachmentUrl(sha);
+      if (!sha) continue;
+      if (block.shape === 'image') void ensureAttachmentUrl(sha);
+      if (block.shape === 'image' || block.shape === 'attachment') referenced.push(sha);
     }
+    void fetchAttachmentLedger(referenced);
     dirty.value = false;
     saveState.value = 'idle';
     saveErrorKey.value = null;
@@ -403,6 +409,38 @@ export const useEditorStore = defineStore('editor', () => {
     return attachmentUrls.value[sha256] ?? null;
   }
 
+  /**
+   * 这台设备"有没有这份可用字节"的那本账（sha -> 核心回的那对状态位）。
+   *
+   * 为什么要有它：占位那句话的判据必须来自**真实存在的账**，而不是"这次会话上传过没有"。
+   * 只有后者时，从别的设备同步来、本机还没下载的附件画起来跟完好的一样 —— 既不说明缺，
+   * 也不给那两颗已经写好的动作（2026-10-06 记为 G74）。
+   */
+  const ledger = ref<Record<string, AttachmentLedgerState>>({});
+
+  /** 没问过 / 问不到都回 `null`。`null` 不等于"缺" —— 那是"未知"，界面此刻不该下结论。 */
+  function attachmentLedger(sha256: string | undefined): AttachmentLedgerState | null {
+    if (!sha256) return null;
+    return ledger.value[sha256] ?? null;
+  }
+
+  function rememberLedger(row: AttachmentLedgerState | null | undefined): void {
+    if (!row?.sha256) return;
+    ledger.value = { ...ledger.value, [row.sha256]: row };
+  }
+
+  /** 一次问一批（打开一篇笔记就一次）。去重放在这里，免得核心为同一个 sha 跑两遍。 */
+  async function fetchAttachmentLedger(shas: string[]): Promise<void> {
+    const uniq = [...new Set(shas.filter((sha) => sha.length > 0))];
+    if (uniq.length === 0) return;
+    try {
+      const rows = await callCommand<AttachmentLedgerState[]>(Commands.attachmentStates, { shas: uniq });
+      for (const row of rows ?? []) rememberLedger(row);
+    } catch {
+      // 问不到账就继续"未知"：拿一次桥的失败去告诉用户"你的附件没了"，比不说更坏。
+    }
+  }
+
   /** 同一个 sha 只取一次；取不到就保持没有 URL，让 UI 显示占位而不是错误。 */
   function ensureAttachmentUrl(sha256: string): Promise<void> {
     if (attachmentUrls.value[sha256]) return Promise.resolve();
@@ -434,6 +472,8 @@ export const useEditorStore = defineStore('editor', () => {
     if (!sha256) return null;
     try {
       const st = await callCommand<AttachmentLedgerState>(Commands.attachmentRetry, { sha256 });
+      // 核心刚把否定结论撤掉 ⇒ 那本账必须跟着改口，否则占位会继续说"缺"到下次打开为止。
+      rememberLedger(st);
       toasts.pushText(t('editor.attachmentRetryDone'), 'info');
       // 这一次意图会落成一条待办，徽标该立刻反映"还有事在做"
       void sync.syncNow();
@@ -454,6 +494,7 @@ export const useEditorStore = defineStore('editor', () => {
     if (!sha256) return null;
     try {
       const st = await callCommand<AttachmentLedgerState>(Commands.attachmentReupload, { sha256 });
+      rememberLedger(st);
       toasts.pushText(t('editor.attachmentReuploadDone'), 'info');
       void sync.syncNow();
       return st;
@@ -537,6 +578,7 @@ export const useEditorStore = defineStore('editor', () => {
     clearAttachRequest,
     attachmentState,
     attachmentUrl,
+    attachmentLedger,
     ensureAttachmentUrl,
     // 占位上的两个用户动作（「重试取回」/「重新上传本机这份」）
     retryAttachmentFetch,

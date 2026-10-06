@@ -338,6 +338,13 @@ pub struct AttachmentShaCmd {
     pub sha256: String,
 }
 
+/// `attachment_states` 的参数：一篇笔记引用到的那批内容键。
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentShasCmd {
+    pub shas: Vec<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewTextCmd {
@@ -636,6 +643,13 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
             let c: AttachmentDataCmd =
                 serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.attachment_data(&c.sha256)?)
+        }
+        // 编辑器读侧的"这台设备有没有这份字节"。批量、只读、不下载任何字节 ——
+        // 一颗芯片的显示判据不该触发一次 32 MiB 的读盘。
+        "attachment_states" => {
+            let c: AttachmentShasCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            j(app.attachment_states(&c.shas)?)
         }
         // 用户在坏图占位上点「重试取回」。为什么是一条命令而不是后台自己再试一次：
         // 后台对 `absent`/`error` 收手是**刻意的**（§27/§28 那两条保证句要的就是不每 20 s 空转），

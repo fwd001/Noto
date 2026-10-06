@@ -403,6 +403,9 @@ export const Commands = {
   // 坏图/坏附件占位上的两个用户动作。名字与载荷都是核心那两条命令的逐字契约。
   attachmentRetry: 'attachment_retry',
   attachmentReupload: 'attachment_reupload',
+  /** 读侧批量问账：这篇笔记引用的每个对象，本机到底有没有可用字节。只读账、不下载字节 ——
+   *  一颗芯片的显示判据不该触发一次 32 MiB 的读盘。 */
+  attachmentStates: 'attachment_states',
   stats: 'stats',
   syncNow: 'sync_now',
   configureAccount: 'configure_account',
