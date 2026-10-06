@@ -2079,6 +2079,30 @@ E2EE 那两本 `key_vault.rs`/`sealed_e2ee.rs` 的若干条）。
     `notera-desktop.exe` 仍在跑（不是我起的，没去动它），所以全量 clippy 那一支照旧要等那个窗口关掉。
 
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
+- **G75 桌面壳一个 capability 都没有：`§6` 那句"系统文件对话框已接插件"在界面上的实际后果是 0**（2026-10-06 查"要不要现在接导出选择器"时撞出来的；状态 = **待一次真壳运行来分辨**）
+  - 已经量到的三条事实：
+    ① 壳里注册了四个插件（`dialog` / `notification` / `shell` / `global-shortcut`，`src-tauri/src/lib.rs:188-193`），
+      但**全仓没有任何 capability**：`gen/schemas/capabilities.json` 是 `{}`、没有 `capabilities/` 目录、
+      `tauri.conf.json` 的 `app.security` 只有 `csp`。
+    ② 生成的 `gen/schemas/acl-manifests.json` 里 `dialog` 有 `allow-open` / `allow-save`、
+      `core:event` 有 `allow-listen` —— 也就是说这些命令名是**要授权才给用**的。
+    ③ 前端**一次都没碰过 plugin IPC**（`grep 'plugin:' apps/desktop/src` 零命中），
+      所以导入/导出仍然要用户手敲绝对路径（`SettingsView.vue:558` 那颗 `export-path` 输入框）。
+      这与 `PLATFORM.md` 对全局快捷键写的那条口径一致："只从 Rust 侧注册，前端不碰该插件 IPC，因此无需 capability" ——
+      对话框这一格也照这条走了，于是它就一直停在"插件在、入口没有"。
+  - **没证伪也没证到的那一条（记成假说，不当结论）**：前端 `api.listen('notera://event')` / `('notera://menu')`
+    在真壳里到底通不通。静态读 `tauri-2.12.0/src/ipc/authority.rs:462 resolve_access`，
+    命令必须出现在 `allowed_commands` 里才放行；而我在该 crate 的 `src/` 里找不到非插件命令的调用点，
+    所以"零 capability ⇒ `plugin:event|listen` 被拒（等于壳里事件回流一直是断的，dev/HTTP 那条却好着）"
+    这个说法**我没能证明，也没能排除**。它若为真，就是这批里最重的一条：界面只会因用户自己的动作而刷新。
+  - 为什么这一格现在合不上：我把自建壳指向隔离数据目录（`NOTERA_DATA_DIR`，不碰任何真库）起过一次，
+    WebView2 创建失败 `HRESULT(0x8007139F)` —— 现场那台 `notera-desktop.exe`（PID 155068，**不是我起的**）
+    占着同一个 WebView2 user-data 目录（那个目录按应用 identifier 分，不看 `NOTERA_DATA_DIR`）。
+    按"只按 PID 杀自己起的进程"这条口径我没去关它，探针产物已清掉。
+  - 关闭动作（等那台窗口空出来，两分钟的事）：起自建壳 + `--remote-debugging-port` 连 CDP，
+    直接问一次 `plugin:event|listen` 被不被拒 ⇒ 若拒，补一份 capability（`core:default` + 按需 `dialog:default`）
+    并把"浏览…"入口一并接上；若不拒，就把 §6 那格改口成"只差一个入口，权限已可用"。
+    **在分辨之前不许画那颗按钮** —— 画一颗点了没反应的按钮正是这个项目反复记为缺陷的形状。
 - **G70 导出那一排还按"深度"缩进，与侧栏的"只有一层"口径不一致**（2026-10-05 扫 ⑱ 那批时从截图里看见；状态 = **待拍板**）
   - 事实：`SettingsView` 的导出文件夹清单是全站唯一还读 `f.depth` 的地方（`paddingLeft: 0.5 + depth*0.75rem`），
     而侧栏在 9b11374 已经拍平成一层（第 ⑨ 腿钉的就是那个形状）⇒ 同一份 `folders.flat`，
