@@ -691,7 +691,7 @@ function jumpTo(id: string): void {
 
 .folder-pick {
   margin-top: 0.25rem;
-  border-left: 2px solid var(--line);
+  border-left: 2px solid var(--border-subtle);
   padding-left: 0.25rem;
 }
 

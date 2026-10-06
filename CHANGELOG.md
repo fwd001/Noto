@@ -2010,6 +2010,27 @@ E2EE 那两本 `key_vault.rs`/`sealed_e2ee.rs` 的若干条）。
     而 fixed 在 `.app-dialog__scrim` 与居中包层上、面板本来就是 static ⇒ **红的是判据不是产品**。
     换成三条设计无关的事实（在侧栏之外 / 盖在最上面 / 遮罩 fixed）后，判据才在说"它是全局悬浮层"这句话。
 
+### 修复（2026-10-06 这批：0.0.74 → 0.0.75）
+
+- **G73 导出文件夹清单左边那条竖线，从来没画出来过**（第 ④ 条那一片界面；做 token 交接核对时撞出来的）
+  - 事实：`SettingsView.vue` 的 `.folder-pick` 写的是 `border-left: 2px solid var(--line)`，而
+    **`--line` 在整个前端没有任何定义、也没有兜底值**。CSS 规范里这叫"computed value 阶段无效"⇒ 整条声明
+    按 initial 处理，`border-left-style` 回到 `none`。所以这处"看着是走 token 体系的写法"其实**一个像素都没画**。
+  - 真浏览器读数（127.0.0.1:5173，勾上"按范围导出"之后量 `[data-testid="export-folder-list"]`）：
+    修之前 `{borderLeftStyle:"none", borderLeftWidth:"0px", --line:"(empty)"}`；
+    修之后 `{borderLeftStyle:"solid", borderLeftWidth:"1.6px", clientLeft:2, color:rgb(213,219,228) = var(--border-subtle)}`。
+  - 修法：换成体系里本来就有的 `--border-subtle`。**没有**新增一个 `--line` 令牌去迁就这处笔误 ——
+    那个名字在别处没有任何消费者。
+  - 真正值钱的是那条**通判据**（`tokens.spec.ts` 新增一节）：界面里每一个 `var(--x)` 都必须真有出处。
+    三条子判据：① 消费侧与定义侧各自先验样本量（>40 且必须扫到 `--bg-pane` / `--space-2` 这两个已知点），
+    否则"零孤儿"是空转；② 无兜底的未定义引用一律红（那才是"什么都画不出来"这一族）；
+    ③ **带兜底的未定义引用单独记一笔** —— 它不会红，但兜底值会静默取代 token，换主题时那一处就不再跟着走。
+  - 牙证过，红得恰好且两条臂各自独立：塞 `border-top: 1px solid var(--g73-bogus)` ⇒ 只有第②条红；
+    再塞 `outline-color: var(--g73-bogus-fb, red)` ⇒ 只有第③条红。两处都在时各报各的，属性与文件都点名到位。
+  - **顺带记一次仪器自己的假红**：第一版我没抹注释，`editor/dom.ts` 里那句散文
+    （"渲染成 `var(--ink-*)`"）被当成一次真引用 ⇒ 报出一个根本不存在的孤儿令牌。
+    抹掉 `/* */` 与整行 `//` 之后红只剩 `--line` 那一条真的。**红先分清是产品红还是判据红**（同 [[verify-the-instrument-before-the-verdict]]）。
+
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
 - **G70 导出那一排还按"深度"缩进，与侧栏的"只有一层"口径不一致**（2026-10-05 扫 ⑱ 那批时从截图里看见；状态 = **待拍板**）
   - 事实：`SettingsView` 的导出文件夹清单是全站唯一还读 `f.depth` 的地方（`paddingLeft: 0.5 + depth*0.75rem`），
