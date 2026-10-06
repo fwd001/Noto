@@ -61,9 +61,10 @@ const MESSAGES: Record<MessageKey, string> = {
   'editor.untitled': '无标题',
   'editor.pane': '笔记正文',
   'editor.placeholder': '请输入标题和正文',
-  'editor.saved': '已保存',
-  'editor.saving': '保存中',
-  'editor.unsaved': '未保存',
+  // §4.1 保存四格的文案（措辞按规范原话：说清"东西在哪、稳不稳"，不用"已保存"这种状态词糊过去）
+  'editor.saved': '已存在本机',
+  'editor.saving': '正在保存',
+  'editor.unsaved': '还有改动没存',
   'editor.readOnly': '只读',
   'editor.staleTitle': '这条笔记在别处被改动了',
   'editor.staleBody': '为避免覆盖，已显示对方版本。你的改动仍保留在下方，可自行取舍。',

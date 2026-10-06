@@ -67,12 +67,32 @@ export const useEditorStore = defineStore('editor', () => {
     if (inTrash.value) return 'inTrash';
     return null;
   });
+  /**
+   * 保存这一格的**唯一派生值**：文案与图标都从它算，谁也不许自己再看一眼 `saveState`。
+   * 两处各推一遍迟早分叉 —— 分叉的读数就是"写着正在保存、画着虚线圆"。
+   * 顺序即优先级：§4.1 要求**失败那一行说得出具体原因**，所以它排在"还没存"之前。
+   * 老写法把 `dirty` 放在 error 前面，而 `dirty` 只有保存成功才清 —— 于是一轮真写被服务端
+   * 拒掉之后屏幕上永远是"还有改动没存"，那句原因根本不上屏（缺口 G79，
+   * 读数 `expected '未保存' to contain '服务器空间不足'`）。
+   */
+  const saveKind = computed<'saving' | 'dirty' | 'error' | 'saved' | null>(() => {
+    if (saveState.value === 'error') return 'error';
+    if (saveState.value === 'saving') return 'saving';
+    // `pending` 是"改动排在队里、还没出门"（自动保存那 1.2 秒的窗口）。把它算成"正在保存"
+    // 是**拿转圈冒充在飞**：这一格里请求根本没发出去，屏幕上却画着环形进度说"正在保存"。
+    // 第 ㉗ 腿采样整段序列时只读得到 saving、永远读不到 dirty，就是这么撞出来的（缺口 G81）。
+    if (saveState.value === 'pending' || dirty.value) return 'dirty';
+    if (lastSavedAt.value !== null) return 'saved';
+    return null;
+  });
   const saveLabel = computed(() => {
-    if (saveState.value === 'saving' || saveState.value === 'pending') return t('editor.saving');
-    if (dirty.value) return t('editor.unsaved');
-    if (saveState.value === 'error') return messageFor(saveErrorKey.value ?? 'error.sync_failed');
-    if (lastSavedAt.value !== null) return t('editor.saved');
-    return '';
+    switch (saveKind.value) {
+      case 'error': return messageFor(saveErrorKey.value ?? 'error.sync_failed');
+      case 'saving': return t('editor.saving');
+      case 'dirty': return t('editor.unsaved');
+      case 'saved': return t('editor.saved');
+      default: return '';
+    }
   });
   const hasDraftConflict = computed(() => localDraft.value !== null);
   const isEmpty = computed(() => blocks.value.length === 0);
@@ -163,12 +183,30 @@ export const useEditorStore = defineStore('editor', () => {
     return blocksToDoc(blocks.value, Math.min(docVersion.value, SUPPORTED_DOC_VERSION));
   }
 
-  function replaceBlocks(next: readonly EditorBlock[]): void {
-    if (writeBlocked.value) return;
+  /**
+   * 一套内容进门，**只有一处**决定"这算不算一次改动"（缺口 G80）。
+   *
+   * 探针复现出来的形状：contenteditable 在挂载/归一化时会自己发一次 input，那一发解析回来的
+   * 正文与库里逐字段相同（只差 `"attrs":{}` / `"marks":[]` 这种空位），却照样被标成 dirty ——
+   * 于是"换一篇"就把刚离开的那篇重写一遍。实测那一篇 `expectedRev=28`，也就是已经被这样
+   * 白写了 28 次；对端还会看到"这台设备改过它"。顺带 §4.1 的"正在保存"也在说谎：
+   * 那里面没有用户的改动在飞。
+   *
+   * 比较打在 `currentDoc()` 上而不是入参上：两边都过同一套归一化，空 `attrs` / 空 `marks`
+   * 这种"写法差别"才会互相抵掉。
+   */
+  function applyBlocks(next: readonly EditorBlock[]): void {
+    const before = JSON.stringify(currentDoc());
     blocks.value = next.map((block) => ({ ...block }));
+    if (JSON.stringify(currentDoc()) === before) return;
     dirty.value = true;
     saveState.value = 'pending';
     debouncedSave();
+  }
+
+  function replaceBlocks(next: readonly EditorBlock[]): void {
+    if (writeBlocked.value) return;
+    applyBlocks(next);
   }
 
   /** 单个块就地更新（保留其它块的 DOM 与 id）。 */
@@ -181,10 +219,7 @@ export const useEditorStore = defineStore('editor', () => {
       saveErrorKey.value = 'save_dropped';
       return;
     }
-    blocks.value = blocks.value.map((item) => (item.id === block.id ? { ...block } : item));
-    dirty.value = true;
-    saveState.value = 'pending';
-    debouncedSave();
+    applyBlocks(blocks.value.map((item) => (item.id === block.id ? { ...block } : item)));
   }
 
   function commitStructural(next: readonly EditorBlock[], focusId: string | null, caret = 0): void {
@@ -544,6 +579,7 @@ export const useEditorStore = defineStore('editor', () => {
     docVersion,
     dirty,
     saveState,
+    saveKind,
     saveLabel,
     saveErrorKey,
     loading,

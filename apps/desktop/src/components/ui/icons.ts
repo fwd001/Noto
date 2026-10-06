@@ -15,6 +15,8 @@
 export interface IconSpec {
   /** 描边路径（fill=none）。实心整形或点阵图标可以完全没有它。 */
   d?: string[];
+  /** 虚线描边路径（§4.1「有改动未落地」那一枚要的就是**虚线圆**，用 dasharray 画，不是猜四个弧）。 */
+  dashed?: string[];
   /** 实心小圆（拖拽把手那种点阵）。 */
   dots?: Array<[number, number]>;
   /** 需要填充的整形（已置顶的星标）。 */
@@ -28,10 +30,17 @@ export type IconName =
   | 'check' | 'drag-handle' | 'plus' | 'pencil' | 'chevron-down' | 'arrow-back'
   | 'indent-in' | 'indent-out' | 'trash' | 'warn' | 'rule'
   | 'list' | 'alert' | 'question' | 'menu' | 'settings' | 'undo' | 'redo'
+  | 'save-saving' | 'save-dirty' | 'save-saved' | 'save-failed'
   | 'win-min' | 'win-max' | 'win-restore' | 'close';
 
 /** 同步五格共用同一片云，只换内部徽标 —— 这样一眼看出是同步家族（§2.3）。 */
 const CLOUD = 'M6.4 15h7.3a3.1 3.1 0 0 0 .6-6.1A4.3 4.3 0 0 0 6 8.3a3.1 3.1 0 0 0 .4 6.7Z';
+
+/**
+ * 保存四格共用同一张纸（§2.2 的载体规则：**保存 → 文档**），只换纸里那枚徽标 ——
+ * 与云那一族同一个道理，一眼看出是"存盘"这一家四格，而不是四个互不相干的东西。
+ */
+const DOC = ['M5.8 3.4h4.6l3.8 3.8v9.4H5.8Z', 'M10.4 3.4v3.8h3.8'];
 
 export const ICONS: Record<IconName, IconSpec> = {
   'sync-synced': { d: [CLOUD, 'M7.9 11.1l1.5 1.5 2.8-2.9'] },
@@ -39,6 +48,12 @@ export const ICONS: Record<IconName, IconSpec> = {
   'sync-offline': { d: [CLOUD, 'M7.6 11.4l1.3 1.2 1.3-1.2 1.3 1.2'] },
   'sync-failed': { d: [CLOUD, 'M10 8.6v3', 'M10 13.4h.01'] },
   'sync-idle': { d: [CLOUD, 'M8 11.4h4'] },
+
+  // §4.1 保存四格：环形指示 / 虚线圆 / 实心勾 / 感叹号，都压在同一张纸上。
+  'save-saving': { d: [...DOC, 'M11.2 11.5a2.1 2.1 0 1 0-2.1-2.1'] },
+  'save-dirty': { d: DOC, dashed: ['M9.7 8.3a2.2 2.2 0 1 1 0 4.4 2.2 2.2 0 0 1 0-4.4'] },
+  'save-saved': { d: [...DOC, 'M7.7 11.1l1.4 1.4 2.7-2.8'] },
+  'save-failed': { d: [...DOC, 'M9.7 9.1v2.4', 'M9.7 13.3h.01'] },
 
   'pin-on': { solid: ['M10 3.6l2 4.1 4.5.6-3.3 3.1.8 4.5L10 13.8l-4 2.1.8-4.5-3.3-3.1 4.5-.6Z'] },
   'pin-off': { d: ['M10 3.9l1.9 3.9 4.3.6-3.1 3 .7 4.3-3.8-2-3.8 2 .7-4.3-3.1-3 4.3-.6Z'] },
@@ -75,8 +90,12 @@ export const ICONS: Record<IconName, IconSpec> = {
 export const CARRIERS: Record<string, IconName[]> = {
   cloud: ['sync-synced', 'sync-syncing', 'sync-offline', 'sync-failed', 'sync-idle'],
   star: ['pin-on', 'pin-off'],
-  document: ['attach-file'],
+  document: ['save-saving', 'save-dirty', 'save-saved', 'save-failed'],
   image: ['attach-image'],
+  // ⚠️ 附件那两颗也是"纸"，与保存那一族同载体 —— §2.2 的撞脸规则在这里其实是被破了的。
+  // 现在靠"纸里有没有徽标"分开（保存四格内部都有一枚状态徽标，附件这两颗没有），
+  // 真分开要等设计师的 SVG。单列一组是为了不让它混进 `document` 那条基形判据里。
+  attachment: ['attach-file'],
 };
 
 /**
@@ -90,4 +109,15 @@ export const SYNC_ICONS: Record<string, IconName> = {
   failed: 'sync-failed',
   // 未配置账户：静止那格。转不停的圈会被读成"正在忙"，而这里的事实是"没在同步"。
   idle: 'sync-idle',
+};
+
+/**
+ * 保存四格 → 图标。键是 `stores/editor.ts` 算出来的 `saveKind`（**不是** `saveState`）：
+ * 文案与图形必须读同一个派生值，否则会出现"写着正在保存、画着虚线圆"那种自相矛盾的读数。
+ */
+export const SAVE_ICONS: Record<string, IconName> = {
+  saving: 'save-saving',
+  dirty: 'save-dirty',
+  saved: 'save-saved',
+  error: 'save-failed',
 };

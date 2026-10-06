@@ -260,6 +260,101 @@ describe('写被挡下时不许静默', () => {
     expect(service.callsOf('edit_note')).toHaveLength(0);
   });
 
+  it('一轮真写被服务端拒掉时，右下角要说的是那句原因，不是"还有改动没存"（§4.1 失败那一行）', async () => {
+    stubLocalService({
+      edit_note: () => ({ ok: false, error: { code: 'quota_full', messageKey: 'error.quota_full', retryable: false } }),
+    });
+    const editor = useEditorStore();
+    editor.hydrate(asNote(noteFixture()));
+    // 改的是**已存在的那一块**（`updateBlock` 按 id 就地换；给一个不存在的 id 会被 G80 那道
+    // "内容没变就别写"的门直接挡掉，那样量的就不是"被服务端拒掉"这一格了）。
+    editor.updateBlock({ ...editor.blocks[0], content: [{ text: '打进去却没被接受的正文' }] });
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(editor.dirty, '改动确实还没落地').toBe(true);
+    expect(editor.saveState).toBe('error');
+    expect(editor.saveLabel).toContain('服务器空间不足');
+    expect(editor.saveLabel, '失败的原因不许被"还没存"这句盖掉').not.toContain('还有改动没存');
+  });
+
+  it('内容逐字段没变的一次替换，不许标成"有改动没存"，也不许把那一发写出去（缺口 G80）', async () => {
+    // 复现出来的形状：contenteditable 在挂载/归一化时会自己触发一次 input，那一发的正文
+    // 与库里逐字段相同，却照样被标成 dirty —— 于是"换一篇"就把刚离开的那篇重写一遍，
+    // rev 白涨（实测 `expectedRev=28`，那一篇已经被这样白写过 28 次），对端还看到这台设备改过它。
+    const service = stubLocalService({ edit_note: () => noteFixture({ rev: 3 }) });
+    const editor = useEditorStore();
+    editor.hydrate(asNote(noteFixture({ content: [textBlock('paragraph', [{ text: '原样的一段' }])] })));
+    await vi.advanceTimersByTimeAsync(3000);
+    const sent = service.callsOf('edit_note').length;
+
+    editor.replaceBlocks(editor.blocks.map((b) => ({ ...b })));
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(editor.dirty, '没改东西不该说"还有改动没存"').toBe(false);
+    expect(service.callsOf('edit_note'), '没改东西不该发那一写').toHaveLength(sent);
+  });
+
+  it('正对照：内容真的变了，那一发照发（上面那条不许把保存一起关掉）', async () => {
+    const service = stubLocalService({ edit_note: () => noteFixture({ rev: 4 }) });
+    const editor = useEditorStore();
+    editor.hydrate(asNote(noteFixture({ content: [textBlock('paragraph', [{ text: '原样的一段' }])] })));
+    await vi.advanceTimersByTimeAsync(3000);
+    const sent = service.callsOf('edit_note').length;
+
+    editor.replaceBlocks([textBlock('paragraph', [{ text: '原样的一段，后面加了字' }])]);
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(service.callsOf('edit_note').length).toBeGreaterThan(sent);
+    expect(editor.dirty).toBe(false);
+  });
+
+  it('就地改单个块但内容逐字段没变（DOM 自己发的那次 input）：不许标 dirty、不许发那一写', async () => {
+    // 这一条才是浏览器里真正的那条路：`RichEditor.onInput` 走的是 `updateBlock`，不是
+    // `replaceBlocks`。上一版只钉了 `replaceBlocks`，于是**单测全绿而浏览器照写**
+    // —— 同一族规则有两个入口时，两个入口都要钉（见 [[verify-the-call-edge-not-just-the-callees-tests]]）。
+    const service = stubLocalService({ edit_note: () => noteFixture({ rev: 3 }) });
+    const editor = useEditorStore();
+    editor.hydrate(asNote(noteFixture({ content: [textBlock('paragraph', [{ text: '原样的一段' }])] })));
+    await vi.advanceTimersByTimeAsync(3000);
+    const sent = service.callsOf('edit_note').length;
+    const same = editor.blocks.map((b) => ({ ...b }));
+
+    editor.updateBlock(same[0]);
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(editor.dirty, '没改东西不该说"还有改动没存"').toBe(false);
+    expect(service.callsOf('edit_note'), '没改东西不该发那一写').toHaveLength(sent);
+  });
+
+  it('正对照：就地真的改一个字，那一发照发', async () => {
+    const service = stubLocalService({ edit_note: () => noteFixture({ rev: 4 }) });
+    const editor = useEditorStore();
+    editor.hydrate(asNote(noteFixture({ content: [textBlock('paragraph', [{ text: '原样的一段' }])] })));
+    await vi.advanceTimersByTimeAsync(3000);
+    const sent = service.callsOf('edit_note').length;
+    const edited = { ...editor.blocks[0], content: [{ text: '原样的一段啊' }] };
+
+    editor.updateBlock(edited);
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(service.callsOf('edit_note').length).toBeGreaterThan(sent);
+  });
+
+  it('排在队里、还没出门的那 1.2 秒，不许说"正在保存"（缺口 G81）', () => {
+    // 撞出来的过程：第 ㉗ 腿在页面里按 50ms 采样整段状态序列，结果只读得到 saving、
+    // 永远读不到 dirty —— 因为 `pending`（debounce 排队中）被算成了"正在保存"，
+    // 而那 1.2 秒里请求根本没发出去。拿转圈冒充在飞，与"没配账户却在转"是同一族。
+    stubLocalService({ edit_note: () => noteFixture({ rev: 3 }) });
+    const editor = useEditorStore();
+    editor.hydrate(asNote(noteFixture({ content: [textBlock('paragraph', [{ text: '原样的一段' }])] })));
+    editor.updateBlock({ ...editor.blocks[0], content: [{ text: '原样的一段啊' }] });
+
+    expect(editor.saveState, '这一发还排在 debounce 里').toBe('pending');
+    expect(editor.saveKind).toBe('dirty');
+    expect(editor.saveLabel).toContain('还有改动没存');
+    expect(editor.saveLabel).not.toContain('正在保存');
+  });
+
   it('就绪之后同样的写入照常落库（错误态不是常态化的挡路）', async () => {
     const service = stubLocalService({ edit_note: () => noteFixture({ rev: 2 }) });
     const editor = useEditorStore();

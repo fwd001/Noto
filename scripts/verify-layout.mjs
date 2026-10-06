@@ -56,6 +56,8 @@
  *  ㉖ §4.9 交互状态规格：按钮四变体 × 五状态（胶囊圆角、主按钮实心 --ink、按下 scale(0.97)、
  *     悬停 +6% 亮度、禁用 0.45、危险只换字与描边）、输入框"只读 ≠ 错误"两档各量各的、
  *     Toast 底部居中 ≤520 只染边框且带一颗点得着的「知道了」。
+ *  ㉗ §4.1 保存四格（route 按住 edit_note 把"正在保存"停在屏幕上读；放成 400 读"原因上不上屏"，
+ *     即缺口 G79 那一格），并回库里读一遍确认"已存在本机"说的是事实。
  *
  * 前置（脚本不管，由调用方起）：
  *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
@@ -2296,6 +2298,156 @@ function contrastRatio(fg, bg) {
   await sctx.close();
   await cmd('purge_note', { id: made.id });
   await purgeByTitle(MARK);
+}
+
+/**
+ * ㉗ §4.1 保存四格：正在保存 / 有改动没存 / 已存在本机 / 失败（必须带具体原因）。
+ *
+ * 四格全部走**真的一次保存往返**量出来：`edit_note` 那一发用 route 拦下来 ——
+ * 按住不放才能把"正在保存"这一格停在屏幕上读（它天然只有几百毫秒的窗口，不拦就量不到），
+ * 放成 400 才能量"那句原因上不上屏"（缺口 G79 的形状：被拒之后屏幕上说的是"还有改动没存"）。
+ * 这一腿刻意**不判 console 零错** —— 400 那个回包是注入的，浏览器自己会记一条资源错误，
+ * 那条不是产品的问题（判据把环境噪音算成缺陷，下一轮就没人信这条腿了）。
+ */
+{
+  const MARK2 = '保存状态夹具';
+  const wctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const wp = await wctx.newPage();
+  let mode = 'hold';
+  let release = null;
+  await wp.route('**/cmd/edit_note', async (route) => {
+    if (mode === 'hold') await new Promise((resolve) => { release = resolve; });
+    if (mode === 'fail') {
+      return route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 'quota_full', messageKey: 'error.quota_full', retryable: false }),
+      });
+    }
+    return route.continue();
+  });
+  await wp.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await wp.waitForSelector('[data-testid="folder-row"]', { timeout: 15000 });
+
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: { v: 1, content: [{ id: `sv${stamp}`, type: 'paragraph', content: [{ text: `${MARK2} 原文` }] }] },
+  });
+  await wp.click(`[data-testid="note-row-${made.id}"]`);
+  await wp.waitForSelector('.nb-block .nb-content', { timeout: 15000 });
+  await wp.waitForTimeout(600);
+
+  const cell = () => wp.evaluate(() => {
+    const el = document.querySelector('[data-testid="save-state"]');
+    if (!el) return { missing: true };
+    const g = el.querySelector('svg');
+    const tok = (n) => {
+      const p = document.createElement('span');
+      p.style.color = `var(${n})`;
+      document.body.appendChild(p);
+      const v = getComputedStyle(p).color;
+      p.remove();
+      return v;
+    };
+    return {
+      kind: el.getAttribute('data-save-state'),
+      text: el.textContent.replace(/\s+/g, '').trim(),
+      icon: g?.getAttribute('data-icon') ?? '',
+      spin: g ? getComputedStyle(g).animationName : '',
+      anims: g ? g.getAnimations().length : -1,
+      color: getComputedStyle(el).color,
+      t: { ok: tok('--ok'), danger: tok('--danger'), body: tok('--body'), mute: tok('--mute') },
+    };
+  });
+
+  // 「有改动没存」这一格天然只活到那一发出门之前（自动保存 1.2s，而六个字的敲入本身就要几百毫秒），
+  // 所以"敲完再读一次"是会读空的 —— 上一版就是这么读成 `saving` 的。
+  // 改成**在页面里按 50ms 采样整段序列**，再按状态取第一帧：既证明这一格真的渲染过，
+  // 也顺手钉住"dirty 在 saving 之前"这个次序（次序错了就是"用户还没打完就说在保存"）。
+  await wp.evaluate(() => {
+    const tok = (n) => {
+      const p = document.createElement('span');
+      p.style.color = `var(${n})`;
+      document.body.appendChild(p);
+      const v = getComputedStyle(p).color;
+      p.remove();
+      return v;
+    };
+    window.__tok = { ok: tok('--ok'), danger: tok('--danger'), body: tok('--body'), mute: tok('--mute') };
+    window.__seq = [];
+    const tick = () => {
+      const el = document.querySelector('[data-testid="save-state"]');
+      if (!el) {
+        window.__seq.push(null);
+        return;
+      }
+      const g = el.querySelector('svg');
+      window.__seq.push({
+        kind: el.getAttribute('data-save-state'),
+        icon: g ? g.getAttribute('data-icon') : '',
+        text: (el.textContent || '').replace(/\s+/g, ''),
+        color: getComputedStyle(el).color,
+        spin: g ? getComputedStyle(g).animationName : '',
+        anims: g ? g.getAnimations().length : -1,
+      });
+    };
+    window.__seqTimer = setInterval(tick, 50);
+    tick();
+  });
+  await wp.dblclick('.nb-block .nb-content', { position: { x: 14, y: 8 } });
+  await wp.keyboard.type(' 打进去的字');
+  await wp.waitForTimeout(1700);
+  const seq = await wp.evaluate(() => {
+    clearInterval(window.__seqTimer);
+    return window.__seq;
+  });
+  const dirty = seq.find((s) => s && s.kind === 'dirty') ?? { missing: 'dirty' };
+  const saving = seq.find((s) => s && s.kind === 'saving') ?? { missing: 'saving' };
+  const order = seq.findIndex((s) => s && s.kind === 'dirty');
+  const orderSaving = seq.findIndex((s) => s && s.kind === 'saving');
+  const tok = await wp.evaluate(() => window.__tok);
+
+  check('㉗ 样本量：这一段采样真的抓到了两格各自的**第一帧**（否则下面全是空判据）',
+    dirty.missing === undefined && saving.missing === undefined, JSON.stringify({ kinds: [...new Set(seq.filter(Boolean).map((s) => s.kind))] }));
+  check('㉗ 打了字、那一发还没出门：这一格是「还有改动没存」+ 虚线圆，而且它排在"正在保存"**之前**（§4.1 第二行）',
+    dirty.kind === 'dirty' && dirty.icon === 'save-dirty' && dirty.text.includes('还有改动没存')
+      && dirty.color === tok.body && dirty.spin === 'none' && order >= 0 && order < orderSaving,
+    JSON.stringify({ dirty, order, orderSaving }));
+  check('㉗ 那一发在飞（route 按住）：这一格是「正在保存」+ 环形指示，而且**真的在转**（getAnimations 抓到动画对象）',
+    saving.kind === 'saving' && saving.icon === 'save-saving' && saving.text.includes('正在保存')
+      && saving.spin !== 'none' && saving.anims > 0,
+    JSON.stringify(saving));
+
+  mode = 'fail';
+  if (release) release();
+  await wp.waitForTimeout(700);
+  const failed = await cell();
+  check('㉗ 那一发被服务端拒掉：屏幕上必须是**那句具体原因**，不是"还有改动没存"（缺口 G79）',
+    failed.kind === 'error' && failed.icon === 'save-failed'
+      && failed.text.includes('服务器空间不足') && !failed.text.includes('还有改动没存') && failed.color === failed.t.danger,
+    JSON.stringify(failed));
+
+  mode = 'pass';
+  await wp.keyboard.type(' 再打一次');
+  await wp.waitForTimeout(2600); // 等这一发真的走完（debounce + 往返）
+  const saved = await cell();
+  const stored = await cmd('get_note', { id: made.id });
+  const landed = JSON.stringify(stored).includes('再打一次');
+  check('㉗ 这一发成功了：「已存在本机」+ 实心勾 + --ok（§4.1 第三行）',
+    saved.kind === 'saved' && saved.icon === 'save-saved' && saved.text.includes('已存在本机') && saved.color === saved.t.ok,
+    JSON.stringify(saved));
+  check('㉗ 界面说"已存在本机"的时候，**库里真的有这些字**（文案与落库对得上，不是自我声明）',
+    landed === true, JSON.stringify({ landed }));
+  check('㉗ 静止那三格绝不像在忙：dirty / error / saved 三格里 animation-name 都是 none（§2.3 同一条规矩）',
+    [dirty, failed, saved].every((s) => s.spin === 'none'), JSON.stringify([dirty.spin, failed.spin, saved.spin]));
+  check('㉗ 四格两两不同（同一条基形只换徽标，但**状态必须互相分得开**）',
+    new Set([dirty, saving, failed, saved].map((s) => `${s.icon}|${s.text}|${s.color}`)).size === 4,
+    JSON.stringify([dirty, saving, failed, saved].map((s) => [s.icon, s.text, s.color])));
+
+  notes.push(`     保存四格实测：${[dirty, saving, failed, saved].map((s) => `${s.icon}/${s.text}`).join(' → ')}`);
+  await wp.screenshot({ path: `${OUT}/41-save-states-1440.png` });
+  await wctx.close();
+  await cmd('purge_note', { id: made.id });
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */

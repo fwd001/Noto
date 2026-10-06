@@ -45,6 +45,7 @@ import type { Inline } from '../api/types';
 import { t, type MessageKey } from '../i18n';
 import { attachmentNotice } from '../editor/attachmentNotice';
 import AppIcon from './ui/AppIcon.vue';
+import { SAVE_ICONS, type IconName } from './ui/icons';
 
 const MARK_KINDS = ['bold', 'italic', 'underline', 'strike', 'code', 'highlight', 'link', 'fontSize', 'color'] as const;
 
@@ -69,6 +70,9 @@ function attrInRange(content: readonly Inline[], start: number, end: number, kin
 }
 
 const store = useEditorStore();
+
+/** 保存那一格的图形：与文案同读 `store.saveKind`（表在 `ui/icons.ts`，四格共用一张纸这个载体）。 */
+const saveIcon = computed<IconName>(() => SAVE_ICONS[store.saveKind ?? ''] ?? 'save-saved');
 const shell = useShellStore();
 
 const docEl = ref<HTMLElement | null>(null);
@@ -829,7 +833,20 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
 
     <div class="editor-corner">
       <span class="text-sm text-muted">{{ charCount }}</span>
-      <span class="text-sm" :data-save-state="store.saveState">{{ store.saveLabel }}</span>
+      <span
+        v-if="store.saveKind"
+        class="editor-corner__save"
+        :data-save-state="store.saveKind"
+        data-testid="save-state"
+      >
+        <AppIcon
+          class="editor-corner__glyph"
+          :name="saveIcon"
+          :size="16"
+          :data-spin="store.saveKind === 'saving' ? 'true' : 'false'"
+        />
+        <span class="text-sm">{{ store.saveLabel }}</span>
+      </span>
       <button v-if="!readOnly && currentBlock" type="button" class="btn btn--quiet text-sm" :title="t('editor.deleteBlock')" @click="onDeleteBlock">
         {{ t('editor.deleteBlock') }}
       </button>
@@ -900,9 +917,13 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
   min-height: var(--touch);
 }
 
-.editor-corner [data-save-state='saving'],
-.editor-corner [data-save-state='pending'] {
+.editor-corner [data-save-state='saving'] {
   color: var(--mute);
+}
+
+/* 「还有改动没存」是一句事实，不是警告也不是错误 —— 用 --body，别抢 error 那格的注意力。 */
+.editor-corner [data-save-state='dirty'] {
+  color: var(--body);
 }
 
 .editor-corner [data-save-state='error'] {
@@ -911,6 +932,19 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
 
 .editor-corner [data-save-state='saved'] {
   color: var(--ok);
+}
+
+/* §4.1 那一格：图形与文字读同一个派生值（`saveKind`），所以它俩不会各说各话。 */
+.editor-corner__save {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* §1.6 / §2.3 同一条规矩：四格里**只有"正在保存"会动**。 */
+.editor-corner__glyph[data-spin='true'] {
+  animation: sync-spin 1.4s linear infinite;
+  transform-origin: 50% 50%;
 }
 
 /* 浮动选区条：fixed 定位（坐标按视口算），层级压在正文与侧栏之上 */

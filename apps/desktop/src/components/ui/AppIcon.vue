@@ -42,6 +42,17 @@ const stroke = computed(() => Number((props.size / 20 * 1.75).toFixed(2)));
     >
       <path v-for="(d, i) in spec.d" :key="`p${i}`" :d="d" />
     </g>
+    <!-- 虚线那一组：dash 长度写在 viewBox 单位里，所以它跟着尺寸一起缩放，不需要按 size 换算。 -->
+    <g
+      v-if="spec.dashed?.length"
+      stroke="currentColor"
+      :stroke-width="stroke"
+      stroke-dasharray="1.7 1.7"
+      stroke-linecap="round"
+      fill="none"
+    >
+      <path v-for="(d, i) in spec.dashed" :key="`d${i}`" :d="d" />
+    </g>
     <g fill="currentColor" stroke="none">
       <path v-for="(d, i) in spec.solid ?? []" :key="`s${i}`" :d="d" />
       <circle v-for="(c, i) in spec.dots ?? []" :key="`c${i}`" :cx="c[0]" :cy="c[1]" :r="stroke" />

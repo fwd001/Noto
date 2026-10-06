@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CARRIERS, ICONS } from './components/ui/icons';
 
 /**
  * §2 的门禁：**图标一律 SVG，不许再用 Unicode 字形顶替**。
@@ -67,4 +68,20 @@ describe('§2 图标必须是 SVG，不许是 Unicode 字形', () => {
   it('界面上没有任何一个位置在用 Unicode 字形当图标', () => {
     expect(violations, `还有 ${violations.length} 处：\n${violations.join('\n')}`).toEqual([]);
   });
+});
+
+/**
+ * §2.2 / §2.3 的载体规则里那句可机检的话：**同一家族共享同一条基形，只换内部徽标**。
+ * 规范给的理由是"v1 用'圆圈 + 符号'画了同步五格和保存三态，两枚撞脸，用户以为是同一个东西"。
+ * 这条判据守的就是"撞脸别再回来"：谁往云那一组里塞一条不一样的轮廓，这里就红。
+ */
+describe('§2.2 载体：同一家族必须共享同一条基形', () => {
+  for (const group of ['cloud', 'document']) {
+    it(`「${group}」那一组共享同一条基形路径`, () => {
+      const names = CARRIERS[group] ?? [];
+      expect(names.length, `${group} 组不足 3 枚，这条判据会空转`).toBeGreaterThanOrEqual(3);
+      const bases = new Set(names.map((n) => (ICONS[n].d ?? [])[0]));
+      expect(bases.size, `${group} 组里出现了 ${bases.size} 条不同的基形`).toBe(1);
+    });
+  }
 });

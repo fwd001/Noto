@@ -82,15 +82,20 @@ function selectTrash(): void {
     </div>
 
     <div class="side-nav">
+      <!-- §2.4 导航与组织那一组：这三行以前只有文字。图标不替文字说话（读屏与搜索都靠这行字），
+           它管的是"扫一眼就知道这三行是同一类东西"。 -->
       <button type="button" class="nav-btn" :data-active="shell.view === 'workspace' && notes.mode.kind === 'all' ? 'true' : 'false'" data-testid="nav-all" @click="selectAll">
+        <AppIcon :size="18" name="list" />
         <span>{{ t('sidebar.allNotes') }}</span>
         <span v-if="allCount" class="nav-btn__count">{{ allCount }}</span>
       </button>
       <button type="button" class="nav-btn" :data-active="shell.view === 'workspace' && notes.mode.kind === 'trash' ? 'true' : 'false'" data-testid="nav-trash" @click="selectTrash">
+        <AppIcon :size="18" name="trash" />
         <span>{{ t('sidebar.trash') }}</span>
         <span v-if="trashCount" class="nav-btn__count">{{ trashCount }}</span>
       </button>
       <button type="button" class="nav-btn" :data-active="shell.view === 'conflicts' ? 'true' : 'false'" data-testid="nav-conflicts" @click="shell.goto('conflicts')">
+        <AppIcon :size="18" name="warn" />
         <span>{{ t('conflict.title') }}</span>
         <span v-if="conflicts.count > 0" class="nav-btn__count nav-btn__count--warn">{{ t('conflict.count', { count: conflicts.count }) }}</span>
       </button>
@@ -140,7 +145,8 @@ function selectTrash(): void {
 
     <div class="side-foot safe-bottom">
       <button type="button" class="nav-btn" :data-active="shell.view === 'settings' ? 'true' : 'false'" data-testid="nav-settings" @click="shell.goto('settings')">
-        {{ t('settings.title') }}
+        <AppIcon :size="18" name="settings" />
+        <span>{{ t('settings.title') }}</span>
       </button>
       <!-- §3.2：同一行给本地库读数（东西在哪、有多大）。没问到就整行不出现，不画"— · —"那种空壳。 -->
       <span v-if="libraryReadout" class="side-foot__readout" data-testid="library-readout">{{ libraryReadout }}</span>
