@@ -1,74 +1,186 @@
 /* =========================================================================
-   Design token：全部颜色 / 间距 / 圆角 / 阴影 / 字号 / 动效只从这里出。
-   组件内禁止硬编码颜色（PLATFORM.md §11）。
-   两套主题的正文对比度均 ≥ 7:1（WCAG AAA），可点击目标 ≥ 44px。
+   Design token（v2 · 2026-10-05 设计稿 `Noto-界面设计规范.md` §1）
+   全部颜色 / 间距 / 圆角 / 高度 / 动效只从这里出；组件内禁止硬编码颜色。
+   对比度按设计稿 §1.1 的六组配色独立复算过，与文档表格逐位一致（见 tokens.spec.ts）：
+     ink/canvas 17.44·16.11｜body/canvas 8.79·10.39｜mute/canvas 5.44·6.27
+     accent/canvas 8.69·8.39｜mute/sunken 4.56·5.34｜on-accent/accent 8.69·8.52
+   触摸目标 ≥44px；两套主题键名必须完全一致（只换值）。
    ========================================================================= */
 
 :root,
 [data-theme='light'] {
-  /* 面 */
-  --bg-canvas: #eef1f6;
-  --bg-pane: #ffffff;
-  --bg-raised: #ffffff;
-  --bg-sunken: #f4f6fa;
-  --bg-hover: #e9edf4;
-  --bg-active: #dde4ef;
-  --bg-overlay: rgba(16, 20, 27, 0.44);
-  --bg-code: #f2f4f8;
-  --bg-highlight: #ffe9a8;
-  --bg-unknown: #eef0f3;
-  --bg-skeleton: #e3e8f0;
+  /* 面（§1.1：canvas 正文底 / surface 侧栏与标题栏 / sunken 搜索框与选中行 / hover 行悬停） */
+  --canvas: #ffffff;
+  --surface: #f6f5f2;
+  --sunken: #edebe6;
+  --hover: #eff0f1;
+  --line: #ddd9d2;
 
   /* 文字 */
-  --text-primary: #14181f;
-  --text-secondary: #3b4554;
-  --text-muted: #5c6675;
-  --text-inverse: #ffffff;
-  --text-link: #1f4fa3;
-  --text-on-accent: #ffffff;
-
-  /* 线 */
-  --border-subtle: #d5dbe4;
-  --border-strong: #aab3c0;
-  --border-focus: #1f4fa3;
+  --ink: #1a1a17;
+  --body: #4b4b44;
+  --mute: #6b6a62;
 
   /* 语义色 */
-  --accent: #1f4fa3;
-  --accent-soft: #dfe8f7;
-  --success: #14683f;
-  --warn: #8a4a05;
-  --danger: #a3121f;
-  --danger-soft: #fbe4e6;
-  --sync-idle: #5c6675;
-
-  /* 笔记正文的"文字颜色"（编辑器里那五颗）。存语义名、渲染成 var(--ink-*) ⇒
-     用户在浅色里选的深红，换到深色主题不会糊成一片。
-     对比度实测（WCAG，vs 面板 #ffffff）：红 6.64 / 橙 5.25 / 绿 5.38 / 蓝 7.76 / 紫 7.83，
-     最差的橙色 vs 画布 #eef1f6 也有 4.64:1 —— 全部 ≥ AA 正文的 4.5。 */
-  --ink-red: #b3202f;
-  --ink-orange: #a8560b;
-  --ink-green: #1e7a3c;
-  --ink-blue: #1f4fa3;
-  --ink-violet: #6b2fb3;
-
-  /* 阴影 */
-  --shadow-1: 0 1px 2px rgba(18, 24, 33, 0.08);
-  --shadow-2: 0 2px 8px rgba(18, 24, 33, 0.1);
-  --shadow-3: 0 12px 32px rgba(18, 24, 33, 0.16);
-  --ring: 0 0 0 2px rgba(31, 79, 163, 0.55);
+  --accent: #24469a;
+  --on-accent: #ffffff;
+  --danger: #b3261e;
+  --warn: #8a5000;
+  --ok: #1f6b45;
 
   color-scheme: light;
 }
 
-[data-theme='dark'],
-.theme-dark {
+[data-theme='dark'] {
+  --canvas: #141417;
+  --surface: #1c1c20;
+  --sunken: #232327;
+  --hover: #2c2c2c;
+  --line: #343434;
+
+  --ink: #f1f0eb;
+  --body: #c4c3ba;
+  --mute: #98978f;
+
+  --accent: #8aaeff;
+  --on-accent: #0d1220;
+  --danger: #f98d80;
+  --warn: #f0b849;
+  --ok: #7fd8a4;
+
+  color-scheme: dark;
+}
+
+/* =========================================================================
+   与主题无关的量（§1.2 间距 4px 网格 / §1.3 圆角只有三种 / §1.4 控件高度 /
+   §1.5 字号行高 / §1.6 动效 / §3 版心）
+   ========================================================================= */
+
+:root {
+  /* 字体：一律系统字体栈（不引 webfont，离线可用是硬要求；中文回退必须配好） */
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable', 'Segoe UI', 'SF Pro SC', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Source Han Sans SC', 'Noto Sans CJK SC', Roboto, system-ui, sans-serif;
+  --font-ui: var(--font);
+  --font-mono: ui-monospace, SFMono-Regular, 'Cascadia Mono', Consolas, 'Liberation Mono', monospace;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-6: 24px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+
+  --r-row: 6px;
+  --r-card: 10px;
+  --r-chip: 9999px;
+
+  --h-group: 24px;
+  --h-icon: 32px;
+  --h-row: 34px;
+  --h-nav: 32px;
+  --h-input: 36px;
+  --h-btn: 40px;
+  --touch: 44px;
+
+  --motion-fast: 120ms;
+  --motion-base: 220ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  --sidebar-w: 260px;
+  --list-w: 340px;
+  --measure: 720px;
+
+  --font-size-body: 15px;
+  --leading-body: 1.8;
+  --leading-tight: 1.3;
+  --focus-width: 2px;
+
+  /* 用户正文字号可调 0.85–1.6，必须真作用到渲染字号（§1.5） */
+  --user-scale: 1;
+  --editor-font-scale: 1;
+
+  /* 块把手：正文左侧留白，同时也是拖拽指示线的可用宽度 */
+  --nb-handle-gutter: 52px;
+  --nb-hit: 24px;
+}
+
+/* =========================================================================
+   笔记正文的"文字颜色"（编辑器里那五颗）。存语义名、渲染成 var(--ink-*) ⇒
+   用户在浅色里选的深红，换到深色主题不会糊成一片。
+   这五颗设计稿 v2 没有给值，沿用现值；底从 #ffffff 变成 v2 的 canvas/surface 之后
+   对比度只会更好或持平（浅色最差那颗橙 vs #ffffff 实测 5.25:1，≥ AA 正文 4.5）。
+   ========================================================================= */
+
+:root,
+[data-theme='light'] {
+  --ink-red: #b3202f;
+  --ink-orange: #a8560b;
+  --ink-green: #1e7a3c;
+  --ink-blue: #24469a;
+  --ink-violet: #6b2fb3;
+}
+
+[data-theme='dark'] {
+  --ink-red: #ff8f9c;
+  --ink-orange: #f2b46a;
+  --ink-green: #7ee2a1;
+  --ink-blue: #8fc3ff;
+  --ink-violet: #c9a6ff;
+}
+
+/* =========================================================================
+   过渡别名（重构期专用，组件逐个迁到 v2 名字之后就删）
+   --------------------------------------------------------------------------
+   存在的理由：全站有 66 个 `var(--旧名)` 调用点，一次改完会把界面弄成一片无样式；
+   这一节让"未迁的组件按老值继续渲染、已迁的组件用 v2 新值"，每一步都是绿的。
+   刻意**保留老值**而不是指向新值 —— 别名指向新值会让未迁组件跟着变样，
+   那等于把一次视觉改动伪装成一次安全的重命名（看不见的连带改动最贵）。
+   每条都标了它对应 v2 的哪一个，迁完就删这一行。
+   ========================================================================= */
+
+:root,
+[data-theme='light'] {
+  --bg-canvas: #eef1f6; /* → --surface */
+  --bg-pane: #ffffff; /* → --canvas */
+  --bg-raised: #ffffff; /* → --canvas */
+  --bg-sunken: #f4f6fa; /* → --sunken */
+  --bg-hover: #e9edf4; /* → --hover */
+  --bg-active: #dde4ef; /* v2 无这一档，暂用 sunken 的老值 */
+  --bg-code: #f2f4f8; /* → --sunken */
+  --bg-highlight: #ffe9a8; /* 高亮标记底色，v2 未给 */
+  --bg-unknown: #eef0f3;
+  --bg-skeleton: #e3e8f0;
+
+  --text-primary: #14181f; /* → --ink */
+  --text-secondary: #3b4554; /* → --body */
+  --text-muted: #5c6675; /* → --mute */
+  --text-inverse: #ffffff;
+  --text-link: #24469a; /* → --accent */
+  --text-on-accent: #ffffff; /* → --on-accent */
+
+  --border-subtle: #d5dbe4; /* → --line */
+  --border-strong: #aab3c0; /* v2 无 strong 一档 */
+  --border-focus: #24469a; /* → --accent */
+
+  --accent-soft: #dfe8f7; /* v2 无软底一档 */
+  --success: #1f6b45; /* → --ok */
+  --danger-soft: #fbe4e6; /* v2 无软底一档 */
+  --sync-idle: #5c6675; /* → --mute */
+
+  --shadow-1: 0 1px 2px rgba(18, 24, 33, 0.08);
+  --shadow-2: 0 2px 8px rgba(18, 24, 33, 0.1);
+  --shadow-3: 0 12px 32px rgba(18, 24, 33, 0.16);
+  --ring: 0 0 0 2px rgba(36, 70, 154, 0.55);
+}
+
+[data-theme='dark'] {
   --bg-canvas: #0c0f14;
   --bg-pane: #151a21;
   --bg-raised: #1b212a;
   --bg-sunken: #10141a;
   --bg-hover: #232b36;
   --bg-active: #2c3644;
-  --bg-overlay: rgba(2, 4, 7, 0.62);
   --bg-code: #10151c;
   --bg-highlight: #5c4a10;
   --bg-unknown: #1a2028;
@@ -78,41 +190,39 @@
   --text-secondary: #c2ccd9;
   --text-muted: #9aa6b6;
   --text-inverse: #0c0f14;
-  --text-link: #9dc0f5;
-  --text-on-accent: #0c1220;
+  --text-link: #8aaeff;
+  --text-on-accent: #0d1220;
 
   --border-subtle: #2a3340;
   --border-strong: #3c4859;
-  --border-focus: #9dc0f5;
+  --border-focus: #8aaeff;
 
-  --accent: #9dc0f5;
   --accent-soft: #1d2b40;
-  --success: #6fdba3;
-  --warn: #f0c265;
-  --danger: #ff9aa4;
+  --success: #7fd8a4;
   --danger-soft: #3a1b20;
   --sync-idle: #9aa6b6;
-
-  /* 同一批语义名的深色版本（对比度实测 vs 面板 #151a21：红 8.04 / 橙 9.58 / 绿 11.05 / 蓝 9.50 / 紫 8.64） */
-  --ink-red: #ff8f9c;
-  --ink-orange: #f2b46a;
-  --ink-green: #7ee2a1;
-  --ink-blue: #8fc3ff;
-  --ink-violet: #c9a6ff;
 
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-2: 0 2px 10px rgba(0, 0, 0, 0.55);
   --shadow-3: 0 14px 40px rgba(0, 0, 0, 0.6);
-  --ring: 0 0 0 2px rgba(157, 192, 245, 0.7);
-
-  color-scheme: dark;
+  --ring: 0 0 0 2px rgba(138, 174, 255, 0.7);
 }
 
 :root {
-  /* 字体：一律系统字体栈（不内置中文字体，见 PLATFORM.md §11） */
-  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable', 'Segoe UI', 'SF Pro SC', 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei', Roboto, system-ui, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, 'Cascadia Mono', Consolas, 'Liberation Mono', monospace;
+  --space-1: 4px; /* → --sp-1 */
+  --space-2: 8px; /* → --sp-2 */
+  --space-3: 12px; /* → --sp-3 */
+  --space-4: 16px; /* → --sp-4 */
+  --space-5: 24px; /* → --sp-6 */
+  --space-6: 32px; /* v2 网格里没有 32 */
+  --space-7: 48px; /* → --sp-12 */
+  --space-8: 64px; /* v2 网格里没有 64 */
+
+  --radius-1: 4px; /* → --r-row（v2 是 6px） */
+  --radius-2: 8px; /* → --r-card（v2 是 10px） */
+  --radius-3: 12px;
+  --radius-4: 18px;
+  --radius-pill: 999px; /* → --r-chip */
 
   --text-xs: 0.75rem;
   --text-sm: 0.8125rem;
@@ -121,48 +231,31 @@
   --text-lg: 1.25rem;
   --text-xl: 1.5rem;
   --text-2xl: 1.875rem;
-  --leading-body: 1.7;
-  --leading-tight: 1.3;
 
-  /* 间距：4px 栅格 */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
-  --space-7: 48px;
-  --space-8: 64px;
-
-  --radius-1: 4px;
-  --radius-2: 8px;
-  --radius-3: 12px;
-  --radius-4: 18px;
-  --radius-pill: 999px;
-
-  /* 命中尺寸：触摸/点击目标最小 44px */
-  --touch-min: 44px;
+  --touch-min: var(--touch); /* → --touch，同一个 44px */
   --row-height: 76px;
   --row-height-compact: 68px;
-  --sidebar-width: 248px;
-  --list-width: 336px;
-  --titlebar-height: 40px;
+  --sidebar-width: var(--sidebar-w);
+  --list-width: var(--list-width-legacy);
+  --list-width-legacy: 336px;
+  --titlebar-height: var(--h-btn);
   --toolbar-height: 48px;
   --editor-measure: 68ch;
-  /* 块把手：正文左侧留白，同时也是拖拽指示线的可用宽度 */
-  --nb-handle-gutter: 52px;
-  --nb-hit: 24px;
-  --focus-width: 2px;
 
-  --dur-fast: 120ms;
-  --dur-base: 200ms;
+  --dur-fast: var(--motion-fast);
+  --dur-base: var(--motion-base);
   --dur-slow: 320ms;
-  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-out: var(--ease);
 
-  --editor-font-scale: 1;
+  /* 遮罩：v2 没给 scrim，浮层的暗底沿用现值 */
+  --bg-overlay: rgba(16, 20, 27, 0.44);
 }
 
-/* 减少动效：同步动画降级为静态指示 */
+[data-theme='dark'] {
+  --bg-overlay: rgba(2, 4, 7, 0.62);
+}
+
+/* 减少动效：同步动画降级为静止指示（§1.6） */
 @media (prefers-reduced-motion: reduce) {
   :root {
     --dur-fast: 0ms;

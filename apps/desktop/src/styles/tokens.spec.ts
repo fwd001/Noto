@@ -73,6 +73,19 @@ function ratio(vars: Vars, foregroundKey: string, backgroundKey: string): number
   return contrast(foreground ?? '#000000', background ?? '#ffffff');
 }
 
+/** 别名（`--touch-min: var(--touch)`）要先解引用再断言，否则一次改名就把门禁弄成假红。 */
+function resolveToken(value: string | undefined, vars: Vars): string | undefined {
+  let out = value;
+  for (let i = 0; i < 6; i += 1) {
+    const m = out?.match(/^var\((--[\w-]+)\)$/);
+    if (!m) break;
+    const next = vars[m[1]];
+    if (next === undefined) break;
+    out = next;
+  }
+  return out;
+}
+
 describe.each([
   ['浅色', light],
   ['深色', dark],
@@ -104,7 +117,10 @@ describe('token 结构约束', () => {
   });
 
   it('字号缩放范围与共享 token 一致', () => {
-    expect(shared['--touch-min']).toBe('44px');
+    // v2 把触摸目标改名为 `--touch`，`--touch-min` 只是过渡别名 —— 断言要打在**解析后的值**上，
+    // 否则一次安全的重命名会把门禁弄成假红（而假红会让人想去改数值，那才是真危险）。
+    expect(resolveToken(shared['--touch'], shared), '--touch 必须是 44px').toBe('44px');
+    expect(resolveToken(shared['--touch-min'], shared), '--touch-min 必须解析到同一个 44px').toBe('44px');
     expect(shared['--editor-font-scale']).toBe('1');
   });
 
@@ -129,9 +145,56 @@ describe('token 结构约束', () => {
   });
 
   it('字体只用系统字体栈', () => {
-    expect(tokensCss).toMatch(/--font-ui:[^;]*-apple-system/);
-    expect(tokensCss).toMatch(/--font-ui:[^;]*Segoe UI/);
+    // v2 把栈放在 `--font`，`--font-ui` 是过渡别名 ⇒ 两处都要认得系统栈
+    expect(shared['--font']).toMatch(/-apple-system/);
+    expect(shared['--font']).toMatch(/Segoe UI/);
+    expect(shared['--font'], '中文回退必须配好（§1.5）').toMatch(/PingFang SC|Microsoft YaHei|Source Han Sans SC/);
+    expect(resolveToken(shared['--font-ui'], shared)).toBe(shared['--font']);
     expect(tokensCss).not.toMatch(/@font-face|url\(/);
+  });
+});
+
+/**
+ * v2 设计稿 §1.1 那张"对比度已实测"的表。
+ *
+ * 文档说"构建门禁会复验，不要改动数值" —— 那就把它变成一条**逐位对账**的断言，
+ * 而不是一个注释：注释挡不住手滑，也挡不住"看着舒服就调浅一点"（§1.1 底下专门警告过
+ * `mute` 压到 #6B6A62 才够 4.5:1）。这里同时钉两件事：
+ *  ① 阈值（≥7 / ≥4.5）不许破；
+ *  ② 实测值与文档表格逐位一致（±0.02）—— 不一致就说明有人改了色值却没改文档，或反之。
+ */
+const V2_PAIRS: Array<[string, string, number, number, number]> = [
+  // [前景, 背景, 要求, 文档给的浅色, 文档给的深色]
+  ['--ink', '--canvas', 7, 17.44, 16.11],
+  ['--body', '--canvas', 7, 8.79, 10.39],
+  ['--mute', '--canvas', 4.5, 5.44, 6.27],
+  ['--accent', '--canvas', 4.5, 8.69, 8.39],
+  ['--mute', '--sunken', 4.5, 4.56, 5.34],
+  ['--on-accent', '--accent', 4.5, 8.69, 8.52],
+];
+
+describe('v2 设计稿 §1.1 的配色表', () => {
+  it('六组配色两档主题都过阈值，且与文档给的数字逐位一致', () => {
+    for (const [fg, bg, min, docLight, docDark] of V2_PAIRS) {
+      const l = ratio({ ...shared, ...light }, fg, bg);
+      const d = ratio(dark, fg, bg);
+      expect(l, `${fg} on ${bg} 浅色 ${l.toFixed(2)} 低于要求 ${min}`).toBeGreaterThanOrEqual(min);
+      expect(d, `${fg} on ${bg} 深色 ${d.toFixed(2)} 低于要求 ${min}`).toBeGreaterThanOrEqual(min);
+      expect(l, `${fg}/${bg} 浅色实测与文档表格不符`).toBeCloseTo(docLight, 1);
+      expect(d, `${fg}/${bg} 深色实测与文档表格不符`).toBeCloseTo(docDark, 1);
+    }
+  });
+
+  it('两套主题的 v2 键名完全一致（只换值，§1.1）', () => {
+    const v2Names = [...new Set(V2_PAIRS.map((row) => [row[0], row[1]]).flat())];
+    // 先验样本量：这一组只有 7 个键，若扫到的比设计稿给的 13 个少，说明表被改小过
+    expect(v2Names.length).toBeGreaterThanOrEqual(7);
+    const allV2 = ['--canvas', '--surface', '--sunken', '--hover', '--line', '--ink', '--body', '--mute', '--accent', '--on-accent', '--danger', '--warn', '--ok'];
+    expect(allV2.length).toBe(13);
+    for (const key of new Set([...v2Names, ...allV2])) {
+      expect(light[key] ?? shared[key], `浅色主题缺 ${key}`).toBeDefined();
+      expect(dark[key], `深色主题缺 ${key}`).toBeDefined();
+    }
   });
 });
 

@@ -2078,6 +2078,33 @@ E2EE 那两本 `key_vault.rs`/`sealed_e2ee.rs` 的若干条）。
   - 360 前端单测 / 23 腿布局判据 / Rust 54+15 / fmt / clippy（缩到受影响四个 crate）全绿。
     `notera-desktop.exe` 仍在跑（不是我起的，没去动它），所以全量 clippy 那一支照旧要等那个窗口关掉。
 
+### 界面重构 v2（2026-10-06 起，按设计稿 `Noto-界面设计规范.md` v2）· 第 1 刀：token 层
+
+- **三份产物拿到了**（那两条 WorkBuddy 分享链接与 Ardot 画布现在**匿名可读** —— 之前跳登录是跟着那次网络故障一起出现的假象）。
+  正文与 `tokens.css` 已落到 `docs/design/` 存档：`Noto-界面设计规范.from-share.txt`（渲染后的正文）、
+  `tokens.design-v2.css`（从分享页抽出的 475 行 CSS）、`tokens.from-share.txt`（原始抓取，留作出处）。
+- **色值先独立复算再采信**：§1.1 那张"对比度已实测"的表，12 个数字（6 组配色 × 两档主题）我用文件里的真值
+  按 WCAG 公式重算一遍，**逐位一致**（ink/canvas 17.44·16.11、body/canvas 8.79·10.39、mute/canvas 5.44·6.27、
+  accent/canvas 8.69·8.39、mute/sunken 4.56·5.34、on-accent/accent 8.69·8.52）。
+  于是把它从注释升级成 `tokens.spec.ts` 里的**逐位对账断言**（`toBeCloseTo(…, 1)`）——
+  文档里那句"不要随意调整数值"以前只是话，现在改一个字节就会红（§1.1 专门警告过 `mute` 一调浅就破 4.5）。
+- **落差实测**（`check-tokens-intake.mjs` 跑设计师那份，就是它上一轮存在的理由）：
+  69 个消费点里 **61 个在 v2 里没有对应定义**（整套改名：`--bg-canvas→--surface`、`--text-primary→--ink`、
+  `--space-3→--sp-3`、`--radius-pill→--r-chip`、`--touch-min→--touch` …），v2 多出 36 个键，
+  3 处同名取值漂移（深色 `--accent`/`--danger`/`--warn`），`--touch-min` 与 `prefers-reduced-motion`
+  的实现形状也不同（v2 用 `transition-duration: 0ms !important`，不吃 `--dur-fast`）。
+- **这一刀做了什么**：`tokens.css` 换成 v2 的键与值（§1.1 颜色 / §1.2 间距 4px 网格 / §1.3 三种圆角 /
+  §1.4 控件高度 / §1.6 动效 / §3 版心 260·340·720），并加一节**过渡别名**。
+  别名刻意保留**老值**而不是指向新值 —— 别名若指向新值，未迁移的组件会跟着变样，
+  那等于把一次视觉改动伪装成一次安全的重命名（看不见的连带改动最贵）。
+  每迁完一个文件就删对应几行，删干净之前 `tokens.spec.ts` 的两套配色对账都要绿。
+- 五颗笔记正文颜色（`--ink-red/orange/green/blue/violet`）v2 没给值 ⇒ 沿用现值，只把 `--ink-blue` 对齐到新 `--accent`。
+- **G76（顺手记一条既有 flake，不是这一刀弄坏的）**：`syncClickGate.spec.ts` 那条
+  "核心给了原因，那一句话必须在屏幕上看得见"在整批里偶发红（实测 3 次里 1 次），单独跑该文件 4 次全绿。
+  本次改动是纯 CSS token，jsdom 不应用样式，不可能影响 `exists()` / `.text()` 这类断言 ⇒ 判为既有的时序 flake
+  （`settle()` 是固定微任务次数，徽标详情那一格可能踩在异步 toast/定时器后面）。**记下来，别当没看见。**
+- 门禁：362 前端单测 / 304 条布局判据（23 腿）/ typecheck / lint 全绿。
+
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
 - **G75 桌面壳一个 capability 都没有：`§6` 那句"系统文件对话框已接插件"在界面上的实际后果是 0**（2026-10-06 查"要不要现在接导出选择器"时撞出来的；状态 = **待一次真壳运行来分辨**）
   - 已经量到的三条事实：
