@@ -120,9 +120,12 @@ describe('未配置同步不该显示成"正在同步"（用户截图：一直�
   it('第五态 idle 存在，且有静止的字形', () => {
     const types = read('api/types.ts');
     expect(types).toMatch(/SyncBadgeKind =[^;]*'idle'/);
-    const badge = read('components/SyncBadge.vue');
-    const block = badge.slice(badge.indexOf('ICON_NAMES'), badge.indexOf('ICON_NAMES') + 400);
-    // §2.3：五格里只有"正在同步"会动 ⇒ idle 不许指到 syncing 那枚云
+    // §2.3 的五格 → 图标那张表在 `ui/icons.ts`（状态条与移动端底栏共用一份，两处各写一遍迟早分叉）。
+    const icons = read('components/ui/icons.ts');
+    const at = icons.indexOf('SYNC_ICONS');
+    const block = icons.slice(at, at + 500);
+    // 五格里只有"正在同步"会动 ⇒ idle 不许指到 syncing 那枚云
+    expect(at, '找不到 SYNC_ICONS 那张表').toBeGreaterThan(-1);
     expect(block).toMatch(/idle:\s*'sync-idle'/);
     expect(block).not.toMatch(/idle:\s*'sync-syncing'/);
   });

@@ -523,19 +523,120 @@ button {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-.mobile-bar {
-  display: none;
-  align-items: center;
-  gap: var(--sp-1);
-  padding: var(--sp-1) var(--sp-2);
-  border-top: 1px solid var(--line);
-  background: var(--canvas);
-  padding-bottom: calc(var(--sp-1) + env(safe-area-inset-bottom, 0px));
-  flex: 0 0 auto;
+/* §2.3 的同步转圈：1.4s linear infinite。**全局** —— 侧栏状态条与移动端底栏共用这一份，
+   放进任一 scoped 块都会被改名，另一处就静默不转了（"控件在、动效没了"是同一族的病）。 */
+@keyframes sync-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
-.app-shell[data-compact='true'] .mobile-bar {
+/**
+ * §3.5 移动端底部胶囊栏。规格是设计稿写死的几个数：栏 64 高、tab 56×52、主按钮 116×52、
+ * 外层左右 12 / 底部 20（安全区内）、图标 20、标签 10px。
+ * 这些是**结构尺寸**不是设计变量（token 表里没有 20 这一格），所以按 §3.5 的字面值写，
+ * 由第 ㉕ 腿逐条量着 —— 数字漂了会红，不靠注释守着。
+ */
+.dock {
+  display: none;
+  position: fixed;
+  z-index: 60;
+  right: var(--sp-3);
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  left: var(--sp-3);
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  height: 64px;
+  /* §3.5 的三个数要同时成立：栏 64、tab 52、胶囊内上下 6。`box-sizing: border-box` 下
+     6 + 52 + 6 再加 1px 描边就是 65 ⇒ 那颗 tab 会顶出边框 1px。上下各让 1px 给描边，
+     左右仍是 6 —— 栏高与 tab 高两个数都保持字面值。 */
+  padding: 5px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-chip);
+  background: var(--canvas);
+  box-shadow: var(--shadow-2);
+}
+
+.app-shell[data-compact='true'] .dock {
   display: flex;
+}
+
+/**
+ * 抽屉开着的时候，底栏必须退到遮罩**之下**。不退会有两个后果（第一条是实测撞到的）：
+ * ① 抽屉那一栏画到底，它底部那几行（"设置"入口）被压在底栏之下 —— 看得见点不到；
+ * ② 遮罩盖不住底栏，点底栏会换页而抽屉还开着，留下一个"半开"的第三种状态。
+ */
+.app-shell[data-drawer='sidebar'] .dock,
+.app-shell[data-drawer='list'] .dock {
+  z-index: 20;
+}
+
+/* 栏不参与文档流 ⇒ 内容区自己让出这一格，否则最后一行被压在栏底下（§3.5 明写 ≥84）。 */
+.app-shell[data-compact='true'] .app-body {
+  padding-bottom: 84px;
+}
+
+.dock__tab {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 56px;
+  height: 52px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-chip);
+  background: none;
+  color: var(--body);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease);
+}
+
+.dock__tab:active {
+  transform: scale(0.97);
+}
+
+.dock__tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.dock__label {
+  font-size: 10px;
+  line-height: 14px;
+}
+
+/* §4.9 主按钮：实心 --ink 底，文字用 --canvas（实测 17.4:1，比压在 --accent 上还高一档）。 */
+.dock__tab--primary {
+  width: 116px;
+  background: var(--ink);
+  color: var(--canvas);
+}
+
+/* §2.3：五格里只有"正在同步"会转；这一格在手机上就是同步状态的唯一出口。 */
+.dock__glyph[data-spin='true'] {
+  animation: sync-spin 1.4s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+.dock__tab[data-badge='synced'] {
+  color: var(--ok);
+}
+
+.dock__tab[data-badge='syncing'] {
+  color: var(--accent);
+}
+
+.dock__tab[data-badge='failed'] {
+  color: var(--danger);
+}
+
+.dock__tab[data-badge='offline'],
+.dock__tab[data-badge='idle'] {
+  color: var(--mute);
 }
 
 /* ------------------------------------------------------------- 轻提示 */

@@ -27,7 +27,7 @@ export type IconName =
   | 'attach-file' | 'attach-image'
   | 'check' | 'drag-handle' | 'plus' | 'pencil' | 'chevron-down' | 'arrow-back'
   | 'indent-in' | 'indent-out' | 'trash' | 'warn' | 'rule'
-  | 'list' | 'alert' | 'question' | 'menu'
+  | 'list' | 'alert' | 'question' | 'menu' | 'settings'
   | 'win-min' | 'win-max' | 'win-restore' | 'close';
 
 /** 同步五格共用同一片云，只换内部徽标 —— 这样一眼看出是同步家族（§2.3）。 */
@@ -61,6 +61,7 @@ export const ICONS: Record<IconName, IconSpec> = {
   alert: { d: ['M10 4.6v6.2', 'M10 14.6h.01'] },
   question: { d: ['M7.7 7.7a2.4 2.4 0 1 1 3.2 2.3c-.7.3-1 .8-1 1.6', 'M10 14.8h.01'] },
   menu: { d: ['M4.2 6.2h11.6', 'M4.2 10h11.6', 'M4.2 13.8h11.6'] },
+  settings: { d: ['M10 7.4a2.6 2.6 0 1 0 0 5.2 2.6 2.6 0 0 0 0-5.2Z', 'M10 3.4v2', 'M10 14.6v2', 'M3.4 10h2', 'M14.6 10h2', 'M5.3 5.3l1.4 1.4', 'M13.3 13.3l1.4 1.4', 'M14.7 5.3l-1.4 1.4', 'M6.7 13.3l-1.4 1.4'] },
   'win-min': { d: ['M4.6 13.4h10.8'] },
   'win-max': { d: ['M5.2 5.2h9.6v9.6H5.2Z'] },
   'win-restore': { d: ['M7.2 4.6h8.2v8.2', 'M4.6 7.2h8.2v8.2H4.6Z'] },
@@ -73,4 +74,17 @@ export const CARRIERS: Record<string, IconName[]> = {
   star: ['pin-on', 'pin-off'],
   document: ['attach-file'],
   image: ['attach-image'],
+};
+
+/**
+ * 同步五格 → 图标（§2.3）。**唯一一份**：侧栏那条状态条与移动端底栏那颗 tab 读的是同一张表，
+ * 两处各写一遍迟早会分叉（分叉的后果是"第五格在某一处看起来像在忙"，那是 §2.3 明令禁止的）。
+ */
+export const SYNC_ICONS: Record<string, IconName> = {
+  synced: 'sync-synced',
+  syncing: 'sync-syncing',
+  offline: 'sync-offline',
+  failed: 'sync-failed',
+  // 未配置账户：静止那格。转不停的圈会被读成"正在忙"，而这里的事实是"没在同步"。
+  idle: 'sync-idle',
 };

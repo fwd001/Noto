@@ -25,6 +25,8 @@ import { useShellStore } from './stores/shell';
 import { useSyncStore } from './stores/sync';
 import { useToastStore } from './stores/toasts';
 import { t } from './i18n';
+import AppIcon from './components/ui/AppIcon.vue';
+import { SYNC_ICONS, type IconName } from './components/ui/icons';
 
 const shell = useShellStore();
 const sync = useSyncStore();
@@ -45,6 +47,13 @@ const shellAttrs = computed(() => ({
   drawer: shell.drawerTarget ?? 'none',
   theme: settings.resolvedTheme,
 }));
+
+/**
+ * 底栏那颗同步 tab 读的是**状态**，不是动词（§3.5 的移动端后果 + §4.3 的"五种事实一句不许少"）：
+ * 窄屏下侧栏是抽屉，`.syncbar` 平时根本不在屏幕上 ⇒ 底栏是手机上**唯一**能说清
+ * "此刻到底有没有在同步"的地方。写死成"立即同步"就等于把这五种事实从手机上拿掉了。
+ */
+const dockSyncIcon = computed<IconName>(() => SYNC_ICONS[sync.badge] ?? 'sync-failed');
 
 function handleEvent(event: UiEvent): void {
   if (event.kind === 'sync') {
@@ -305,11 +314,25 @@ onBeforeUnmount(() => {
       <ConflictsView v-else />
     </div>
 
-    <nav class="mobile-bar" :aria-label="t('mobile.menu')">
-      <button type="button" class="btn btn--quiet" data-testid="mobile-sidebar" @click="shell.openDrawer('sidebar')">{{ t('mobile.menu') }}</button>
-      <button type="button" class="btn btn--quiet" data-testid="mobile-new" @click="newNote">{{ t('list.newNote') }}</button>
-      <button type="button" class="btn btn--quiet" data-testid="mobile-sync" @click="sync.syncNow()">{{ t('sync.syncNow') }}</button>
-      <button type="button" class="btn btn--quiet" data-testid="mobile-settings" @click="shell.goto('settings')">{{ t('settings.title') }}</button>
+    <!-- §3.5 移动端底部胶囊栏：浮在内容之上、不参与文档流；tab 56×52、主按钮 116×52 实心 --ink；
+         图标 20、标签 10px；外层左右 12 / 底部 20（安全区内），内容区留 ≥84 的 padding-bottom。 -->
+    <nav class="dock" :aria-label="t('mobile.menu')" data-testid="dock">
+      <button type="button" class="dock__tab" data-testid="mobile-sidebar" @click="shell.openDrawer('sidebar')">
+        <AppIcon name="menu" />
+        <span class="dock__label">{{ t('mobile.menu') }}</span>
+      </button>
+      <button type="button" class="dock__tab dock__tab--primary" data-testid="mobile-new" @click="newNote">
+        <AppIcon name="plus" />
+        <span class="dock__label">{{ t('list.newNote') }}</span>
+      </button>
+      <button type="button" class="dock__tab" :data-badge="sync.badge" data-testid="mobile-sync" @click="sync.syncNow()">
+        <AppIcon class="dock__glyph" :name="dockSyncIcon" :data-spin="sync.badge === 'syncing' ? 'true' : 'false'" />
+        <span class="dock__label">{{ sync.label }}</span>
+      </button>
+      <button type="button" class="dock__tab" data-testid="mobile-settings" @click="shell.goto('settings')">
+        <AppIcon name="settings" />
+        <span class="dock__label">{{ t('settings.title') }}</span>
+      </button>
     </nav>
 
     <p v-if="!booted" class="boot-hint" role="status">{{ t('state.boot') }}</p>

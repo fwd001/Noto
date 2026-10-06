@@ -6,25 +6,12 @@ import type { IconName } from './ui/icons';
 import { useSyncStore } from '../stores/sync';
 import { useShellStore } from '../stores/shell';
 import { t } from '../i18n';
+import { SYNC_ICONS } from './ui/icons';
 
 const sync = useSyncStore();
 const shell = useShellStore();
 
-/**
- * 同步五格 = **同一片云 + 不同内部徽标**（§2.3），全部 SVG。
- * 以前这里是 `✓ ↻ ○ ! ·` 五个 Unicode 字形 —— §2 明令禁止：字形依赖各平台字体回退，
- * Windows 与 macOS 必然长得不一样，而"第五格绝不能表现得像在忙"这件事是靠字形稳定才立得住的。
- */
-const ICON_NAMES: Record<string, IconName> = {
-  synced: 'sync-synced',
-  syncing: 'sync-syncing',
-  offline: 'sync-offline',
-  failed: 'sync-failed',
-  // 未配置账户：静止的那格。转不停的圈会被读成"正在忙"，而这里的事实是"没在同步"。
-  idle: 'sync-idle',
-};
-
-const iconName = computed<IconName>(() => ICON_NAMES[sync.badge] ?? 'sync-failed');
+const iconName = computed<IconName>(() => SYNC_ICONS[sync.badge] ?? 'sync-failed');
 const detailText = computed(() => (sync.detail ? `${sync.label} · ${sync.detail}` : sync.label));
 const title = computed(() => {
   if (sync.badge === 'failed') return t('sync.localReady');
@@ -125,14 +112,12 @@ watch(
   flex: 0 0 16px;
 }
 
-/* §1.6 / §2.3：五格里**只有"正在同步"会转**，第五格绝对静止。1.4s linear infinite。 */
+/* §1.6 / §2.3：五格里**只有"正在同步"会转**，第五格绝对静止。1.4s linear infinite。
+   `@keyframes sync-spin` 在 `styles/base.css` 里（全局）：底栏那颗 tab 也要转同一圈，
+   放在这个 scoped 块里会被改名（`sync-spin-data-v-…`），全局那条引用就静默不转了。 */
 .syncbar__glyph[data-spin='true'] {
   animation: sync-spin 1.4s linear infinite;
   transform-origin: 50% 50%;
-}
-
-@keyframes sync-spin {
-  to { transform: rotate(360deg); }
 }
 
 /* 五格各自的颜色（§2.3）：只有"正在同步"会动，第五格绝对静止 */
@@ -172,52 +157,5 @@ watch(
   font-weight: 600;
   font-size: var(--text-xs);
   cursor: pointer;
-}
-</style>
-
-<style scoped>
-.syncline {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  flex-wrap: wrap;
-}
-
-/**
- * 侧栏里的徽标**不该是个胶囊**。
- *
- * `.badge` 的默认样式（pill 圆角 + 描边 + `bg-raised`）是给"独立的一枚状态章"设计的
- * —— 放在页面里很显眼。但它在侧栏里与上面三个 `nav-btn` 视觉语言完全不同：
- * 那些是**无边框的文字行**，它是**带框的胶囊**，于是它不像"侧栏的一行"，
- * 而像"从别处掉进来的东西"（用户反馈"层级乱、看着不齐"）。
- *
- * ⇒ 在侧栏语境下去掉框与底色，改为与 `nav-btn` 同款的左对齐文字行；
- *   状态仍靠字形（✓ / ↻ / ○ / ! / ·）与 `data-badge` 的颜色表达。
- *   **保留可点**（手动同步是保留能力），hover 时给底色作为反馈。
- */
-.syncline :deep(.badge) {
-  width: 100%;
-  justify-content: flex-start;
-  min-height: var(--touch);
-  padding: 0 var(--sp-3);
-  border: 0;
-  border-radius: var(--r-row, 6px);
-  background: none;
-  font-weight: 500;
-}
-
-.syncline :deep(.badge:hover) {
-  background: var(--hover);
-  color: var(--ink);
-}
-
-/* 占满一整行：状态那一行下面单独一句"为什么"，不去挤右侧的重试按钮。 */
-.syncline__detail {
-  flex: 1 0 100%;
-  margin: 0;
-  padding: 0 var(--sp-3) var(--sp-1);
-  font-size: var(--text-xs);
-  line-height: var(--leading-body);
-  color: var(--mute);
 }
 </style>

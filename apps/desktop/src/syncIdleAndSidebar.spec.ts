@@ -89,11 +89,19 @@ describe('① 没配账户时不允许"正在同步"', () => {
 });
 
 describe('① 徽标的第五态是静止的', () => {
-  it('idle 用静止字形，不是转圈', () => {
-    const badge = read('components/SyncBadge.vue');
-    const m = badge.match(/idle:\s*'([^']*)'/);
-    expect(m, "缺 idle 字形").not.toBeNull();
-    expect(m![1]).not.toBe('↻');
+  it('idle 用的是静止那枚云，不是转圈那枚（§2.3）', () => {
+    // 五格 → 图标那张表在 `ui/icons.ts`（侧栏状态条与移动端底栏共用一份）。
+    // 判据不写死"不是 ↻"：那是字形时代的说法，现在 §2 根本禁字形。
+    // 要守的是**关系**：idle 与 syncing 不许指到同一枚图标。
+    const icons = read('components/ui/icons.ts');
+    const at = icons.indexOf('SYNC_ICONS');
+    expect(at, '找不到 SYNC_ICONS 那张表').toBeGreaterThan(-1);
+    const block = icons.slice(at, at + 500);
+    const idle = block.match(/idle:\s*'([^']*)'/);
+    const spinning = block.match(/syncing:\s*'([^']*)'/);
+    expect(idle, '缺 idle 那一格').not.toBeNull();
+    expect(spinning, '缺 syncing 那一格').not.toBeNull();
+    expect(idle![1]).not.toBe(spinning![1]);
   });
 
   it('初始态是 idle（首帧没有同步在跑）', () => {
@@ -109,11 +117,16 @@ describe('② 侧栏三块视觉同级', () => {
     expect(side).toMatch(/section-title[^>]*>\s*\{\{\s*t\('sidebar\.syncSection'\)/);
   });
 
-  it('侧栏里的徽标去掉了框与底色（与 nav-btn 同款）', () => {
+  it('侧栏那一块是**色块**，不是一枚描边胶囊（§3.2：状态陈述 + 可点动作）', () => {
+    // 这条原来钉的是 `.syncline :deep(.badge)` 那段覆盖样式。第 3 刀把徽标改成 `.syncbar` 之后
+    // 那段样式已经没人渲染了（模板里既没有 `.syncline` 也没有 `.badge`）—— 钉着一段死 CSS
+    // 只会让"删掉死代码"变成红灯。判据改打在**现役这一块**上，守的还是同一件事：别画框。
     const badge = read('components/SyncBadge.vue');
-    const seg = badge.slice(badge.indexOf('.syncline :deep(.badge)'));
-    expect(seg.slice(0, 400), '侧栏语境下要覆盖 .badge 的 pill 样式').toMatch(/border:\s*0/);
-    expect(seg.slice(0, 400)).toMatch(/background:\s*none/);
+    const at = badge.indexOf('.syncbar {');
+    expect(at, '找不到 .syncbar 这一段').toBeGreaterThan(-1);
+    const block = badge.slice(at, badge.indexOf('}', at));
+    expect(block).toMatch(/background:\s*var\(--sunken\)/);
+    expect(block, '不要再描边：一圈框会把它变成从别处掉进来的胶囊').not.toMatch(/border(?!-radius)\s*:/);
   });
 
   it('同步块只保留上分隔线（上下都有会像被夹在中间）', () => {
