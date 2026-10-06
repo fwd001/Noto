@@ -11,6 +11,7 @@ import { useShellStore } from '../stores/shell';
 import { useConflictStore } from '../stores/conflicts';
 import { drawsTitleBar } from '../platform/caps';
 import { t, messageFor } from '../i18n';
+import { formatBytes, formatNumber } from '../util/format';
 
 const folders = useFolderStore();
 const notes = useNoteStore();
@@ -24,6 +25,17 @@ const newName = ref('');
 const trashCount = computed(() => settings.stats?.notesInTrash ?? 0);
 const allCount = computed(() => settings.stats?.notes ?? 0);
 const errorText = computed(() => messageFor(folders.errorKey ?? 'error.fallback'));
+
+/** §3.2：底部那一行要同时给"设置入口"和"本地库读数"—— 让人知道东西在哪、有多大。 */
+const libraryReadout = computed(() => {
+  const s = settings.stats;
+  if (!s || typeof s.notes !== 'number' || typeof s.folders !== 'number') return null;
+  return t('sidebar.libraryReadout', {
+    notes: formatNumber(s.notes),
+    folders: formatNumber(s.folders),
+    size: formatBytes(s.dbBytes),
+  });
+});
 
 function openNewFolder(): void {
   newName.value = '';
@@ -129,6 +141,8 @@ function selectTrash(): void {
       <button type="button" class="nav-btn" :data-active="shell.view === 'settings' ? 'true' : 'false'" data-testid="nav-settings" @click="shell.goto('settings')">
         {{ t('settings.title') }}
       </button>
+      <!-- §3.2：同一行给本地库读数（东西在哪、有多大）。没问到就整行不出现，不画"— · —"那种空壳。 -->
+      <span v-if="libraryReadout" class="side-foot__readout" data-testid="library-readout">{{ libraryReadout }}</span>
     </div>
   </aside>
 </template>
@@ -182,6 +196,14 @@ function selectTrash(): void {
 
 .side-foot {
   border-top: 1px solid var(--line);
+}
+
+/* 读数那一行：弱化文字也要 ≥4.5:1（§5），所以用 --body 而不是 --mute。 */
+.side-foot__readout {
+  padding: 0 var(--sp-3);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--body);
 }
 
 .nav-btn {

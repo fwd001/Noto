@@ -46,6 +46,8 @@
  *     那颗点若永远画 ●，⑤ 两条照样全绿 —— 这就是这腿存在的理由。
  *  ㉒ 「新建文件夹」那一格的正向一路（第 ④ 条）：弹窗是全局悬浮层（不许顶走任何一行）、打开就能打字、
  *     空名字不许确认、**取消真的什么都没建**、回车建的在核心里读得回来且侧栏看得见那一行。
+ *  ㉔ §3.2 侧栏常驻：矮窗口（520 高）里同步状态条 / 设置入口 / 库读数都要还在，
+ *     且侧栏那一栏自己不许有可滚溢出（能滚的只能是里面那段）。
  *  ㉓ 附件那颗芯片要说得清"这台设备此刻有没有这份可用的字节"（G74）：真账 available 时一句都不许说（正对照）、
  *     注入 missing+present 必须出现「正在等待下载」与两颗动作、注入 missing+unknown 必须换成中性那句。
  *
@@ -1546,16 +1548,33 @@ const TRAP_SCAN = () => {
   }, seedNoteId);
   check('同一时刻列表里两枚点长得不一样（● 与 ○ 并存，否则"点了没变化"还会回来）', seedDot.glyph === '●' && seedDot.glyph !== off.glyph, JSON.stringify({ seedDot, off }));
 
+  /**
+   * 点完之后**轮询到那颗点稳定**再判（最多 3s）。
+   *
+   * 为什么不是"等 900ms 读一次"：置顶会把这一行**换组**（置顶优先排序），
+   * 换组在虚拟化列表里要重排窗口 —— 一次定长等待在行多时会读到换组前的那一帧，
+   * 于是报出"点了没变"（本轮就红过一次：读数 ○→○→●，而独立探针量同一颗是 ○→●→○、
+   * 核心 true→false 全程对得上 ⇒ **红的是仪器，不是产品**）。
+   * 轮询不是放宽判据：最终仍要求 `●` 与 `aria-pressed=true`，只是给它稳定下来的时间。
+   */
+  const settleDot = async (wanted) => {
+    let last = null;
+    for (let i = 0; i < 12; i += 1) {
+      last = await readDot();
+      if (last.glyph === wanted) return last;
+      await pp.waitForTimeout(250);
+    }
+    return last;
+  };
+
   await pp.click(`[data-testid="note-row-${made.id}"] [data-testid="note-pin-toggle"]`);
-  await pp.waitForTimeout(900);
-  const on = await readDot();
+  const on = await settleDot('●');
   check('点一次：同一颗变成"已置顶"，glyph 与颜色都跟着变（不是只换 aria）', on.glyph === '●' && on.pressed === 'true' && on.on === true && on.color !== off.color, JSON.stringify({ off, on }));
   check('点一次：置顶这一位**真的落进核心**（回读 list_notes 的 pinned）', (await corePinned()) === true, JSON.stringify(await corePinned()));
   check('置顶之后那一行不许从列表里消失（换组不是搬家搬没）', on.missing !== 'row', JSON.stringify(on));
 
   await pp.click(`[data-testid="note-row-${made.id}"] [data-testid="note-pin-toggle"]`);
-  await pp.waitForTimeout(900);
-  const back = await readDot();
+  const back = await settleDot('○');
   check('再点一次回到未置顶（一个来回不留半截状态）', back.glyph === '○' && back.pressed === 'false' && (await corePinned()) === false, JSON.stringify(back));
   check('㉑ 这一腿 console error 为零', pErrors.length === 0, pErrors.slice(0, 3).join(' | '));
   notes.push(`     置顶往返实测：${off.glyph}/${off.color} → ${on.glyph}/${on.color} → ${back.glyph}，核心 pinned true→false`);
@@ -1764,6 +1783,110 @@ const TRAP_SCAN = () => {
   notes.push(`     附件账实测：A 真核心回音 ${JSON.stringify(a.chip.noticeText)}（问账 ${aCalls} 次）｜B(missing/present) ${JSON.stringify(b.chip.noticeText)}｜C(missing/unknown) ${JSON.stringify(c.chip.noticeText)}`);
   await cmd('purge_note', { id: made.id });
   await purgeByTitle(MARK);
+}
+
+/**
+ * ㉔ §3.2 侧栏那三条"常驻"必须量在渲染后的几何上。
+ *
+ * 设计稿写的是：**导航与同步状态条常驻，只有文件夹列表内部滚动**，底部一行同时给设置入口和本地库读数。
+ * 这句话以前只靠 CSS 结构成立，而结构最容易被一次改样式悄悄破掉（G62 那一族就是"看着挡住了其实还能滚"）。
+ * 所以这一腿在**矮窗口**（520 高，文件夹多到放不下）里量四件事：
+ *  ① 同步状态条 / 设置入口 / 库读数三块都真看得见（有尺寸、在视口内、中心命中自己）；
+ *  ② 侧栏那一栏自己**不许**有可滚溢出（滚的只能是里面那段）；
+ *  ③ 库读数要读出**真数字**（含"篇"与数字），不是空壳占位；
+ *  ④ 夹具确实把文件夹塞多了（样本量判据，否则"没溢出"是恒真）。
+ */
+{
+  const MARK = '常驻夹具';
+  // 幂等：只补"缺的那几个"。第一版按 MARK 前缀算 before，于是每次跑都新造 12 个
+  // （上一轮的墓碑还在库里，读模型滤掉了它们 ⇒ 看着像"没有"，又造一轮），开发库一轮厚一层。
+  const liveFolders = flattenFolders(await cmd('list_folders'));
+  const deficit = 12 - liveFolders.length;
+  for (let i = 0; i < Math.max(0, deficit); i += 1) {
+    await cmd('create_folder', { parentId: null, name: `${MARK} ${i}-${stamp}` });
+  }
+  const madeCount = flattenFolders(await cmd('list_folders')).length;
+
+  const fctx = await browser.newContext({ viewport: { width: 1440, height: 520 } });
+  const fp = await fctx.newPage();
+  const fErrors = [];
+  fp.on('pageerror', (e) => fErrors.push(String(e).slice(0, 140)));
+  fp.on('console', (m) => { if (m.type() === 'error') fErrors.push(m.text().slice(0, 140)); });
+  await fp.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await fp.waitForSelector('[data-testid="sidebar"]', { timeout: 15000 });
+  await fp.waitForTimeout(1800);
+
+  const shot = await fp.evaluate(() => {
+    const side = document.querySelector('[data-testid="sidebar"]');
+    /**
+     * 只读**看得见**的那份文字。
+     * 第一版这里用 `el.innerText`，读数出来是 `· 未配置同步 未配置同步` ——
+     * 我据此以为界面把同一句话说了一遍又一遍，还去改了 store。
+     * 实际是 `.visually-hidden` 用的是 `clip-path`（不是 `display:none`），
+     * 那句给读屏器的 `aria-live` 文本照样进 `innerText` ⇒ **量的是仪器，不是界面**。
+     * 所以这里显式把 `.visually-hidden` 与 0 尺寸节点剔掉。
+     */
+    const visibleText = (root) => Array.from(root.childNodes)
+      .filter((n) => {
+        // 注释节点必须剔掉：Vue 开发模式会把 falsy 的 `v-if` 留成 `<!--v-if-->` 占位，
+        // 而我写在模板里的说明也是注释 —— 第一版把它们当文字读了，
+        // 读数变成「· 未配置同步 v-if v-if v-if 那一句"为什么"必须看得见…」。
+        if (n.nodeType === 8) return false;
+        if (n.nodeType === 3) return true;
+        if (n.nodeType !== 1) return false;
+        const el = n;
+        if (el.classList.contains('visually-hidden')) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 || r.height > 0;
+      })
+      .map((n) => (n.nodeType === 1 ? visibleText(n) : n.textContent ?? ''))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const view = (sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return { missing: true };
+      const r = el.getBoundingClientRect();
+      const cx = Math.round(r.left + r.width / 2);
+      const cy = Math.round(r.top + r.height / 2);
+      const hit = document.elementFromPoint(cx, cy);
+      return {
+        h: Math.round(r.height),
+        inViewport: r.top >= 0 && r.bottom <= window.innerHeight + 1,
+        hitSelf: Boolean(hit && (hit === el || el.contains(hit) || hit.contains(el))),
+        text: visibleText(el).slice(0, 60),
+      };
+    };
+    const body = document.querySelector('[data-testid="sidebar"] .pane-body');
+    return {
+      syncbar: view('[data-testid="syncbar"]'),
+      settings: view('[data-testid="nav-settings"]'),
+      readout: view('[data-testid="library-readout"]'),
+      sideOverflowY: side ? side.scrollHeight - side.clientHeight : -1,
+      // §3.2 的正半句：**里面那一段必须真能滚**。少了这条，"侧栏自己不滚"可能只是因为没内容可滚。
+      folderScrollY: body ? body.scrollHeight - body.clientHeight : -1,
+      sideH: side ? Math.round(side.getBoundingClientRect().height) : -1,
+      viewportH: window.innerHeight,
+    };
+  });
+
+  check('㉔ 矮窗口（520 高）里同步状态条、设置入口、库读数三块都常驻可见',
+    shot.syncbar.missing !== true && shot.settings.missing !== true && shot.readout.missing !== true
+      && [shot.syncbar, shot.settings, shot.readout].every((b) => b.h > 0 && b.inViewport && b.hitSelf),
+    JSON.stringify(shot));
+  check('㉔ 同步状态条上那句话只说一遍（剔掉给读屏器的 aria-live 之后再比）',
+    (shot.syncbar.text ?? '').split('未配置同步').length === 2, JSON.stringify(shot.syncbar));
+  check('㉔ 侧栏那一栏自己不许有可滚溢出（滚的只能是里面那段）', shot.sideOverflowY <= 1, JSON.stringify(shot));
+  check('㉔ 里面那段文件夹列表确实溢出可滚（样本量判据：否则上一条只是"没内容可滚"的恒真）', shot.folderScrollY > 0, JSON.stringify(shot));
+  check('㉔ 库读数要读出真数字（含"篇"和数字），不是空壳', /篇/.test(shot.readout.text ?? '') && /\d/.test(shot.readout.text ?? ''), JSON.stringify(shot.readout));
+  check('㉔ 样本量：文件夹确实塞到 12 个（否则"没溢出"是恒真）', madeCount >= 12, JSON.stringify({ madeCount }));
+  check('㉔ 这一腿 console error 为零', fErrors.length === 0, fErrors.slice(0, 3).join(' | '));
+  notes.push(`     侧栏常驻实测：同步条=${JSON.stringify(shot.syncbar.text)}｜读数=${JSON.stringify(shot.readout.text)}｜侧栏溢出=${shot.sideOverflowY}px（视口 ${shot.viewportH}）`);
+  await fp.screenshot({ path: `${OUT}/38-sidebar-pinned-520.png` });
+  await fctx.close();
+
+  const after = flattenFolders(await cmd('list_folders'));
+  for (const f of after.filter((x) => (x.name ?? '').startsWith(MARK))) await cmd('delete_folder', { id: f.id });
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */

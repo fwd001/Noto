@@ -11,8 +11,9 @@ import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { callCommand, type LinkState } from '../api/bridge';
 import { Commands, type SyncBadgeKind, type SyncProgress } from '../api/types';
-import { messageFor } from '../i18n';
+import { messageFor, t } from '../i18n';
 import { asBridgeError } from '../util/errors';
+import { formatWhen } from '../util/format';
 import { useSettingsStore } from './settings';
 
 export interface FoldedSyncState {
@@ -137,6 +138,28 @@ export const useSyncStore = defineStore('sync', () => {
   const offline = computed(() => state.value.badge === 'offline');
   const linkDown = computed(() => link.value === 'unreachable');
 
+  /**
+   * 上一次同步成功的时间（§4.3 的「已同步 · 上一次：{时间}」）。
+   *
+   * 来源是核心 `sync_status` 的 `lastSuccessAt` —— 那个字段一直有，前端从来没调过那条命令，
+   * 于是这一格只能靠本次会话的事件凑，重启之后就是空的（看起来像"从没同步过"）。
+   * **没拿到就是 null**：写"刚刚"或拿启动时间冒充，都是把未知说成事实。
+   */
+  const lastSuccessAt = ref<string | null>(null);
+  const lastSuccessLine = computed(() => {
+    const when = formatWhen(lastSuccessAt.value);
+    return when.length > 0 ? t('sync.lastSuccess', { time: when }) : null;
+  });
+
+  async function refreshStatus(): Promise<void> {
+    try {
+      const status = await callCommand<{ lastSuccessAt?: string | null }>(Commands.syncStatus, {});
+      lastSuccessAt.value = status?.lastSuccessAt ?? null;
+    } catch {
+      // 问不到就继续未知：这一格缺席不影响徽标那五格，也不该抛到界面上。
+    }
+  }
+
   function applySignal(signal: SyncSignal): void {
     if (signal.errorCode === 'db_too_new' || signal.messageKey === 'db_too_new') dbTooNew.value = true;
     state.value = foldSyncEvent(state.value, signal, Date.now());
@@ -241,6 +264,9 @@ export const useSyncStore = defineStore('sync', () => {
     dbTooNew,
     showRetry,
     percent,
+    lastSuccessAt,
+    lastSuccessLine,
+    refreshStatus,
     offline,
     linkDown,
     busy,

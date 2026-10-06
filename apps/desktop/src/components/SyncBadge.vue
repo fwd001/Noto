@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** 同步徽标：用户可见的全部同步语义，只有那几格（协议细节一律折进来）。 */
-import { computed } from 'vue';
+import { computed, onMounted, watch } from 'vue';
 import { useSyncStore } from '../stores/sync';
 import { useShellStore } from '../stores/shell';
 import { t } from '../i18n';
@@ -41,13 +41,27 @@ function onClick(): void {
   // 门控在 store 里（没配/关掉时它不发请求、也不点亮徽标），这里只补"去处"。
   if (!sync.syncActive) shell.goto('settings');
 }
+
+/** 开机问一次，一轮跑完再问一次 —— "上一次成功"必须是核心那个**持久**的时间，不是本次会话凑的。 */
+onMounted(() => {
+  void sync.refreshStatus();
+});
+
+watch(
+  () => sync.badge,
+  (next, prev) => {
+    if (prev === 'syncing' && (next === 'synced' || next === 'failed')) void sync.refreshStatus();
+  },
+);
 </script>
 
 <template>
-  <div class="syncline">
+  <!-- §3.2：这一块是**状态陈述 + 可点动作**，不是提示条；它常驻，不跟文件夹列表一起滚。
+       §4.3：五种事实一句不许少，"上一次：{时间}"只在真拿到时间时出现。 -->
+  <div class="syncbar" :data-badge="sync.badge" data-testid="syncbar">
     <button
       type="button"
-      class="badge"
+      class="syncbar__title"
       :data-badge="sync.badge"
       :title="title"
       :aria-busy="sync.badge === 'syncing' ? 'true' : 'false'"
@@ -55,11 +69,12 @@ function onClick(): void {
       data-testid="sync-badge"
       @click="onClick()"
     >
-      <span class="badge__glyph" aria-hidden="true">{{ glyph }}</span>
+      <span class="syncbar__glyph" aria-hidden="true">{{ glyph }}</span>
       <span>{{ sync.label }}</span>
-      <span v-if="sync.percent !== null" class="text-muted">{{ t('sync.progress', { done: sync.percent, total: 100 }) }}</span>
+      <span v-if="sync.percent !== null" class="syncbar__progress">{{ t('sync.progress', { done: sync.percent, total: 100 }) }}</span>
     </button>
-    <button v-if="sync.showRetry" type="button" class="btn btn--quiet text-sm" data-testid="sync-retry" @click="sync.syncNow()">
+    <p v-if="sync.lastSuccessLine" class="syncbar__when" data-testid="sync-last-success">{{ sync.lastSuccessLine }}</p>
+    <button v-if="sync.showRetry" type="button" class="syncbar__action" data-testid="sync-retry" @click="sync.syncNow()">
       {{ t('sync.retry') }}
     </button>
     <span class="visually-hidden" role="status" aria-live="polite">{{ detailText }}</span>
@@ -67,9 +82,82 @@ function onClick(): void {
          而核心给的说法（`sync.needs_credentials` 那格文案）以前只进 `aria-live`
          与 `title` ⇒ 屏幕上只剩"离线"两个字，用户既不知道是口令没了、
          也不知道该去哪儿修。静止态更要说清是哪一种静止（未配置 / 已关闭 / 缺凭据）。 -->
-    <p v-if="sync.detail" class="syncline__detail" data-testid="sync-detail">{{ sync.detail }}</p>
+    <p v-if="sync.detail" class="syncbar__desc" data-testid="sync-detail">{{ sync.detail }}</p>
   </div>
 </template>
+
+<style scoped>
+/** 设计稿 §3.2 的 `.syncbar`：sunken 底的一小块，标题行 / 时间 / 原因 / 动作自上而下。 */
+.syncbar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3);
+  border-radius: var(--r-row);
+  background: var(--sunken);
+}
+
+.syncbar__title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: var(--touch);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-weight: 600;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.syncbar__glyph {
+  width: 16px;
+  flex: 0 0 16px;
+  text-align: center;
+}
+
+/* 五格各自的颜色（§2.3）：只有"正在同步"会动，第五格绝对静止 */
+.syncbar__title[data-badge='synced'] .syncbar__glyph { color: var(--ok); }
+.syncbar__title[data-badge='syncing'] .syncbar__glyph { color: var(--accent); }
+.syncbar__title[data-badge='failed'] .syncbar__glyph { color: var(--danger); }
+.syncbar__title[data-badge='offline'] .syncbar__glyph,
+.syncbar__title[data-badge='idle'] .syncbar__glyph { color: var(--mute); }
+
+.syncbar__progress {
+  color: var(--mute);
+  font-weight: 400;
+}
+
+.syncbar__when {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--mute);
+}
+
+.syncbar__desc {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--body);
+}
+
+.syncbar__action {
+  align-self: flex-start;
+  min-height: 28px;
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: var(--r-chip);
+  background: var(--canvas);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+</style>
 
 <style scoped>
 .syncline {
