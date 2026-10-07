@@ -33,6 +33,11 @@ const MESSAGES: Record<MessageKey, string> = {
   /* 列表 / 搜索 */
   'list.searchPlaceholder': '搜索笔记',
   'list.searching': '搜索中…',
+  // §3.3 搜索结果分档。三句都照设计稿 v2 的搜索态那一栏抄，不自创措辞。
+  'list.searchFound': '「{query}」找到 {count} 条',
+  'list.searchTierHint': '两条字都搜得到 · 搜的是字，不是意思',
+  'list.tierExact': '精准 {count}',
+  'list.tierFuzzy': '模糊 {count}',
   'list.noResults': '没有找到相关内容',
   'list.noResultsHint': '换个词试试，中文两个字也能搜。',
   'list.empty': '这里还没有笔记',

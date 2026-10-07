@@ -78,6 +78,36 @@ describe('即时搜索', () => {
     expect(notes.searching).toBe(false);
   });
 
+  /**
+   * 命中行的标题那一格：核心一直在发 `title`（真 dev 桥实测：连"第一段是空的"那种笔记，
+   * 它给的也是**正文第一块**那句话），而 store 里那份"拿片段前 40 字猜标题"是从前
+   * DTO 还没这个键的年代留下来的（`git log -S` 到初始提交）。
+   * 它只在**这篇不在已载入的列表里**时才露头（在文件夹视图里搜、或库里 200 条开外）——
+   * 露出来的就是列表上「标题」与「摘要」两行写着同一段正文。
+   */
+  it('命中行的标题用核心给的那一格，不拿片段猜（缺口 G93）', async () => {
+    stubLocalService({
+      // 列表里没有这一篇，于是 titles 是空的 —— 正是那条旧退路会露头的形状。
+      list_notes: () => [],
+      search: () => [{ noteId: 'far-1', score: 1, title: '真正的标题', snippetHtml: '<mark>甲</mark>乙的正文片段', exact: true }],
+    });
+    const notes = useNoteStore();
+    notes.requestSearch('甲乙');
+    await vi.advanceTimersByTimeAsync(220);
+    expect(notes.titles['far-1']).toBe('真正的标题');
+  });
+
+  it('核心说这篇没有标题，界面就不许给它编一个（退「未命名」）', async () => {
+    stubLocalService({
+      list_notes: () => [],
+      search: () => [{ noteId: 'blank-1', score: 1, title: '', snippetHtml: '<mark>甲</mark>乙的正文片段', exact: true }],
+    });
+    const notes = useNoteStore();
+    notes.requestSearch('甲乙');
+    await vi.advanceTimersByTimeAsync(220);
+    expect(notes.titles['blank-1']).toBe('');
+  });
+
   it('搜索中/无结果两态可区分', async () => {
     stubLocalService({ search: () => [], list_notes: () => [] });
     const notes = useNoteStore();

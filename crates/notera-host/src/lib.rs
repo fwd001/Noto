@@ -24,8 +24,8 @@ use notera_config::{
 };
 use notera_core::{Clock, DeviceId, EntityId, EntityKind, Rev, SystemClock, Timestamp};
 use notera_store::{
-    ApplyOp as StoreApplyOp, ConflictRow, Folder, Note, NoteListRow, NoteQuery, SearchPath, Store,
-    StoreError,
+    ApplyOp as StoreApplyOp, ConflictRow, Folder, MatchKind, Note, NoteListRow, NoteQuery,
+    SearchPath, Store, StoreError,
 };
 use notera_sync::plan::{Decision, LocalView, RemoteView};
 use notera_sync::{ApplyOp, EngineConfig, LocalError, LocalPort, Phase, RoundStats, SyncEvent};
@@ -642,6 +642,7 @@ impl App {
                 score: h.score,
                 snippet_html: h.snippet_html,
                 title,
+                exact: matches!(h.match_kind, MatchKind::Exact),
             });
         }
         Ok(out)

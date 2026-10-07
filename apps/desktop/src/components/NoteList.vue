@@ -105,6 +105,18 @@ const listTitle = computed(() => {
 
 const errorText = computed(() => (notes.errorKey ? messageFor(notes.errorKey) : ''));
 
+/**
+ * §3.3 分档那一段要不要画。
+ *
+ * 空结果时不画：那一格归 §3.3 固定的那句「没有找到相关内容」管，再来一排「精准 0 · 模糊 0」
+ * 是同一件事说两遍。搜索进行中也不画：那时这几格还是**上一次**查询的结论，顶着说就是假话。
+ */
+const tiers = computed(() => {
+  const read = notes.searchTiers;
+  if (read === null || notes.searching) return null;
+  return read.exact + read.fuzzy > 0 ? read : null;
+});
+
 function onScroll(event: Event): void {
   const el = event.target as HTMLElement;
   scrollTop.value = el.scrollTop;
@@ -181,6 +193,21 @@ function createFrom(tpl: NoteTemplate): void {
     <SearchField ref="searchField" />
 
     <p v-if="notes.searching" class="list-status" role="status" data-testid="search-status">{{ t('list.searching') }}</p>
+
+    <!-- §3.3 分档读数（§6 第 5 条"已实现未开放"里的第 5 格）。
+         刻意放在滚动区**外面**：`.rows` 的 padTop/padBottom/endIndex 全按 ROW_HEIGHT 算，
+         往视口里插一块会被滚走的东西，虚拟滚动的位置公式就整体偏一格 —— 表现是"滚到某处开始空白行"。
+         搜索进行中不画：那时下面这几格还是上一次查询的结论，顶着说就是假话。 -->
+    <div v-if="tiers !== null" class="search-summary" data-testid="search-summary">
+      <p class="search-summary__count" role="status" data-testid="search-found">
+        {{ t('list.searchFound', { query: notes.query.trim(), count: notes.hits?.length ?? 0 }) }}
+      </p>
+      <p class="search-summary__hint" data-testid="search-tier-hint">{{ t('list.searchTierHint') }}</p>
+      <p class="search-summary__tiers">
+        <span class="tier-chip" data-testid="tier-exact">{{ t('list.tierExact', { count: tiers.exact }) }}</span>
+        <span class="tier-chip" data-testid="tier-fuzzy">{{ t('list.tierFuzzy', { count: tiers.fuzzy }) }}</span>
+      </p>
+    </div>
 
     <div ref="viewport" class="pane-body list-viewport" @scroll.passive="onScroll">
       <SkeletonRows v-if="notes.loading && total === 0" />
@@ -450,5 +477,39 @@ function createFrom(tpl: NoteTemplate): void {
   color: var(--mute);
   text-align: center;
   flex: 0 0 auto;
+}
+
+.search-summary {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.search-summary__count {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.search-summary__hint {
+  font-size: var(--text-xs);
+  line-height: 17px;
+  color: var(--mute);
+}
+
+.search-summary__tiers {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.tier-chip {
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-chip);
+  font-size: var(--text-xs);
+  color: var(--body);
 }
 </style>

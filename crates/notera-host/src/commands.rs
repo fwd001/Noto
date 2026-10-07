@@ -81,6 +81,11 @@ pub struct SearchHitDto {
     pub score: f64,
     pub snippet_html: String,
     pub title: String,
+    /// §3.3 的分档：`true` = 每个词段都连着出现（精准），`false` = 只有三字串档命中（模糊）。
+    ///
+    /// 存储层一直算好了（`SearchHit::match_kind`），丢在这一刀。以前界面上"精准 N · 模糊 N"
+    /// 根本画不出来，就是因为线上没这一格。
+    pub exact: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]

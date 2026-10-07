@@ -110,6 +110,7 @@ const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '');
 const FIXTURE_MARKS = [
   '只读夹具', '常驻夹具', '拖排夹具', '滚动夹具', '状态夹具', '保存状态夹具',
   '置顶往返夹具', '通扫夹具', '键盘夹具', '附件账夹具', '弹窗夹具', '拖放夹具',
+  '分档夹具',
 ];
 for (const mark of FIXTURE_MARKS) await purgeByTitle(mark);
 
@@ -3905,6 +3906,144 @@ function contrastRatio(fg, bg) {
   await p45s.close();
   await c45s.close();
   notes.push(`     静止格「同步已关闭」实测：${JSON.stringify(cell.visible).slice(0, 90)}；520 高读数 ${JSON.stringify(short)}`);
+}
+
+/**
+ * ㊶ §3.3 搜索分档 —— §6「已实现未开放」第 5 格接上的那一刀。
+ *
+ * 核心早就算完了两档，丢的是过桥那一刀（`SearchHitDto` 以前只有 4 个键，真 dev 桥实测）。
+ * 这一腿钉的是**屏幕上那几行字对不对得上同一发查询的真载荷**，不是"有没有画两个 chip"：
+ *  - 期望值从核心的 JSON 里按 `exact` 逐条数出来，读数是渲染后的 `innerText` ⇒
+ *    键名漂移、把模糊数成精准、"前 N 条算精准"那一类抄位置的写法都跑不掉；
+ *  - 顺序也钉（§3.3 原话"精准排前，模糊在后"）：界面要是自己重排，屏幕上就再也读不到核心的顺序；
+ *  - 再加一个只命中精准档的查询当第二个读数点（只会数一次的话，写反了也量不出来），
+ *    和一条反向（空结果不许报「精准 0 · 模糊 0」，那一格归固定的空态文案）；
+ *  - 最后一条是几何：这一段必须在列表滚动区**外面**。放进去就等价于往虚拟滚动前面塞一块
+ *    会被滚走的东西，padTop/endIndex 全按 ROW_HEIGHT 算，表现是滚到一半开始出空白行。
+ */
+{
+  const texts = [
+    '分档夹具·精准：这一篇写着数据同步协议的边界条件',
+    '分档夹具·模糊：先做数据同步的预演，同步协调另开一条线，下一步协议的边界还没定',
+    '分档夹具·无关：今年开始同步协调，明年再说',
+  ];
+  for (const [i, text] of texts.entries()) {
+    await cmd('create_note', { folderId: null, doc: { v: 1, content: [{ id: `tierblk0${i}`, type: 'paragraph', content: [{ text }] }] } });
+  }
+
+  const c46 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p46 = await c46.newPage();
+  const tErrors = [];
+  p46.on('console', (m) => { if (m.type() === 'error') tErrors.push(m.text()); });
+  await p46.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p46.waitForSelector('[data-testid="search-input"]', { timeout: 15000 });
+
+  /** 真打字进去（`fill` 走浏览器的 input 事件，不是往 DOM 塞 value），然后把"屏幕上"和"核心里"两处读数一起取。 */
+  const read = async (text) => {
+    await p46.fill('[data-testid="search-input"]', text);
+    try {
+      await p46.waitForSelector('[data-testid="search-summary"]', { timeout: 9000 });
+    } catch {
+      // 空结果那一格本来就不该出现这一段；不在这儿抛，交给下面的判据去红。
+    }
+    await p46.waitForTimeout(300);
+    const screen = await p46.evaluate(() => {
+      const val = (sel) => document.querySelector(sel)?.innerText?.trim() ?? null;
+      const list = document.querySelector('.pane--list');
+      return {
+        summary: val('[data-testid="search-summary"]'),
+        found: val('[data-testid="search-found"]'),
+        hint: val('[data-testid="search-tier-hint"]'),
+        exact: val('[data-testid="tier-exact"]'),
+        fuzzy: val('[data-testid="tier-fuzzy"]'),
+        rowTitles: Array.from(document.querySelectorAll('[data-testid^="note-row-"]'))
+          .map((r) => r.querySelector('.row-item__title')?.innerText?.trim() ?? ''),
+        emptyShown: document.querySelector('[data-testid="search-empty"]') !== null,
+        listOverflowY: list ? list.scrollHeight - list.clientHeight : -1,
+      };
+    });
+    const back = await cmd('search', { text, limit: 80 });
+    return { screen, payload: Array.isArray(back) ? back : [] };
+  };
+
+  const both = await read('数据同步协议');
+  const exactN = both.payload.filter((h) => h.exact === true).length;
+  const fuzzyN = both.payload.filter((h) => h.exact === false).length;
+  check('㊶ 仪器自检：这一发查询在核心里真的两档各命中一条（不然下面几条全是空判据）',
+    both.payload.length >= 2 && exactN >= 1 && fuzzyN >= 1,
+    JSON.stringify({ len: both.payload.length, exactN, fuzzyN, keys: Object.keys(both.payload[0] ?? {}) }));
+  check('㊶ 屏幕上「精准 N」的 N 就是真载荷里 exact=true 的条数（读的是渲染后的文字）',
+    both.screen.exact === `精准 ${exactN}`, JSON.stringify({ onScreen: both.screen.exact, expected: exactN }));
+  check('㊶ 屏幕上「模糊 N」的 N 就是真载荷里 exact=false 的条数 —— 两档合起来才是全量，缺一条就是界面在漏数',
+    both.screen.fuzzy === `模糊 ${fuzzyN}`, JSON.stringify({ onScreen: both.screen.fuzzy, expected: fuzzyN }));
+  check('㊶ 「找到 M 条」的 M 是真载荷条数，且那句带着用户打进去的词（不是把标题名念一遍）',
+    both.screen.found === `「数据同步协议」找到 ${both.payload.length} 条`, JSON.stringify({ onScreen: both.screen.found }));
+  check('㊶ 精准排前、模糊在后：列表第一行是精准那条，而核心给的回顺序本来就如此（界面不许自己重排）',
+    both.screen.rowTitles[0]?.startsWith('分档夹具·精准') === true && both.payload[0]?.exact === true,
+    JSON.stringify({ firstRow: both.screen.rowTitles[0], firstFlag: both.payload[0]?.exact ?? null }));
+  check('㊶ 那句"两条字都搜得到 · 搜的是字，不是意思"是看得见的一行（设计稿搜索态那一栏的第二行）',
+    both.screen.hint === '两条字都搜得到 · 搜的是字，不是意思', JSON.stringify({ onScreen: both.screen.hint }));
+
+  const only = await read('边界条件');
+  check('㊶ 只命中精准档的那一发：屏幕换成「精准 1 · 模糊 0」（数字跟着载荷走，不是写死的一排）',
+    only.screen.exact === `精准 ${only.payload.filter((h) => h.exact === true).length}`
+      && only.screen.fuzzy === '模糊 0' && only.payload.length >= 1 && only.screen.summary !== null,
+    JSON.stringify({ onScreen: [only.screen.exact, only.screen.fuzzy], payload: only.payload.map((h) => [h.title.slice(0, 12), h.exact]) }));
+
+  const none = await read('qwerty不存在的东西');
+  check('㊶ 空结果那一格不报分档：没有「精准 0 · 模糊 0」，画的是 §3.3 固定那句空态（一件事只说一遍）',
+    none.screen.summary === null && none.screen.emptyShown === true && none.payload.length === 0,
+    JSON.stringify({ summary: none.screen.summary, emptyShown: none.screen.emptyShown, len: none.payload.length }));
+
+  /**
+   * 几何那一格：这一段必须**不参与列表滚动**。
+   *
+   * 判法不是"看它挂在哪个父节点下"，也不是量 `.pane--list` 的溢出量 —— 我先写的正是后者，
+   * 探针实测那一判**恒为 0**（真在滚的是里面那层 `.list-viewport`），于是"把这一段挪进滚动区"
+   * 它照样绿：扫到 0 项 ≠ 检查过。这里改成**真的把列表滚一下**：
+   *  其中一行的 top 必须动（正对照 —— 不然"没动"可能只是压根没滚起来），而这一段的 top 一动不动。
+   */
+  for (let i = 0; i < 12; i += 1) {
+    await cmd('create_note', {
+      folderId: null,
+      doc: { v: 1, content: [{ id: `tierfill${String(i).padStart(2, '0')}`, type: 'paragraph', content: [{ text: `分档夹具·撑高 ${i}：这一篇存在的唯一目的是把列表真的撑到能滚` }] }] },
+    });
+  }
+  await p46.fill('[data-testid="search-input"]', '分档夹具');
+  const sumWaited = await p46.waitForSelector('[data-testid="search-summary"]', { timeout: 9000 }).then(() => true).catch(() => false);
+  await p46.waitForTimeout(400);
+  const GEOM = () => {
+    const vp = document.querySelector('.list-viewport');
+    const sum = document.querySelector('[data-testid="search-summary"]');
+    const row = document.querySelector('[data-testid^="note-row-"]');
+    return {
+      sumTop: Math.round(sum?.getBoundingClientRect().top ?? -1),
+      rowTop: Math.round(row?.getBoundingClientRect().top ?? -1),
+      scrollTop: vp ? Math.round(vp.scrollTop) : -1,
+      scrollable: vp ? Math.round(vp.scrollHeight - vp.clientHeight) : -1,
+      sumInVp: sum && vp ? vp.contains(sum) : null,
+    };
+  };
+  const g0 = await p46.evaluate(GEOM);
+  await p46.evaluate(() => {
+    const vp = document.querySelector('.list-viewport');
+    if (vp) vp.scrollTop = 150;
+  });
+  await p46.waitForTimeout(200);
+  const g1 = await p46.evaluate(GEOM);
+  check('㊶ 仪器自检（几何）：这一发查询真的把列表撑到能滚，且那一段画出来了（滚不动就没有正对照）',
+    sumWaited === true && g0.scrollable > 100, JSON.stringify({ sumWaited, g0 }));
+  check('㊶ 正对照：把列表滚 150px，其中一行的 top 真的动了（量到"没动"可能是压根没滚）',
+    Math.abs(g1.rowTop - g0.rowTop) >= 100 && g1.scrollTop >= 100, JSON.stringify({ rowTop: [g0.rowTop, g1.rowTop], scrollTop: [g0.scrollTop, g1.scrollTop] }));
+  check('㊶ 而分档那一段的 top 一动不动、且它不在滚动区里（塞进去就等于往虚拟滚动前面塞一块会被滚走的东西：padTop/endIndex 整体偏一格，表现是滚到一半出空白行）',
+    g0.sumTop === g1.sumTop && g1.sumInVp === false, JSON.stringify({ sumTop: [g0.sumTop, g1.sumTop], sumInVp: g1.sumInVp, rowTop: [g0.rowTop, g1.rowTop] }));
+  check('㊶ 这一腿 console error 为零', tErrors.length === 0, tErrors.slice(0, 3).join(' | '));
+
+  await p46.screenshot({ path: `${OUT}/52-search-tier-1440.png` });
+  await p46.close();
+  await c46.close();
+  await purgeByTitle('分档夹具');
+  notes.push(`     分档实测：载荷 ${both.payload.length} 条（精准 ${exactN} / 模糊 ${fuzzyN}）⇒ 屏幕「${both.screen.exact}」「${both.screen.fuzzy}」；单档一发 ${only.screen.exact}/${only.screen.fuzzy}`);
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */

@@ -277,3 +277,58 @@ fn folder_wire_carries_system_kind_for_the_default_folder() {
         "拒绝默认本删除的错误码变了：{err:?}"
     );
 }
+
+/// §3.3：「搜索分档是新能力：后端已经算出"精准/模糊"…但被丢掉了。精准排前，模糊在后。」
+///
+/// "被丢掉"发生在过桥这一刀，不在检索里 —— `notera_store::SearchHit.match_kind` 一直有值，
+/// `SearchHitDto` 以前只带四个键（真 dev 桥实测：`noteId,score,snippetHtml,title`）。
+/// 所以这一格钉的是**线格式**：键名、两档各一条的真值、以及"精准在前"这个顺序承诺。
+/// TS 类型和前端 mock 都看不见这一类漂移（本仓库踩过两次同一形状）。
+#[test]
+fn search_wire_carries_the_tier_flag_with_exact_first() {
+    let dir = Tmp::new("tier");
+    let app = App::boot(dir.path()).expect("核心启动");
+
+    // 同一句查询：连着写完的是精准档；把"数据同步"和"协议"隔开写的，只有三字串档能抓到。
+    let exact = call(
+        &app,
+        "create_note",
+        json!({ "folderId": Value::Null, "doc": doc("这一篇写着数据同步协议的边界条件") }),
+    );
+    let fuzzy = call(
+        &app,
+        "create_note",
+        json!({ "folderId": Value::Null, "doc": doc("先做数据同步的预演，同步协调另开一条线，下一步协议的边界还没定") }),
+    );
+    let exact_id = exact["id"].as_str().unwrap().to_string();
+    let fuzzy_id = fuzzy["id"].as_str().unwrap().to_string();
+
+    let hits = call(
+        &app,
+        "search",
+        json!({ "text": "数据同步协议", "limit": 10 }),
+    );
+    let all = hits.as_array().expect("search 该回数组");
+    assert_eq!(all.len(), 2, "夹具该命中两条，实际 {all:?}");
+
+    let first = &all[0];
+    for key in ["noteId", "score", "snippetHtml", "title", "exact"] {
+        assert!(first.get(key).is_some(), "命中载荷缺 {key}：{first}");
+    }
+    assert_eq!(
+        first["noteId"].as_str(),
+        Some(exact_id.as_str()),
+        "精准档没排在前面——§3.3 的顺序承诺是'精准排前，模糊在后'，界面那两句读数以这个顺序为前提"
+    );
+    assert_eq!(
+        first["exact"],
+        json!(true),
+        "精准那一条没报成精准：界面会显示「精准 0」"
+    );
+    assert_eq!(all[1]["noteId"].as_str(), Some(fuzzy_id.as_str()));
+    assert_eq!(
+        all[1]["exact"],
+        json!(false),
+        "模糊那一条报成了精准：界面会说谎"
+    );
+}

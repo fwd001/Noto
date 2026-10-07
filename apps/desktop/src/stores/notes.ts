@@ -56,6 +56,18 @@ export const useNoteStore = defineStore('notes', () => {
   const pinnedRows = computed(() => rows.value.filter((row) => row.pinned === true));
   const restRows = computed(() => rows.value.filter((row) => row.pinned !== true));
   const titleOf = computed(() => (id: string) => titles.value[id] ?? '');
+  /**
+   * §3.3 的分档读数：**逐条读核心给的 `exact`**，不按位置切。
+   *
+   * 核心内部确实是用位置切的（`search.rs` 里 `if i < exact_count`），界面再抄一遍
+   * 就是第二份判据 —— 哪天两档交叉返回，抄位置的这份会安静地数错。
+   */
+  const searchTiers = computed<{ exact: number; fuzzy: number } | null>(() => {
+    if (hits.value === null) return null;
+    let exact = 0;
+    for (const hit of hits.value) if (hit.exact === true) exact += 1;
+    return { exact, fuzzy: hits.value.length - exact };
+  });
 
   let requestId = 0;
 
@@ -147,10 +159,11 @@ export const useNoteStore = defineStore('notes', () => {
       hits.value = list;
       const next: Record<string, string> = { ...titles.value };
       for (const hit of list) {
-        if (hit.noteId && !next[hit.noteId]) {
-          const derived = hit.snippetHtml ? stripTags(hit.snippetHtml).slice(0, 40) : '';
-          next[hit.noteId] = derived;
-        }
+        // 标题只认核心发的 `title`（缺口 G93）：以前这里拿片段前 40 字猜标题，而那一带
+        // 是 DTO 还没有 `title` 键的年代留下的。露头的形状很日常 —— 在文件夹视图里搜、
+        // 或库里 200 条开外：只要这篇不在已载入的列表里，屏幕上「标题」与「摘要」两行
+        // 就是同一段正文。空标题的那篇也照核心给的走（界面上退「未命名」），不替它编一个。
+        if (hit.noteId && !next[hit.noteId]) next[hit.noteId] = hit.title ?? '';
       }
       titles.value = next;
     } catch (error) {
@@ -372,6 +385,7 @@ export const useNoteStore = defineStore('notes', () => {
     selectedId,
     query,
     hits,
+    searchTiers,
     searching,
     searchErrorKey,
     titles,
@@ -395,7 +409,3 @@ export const useNoteStore = defineStore('notes', () => {
     invalidate,
   };
 });
-
-function stripTags(html: string): string {
-  return html.replace(/<[^>]*>/g, '').replace(/&[a-z]+;/gi, ' ');
-}
