@@ -4290,6 +4290,70 @@ function contrastRatio(fg, bg) {
   notes.push(`     「改于」实测：核心 ${before.slice(11, 16)} ⇒ 屏幕「${label0}」；存过一次之后 ${after.slice(11, 16)} ⇒ 屏幕「${label1}」；角上那一排「${(cornerWords ?? '').slice(0, 40)}」`);
 }
 
+/**
+ * ㊹ §6 第 4 格「同步详情面板」剩下的两位 —— 核心的 `pendingOps` / `openConflicts` 过桥到屏幕。
+ *
+ * 这一格的要点不是"有没有那两个数"，而是**它们各自说的是什么**：
+ * 核心的 `pending_ops` 数的是"**当前账户出箱**里还有几条"（`lib.rs` 里那段 `outbox_len(账户…)`），
+ * 没配账户时恒为 0 —— 那不是"没有改动没落地"（那一件事在笔记行的 `dirty` 上）。
+ * 于是那句「改动都已经同步过去」只能对**配了账户**的设备说（缺口 G94 就是这么登记的）。
+ * 四种形状各有一条判据，正对照是"那一卡与徽标真渲染了"—— 少了它，"那一行没出现"
+ * 可能只是整页没画（㊸ 那次注入就是把整页弄没了，同一个坑不踩第二遍）。
+ */
+{
+  const ACC = {
+    id: 'acct-99', baseUrl: 'https://dav.invalid/dav', username: 'u', enabled: true,
+    hasCredential: true, credentialLive: true, credentialPersistent: true,
+  };
+  const BASE = { phase: 'idle', badge: 'synced', lastSuccessAt: null, divergenceHeld: null, messageKey: null, retryable: false };
+
+  const visit = async (status, account) => {
+    const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const p = await c.newPage();
+    const errs = [];
+    p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    await p.route('**/cmd/account', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(account) }));
+    await p.route('**/cmd/sync_status', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(status) }));
+    await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await p.evaluate(() => document.querySelector('[data-testid="nav-settings"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    await p.waitForTimeout(900);
+    const read = await p.evaluate(() => ({
+      card: document.querySelector('#sec-sync') !== null,
+      badge: document.querySelector('[data-testid="syncbar"]') !== null,
+      backlog: document.querySelector('[data-testid="sync-backlog"]')?.innerText?.trim() ?? null,
+    }));
+    return { p, c, errs, ...read };
+  };
+
+  const seven = await visit({ ...BASE, pendingOps: 7, openConflicts: 2 }, ACC);
+  check('㊹ 仪器自检（正对照）：设置页那一卡与同步徽标都真渲染了（否则"那一行没出现"可能只是整页没画）',
+    seven.card === true && seven.badge === true, JSON.stringify({ card: seven.card, badge: seven.badge }));
+  check('㊹ 核心发的两个数过桥到屏幕上：排队 7 条 + 等处理 2 条，两句都在',
+    seven.backlog === '还有 7 项改动等着同步 · 2 条版本等你处理', JSON.stringify({ onScreen: seven.backlog }));
+  await seven.p.screenshot({ path: `${OUT}/55-sync-backlog-1440.png` });
+
+  const zero = await visit({ ...BASE, pendingOps: 0, openConflicts: 0 }, ACC);
+  check('㊹ 两个数都是 0 时说的是「改动都已经同步过去」（配了账户才许说这句）',
+    zero.card === true && zero.backlog === '改动都已经同步过去', JSON.stringify({ card: zero.card, onScreen: zero.backlog }));
+
+  const noAcc = await visit({ ...BASE, pendingOps: 0, openConflicts: 0 }, null);
+  check('㊹ 没配账户时那一行不出现：核心的 0 是"没账户可数"，不是"都传上去了"（缺口 G94）',
+    noAcc.card === true && noAcc.badge === true && noAcc.backlog === null, JSON.stringify({ card: noAcc.card, badge: noAcc.badge, onScreen: noAcc.backlog }));
+
+  const legacy = await visit({ ...BASE }, ACC);
+  check('㊹ 回包里缺那两格（对面是个没升级的核心）⇒ 也只能当未知，不许把缺位读成 0',
+    legacy.card === true && legacy.backlog === null, JSON.stringify({ card: legacy.card, onScreen: legacy.backlog }));
+
+  const allErrors = [seven.errs, zero.errs, noAcc.errs, legacy.errs].flat();
+  check('㊹ 这一腿 console error 为零（四种注入形状都不许把界面弄出报错）', allErrors.length === 0, allErrors.slice(0, 3).join(' | '));
+
+  for (const run of [seven, zero, noAcc, legacy]) {
+    await run.p.close();
+    await run.c.close();
+  }
+  notes.push(`     同步排队数实测：7/2 ⇒「${seven.backlog}」；0/0 ⇒「${zero.backlog}」；没账户 ⇒ 不出现；缺键 ⇒ 不出现`);
+}
+
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
 async function purgeByTitle(prefix) {
   for (const trash of [false, true]) {

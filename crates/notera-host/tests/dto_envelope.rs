@@ -332,3 +332,55 @@ fn search_wire_carries_the_tier_flag_with_exact_first() {
         "模糊那一条报成了精准：界面会说谎"
     );
 }
+
+/// §6 第 4 格「同步详情面板 —— 阶段、上次成功时间、待处理任务数、开放冲突数、能否重试，后端全有」。
+///
+/// 前端以前在 `refreshStatus()` 的调用点上只取了 `lastSuccessAt` 与 `divergenceHeld`，
+/// 于是"这台设备上还有多少改动没传上去"这一格在界面上是**说不出来**的 ——
+/// 而那两个计数一直在发。这一格钉的是**线格式**：键名与类型必须还在（漂了界面就只能猜）。
+/// 数本身真不真（建一篇之后待传数要跟着涨）也在这里钉 —— 界面上那句话说的是它。
+#[test]
+fn sync_status_carries_the_backlog_counters() {
+    let dir = Tmp::new("backlog");
+    let app = App::boot(dir.path()).expect("核心启动");
+
+    let status = call(&app, "sync_status", json!({}));
+    for key in [
+        "phase",
+        "badge",
+        "lastSuccessAt",
+        "pendingOps",
+        "openConflicts",
+        "retryable",
+    ] {
+        assert!(
+            status.get(key).is_some(),
+            "sync_status 缺 {key}（缺了界面就说不清这一台的状态）：{status}"
+        );
+    }
+    assert!(
+        status["pendingOps"].is_number() && status["openConflicts"].is_number(),
+        "两个计数不是数字：{status}"
+    );
+
+    call(
+        &app,
+        "create_note",
+        json!({ "folderId": Value::Null, "doc": doc("这台设备上有一条改动还没处可去") }),
+    );
+    let after = call(&app, "sync_status", json!({}));
+    assert_eq!(
+        after["phase"],
+        json!("unconfigured"),
+        "这台设备本来没配账户，phase 却不再是 unconfigured：{after}"
+    );
+    // 这一条钉的是**这一格的语义**：`pendingOps` 是"当前账户出箱里还有几条"，
+    // 不是"这台设备上还有多少没保存/没传走的改动"（笔记行上的 `dirty` 才是那一件事）。
+    // 没配账户时它恒为 0 —— 界面要是拿它去说"改动都已经同步过去"，就对一台根本没开同步的设备撒了谎
+    // （`stores/sync.ts` 的 `backlogLine` 因此只在配了账户时才开口）。
+    assert_eq!(
+        after["pendingOps"],
+        json!(0),
+        "没配账户时 pendingOps 竟然不是 0：{after} —— 那一格到底在数什么要重新对账"
+    );
+}

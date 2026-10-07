@@ -174,6 +174,11 @@ const MESSAGES: Record<MessageKey, string> = {
   'sync.retry': '重试',
   // §4.3「已同步 · 上一次：{时间}」。没拿到时间时这一句**根本不出现**（不写"刚刚"，那是编的）。
   'sync.lastSuccess': '上一次：{time}',
+  // §6 第 4 格「同步详情」里剩下的两位（核心一直在发 `pendingOps` / `openConflicts`，
+  // 前端以前在调用点上把它们丢了）。两句 + 一句分隔：数是真的，问不到时这一整行不出现。
+  'sync.backlogPending': '还有 {count} 项改动等着同步',
+  'sync.backlogClear': '改动都已经同步过去',
+  'sync.backlogConflicts': ' · {count} 条版本等你处理',
   'sync.detail': '同步状态',
   'sync.syncNow': '立即同步',
   'sync.progress': '{done}/{total}',

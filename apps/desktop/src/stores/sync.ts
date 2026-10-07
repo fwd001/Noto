@@ -188,16 +188,48 @@ export const useSyncStore = defineStore('sync', () => {
    */
   const divergence = ref<DivergenceHeld | null>(null);
 
+  /**
+   * 这台设备上**还没传上去的改动数**与**等人处理的版本数**（§6 第 4 格那两位）。
+   *
+   * 来源是 `sync_status` 的 `pendingOps` / `openConflicts` —— 核心一直在发，
+   * 而 `refreshStatus()` 以前只取 `lastSuccessAt` 与 `divergenceHeld`，
+   * 于是"门后面到底有没有排队"这件事屏幕上说不出来。
+   * **未知就是 null**：问不到、或对面是个没这两格的核心时，那一行整条不出现 ——
+   * 把 `undefined` 读成 0 会说出一句"改动都已经同步过去"，那是把"没查到"讲成"查过了"。
+   */
+  const backlog = ref<{ pendingOps: number; openConflicts: number } | null>(null);
+  const backlogLine = computed<string | null>(() => {
+    const read = backlog.value;
+    if (read === null) return null;
+    /**
+     * 没配账户时这一句**整条不说**。
+     * 核心的 `pendingOps` 数的是"**当前账户出箱**里还有几条"（`lib.rs` 里那段 `outbox_len(账户…)`），
+     * 不是"这台设备上还有多少改动没落地"—— 没配账户时它恒为 0，而笔记行上的 `dirty` 才是真的。
+     * 于是直接说"改动都已经同步过去"，就是对着一个根本没开同步的设备撒一句谎（缺口 G94）。
+     */
+    if (!useSettingsStore().hasAccount) return null;
+    const head = read.pendingOps > 0 ? t('sync.backlogPending', { count: read.pendingOps }) : t('sync.backlogClear');
+    return read.openConflicts > 0 ? `${head}${t('sync.backlogConflicts', { count: read.openConflicts })}` : head;
+  });
+
   async function refreshStatus(): Promise<void> {
     try {
-      const status = await callCommand<{ lastSuccessAt?: string | null; divergenceHeld?: DivergenceHeld | null }>(
-        Commands.syncStatus,
-        {},
-      );
+      const status = await callCommand<{
+        lastSuccessAt?: string | null;
+        divergenceHeld?: DivergenceHeld | null;
+        pendingOps?: number | null;
+        openConflicts?: number | null;
+      }>(Commands.syncStatus, {});
       lastSuccessAt.value = status?.lastSuccessAt ?? null;
       divergence.value = status?.divergenceHeld ?? null;
+      const pending = status?.pendingOps;
+      const conflicts = status?.openConflicts;
+      backlog.value = typeof pending === 'number' && typeof conflicts === 'number'
+        ? { pendingOps: pending, openConflicts: conflicts }
+        : null;
     } catch {
       // 问不到就继续未知：这一格缺席不影响徽标那五格，也不该抛到界面上。
+      backlog.value = null;
     }
   }
 
@@ -327,6 +359,8 @@ export const useSyncStore = defineStore('sync', () => {
     lastSuccessAt,
     divergence,
     lastSuccessLine,
+    backlog,
+    backlogLine,
     refreshStatus,
     acceptDivergence,
     offline,

@@ -3089,6 +3089,49 @@ Rust：`notera-host` **160** 通过（30 个 result 行，全 ok）、`notera-sy
 
 **这一刀改的是产品行为（编辑器角上多了一句真话），按口径升 patch。**
 
+### 界面重构 v2 · 第 25 刀：§6 第 4 格剩下的两位 —— 同步账上的排队数（含一次"数的是什么"的语义纠正，缺口 G94）
+
+§6 那条清单写的是「同步详情面板 —— 阶段、上次成功时间、待处理任务数、开放冲突数、能否重试，后端全有」。
+第 21 刀接了上次成功时间与第五格三句，这一刀接剩下的两位。形状与 §3.3 的分档**完全同一族**：
+核心在 `SyncStatusDto` 里一直在发（真产物实测键：`phase,badge,lastSuccessAt,messageKey,openConflicts,pendingOps,retryable,divergenceHeld`），
+而 `stores/sync.ts` 的 `refreshStatus()` 只取 `lastSuccessAt` 与 `divergenceHeld` ——
+**其余几位丢在调用点上**（连那一发的 TS 类型字面量里都没声明，所以 TS 与 mock 一起绿灯）。
+
+设置页 `#sec-sync`（那张卡的标题就叫"同步详情"）里加一行：
+`还有 {N} 项改动等着同步 · {M} 条版本等你处理`，两位都是 0 时说 `改动都已经同步过去`。
+
+**查出 G94：那个 0 不是"没有改动没落地"。** `pending_ops` 在核心里是
+`outbox_len(当前账户, [Pending, Inflight, Failed])`（`lib.rs:3035` 起），**没配账户时恒为 0**；
+"这台设备上还有多少改动没落地"是笔记行上的 `dirty`。所以那句「改动都已经同步过去」
+只能对**配了账户**的设备说 —— `backlogLine` 因此在 `hasAccount` 为假时整条不说，
+Rust 那条测试把语义钉住（`phase == "unconfigured"` 且 `pendingOps == 0`，注释写着"这不是本机 dirty 数"）。
+这与本仓那一族既有缺陷同一个形状：**乐观状态没先判前置条件**（G50 / G89 那两次同形）。
+
+`phase` 与 `retryable` 这一刀**故意不接**，理由写在这儿：
+`phase` 是引擎内部阶段的枚举名（`unconfigured` / `idle` / …），§8 第一问明写"不能出现任何协议词汇"；
+`retryable` 界面已经在说（`showRetry` 从事件折出来的状态给），DTO 那一格是同一件事的第二个来源，
+接上去就是两份判据管一颗按钮 —— 要接先回答"事件与回包不一致时信谁"。
+
+**新腿 ㊹（6 项）**：四种注入形状（7/2、0/0、没配账户、回包缺那两格）各一条，
+正对照钉的是"那一卡与徽标真渲染了" —— 少了它，"那一行没出现"可能只是整页没画（㊸ 那次就是这么被骗的）。
+"缺键 ⇒ 当未知"与"问不到 ⇒ 当未知"两条是这个产品的口径：`undefined` 不是 0。
+
+**变异 P-1**（撤掉 `hasAccount` 那道门）⇒ 单测 1 红（正是 G94 那条）、布局门禁 **1 红 490 绿**，
+而失败读数自己写着屏幕上那句话：`onScreen:"改动都已经同步过去"` 挂在一台根本没配同步的设备上。
+还原后整条重跑 ⇒ **491 项 PASS / 0 FAIL**。
+
+实测读数：设置页那行 `7/2 ⇒「还有 7 项改动等着同步 · 2 条版本等你处理」；0/0 ⇒「改动都已经同步过去」；没账户 ⇒ 不出现；缺键 ⇒ 不出现`；
+`verify-layout` **491 项 PASS / 0 FAIL**、`vitest` 58 文件 / **484** 条（新文件 `stores/syncBacklog.spec.ts` 8 条）、
+`vue-tsc` 0 错、`eslint --max-warnings 0` 0、`cargo test -p notera-host` 全绿（`dto_envelope` 5 条，含新的那条）、`fmt --check` 0。
+
+另记一条**仪器账**（不是产品）：这一批我有一次在仓库根目录跑 `npx vitest run`，
+于是 17 个文件 41 条红 —— 红的都是 `import.meta.glob('…?raw')` 那族按**相对路径**取源码的判据
+（`layoutBreakpoints.spec.ts` 读不到 `--sidebar-w`，`tokens.css` 明明在第 117 行写着它）。
+换回 `apps/desktop` 这个 cwd 就 58/58 全绿。**这类"整批红"先看 cwd 与判据取文件的方式，再怀疑产品**
+（同 [[verify-the-instrument-before-the-verdict]]、[[lane-hygiene-fresh-binary-and-step-interference]]）。
+
+**这一刀改的是产品行为（设置页那一卡多说一句真话），按口径升 patch。**
+
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
 - **G92 已撤销（2026-10-07 第 18 刀）：登记的原文是「块把手的命中区是 24×24，低于 §5 要求的 44」—— 那句话错在探针，不在产品。**
   留痕在这里，因为它是"界面判据怎么把自己骗成产品缺陷"的标准样本：

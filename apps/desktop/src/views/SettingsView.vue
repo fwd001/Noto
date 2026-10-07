@@ -481,6 +481,10 @@ function jumpTo(id: string): void {
           <p class="text-sm text-muted">
             {{ sync.state.finishedAt ? t('sync.lastRound', { when: formatWhen(new Date(sync.state.finishedAt).toISOString()) }) : t('sync.never') }}
           </p>
+          <!-- §6 第 4 格剩下的两位（核心的 `pendingOps` / `openConflicts`，以前在调用点上被丢掉）。
+               问不到、或对面是个没这两格的核心时**这一行不出现** —— 那一格的位置留给徽标：
+               「本地服务连不上」本来就写在那儿，这里再补一句"没查到"只会把同一件事说两遍。 -->
+          <p v-if="sync.backlogLine" class="text-sm text-muted" data-testid="sync-backlog">{{ sync.backlogLine }}</p>
           <button type="button" class="btn" data-testid="sync-now" @click="syncNow()">{{ t('sync.syncNow') }}</button>
 
           <!-- 删账户与删库是两件事：核心一直有 `remove_account`，界面上却没有入口，
