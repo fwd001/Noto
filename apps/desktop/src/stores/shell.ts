@@ -28,6 +28,12 @@ export const useShellStore = defineStore('shell', () => {
   /** 键盘占掉的那一段高度（px）。0 = 键盘没弹起。由 `observeViewport()` 写。 */
   const keyboardInset = ref(0);
   const drawerTarget = ref<'sidebar' | 'list' | null>(null);
+  /**
+   * 「整机只读（库过新）」这一格（§4.2 第四行）。放在 shell 而不是 sync：它说的是**整个库**，
+   * 与同步那一轮没关系 —— 以前它挂在 `sync.dbTooNew` 上，而那个位只由一个核心从未发过的
+   * 事件写（缺口 G85），于是这条横幅永远出不来。
+   */
+  const libraryReadOnly = ref(false);
 
   const layout = computed<LayoutMode>(() => layoutFor(width.value));
   const isCompact = computed(() => layout.value === 'one');
@@ -166,6 +172,11 @@ export const useShellStore = defineStore('shell', () => {
     };
   }
 
+  /** 只进不退：库过新这件事在一次运行里不会因为某条命令成功而消失（要消失得重启应用）。 */
+  function markLibraryReadOnly(): void {
+    libraryReadOnly.value = true;
+  }
+
   return {
     view,
     width,
@@ -175,6 +186,8 @@ export const useShellStore = defineStore('shell', () => {
     reducedMotion,
     keyboardInset,
     drawerTarget,
+    libraryReadOnly,
+    markLibraryReadOnly,
     layout,
     isCompact,
     sidebarShown,
