@@ -10,7 +10,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { callCommand, type LinkState } from '../api/bridge';
-import { Commands, type SyncBadgeKind, type SyncProgress } from '../api/types';
+import { Commands, type DivergenceHeld, type SyncBadgeKind, type SyncProgress } from '../api/types';
 import { messageFor, t } from '../i18n';
 import { asBridgeError } from '../util/errors';
 import { formatWhen } from '../util/format';
@@ -177,13 +177,38 @@ export const useSyncStore = defineStore('sync', () => {
     return when.length > 0 ? t('sync.lastSuccess', { time: when }) : null;
   });
 
+  /**
+   * §4.3 / G87 那两个数（"本机认账 N 条，这次只回来 M 条"）。
+   * 和 `lastSuccessAt` 同一个来源、同一个口径：**问不到就是 null**，不拿"没有"冒充"没停"。
+   */
+  const divergence = ref<DivergenceHeld | null>(null);
+
   async function refreshStatus(): Promise<void> {
     try {
-      const status = await callCommand<{ lastSuccessAt?: string | null }>(Commands.syncStatus, {});
+      const status = await callCommand<{ lastSuccessAt?: string | null; divergenceHeld?: DivergenceHeld | null }>(
+        Commands.syncStatus,
+        {},
+      );
       lastSuccessAt.value = status?.lastSuccessAt ?? null;
+      divergence.value = status?.divergenceHeld ?? null;
     } catch {
       // 问不到就继续未知：这一格缺席不影响徽标那五格，也不该抛到界面上。
     }
+  }
+
+  /** 用户确认"这一版清单"。核心记下的是这一份的 etag，所以再少一截会重新问。 */
+  async function acceptDivergence(): Promise<void> {
+    divergence.value = null;
+    try {
+      await callCommand<null>(Commands.acceptDivergence, {});
+    } catch (error) {
+      void error;
+      // 确认失败时**把横幅读回来**，而不是补一句兜底的"操作失败"：这一格到底停没停，
+      // 权威在核心那一侧；重问一次比在界面上猜一条原因更诚实。
+      await refreshStatus();
+      return;
+    }
+    await refreshStatus();
   }
 
   function applySignal(signal: SyncSignal): void {
@@ -295,8 +320,10 @@ export const useSyncStore = defineStore('sync', () => {
     showRetry,
     percent,
     lastSuccessAt,
+    divergence,
     lastSuccessLine,
     refreshStatus,
+    acceptDivergence,
     offline,
     linkDown,
     busy,

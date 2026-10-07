@@ -139,6 +139,12 @@ const MESSAGES: Record<MessageKey, string> = {
   'sync.idleGoConfigure': '未配置同步 —— 点这里去设置',
   'sync.disabled': '同步已关闭',
   'sync.needsPassword': '需要重新填写口令',
+  // §4.3「服务器丢了很多条记录 → 人工确认，不许静默兜底」（缺口 G87）。
+  // 三个面各有各的活：徽标那一格要说"哪一种静止"，横幅要说"少了多少 + 这一轮没做什么"，
+  // 那颗按钮给得出动作。合成一句就必然在其中一格里说不准。
+  'sync.divergenceHeld': '远端少了一大截记录，同步已暂停',
+  'sync.divergenceBody': '本机认账 {cached} 条，服务器这一版只回来 {received} 条。这一轮整个停住了：远端这一版没有被应用，你的改动也不会被它覆盖。',
+  'sync.divergenceAccept': '确认这一版，继续同步',
   'settings.dangerZone': '危险操作',
   'settings.erase': '清除一切数据…',
   'settings.eraseHint': '删除本机全部笔记、文件夹、附件与同步配置，恢复到刚安装的状态。此操作不可撤销，也没有回收站。',

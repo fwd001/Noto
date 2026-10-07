@@ -196,6 +196,8 @@ struct FakeLocal {
     /// 注入用：让本机对**远端删除的落库**（`Tombstone` 软删 / `Purge` 永久删）拒收。
     /// 引擎里那一处以前是 `let _ =`，这条判据钉的就是"拒绝到底有没有去处"（ADR-0021 D3 的最后一格）。
     reject_tombstones: Arc<AtomicBool>,
+    /// §4.3 / G87：宿主这一侧要不要把这一轮挡下来。
+    hold: Arc<AtomicBool>,
 }
 
 impl LocalPort for FakeLocal {
@@ -289,6 +291,10 @@ impl LocalPort for FakeLocal {
             .push((format!("{kind}:{id}:{rev}"), st));
         Ok(())
     }
+    fn holds_divergence(&self, _cached: usize, _received: usize, _etag: &str) -> bool {
+        self.hold.load(Ordering::SeqCst)
+    }
+
     fn cached_manifest(&self) -> Option<Vec<u8>> {
         self.cached_manifest.lock().unwrap().clone()
     }
@@ -980,5 +986,136 @@ async fn a_purged_remote_view_purges_a_clean_local_row() {
     assert!(
         !also_soft,
         "永久删除的那一条同时又落了软删除 op —— 对端会停在回收站里：{applied:?}"
+    );
+}
+
+/// §4.3 / G87：服务器这一版只回来一小截 ⇒ **整轮停**。
+///
+/// 这条判据钉的是**调用边**：`divergence_is_suspicious` 有实现、有单测，绿了很久，
+/// 但引擎一次都没调过它（缺口 G87 的全部形状就是这个"零生产调用者"）。
+/// 所以断言不落在"函数返回什么"，而落在"这一轮到底做了什么"：
+/// ① 那份可疑清单**没被存下**（存了下一轮就是 304，比的是它自己，这一格永不成立）；
+/// ② 一条都没应用；③ 一个字节都没上传（本机明明有一条脏行等着走）。
+#[tokio::test]
+async fn a_shrunken_index_holds_the_whole_round_and_does_nothing_at_all() {
+    let l = FakeLocal::default();
+    let r = FakeRemote::default();
+
+    // 本机认账的那一份：窗口声明 300 条。
+    let mut big = base_manifest();
+    big.window = Window {
+        since_seq: 1,
+        complete: true,
+        entries: (0..300)
+            .map(|i| ent(&format!("n{i:04}"), 1, "aaaa"))
+            .collect(),
+    };
+    big.refresh_checksum();
+    *l.cached_manifest.lock().unwrap() = Some(big.to_wire());
+
+    // 服务器这一版只剩 10 条：少了 290 条 = 既过 50 那条线，也过 30% 那条线。
+    let mut small = base_manifest();
+    small.seq = 2;
+    small.window = Window {
+        since_seq: 2,
+        complete: true,
+        entries: (0..10)
+            .map(|i| ent(&format!("n{i:04}"), 2, "bbbb"))
+            .collect(),
+    };
+    small.refresh_checksum();
+    r.seed(small);
+
+    // 本机有一条脏行 —— 没有这道闸门时它**必须**会被推出去，下面正对照就是量这个。
+    l.locals.lock().unwrap().push(local("mine1", 9, 0, "cccc"));
+    l.hold.store(true, Ordering::SeqCst);
+
+    let (_, evs) = run(l.clone(), r.clone(), Some("\"old-etag\"")).await;
+
+    assert!(
+        evs.iter().any(|e| matches!(
+            e,
+            SyncEvent::DivergenceHeld {
+                cached_records: 300,
+                received_records: 10
+            }
+        )),
+        "停下要带着**这两个数**，界面才说得出少了多少：{evs:?}"
+    );
+    let applied = l.applied.lock().unwrap();
+    assert!(
+        !applied
+            .iter()
+            .any(|o| matches!(o, ApplyOp::StoreManifest { .. })),
+        "这份清单不许被存成新的基线：存了下一轮就再也不会问第二遍 —— {applied:?}"
+    );
+    assert!(applied.is_empty(), "整轮停 = 一条都不应用：{applied:?}");
+    assert_eq!(
+        r.req(),
+        1,
+        "只该有那一次清单读取；本机明明有一条脏行，一个字节都不许推出去"
+    );
+    assert!(
+        r.records.lock().unwrap().get(&path("n", "mine1")).is_none(),
+        "远端不许出现本机那条记录 —— 上传真的没发生"
+    );
+}
+
+/// 正对照：同一副夹具、同一个形状，只是这一版**已被用户确认**（闸门放行）。
+/// 这一条红 = 上面那条"整轮停"其实是别的东西造成的（比如这轮本来就没活）。
+#[tokio::test]
+async fn the_accepted_version_of_the_same_index_is_applied_and_pushed() {
+    let l = FakeLocal::default();
+    let r = FakeRemote::default();
+
+    let mut big = base_manifest();
+    big.window = Window {
+        since_seq: 1,
+        complete: true,
+        entries: (0..300)
+            .map(|i| ent(&format!("n{i:04}"), 1, "aaaa"))
+            .collect(),
+    };
+    big.refresh_checksum();
+    *l.cached_manifest.lock().unwrap() = Some(big.to_wire());
+
+    let mut small = base_manifest();
+    small.seq = 2;
+    small.window = Window {
+        since_seq: 2,
+        complete: true,
+        entries: (0..10)
+            .map(|i| ent(&format!("n{i:04}"), 2, "bbbb"))
+            .collect(),
+    };
+    small.refresh_checksum();
+    r.seed(small);
+
+    l.locals.lock().unwrap().push(local("mine1", 9, 0, "cccc"));
+    l.envelopes.lock().unwrap().insert(
+        "mine1".into(),
+        br#"{"kind":"n","id":"mine1","rev":9}"#.to_vec(),
+    );
+    // hold 保持 false：等价于"用户已经确认过这一版"。
+
+    let (_, evs) = run(l.clone(), r.clone(), Some("\"old-etag\"")).await;
+
+    assert!(
+        !evs.iter()
+            .any(|e| matches!(e, SyncEvent::DivergenceHeld { .. })),
+        "确认后不许再拦：{evs:?}"
+    );
+    assert!(
+        l.applied
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|o| matches!(o, ApplyOp::StoreManifest { .. })),
+        "放行之后这份清单要正常落账"
+    );
+    assert!(
+        r.req() > 1,
+        "放行之后该走的路要走完（公告 + 记录），实到请求 {} 次",
+        r.req()
     );
 }

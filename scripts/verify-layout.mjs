@@ -2716,6 +2716,87 @@ function contrastRatio(fg, bg) {
   await c31.close();
 }
 
+/**
+ * ㉜ §4.3「服务器丢了很多条记录 → 人工确认」（G87）的那一条横幅与那颗按钮。
+ *
+ * 引擎侧的"整轮停"由 `notera-sync/tests/engine.rs` 那两条判据守着（真停、真什么都不做）；
+ * 这一腿只管界面这两件事：**说得出少了多少**、**给得出一个动作**。
+ * 拦的是 `sync_status`（那两个数的唯一来源是核心，界面上不许自己算），
+ * 点下去之后断言的是**请求到底发没发**（`accept_divergence` 出门 1 次）。
+ */
+{
+  const c32 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p32 = await c32.newPage();
+  let held = true;
+  let accepted = 0;
+  await p32.route('**/cmd/sync_status', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        phase: 'idle',
+        badge: 'offline',
+        lastSuccessAt: null,
+        pendingOps: 0,
+        openConflicts: 0,
+        messageKey: 'sync.divergenceHeld',
+        retryable: false,
+        divergenceHeld: held ? { cachedRecords: 300, receivedRecords: 10 } : null,
+      }),
+    }),
+  );
+  await p32.route('**/cmd/accept_divergence', (route) => {
+    accepted += 1;
+    held = false;
+    return route.continue();
+  });
+  await p32.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p32.waitForTimeout(1600);
+
+  const bar = await p32.evaluate(() => {
+    const el = document.querySelector('[data-testid="banner-divergence"]');
+    if (!el) return { missing: true };
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    const btn = el.querySelector('[data-testid="divergence-accept"]');
+    const br = btn?.getBoundingClientRect();
+    const bhit = br ? document.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2) : null;
+    return {
+      text: (el.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      role: el.getAttribute('role'),
+      h: Math.round(r.height),
+      hitSelf: Boolean(hit && el.contains(hit)),
+      aboveContent: r.top <= (document.querySelector('.app-body')?.getBoundingClientRect().top ?? 1e9) + 1,
+      btnText: (btn?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      btnH: Math.round(br?.height ?? 0),
+      btnHit: Boolean(bhit && btn?.contains(bhit)),
+    };
+  });
+  check('㉜ 停下来的时候有一条**全局横幅**：看得见、中心命中自己、排在正文之前、role=alert',
+    bar.missing !== true && bar.role === 'alert' && bar.h > 0 && bar.hitSelf === true && bar.aboveContent === true,
+    JSON.stringify(bar));
+  check('㉜ 那句话把**少了多少**说出来（两个数都得上屏，"少了一大截"不算交代）',
+    /300/.test(bar.text) && /10/.test(bar.text) && !/操作失败/.test(bar.text),
+    JSON.stringify({ text: bar.text }));
+  check('㉜ 有一条能点的动作（≥44 高、中心命中它自己），而且说的就是"确认这一版"',
+    bar.btnH >= 44 && bar.btnHit === true && /确认这一版/.test(bar.btnText),
+    JSON.stringify({ btnH: bar.btnH, btnHit: bar.btnHit, btnText: bar.btnText }));
+
+  await p32.click('[data-testid="divergence-accept"]');
+  await p32.waitForTimeout(1200);
+  const after = await p32.evaluate(() => ({
+    still: document.querySelector('[data-testid="banner-divergence"]') !== null,
+  }));
+  check('㉜ 点下去真的发了那一发（调用边：accept_divergence 出门 1 次）',
+    accepted === 1, JSON.stringify({ accepted }));
+  check('㉜ 核心不再报停之后，这条横幅要真的收回去（不许留在屏幕上假装还要确认）',
+    after.still === false, JSON.stringify(after));
+
+  notes.push(`     G87 横幅实测：${JSON.stringify(bar.text).slice(0, 60)}…；accept_divergence ${accepted} 次`);
+  await p32.screenshot({ path: `${OUT}/44-divergence-held-1440.png` });
+  await c32.close();
+}
+
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
 async function purgeByTitle(prefix) {
   for (const trash of [false, true]) {

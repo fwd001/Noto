@@ -43,8 +43,10 @@ onMounted(() => {
 
 watch(
   () => sync.badge,
-  (next, prev) => {
-    if (prev === 'syncing' && (next === 'synced' || next === 'failed')) void sync.refreshStatus();
+  (_next: string, prev: string) => {
+    // 一轮跑完就要重新问一次持久事实：`synced`/`failed` 之外还有**静止那一格**（§4.3 让路、
+    // §4.2 只读、§4.3 G87 停下等确认）—— 那些都不报成败，但都带着界面要显示的事实。
+    if (prev === 'syncing') void sync.refreshStatus();
   },
 );
 </script>

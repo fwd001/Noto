@@ -15,9 +15,9 @@ pub mod devserver;
 pub mod platform;
 
 use commands::{
-    AccountDraftCmd, AccountDto, AttachmentStateDto, CmdError, ConflictDto, ExportCmd, FolderDto,
-    ImportCmd, ListNotesCmd, NoteDto, NoteListDto, SearchCmd, SearchHitDto, StatsDto,
-    SyncStatusDto,
+    AccountDraftCmd, AccountDto, AttachmentStateDto, CmdError, ConflictDto, DivergenceHeldDto,
+    ExportCmd, FolderDto, ImportCmd, ListNotesCmd, NoteDto, NoteListDto, SearchCmd, SearchHitDto,
+    StatsDto, SyncStatusDto,
 };
 use notera_config::{
     AccountConfig, AppConfig, ConfigRepository, ProxyMode, ProxyProfile, TlsPolicyKind,
@@ -202,6 +202,17 @@ struct SyncView {
     in_flight: bool,
 }
 
+/// §4.3 / G87：一轮被"服务器丢了一大截"这道闸门拦下来的那笔账。
+/// 只在内存里 —— 重启之后再问一次是**特性**不是不便：这台设备重新联网之后，
+/// 那份清单到底还是不是同一份，本机并不知道。
+#[derive(Clone, Debug)]
+struct HeldDivergence {
+    cached_records: usize,
+    received_records: usize,
+    /// 这一份清单的 etag。用户确认的就是"这一版"，别的版本照旧要问。
+    etag: String,
+}
+
 impl SyncView {
     /// 首帧的诚实起点：没配过账户、也没联网。
     fn initial() -> Self {
@@ -231,6 +242,9 @@ struct Inner {
     subs: Mutex<Vec<std::sync::mpsc::Sender<BusEvent>>>,
     sync_view: Mutex<SyncView>,
     cached_manifest: Mutex<Option<Vec<u8>>>,
+    /// §4.3 / G87 的两笔账：这一轮被停下的原因，与用户已经确认过哪一版清单。
+    divergence_held: Mutex<Option<HeldDivergence>>,
+    accepted_divergence: Mutex<Option<String>>,
     /// 上一轮提交后服务器给的清单 etag —— 下一轮带它才可能拿到 304（§6.3 空轮 0 字节）
     manifest_etag: Mutex<Option<String>>,
     seq_applied: AtomicU64,
@@ -288,6 +302,8 @@ impl App {
                 subs: Mutex::new(Vec::new()),
                 sync_view: Mutex::new(SyncView::initial()),
                 cached_manifest: Mutex::new(None),
+                divergence_held: Mutex::new(None),
+                accepted_divergence: Mutex::new(None),
                 manifest_etag: Mutex::new(None),
                 seq_applied: AtomicU64::new(0),
                 syncing: AtomicBool::new(false),
@@ -3046,7 +3062,27 @@ impl App {
             open_conflicts: conflicts,
             message_key: v.message_key.clone(),
             retryable: v.retryable,
+            divergence_held: self.inner.divergence_held.lock().unwrap().clone().map(|h| {
+                DivergenceHeldDto {
+                    cached_records: h.cached_records,
+                    received_records: h.received_records,
+                }
+            }),
         })
+    }
+
+    /// §4.3 / G87：用户确认"这一版清单"。记下的是这一份的 etag，所以
+    /// ① 只有这一版被放行，服务器再少一截会重新问；② 没停下过的时候这是空操作
+    /// （不报错也不假装做了什么）。
+    pub fn accept_divergence(&self) -> Result<(), CmdError> {
+        let held = self.inner.divergence_held.lock().unwrap().take();
+        let Some(held) = held else {
+            return Ok(());
+        };
+        *self.inner.accepted_divergence.lock().unwrap() = Some(held.etag.clone());
+        // 确认之后立刻走一轮：不然要等到下一个 25 秒，而用户刚刚点的是"现在继续"。
+        self.request_sync();
+        Ok(())
     }
 
     /// 步骤 6：**首帧之后**才调用。返回一个可后台运行的调度句柄。
@@ -3148,6 +3184,30 @@ impl App {
                     v.retryable = true;
                 });
                 tracing::info!(%device, "本轮让路给另一台正在写的设备（§11.4）");
+            }
+            // §4.3 / G87：停下不是坏了。归入**离线**那一格（与 §11.4 让路同一个先例：
+            // "本机照常可写、远端这一轮不走"），并挂上具名原因，界面上才给得出动作。
+            SyncEvent::DivergenceHeld {
+                cached_records,
+                received_records,
+            } => {
+                self.set_sync(|v| {
+                    v.badge = Badge::Offline;
+                    v.message_key = Some("sync.divergenceHeld".into());
+                    v.retryable = false;
+                });
+                self.emit(BusEvent::Sync {
+                    badge: Badge::Offline,
+                    progress: None,
+                    // 具名原因要**推给界面**，不能只留在 `sync_view` 里等人来问：
+                    // 徽标那一格说的是"哪一种静止"，靠的就是这一串码。
+                    error_code: Some("sync.divergenceHeld".into()),
+                });
+                tracing::warn!(
+                    cached_records,
+                    received_records,
+                    "远端索引比本机认账的那份少了一大截，整轮已停下等确认（§4.3 / G87）"
+                );
             }
             SyncEvent::Completed(_) => {}
             SyncEvent::Failed {
@@ -3598,6 +3658,27 @@ impl LocalPort for HostLocalPort {
         .map_err(store_err)?;
         Ok(wire)
     }
+    /// §4.3 / G87 的闸门。三件事按顺序判：
+    /// ① 用户已经确认过**这一版清单**（etag 对得上）→ 放行；② 比值没到那条线 → 放行；
+    /// ③ 否则把停下的原因记下来（界面要读它）并返回 true，引擎于是整轮停。
+    ///
+    /// 阈值不在这里另立一套：用 `divergence_is_suspicious` —— 那条判据有实现有测试
+    /// 却**零生产调用者**了这么久，这一格补的就是它的调用边。
+    fn holds_divergence(&self, cached: usize, received: usize, etag: &str) -> bool {
+        if self.0.inner.accepted_divergence.lock().unwrap().as_deref() == Some(etag) {
+            return false;
+        }
+        if !notera_sync::manifest::divergence_is_suspicious(cached, received) {
+            return false;
+        }
+        *self.0.inner.divergence_held.lock().unwrap() = Some(HeldDivergence {
+            cached_records: cached,
+            received_records: received,
+            etag: etag.to_string(),
+        });
+        true
+    }
+
     fn apply(&self, ops: Vec<ApplyOp>) -> Result<notera_sync::ApplyReport, LocalError> {
         let mut mapped = Vec::new();
         for o in ops {

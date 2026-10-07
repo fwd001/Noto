@@ -19,6 +19,12 @@ const showOffline = computed(() => !sync.linkDown && sync.shownBadge === 'offlin
 const showDb = computed(() => shell.libraryReadOnly);
 const showSearchError = computed(() => notes.searchErrorKey !== null);
 const searchErrorText = computed(() => messageFor(notes.searchErrorKey ?? 'error.fallback'));
+/** §4.3 / G87：停下要说得出"少了多少"，并且必须有一颗能点的按钮 —— 一句"同步已暂停"是静默兜底。 */
+const divergenceText = computed(() => {
+  const held = sync.divergence;
+  if (!held) return '';
+  return t('sync.divergenceBody', { cached: held.cachedRecords, received: held.receivedRecords });
+});
 
 async function reconnect(): Promise<void> {
   sync.setLink('connecting');
@@ -55,6 +61,15 @@ async function reconnect(): Promise<void> {
       <span class="banner__spacer" />
       <button type="button" class="btn" data-testid="stale-use-mine" @click="editor.useLocalDraft()">{{ t('editor.useMyDraft') }}</button>
       <button type="button" class="btn btn--quiet" data-testid="stale-discard" @click="editor.discardLocalDraft()">{{ t('editor.discardMyDraft') }}</button>
+    </div>
+
+    <div v-if="sync.divergence" class="banner banner--danger" role="alert" data-testid="banner-divergence">
+      <AppIcon :size="18" name="warn" />
+      <span>{{ divergenceText }}</span>
+      <span class="banner__spacer" />
+      <button type="button" class="btn" data-testid="divergence-accept" @click="sync.acceptDivergence()">
+        {{ t('sync.divergenceAccept') }}
+      </button>
     </div>
 
     <div v-if="showSearchError" class="banner">

@@ -162,6 +162,16 @@ pub struct SyncStatusDto {
     pub open_conflicts: u32,
     pub message_key: Option<String>,
     pub retryable: bool,
+    /// §4.3 / G87：这一轮被"远端少了一大截"那道闸门停下的那笔账；没停就是 `null`。
+    pub divergence_held: Option<DivergenceHeldDto>,
+}
+
+/// 停下时那两个数直接发给界面：原因要说得出"少了多少"，而不是一句"同步已暂停"。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DivergenceHeldDto {
+    pub cached_records: usize,
+    pub received_records: usize,
 }
 
 /// 附件在这台设备账上的那对状态，给界面的占位/按钮用。
@@ -551,7 +561,7 @@ fn id(s: &str) -> R<EntityId> {
 /// 这里**只列不经过 `Store::write_tx` 的那些**：改数据目录里的文件（附件字节、导入、
 /// 恢复、清除、备份）以及账户配置 —— 它们的 config.json 一半落了、库那一半才会失败，
 /// 所以不能留给库层闸门去拒。库写不用列：`write_tx` 是全库唯一写入口，闸门就在那一处。
-const READ_ONLY_REFUSED: [&str; 9] = [
+const READ_ONLY_REFUSED: [&str; 10] = [
     "attach_file",
     "import_data",
     "import_files",
@@ -561,6 +571,8 @@ const READ_ONLY_REFUSED: [&str; 9] = [
     "sync_now",
     "configure_account",
     "remove_account",
+    // 确认一份可疑清单是一次**写动作**（放行之后就要应用远端），只读闸门下不放行。
+    "accept_divergence",
 ];
 
 pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json::Value> {
@@ -706,6 +718,12 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
             j(serde_json::Value::Null)
         }
         "sync_status" => j(app.sync_status()?),
+        // §4.3 的"人工确认"就是这一发：把**这一版**清单记成本机已接受，然后要走一轮就走。
+        // 没有停下过的东西没什么可确认的 —— 那时它是空操作，不是一门假开关。
+        "accept_divergence" => {
+            app.accept_divergence()?;
+            j(serde_json::Value::Null)
+        }
         "account" => j(app.current_account()?),
         "configure_account" => {
             let c: AccountDraftCmd =

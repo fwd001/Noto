@@ -63,6 +63,22 @@ pub trait LocalPort: Send + Sync {
     fn revision_json(&self, id: &str, rev: u64) -> Result<Option<serde_json::Value>, LocalError>;
     /// 待上传实体的 wire 字节（信封 JSON）
     fn envelope_wire(&self, kind: &str, id: &str) -> Result<Option<Vec<u8>>, LocalError>;
+    /// §4.3「服务器丢了很多条记录 ⇒ 人工确认，不许静默兜底」（缺口 G87）。
+    ///
+    /// 引擎在**存下新清单之前**把"上一份认账的清单声明的记录数"与"这一份声明的记录数"、
+    /// 连同这一份的 etag 交给宿主，由宿主决定这一轮停不停。默认 `false` = 不拦
+    /// （判定与"用户已经确认过这一版"的账都在宿主，不在协议层）。
+    /// 返回 `true` 时引擎**整轮停**：不存这份清单、不应用、也不上传 ——
+    /// 不存是刻意的：存了就等于把旧基线换掉，下一轮 304 一比"自己与自己"，
+    /// 这一格就永远不再成立，删除会被静默接受。
+    fn holds_divergence(
+        &self,
+        _cached_records: usize,
+        _received_records: usize,
+        _etag: &str,
+    ) -> bool {
+        false
+    }
     /// 应用远端结果：单事务
     fn apply(&self, ops: Vec<ApplyOp>) -> Result<ApplyReport, LocalError>;
     /// 记录冲突（保留双方）
@@ -350,6 +366,13 @@ pub enum SyncEvent {
     Deferred {
         device: String,
     },
+    /// §4.3 / G87：这一份清单比本机认账的那一份少了一大截，**整轮已经停下**，等用户确认。
+    /// 单独一个事件而不是"失败"：什么都没坏，是引擎拒绝相信它 —— 报成失败会让人去查网络，
+    /// 而该做的动作是看一眼服务器是不是被清了。
+    DivergenceHeld {
+        cached_records: usize,
+        received_records: usize,
+    },
     Completed(RoundOutcome),
     Failed {
         retryable: bool,
@@ -517,6 +540,35 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                     // 本机提交清单时才写，于是纯拉侧每轮都拿不到 304、每轮整份重下
                     // index.json（5000 条约 186 KiB / 轮 / 设备，而后台 25 秒一轮）。
                     Ok(m) => {
+                        // §4.3 / G87 的闸门，**必须落在把新清单存下之前**：
+                        // 一存下去，旧基线就没了 —— 下一轮拿到 304 时比的是"这份与它自己"，
+                        // 这一格从此永不成立，那一大截删除就被静默接受了。
+                        let cached_records = self
+                            .local
+                            .cached_manifest()
+                            .and_then(|b| Manifest::parse(&b).ok())
+                            .map(|old| old.declared_records())
+                            .unwrap_or(0);
+                        let received_records = m.declared_records();
+                        if self.local.holds_divergence(
+                            cached_records,
+                            received_records,
+                            e.as_deref().unwrap_or(""),
+                        ) {
+                            return (
+                                RoundStats {
+                                    outcome: RoundOutcome::Partial,
+                                    ..st
+                                },
+                                vec![
+                                    SyncEvent::DivergenceHeld {
+                                        cached_records,
+                                        received_records,
+                                    },
+                                    SyncEvent::Completed(RoundOutcome::Partial),
+                                ],
+                            );
+                        }
                         let _ = self.local.apply(vec![ApplyOp::StoreManifest {
                             wire: bytes,
                             etag: e.clone(),

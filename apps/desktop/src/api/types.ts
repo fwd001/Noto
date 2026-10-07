@@ -159,6 +159,12 @@ export interface Attachment {
 
 /* -------------------------------------------------------------------- 统计 */
 
+/// §4.3 / G87：一轮被"远端少了一大截"那道闸门停下时，核心报回来的那两个数。
+export interface DivergenceHeld {
+  cachedRecords: number;
+  receivedRecords: number;
+}
+
 export interface StoreStats {
   notes?: number;
   notesInTrash?: number;
@@ -413,6 +419,7 @@ export const Commands = {
   /** 同步的那几项事实（阶段、**上一次成功时间**、待处理数、开放冲突数、能否重试）。
    *  后端一直有，前端此前从没调过 ⇒ "上一次：{时间}" 那一格只能等本次会话跑完一轮才有值。 */
   syncStatus: 'sync_status',
+  acceptDivergence: 'accept_divergence',
   configureAccount: 'configure_account',
   /** 核心早就有这条命令，但界面**从来没有入口** ⇒ 用户想停掉同步只能"清除一切数据"
    *  （连笔记一起删掉）。删账户与删库是两件事。 */
