@@ -28,6 +28,7 @@ import {
   type EditorBlock,
 } from '../editor/model';
 import { useNoteStore } from './notes';
+import { useShellStore } from './shell';
 import { useSyncStore } from './sync';
 import { useToastStore } from './toasts';
 
@@ -40,6 +41,7 @@ export interface EditorReadiness {
 
 export const useEditorStore = defineStore('editor', () => {
   const notes = useNoteStore();
+  const shell = useShellStore();
   const sync = useSyncStore();
   const toasts = useToastStore();
 
@@ -61,8 +63,17 @@ export const useEditorStore = defineStore('editor', () => {
   // 而回读还在飞 —— 这一刻补上来的写会以 `{id: 下一篇, expectedRev: 上一篇的 rev}` 出门
   // （2026-10-02 在 store 层复现出来，正是 lane 里那对 `actual 5 / expected 2`）。
   // 窗口里**拒绝**写入（updateBlock 把原因落到 saveErrorKey，不静默），比把串了的那一支发出去好。
-  const writeBlocked = computed(() => loading.value || versionTooNew.value || inTrash.value || noteId.value === null);
+  const writeBlocked = computed(
+    () =>
+      loading.value ||
+      versionTooNew.value ||
+      inTrash.value ||
+      shell.libraryReadOnly ||
+      noteId.value === null,
+  );
   const readOnlyReason = computed<string | null>(() => {
+    // 整机那一格排在最前：它说的是"这台设备现在谁都写不了"，比"这一条恰好也不能写"更该先听到。
+    if (shell.libraryReadOnly) return 'libraryReadOnly';
     if (versionTooNew.value) return 'versionTooNew';
     if (inTrash.value) return 'inTrash';
     return null;

@@ -114,7 +114,6 @@ export const useSyncStore = defineStore('sync', () => {
   const busy = ref(false);
 
   const badge = computed(() => state.value.badge);
-  const dbTooNew = ref(false);
   /**
    * 静止态（`idle`）要说清是**哪一种**静止：没配过 vs 配了但关了。
    *
@@ -161,7 +160,6 @@ export const useSyncStore = defineStore('sync', () => {
   }
 
   function applySignal(signal: SyncSignal): void {
-    if (signal.errorCode === 'db_too_new' || signal.messageKey === 'db_too_new') dbTooNew.value = true;
     state.value = foldSyncEvent(state.value, signal, Date.now());
   }
 
@@ -261,7 +259,6 @@ export const useSyncStore = defineStore('sync', () => {
     label,
     detail,
     syncActive,
-    dbTooNew,
     showRetry,
     percent,
     lastSuccessAt,

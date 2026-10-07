@@ -250,6 +250,9 @@ pub struct StoreStats {
     pub conflicts_open: u32,
     pub fts_rows: u32,
     pub user_version: u32,
+    /// ADR-0012 的只读闸门开着 = 这本库比本程序新，界面要据此说"请升级以编辑"。
+    /// 由 `Store` 自己填：它已经是这个事实的唯一持有者，不许第二处再推一遍。
+    pub library_read_only: bool,
     pub search_generation: i64,
     pub db_bytes: u64,
 }

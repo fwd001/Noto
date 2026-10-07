@@ -58,6 +58,10 @@
  *     Toast 底部居中 ≤520 只染边框且带一颗点得着的「知道了」。
  *  ㉗ §4.1 保存四格（route 按住 edit_note 把"正在保存"停在屏幕上读；放成 400 读"原因上不上屏"，
  *     即缺口 G79 那一格），并回库里读一遍确认"已存在本机"说的是事实。
+ *  ㉚ §4.2 第四格「整机只读（库过新）」：只拦首帧那次 `stats`，让它带 `libraryReadOnly`
+ *     （这一位的新生产者 —— 旧形状里它挂在一个核心从不发出的同步事件上，缺口 G85），
+ *     量全局横幅在不在、有没有给"请升级以编辑"这句下一步、是不是常驻（不是 4.5s 的 toast），
+ *     读侧还读不读得到真数据，以及打了字之后**真核心**那一篇的 rev 与正文有没有动。
  *
  * 前置（脚本不管，由调用方起）：
  *   cargo run -p notera-cli -- --data-dir <空目录> serve --port 17323
@@ -2447,6 +2451,118 @@ function contrastRatio(fg, bg) {
   notes.push(`     保存四格实测：${[dirty, saving, failed, saved].map((s) => `${s.icon}/${s.text}`).join(' → ')}`);
   await wp.screenshot({ path: `${OUT}/41-save-states-1440.png` });
   await wctx.close();
+  await cmd('purge_note', { id: made.id });
+}
+
+/**
+ * ㉚ §4.2 第四格「整机只读（库过新）」（缺口 G85）。
+ *
+ * 这一腿以前拦的是 `list_notes` 回 `db_too_new` —— 那是我以为的生产者，实际不存在：
+ * 核心在库过新时让 `Store::open` 直接失败，整条命令面根本没起来（真生产者现在只有
+ * 首帧那次 `stats`，它带 `libraryReadOnly`；读侧留着、写侧由 `Store::write_tx` 那道闸门拒。
+ * 所以这一腿改造**新契约**那一格：只拦 `stats`，其余全部走真桥。
+ *
+ * 量的四件事：横幅在不在（几何，不是 DOM 存在）、说的是不是下一步、它是不是常驻
+ * （不是 4.5 秒就消失的 toast）、以及"只读"这一位有没有真把写关在门外 —— 最后这条
+ * 打在**真核心**上：整段之后回读那一篇，rev 与正文必须一个字没变。
+ */
+{
+  const MARK = '只读夹具';
+  await purgeByTitle(MARK);
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: { v: 1, content: [{ id: `ro${stamp}`, type: 'paragraph', content: [{ text: `${MARK} 只读前原文` }] }] },
+  });
+  const revBefore = (await cmd('get_note', { id: made.id })).rev;
+
+  const rctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const rp = await rctx.newPage();
+  let injected = 0;
+  let writes = 0;
+  await rp.route('**/cmd/stats', (route) => {
+    injected += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ notes: 1, notesInTrash: 0, folders: 1, attachments: 0, ftsEntries: 1, dbBytes: 4096, searchGeneration: 1, inflightOps: 0, libraryReadOnly: true }),
+    });
+  });
+  await rp.route(/\/cmd\/(edit_note|create_note|delete_note|set_note_pinned|purge_note|restore_note)/, (route) => {
+    writes += 1;
+    return route.continue();
+  });
+  await rp.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await rp.waitForTimeout(1500);
+
+  const banner = await rp.evaluate(() => {
+    const el = document.querySelector('[data-testid="banner-db"]');
+    if (!el) return { missing: true };
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    const inToastHost = Boolean(el.closest('.toast-host'));
+    const cs = getComputedStyle(el);
+    return {
+      text: (el.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      h: Math.round(r.height),
+      inViewport: r.top >= 0 && r.bottom <= window.innerHeight,
+      hitSelf: Boolean(hit && el.contains(hit)),
+      inToastHost,
+      bg: cs.backgroundColor,
+      // 横幅必须排在正文之前：它说的是"这台设备现在只能看"，藏在列表下面等于没说。
+      aboveContent: r.top <= (document.querySelector('.app-body')?.getBoundingClientRect().top ?? 1e9) + 1,
+    };
+  });
+
+  check('㉚ 仪器自检：首帧那次 `stats` 真的被我拦下了（没拦到就是这一格根本没造出来）',
+    injected >= 1, JSON.stringify({ injected }));
+  check('㉚ 库过新时有一条**全局横幅**：看得见、中心命中自己、排在正文之前，而且不是 toast',
+    banner.missing !== true && banner.h > 0 && banner.inViewport === true && banner.hitSelf === true
+      && banner.inToastHost === false && banner.aboveContent === true,
+    JSON.stringify(banner));
+  check('㉚ 那句话给的是**下一步**（§4.2「请升级以编辑」）并说清不会写坏，不是"出错了"三个字',
+    /请升级以编辑/.test(banner.text) && /不会写/.test(banner.text), JSON.stringify({ text: banner.text }));
+  check('㉚ 「只读」不等于"没了"：列表与正文都还读得到（真桥的真数据，这一格不许是空屏）',
+    await rp.locator(`[data-testid="note-row-${made.id}"]`).count() === 1,
+    JSON.stringify({ noteId: made.id }));
+
+  await rp.click(`[data-testid="note-row-${made.id}"]`);
+  await rp.waitForSelector('.nb-block .nb-content', { timeout: 15000 });
+  const editable = await rp.evaluate(() => {
+    const el = document.querySelector('.nb-block .nb-content');
+    return {
+      contenteditable: el?.getAttribute('contenteditable') ?? null,
+      ariaReadonly: el?.getAttribute('aria-readonly') ?? null,
+      note: (document.querySelector('.editor-note')?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    };
+  });
+  check('㉚ 编辑区真的关掉了写：contenteditable=false 且 aria-readonly=true（§4.2 那一行不是只有横幅一句话）',
+    editable.contenteditable === 'false' && editable.ariaReadonly === 'true', JSON.stringify(editable));
+  check('㉚ 编辑区那句话点明的是"这一版只能看"，不是把整机只读误说成"这条在回收站"',
+    /只能查看/.test(editable.note) && !/最近删除/.test(editable.note), JSON.stringify(editable));
+
+  // 点击与打字都要容错：这一格的正常结果就是"点不动、打不进"，仪器不许因此把整轮带走。
+  await rp.click('.nb-block .nb-content').catch(() => {});
+  await rp.keyboard.type('这一笔不许落').catch(() => {});
+  await rp.waitForTimeout(1800);
+
+  await rp.waitForTimeout(5200);
+  const stillThere = await rp.evaluate(() => {
+    const el = document.querySelector('[data-testid="banner-db"]');
+    // 别在这里截断文本：判据要的那句"请升级以编辑"在句子后半段，截 24 个字符会把它切掉
+    // （上一版就是这么红的 —— 横幅明明还在，红的是仪器）。
+    return { exists: Boolean(el), text: (el?.textContent ?? '').replace(/\s+/g, ' ').trim() };
+  });
+  check('㉚ 5.2 秒之后横幅仍在（这一格不许借用 4.5 秒就消失的 toast 通道）',
+    stillThere.exists === true && /请升级以编辑/.test(stillThere.text), JSON.stringify(stillThere));
+
+  const after = await cmd('get_note', { id: made.id });
+  check('㉚ 打了字也不许降级写：写命令 0 发，且**真核心**回读的那一篇 rev 与正文都没变',
+    writes === 0 && after.rev === revBefore && !JSON.stringify(after.doc).includes('这一笔不许落'),
+    JSON.stringify({ writes, revBefore, revAfter: after.rev }));
+
+  notes.push(`     库过新横幅实测：拦下 stats ${injected} 次；横幅=${JSON.stringify(stillThere.text)}；写命令 ${writes} 次；rev ${revBefore}→${after.rev}`);
+  await rp.screenshot({ path: `${OUT}/42-db-too-new-1440.png` });
+  await rctx.close();
   await cmd('purge_note', { id: made.id });
 }
 

@@ -188,37 +188,64 @@ fn future_db_version_opens_read_only_and_is_never_downgraded() {
     }
     let ahead = SUPPORTED_SCHEMA_VERSION + 7;
     downgrade(&fx.db_file(), ahead);
-    let size_before = std::fs::metadata(fx.db_file()).unwrap().len();
-    let before_files = listing(&fx.dir);
-    let e = Store::open(&fx.dir, fx.device.clone()).expect_err("高于支持值的库必须拒绝可写打开");
+    let hash_before = notera_crypto::sha256_hex_file(&fx.db_file()).unwrap();
+    let before_files = visible_listing(&fx.dir);
+
+    // ADR-0012 说的是"**进入只读模式**"，不是"启动失败"。旧实现把这一格做成了
+    // `Store::open` 直接返回 Err —— 于是整本库连读都读不到，界面也就永远挂不出
+    // §4.2 那句"请升级以编辑"（缺口 G85）。
+    let store = Store::open(&fx.dir, fx.device.clone())
+        .expect("库过新时必须打得开 —— 只读模式不是启动失败（ADR-0012 M4）");
+    assert_eq!(
+        store.library_read_only(),
+        Some((ahead, SUPPORTED_SCHEMA_VERSION))
+    );
+    let stats = store.stats().unwrap();
+    assert!(stats.library_read_only, "界面读不到这一位就挂不出全局横幅");
+    assert_eq!(stats.notes, 1, "只读模式下笔记必须照样读得到");
+
+    // 写：拒，且拒的是"库过新"这一格。
+    let e = store
+        .create_note(&default_folder(&store), doc_text("这一笔不该落下去"))
+        .expect_err("只读闸门下不许写回");
     match e {
         StoreError::ReadOnly { db, supported } => {
-            assert_eq!(db, ahead);
-            assert_eq!(supported, SUPPORTED_SCHEMA_VERSION);
+            assert_eq!((db, supported), (ahead, SUPPORTED_SCHEMA_VERSION));
         }
         other => panic!("必须是 StoreError::ReadOnly，实际 {other:?}"),
     }
+    assert_eq!(
+        store.stats().unwrap().notes,
+        1,
+        "被拒的那一笔不许落进库（拒了却没拒住是同一族的形状）"
+    );
+
     assert_eq!(user_version(&fx.db_file()), ahead, "绝不降级写回（M4）");
     assert_eq!(
-        std::fs::metadata(fx.db_file()).unwrap().len(),
-        size_before,
-        "拒绝打开不得改动文件"
+        notera_crypto::sha256_hex_file(&fx.db_file()).unwrap(),
+        hash_before,
+        "只读模式不得改动库文件（M4）"
     );
-    let backups: Vec<_> = listing(&fx.dir);
+    let after_files = visible_listing(&fx.dir);
     assert_eq!(
-        backups, before_files,
+        after_files, before_files,
         "只读闸门下不得产生备份或任何文件变化"
     );
     assert!(
-        !backups
+        !after_files
             .iter()
             .any(|n| n.ends_with(&format!("pre-migration.{ahead}"))),
-        "被拒绝的迁移不得生成备份：{backups:?}"
+        "被拒绝的迁移不得生成备份：{after_files:?}"
     );
-    // 回到支持范围内后仍可打开（只读闸门不是"库坏了"）
+    drop(store);
+
+    // 回到支持范围内后仍可写（只读闸门不是"库坏了"）
     downgrade(&fx.db_file(), SUPPORTED_SCHEMA_VERSION);
     let store = fx.reopen();
-    assert_eq!(store.stats().unwrap().notes, 1);
+    assert_eq!(store.library_read_only(), None);
+    assert!(!store.stats().unwrap().library_read_only);
+    create(&store, &default_folder(&store), "升级之后能写了");
+    assert_eq!(store.stats().unwrap().notes, 2);
 }
 
 #[test]
@@ -348,6 +375,15 @@ fn listing(dir: &std::path::Path) -> Vec<String> {
         .collect();
     v.sort();
     v
+}
+
+/// 同上，但**不看 WAL 的伴生文件**：只读模式仍要开连接读，SQLite 自己会落下
+/// `-wal` / `-shm`。"不许产生文件"讲的是不许多出备份或迁移产物，不是要 SQLite 不干活。
+fn visible_listing(dir: &std::path::Path) -> Vec<String> {
+    listing(dir)
+        .into_iter()
+        .filter(|n| !n.ends_with("-wal") && !n.ends_with("-shm"))
+        .collect()
 }
 
 /// 用裸连接改版本（模拟"旧程序/新程序"）。刻意用 pragma_update，避免源码里出现

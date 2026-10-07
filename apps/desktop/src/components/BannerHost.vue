@@ -3,6 +3,7 @@
 import { computed } from 'vue';
 import { useEditorStore } from '../stores/editor';
 import { useNoteStore } from '../stores/notes';
+import { useShellStore } from '../stores/shell';
 import { useSyncStore } from '../stores/sync';
 import { t, messageFor } from '../i18n';
 import { probeLink } from '../api/bridge';
@@ -11,10 +12,11 @@ import AppIcon from './ui/AppIcon.vue';
 const sync = useSyncStore();
 const editor = useEditorStore();
 const notes = useNoteStore();
+const shell = useShellStore();
 
 const showLink = computed(() => sync.linkDown);
 const showOffline = computed(() => !sync.linkDown && sync.badge === 'offline');
-const showDb = computed(() => sync.dbTooNew);
+const showDb = computed(() => shell.libraryReadOnly);
 const showSearchError = computed(() => notes.searchErrorKey !== null);
 const searchErrorText = computed(() => messageFor(notes.searchErrorKey ?? 'error.fallback'));
 
@@ -43,7 +45,7 @@ async function reconnect(): Promise<void> {
     </div>
 
     <div v-if="showDb" class="banner banner--warn" data-testid="banner-db">
-      <span aria-hidden="true">!</span>
+      <AppIcon :size="18" name="warn" />
       <span>{{ t('state.dbTooNew') }}</span>
     </div>
 

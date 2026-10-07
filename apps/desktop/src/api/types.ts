@@ -168,6 +168,8 @@ export interface StoreStats {
   dbBytes?: number;
   searchGeneration?: number;
   inflightOps?: number;
+  /** ADR-0012 的只读闸门：这本库比本程序新。§4.2 那句「请升级以编辑」的唯一来源。 */
+  libraryReadOnly?: boolean;
 }
 
 /* ------------------------------------------------------------------ 账户配置 */

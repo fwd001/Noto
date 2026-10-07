@@ -17,6 +17,7 @@ import {
 import { draftFromWire, toWire } from '../sync/accountWire';
 import { asBridgeError } from '../util/errors';
 import { localCaps, normalizeCaps, type PlatformCaps } from '../platform/caps';
+import { useShellStore } from './shell';
 import { useToastStore } from './toasts';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
@@ -279,6 +280,10 @@ export const useSettingsStore = defineStore('settings', () => {
     try {
       const result = await callCommand<StoreStats>(Commands.stats, {});
       stats.value = typeof result === 'object' && result !== null ? result : null;
+      // §4.2 第四格「整机只读（库过新）」的唯一生产者。为什么挂在这一条上：`stats` 是首帧就发、
+      // 且**只读模式下照样成功**的那一次问 —— 核心在闸门下把读留着、把写拒了，所以"能不能读这一位"
+      // 不再取决于用户点没点某颗按钮。（以前它挂在一个核心从不发出的同步事件上 —— 缺口 G85。）
+      if (stats.value?.libraryReadOnly === true) useShellStore().markLibraryReadOnly();
     } catch {
       stats.value = null;
     } finally {

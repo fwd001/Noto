@@ -77,7 +77,7 @@ function selectTrash(): void {
            它就是抽屉里那个"关掉"。`toggleSidebar()` 现在按布局落到对的位上。
            有自绘标题栏时不画 —— 那颗把手归标题栏，画两颗就是"折起下面还有一层折起"。 -->
       <button v-if="!drawsTitleBar(settings.caps)" type="button" class="btn btn--quiet btn--icon" :aria-label="t(shell.sidebarShown ? 'sidebar.collapse' : 'sidebar.expand')" data-testid="sidebar-collapse" @click="shell.toggleSidebar()">
-        ⟨
+        <AppIcon :size="18" :name="shell.sidebarShown ? 'chevron-left' : 'chevron-right'" />
       </button>
     </div>
 

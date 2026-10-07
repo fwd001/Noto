@@ -200,6 +200,8 @@ pub struct StatsDto {
     /// 待发的服务端操作数。口径见 `StoreStats::outbox_pending`：只算启用中的账户，
     /// 本地哨兵账户的留痕行不计入，与 `SyncStatusDto::pending_ops` 同一个意思。
     pub inflight_ops: u32,
+    /// 这本库比本程序新（ADR-0012 只读闸门）。界面据此挂"请升级以编辑"的全局横幅。
+    pub library_read_only: bool,
 }
 
 impl From<StoreStats> for StatsDto {
@@ -213,6 +215,7 @@ impl From<StoreStats> for StatsDto {
             db_bytes: s.db_bytes,
             search_generation: s.search_generation,
             inflight_ops: s.outbox_pending,
+            library_read_only: s.library_read_only,
         }
     }
 }
@@ -543,7 +546,30 @@ fn id(s: &str) -> R<EntityId> {
 // ---------------------------------------------------------------- 分发 ---
 
 /// 命令名 → 处理器。Tauri 侧一个 `invoke` 转发到这里，dev 侧 HTTP 也走这里。
+/// ADR-0012 的只读闸门下必须先挡的 command。
+///
+/// 这里**只列不经过 `Store::write_tx` 的那些**：改数据目录里的文件（附件字节、导入、
+/// 恢复、清除、备份）以及账户配置 —— 它们的 config.json 一半落了、库那一半才会失败，
+/// 所以不能留给库层闸门去拒。库写不用列：`write_tx` 是全库唯一写入口，闸门就在那一处。
+const READ_ONLY_REFUSED: [&str; 9] = [
+    "attach_file",
+    "import_data",
+    "import_files",
+    "restore_db",
+    "erase_all_data",
+    "backup_db",
+    "sync_now",
+    "configure_account",
+    "remove_account",
+];
+
 pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json::Value> {
+    if READ_ONLY_REFUSED.contains(&name) {
+        if let Some((db, supported)) = app.store().library_read_only() {
+            return Err(CmdError::of("db_too_new", false)
+                .with(serde_json::json!({ "db": db, "supported": supported })));
+        }
+    }
     match name {
         "create_note" => {
             let c: CreateNoteCmd =

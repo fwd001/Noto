@@ -827,6 +827,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
 
       <p v-if="readOnly && blocks.length > 0" class="editor-note" role="status">
         <template v-if="store.readOnlyReason === 'versionTooNew'">{{ t('editor.versionTooNew') }}</template>
+        <template v-else-if="store.readOnlyReason === 'libraryReadOnly'">{{ t('editor.libraryReadOnly') }}</template>
         <template v-else>{{ t('state.inTrash') }}</template>
       </p>
     </div>

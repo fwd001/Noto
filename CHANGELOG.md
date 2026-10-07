@@ -2370,6 +2370,57 @@ E2EE 那两本 `key_vault.rs`/`sealed_e2ee.rs` 的若干条）。
   先查仪器再下结论：`curl` 直接问桥，文件夹与笔记都回得好好的 ⇒ 是本机 loopback 那一刻的抖动，
   重跑全绿。**别把环境的抖动记成产品的缺陷**（见 [[verify-the-instrument-before-the-verdict]]）。
 
+
+### 界面重构 v2 · 第 9 刀：§4.2 第四格「整机只读（库过新）」要真能出现（G85）
+
+第 8 刀登记这条时我把根因写成"横幅那一位只挂在一个核心从不发出的同步事件上"。**那句只对了一半，
+而且错的方向更重要**：顺着往下挖一层才发现，`Store::open` 在 `user_version > 支持值` 时直接返回 `Err`
+⇒ `App::boot` 跟着失败 ⇒ 桌面壳 `setup()` 顶死、dev 桥整个进程退出 —— **整条命令面在这个状态下根本不存在**，
+`db_too_new` 在 Rust 里只出现在错误映射表和那张表的单测里。用户看到的是「未连接本地服务」，
+查错方向查到网络上去了。ADR-0012 第 16 行与 M4 写的都是「**进入只读模式**并停止同步 …… 给出可操作文案」，
+所以这不是"缺一条横幅"，是**核心没照 ADR 做**。
+
+- **核心补上只读模式**（`crates/notera-store/src/store.rs`）：`migrate` 报 `ReadOnly` 时不再失败 ——
+  记 `library_read_only=(库的版本, 支持到的版本)`、**跳过引导**（默认本 / 哨兵账户 / meta 是写）、
+  跳过 FTS 自愈（`rebuild_search` 是写），读连接照常开。写侧只加**一道**闸门：
+  `write_tx` 开头拒 `StoreError::ReadOnly`。那一处是全库唯一写入口（它自己的注释早就这么写），
+  所以以后新增的写路径不改这里就自动被拦 —— 不在各条命令里重复表征。
+- **不经过 `write_tx` 的那几条**（`commands.rs::READ_ONLY_REFUSED`）在门口就拒：改数据目录里的文件
+  （附件字节、导入、恢复、清除、备份）与账户配置（config.json 落了、库那一半才失败 = 半截状态）、
+  以及 `sync_now`（ADR 的"停止同步"）。`enable_background_sync` 在只读下**不启动线程**。
+- **生产者只留一条**：`stats` 出参新增 `libraryReadOnly`（`StoreStats` 里由 `Store` 自己填 ——
+  它已经是这个事实的唯一持有者）。首帧那次 `stats`（`probeLink()` 就是它）一定发得出、
+  且在只读下一定成功，所以 `settings.loadStats()` 里那一句 latch 是这一格的唯一来源。
+  顺手删掉两处**永不命中**的旧生产者：`sync.applySignal` 里那个 `errorCode === 'db_too_new'`
+  （核心从不发）与 `notes.load()` 里那个"读列表被拒"（只读模式下读是成功的，这条不再可达）。
+- **界面**：横幅 `BannerHost` 读 `shell.libraryReadOnly`；`writeBlocked` 加上这一位 ⇒ 编辑区
+  `contenteditable=false` + `aria-readonly=true`（§4.2「绝不降级写」的界面那一半），
+  `readOnlyReason` 新增 `'libraryReadOnly'` 一格 —— 原来那一串 `v-else` 会把整机只读说成
+  「这条在"最近删除"里」，那是第二句谎。文案 `state.dbTooNew` 重写为带下一步的那句。
+- 顺带抓到两枚漏网的 Unicode 字形（图标门禁那一条 `\p{S}` 之外的标点判据）：
+  `BannerHost` 里那颗裸 `!` → `warn` AppIcon；`SidebarPanel` 那颗 `⟨` → 新画的 `chevron-left`/`chevron-right`，
+  收/开两态现在读的是同一个 `shell.sidebarShown`。
+
+**判据（每条都先按变异证明它会红，[[mutation-test-every-gate]]）**：
+
+| 判据 | 数 | 变异与实测 |
+|---|---|---|
+| `notera-store/tests/migrations_and_pragmas.rs::future_db_version_opens_read_only_and_is_never_downgraded` | 改写 | 旧内容断言的是 `expect_err("高于支持值的库必须拒绝可写打开")` —— **测试名字里写着"opens read_only"，判据钉的却是"打不开"**，ADR 那一格就这么被绿着掩盖了。新版断言：打开成功、`library_read_only() == Some((ahead, supported))`、`stats().library_read_only == true`、笔记**读得到**（`notes == 1`）、`create_note` 报的是 `ReadOnly{db,supported}` 而不是含糊 sql、被拒那一笔**没落进库**、库文件 sha256 与目录清单不变（`-wal`/`-shm` 除外：只读也要开连接，SQLite 自己会落伴生文件）、版本没被降级写回、回到支持值之后**能写** |
+| `notera-host/tests/library_read_only.rs`（新文件，1 条） | +1 | 走真 `dispatch`：`App::boot` 必须成功、`stats` 载荷里 `libraryReadOnly` 为 `true`（**camelCase 键名在真序列化输出上钉死**，[[verify-cross-language-contracts-with-real-payload]]）、`list_notes` 读得到、`edit_note`/`create_note`/`delete_note`/`set_note_pinned` 四条都按 `db_too_new` 拒且 `detail.db` 带出版本对、`sync_now`/`erase_all_data`/`restore_db`/`backup_db` 四条也拒、库文件字节不变。夹具造"库过新"是**直接改文件头那 4 个字节**而不是发 `PRAGMA` —— `arch-check` 那条 `layer:sql-literal` 先红过一次（host 不许写 SQL），这条规则挡得对：那一道本来就该由 store 管 |
+| `notera-host` 那条 `stats` 键集合契约 | 改 | 加了 `libraryReadOnly` 之后它当场红 ⇒ 说明这条边有人看着；新版同时把**值**钉住（正常库必须是 `false`，否则这一位会退化成"什么都算库过新"） |
+| `apps/desktop/src/libraryReadOnly.spec.ts`（5 条） | +5 | 断言的是**调用边**：`loadStats()` 真的发了那一发 `stats`（`callsOf('stats')`）且这一位立起来；载荷里没这一位就不许立（正对照）；横幅文案给得出下一步；只读时 `updateBlock`+`replaceBlocks`+`flush` 之后 `callsOf('edit_note')` 仍为 0；正对照——没进只读时同一支照常写。变异 M-B（删掉 `settings.ts` 那一句 latch）⇒ **只有那一条红**，红的正是生产者 |
+| `scripts/verify-layout.mjs` ㉚（8 项，原 6 项） | +2 | 这一腿的注入点跟着契约搬：只拦 `**/cmd/stats` 让它带 `libraryReadOnly`，其余全走**真桥**。新增两项 —— ① 「只读不等于没了」：真数据那一篇在列表里数得到；② 打了字之后回读**真核心**：`writes === 0` 且那一篇的 `rev` 与正文一个字没变。变异 M-A（把 `shell.libraryReadOnly` 从 `writeBlocked` 里摘掉）⇒ 三项一起红，其中那一项实测到 `writes: 1`、`rev 1→2` —— 屏幕上真的写进了库，这正是 §4.2 那句"绝不降级写"要拦的形状 |
+
+实测读数：`cargo test -p notera-store` 全绿（含改写那条）；`cargo test -p notera-host` **exit 0**、
+20 个套件 result 行全 ok；`vitest run` **47 个文件全过**；`vue-tsc` 0 错；`eslint --max-warnings 0` 0；
+`arch-check` **32/32**（中途那条 `layer:sql-literal` 红过，改夹具之后回到 32）；
+`verify-layout` **362 项 PASS / 0 FAIL**（上一版 359，㉚ 从 6 项扩到 8 项）。
+
+**登记一条仪器的账**：㉚ 第一版红在"5.2 秒之后横幅仍在"—— 横幅明明还在，红的是我把文本截到 24 个字符
+才去匹配后半句那句"请升级以编辑"（[[verify-the-instrument-before-the-verdict]] 又一次）。
+另一条是**我自己的根因写错了**：第 8 刀那句"横幅读错位"是被"引擎探针绿着"误导的同一形状 ——
+`db_too_new` 这个码在映射表里存在、单测里绿着，我就据此以为发得出。这里按 [[verify-the-call-edge-not-just-the-callees-tests]]
+更正：断言要打在"这一格在真进程里可达吗"上，而答案当时是**不可达**。
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
 - **G75 桌面壳一个 capability 都没有：`§6` 那句"系统文件对话框已接插件"在界面上的实际后果是 0**（2026-10-06 查"要不要现在接导出选择器"时撞出来的；状态 = **待一次真壳运行来分辨**）
   - 已经量到的三条事实：

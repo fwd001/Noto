@@ -31,6 +31,15 @@ const GLYPH = [...'☰↻⌫⇤⇥▾✎＋○●◎✓✔▤▦⠿★☆→‹�
  */
 const SYMBOL = /\p{S}/u;
 
+/**
+ * 第三类 `\p{S}` 也抓不到的：**ASCII 标点当状态标记**。
+ * `BannerHost` 那条"库版本过新"的横幅前缀就是一个裸的 `!`（U+0021 是标点，不是符号类），
+ * 而它干的活与 ⚠ 一模一样 —— 字体不同就长得不同，且与旁边 1.75px 描边的图标不成一套。
+ * 判据：元素内容只有**一个既不是字母、也不是数字、也不是空白**的字符。
+ * 字母与数字放过（`B` `I` `U` `S` 那四颗是 §2.4 认的通用认知；计数也是数字）。
+ */
+const PUNCT_MARK = /^[^\p{L}\p{N}\p{M}\s]$/u;
+
 function templateOf(text: string): string {
   const start = text.indexOf('<template');
   const end = text.lastIndexOf('</template>');
@@ -48,7 +57,7 @@ describe('§2 图标必须是 SVG，不许是 Unicode 字形', () => {
     scanned += 1;
     for (const m of tpl.matchAll(/>([^<>]+)</g)) {
       const inner = (m[1] ?? '').trim();
-      if (inner.length === 1 && (GLYPH.includes(inner) || SYMBOL.test(inner))) {
+      if (inner.length === 1 && (GLYPH.includes(inner) || SYMBOL.test(inner) || PUNCT_MARK.test(inner))) {
         violations.push(`${file} 元素内容是一个字形「${inner}」`);
       }
     }

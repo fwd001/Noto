@@ -2900,6 +2900,12 @@ impl App {
     ///
     /// 幂等：重复调用只有一条监督循环在跑。
     pub fn enable_background_sync(&self) {
+        if self.inner.store.library_read_only().is_some() {
+            // ADR-0012：只读闸门下不启动引擎。一轮同步要写账、写库、写附件目录，
+            // 而这些在闸门下**每一笔都会失败** —— 放它跑起来只是白烧一趟网络，
+            // 还把同一句"库过新"反复刷回界面。
+            return;
+        }
         if self.inner.sync_supervisor.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -5013,6 +5019,7 @@ mod tests {
                 "folders",
                 "ftsEntries",
                 "inflightOps",
+                "libraryReadOnly",
                 "notes",
                 "notesInTrash",
                 "searchGeneration"
@@ -5020,6 +5027,10 @@ mod tests {
         );
         // 值也得接得上：全新库里没有待发操作（本地哨兵账户的留痕行不算队列）
         assert_eq!(got["inflightOps"], 0, "没配置远端时待发队列必须是 0");
+        assert_eq!(
+            got["libraryReadOnly"], false,
+            "本程序自己写的库不算「库过新」 —— 这一位是 §4.2 第四格唯一的生产者"
+        );
         assert_eq!(got["notes"], 0);
         assert_eq!(got["notesInTrash"], 0);
     }

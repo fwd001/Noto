@@ -27,7 +27,7 @@ export type IconName =
   | 'sync-synced' | 'sync-syncing' | 'sync-offline' | 'sync-failed' | 'sync-idle'
   | 'pin-on' | 'pin-off'
   | 'attach-file' | 'attach-image'
-  | 'check' | 'drag-handle' | 'plus' | 'pencil' | 'chevron-down' | 'arrow-back'
+  | 'check' | 'drag-handle' | 'plus' | 'pencil' | 'chevron-down' | 'chevron-left' | 'chevron-right' | 'arrow-back'
   | 'indent-in' | 'indent-out' | 'trash' | 'warn' | 'rule'
   | 'list' | 'alert' | 'question' | 'menu' | 'settings' | 'undo' | 'redo'
   | 'save-saving' | 'save-dirty' | 'save-saved' | 'save-failed'
@@ -66,6 +66,9 @@ export const ICONS: Record<IconName, IconSpec> = {
   plus: { d: ['M10 4.6v10.8', 'M4.6 10h10.8'] },
   pencil: { d: ['M4.8 15.2l.9-3 7.5-7.5 2.1 2.1-7.5 7.5Z', 'M12.2 5.6l2.1 2.1'] },
   'chevron-down': { d: ['M5.6 8.2L10 12.6l4.4-4.4'] },
+  // 侧栏那颗收/开把手以前是 `⟨`（U+27E8，数学括号）—— 字体回退下形状与粗细都不受控。
+  'chevron-left': { d: ['M12.4 5.6L8 10l4.4 4.4'] },
+  'chevron-right': { d: ['M7.6 5.6L12 10l-4.4 4.4'] },
   'arrow-back': { d: ['M12.4 4.8L6.6 10l5.8 5.2'] },
   'indent-in': { d: ['M10.4 6h5', 'M10.4 14h5', 'M4.6 10h3.2', 'M6.2 8l1.6 2-1.6 2'] },
   'indent-out': { d: ['M10.4 6h5', 'M10.4 14h5', 'M4.6 10h3.2', 'M7.8 8L6.2 10l1.6 2'] },

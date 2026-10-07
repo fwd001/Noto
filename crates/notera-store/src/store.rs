@@ -114,6 +114,8 @@ pub struct Store {
     clock: SystemClock,
     migration: MigrateReport,
     startup_violations: Vec<InvariantViolation>,
+    /// ADR-0012 的只读闸门：`Some((库的版本, 本程序支持到的版本))` 时这一本库比本程序新。
+    library_read_only: Option<(u32, u32)>,
 }
 
 /// `Store` 内部持连接池，无法 derive(Debug)。但测试与日志需要一个
@@ -131,8 +133,8 @@ impl std::fmt::Debug for Store {
 impl Store {
     /// 建目录 → PRAGMA → 迁移 → 引导（默认本 / 哨兵账户 / meta）→ 启动自检。
     ///
-    /// `user_version` 高于本程序支持值时返回 [`StoreError::ReadOnly`]（ADR-0012）：
-    /// 不迁移、不写回、不改文件。
+    /// `user_version` 高于本程序支持值时**不失败**，而是进入 ADR-0012 的只读模式：
+    /// 不迁移、不引导、不自愈，只开读 —— 用户要能看见自己的笔记，只是这一版一个字也不写回。
     pub fn open(dir: &Path, device_id: DeviceId) -> Result<Store, StoreError> {
         std::fs::create_dir_all(dir)?;
         // 待恢复标记必须在打开库之前落地，这样后面的启动自检检查的是恢复后的数据。
@@ -142,13 +144,33 @@ impl Store {
         let db = dir.join(DB_FILE_NAME);
 
         let mut conn = crate::pool::open_write_conn(&db)?;
-        let report = migrate::migrate(&mut conn, &db)?;
-        let device = {
-            // 事务改由调用方持有：`erase_all_data` 要在自己那一笔写事务里复用同一个引导逻辑。
-            let tx = conn.transaction()?;
-            let device = bootstrap(&tx, &device_id)?;
-            tx.commit()?;
-            device
+        let (report, library_read_only) = match migrate::migrate(&mut conn, &db) {
+            Ok(report) => (report, None),
+            Err(StoreError::ReadOnly {
+                db: from,
+                supported,
+            }) => (
+                MigrateReport {
+                    from,
+                    to: from,
+                    applied: Vec::new(),
+                    backup: None,
+                },
+                Some((from, supported)),
+            ),
+            Err(e) => return Err(e),
+        };
+        let device = match library_read_only {
+            // 引导（默认本 / 哨兵账户 / meta）是**写**。库比本程序新时这些由更新的那一版负责，
+            // 这里绝不补 —— 补一份本程序以为该有的行，就是往不认识它的 schema 里写。
+            Some(_) => device_id,
+            None => {
+                // 事务改由调用方持有：`erase_all_data` 要在自己那一笔写事务里复用同一个引导逻辑。
+                let tx = conn.transaction()?;
+                let device = bootstrap(&tx, &device_id)?;
+                tx.commit()?;
+                device
+            }
         };
 
         let mut store = Store {
@@ -162,6 +184,7 @@ impl Store {
             clock: SystemClock,
             migration: report,
             startup_violations: Vec::new(),
+            library_read_only,
         };
 
         // 派生索引自愈（DATA-MODEL §7.3）。
@@ -169,7 +192,8 @@ impl Store {
         // 注意：external-content FTS5 的 `count(*)` 报的是**内容表**的行数，索引即使是空的
         // 也照样相等（实测）—— 所以"行数比对"根本发现不了脱钩（例如 0003 刚建好索引、
         // 库里已有老笔记）。唯一的可靠探针是抽样比较 MATCH 与 LIKE 的命中集合。
-        if !store.verify_search().is_empty() {
+        // 只读模式下不许自愈：`rebuild_search` 是写，而这一本库的 schema 由更新的那一版管。
+        if library_read_only.is_none() && !store.verify_search().is_empty() {
             store.rebuild_search()?;
         }
         let violations = store.verify();
@@ -179,6 +203,11 @@ impl Store {
 
     pub fn device_id(&self) -> DeviceId {
         self.device.clone()
+    }
+
+    /// ADR-0012 的只读闸门开着时返回 `Some((库的版本, 本程序支持到的版本))`。
+    pub fn library_read_only(&self) -> Option<(u32, u32)> {
+        self.library_read_only
     }
 
     pub fn paths(&self) -> &StorePaths {
@@ -262,10 +291,16 @@ impl Store {
     // ------------------------------------------------------------ 事务壳 ---
 
     /// 单写者 + 单事务。闭包返回 `Err` 即整体回滚（WAL + synchronous=FULL）。
+    ///
+    /// 这一处是**全库唯一的写入口**，所以 ADR-0012 的"绝不降级写回"落在这里而不是
+    /// 各条命令里 —— 以后新增的写路径不改这里就自动被闸门拦住。
     pub(crate) fn write_tx<T>(
         &self,
         f: impl FnOnce(&Connection, &str) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
+        if let Some((db, supported)) = self.library_read_only {
+            return Err(StoreError::ReadOnly { db, supported });
+        }
         let mut guard = self.write.lock().unwrap_or_else(|p| p.into_inner());
         let now = self.now();
         let tx = guard.transaction()?;
@@ -1552,6 +1587,7 @@ impl Store {
             conflicts_open: one("SELECT COUNT(*) FROM sync_conflicts WHERE state = 'open'")? as u32,
             fts_rows: one("SELECT COUNT(*) FROM notes_fts")? as u32,
             user_version: migrate::current_version(&conn)?,
+            library_read_only: self.library_read_only.is_some(),
             search_generation: rows::meta_i64(&conn, META_SEARCH_GEN, 0)?,
             db_bytes,
         })

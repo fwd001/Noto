@@ -71,6 +71,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'editor.useMyDraft': '用我的版本继续编辑',
   'editor.discardMyDraft': '放弃我的改动',
   'editor.versionTooNew': '这条笔记由更新版本的 Noto 保存，请升级后编辑（当前可查看）。',
+  'editor.libraryReadOnly': '本机的数据由更新版本的 Noto 写入，这一版只能查看（怎么继续见上方横幅）。',
   'editor.unknownBlock': '暂不支持的内容（已原样保留）',
   'editor.attachmentMissing': '附件不在这台设备上，正在等待下载',
   // 本机不可用的其余各格（只有一半 / 校验不过 / 服务器那边也没有或坏了 / 连账都没有）。
@@ -271,7 +272,8 @@ const MESSAGES: Record<MessageKey, string> = {
   'state.linkDownHint': '在本机启动本地服务后会自动接上（默认 127.0.0.1:17323）。',
   'state.reconnect': '重试连接',
   'state.offlineBanner': '离线：改动会先存到本机',
-  'state.dbTooNew': '本地数据由更新版本的 Noto 写入，当前版本只读打开，不会写坏数据。',
+  // §4.2 第四格：横幅要给出**下一步**（请升级以编辑），并说清这一版不会降级写坏数据。
+  'state.dbTooNew': '本地数据来自更新版本的 Noto，已按只读方式打开 —— 请升级以编辑。这一版不会写回数据，你的笔记不会被改坏。',
   'state.dismiss': '知道了',
 
   /* 无障碍 */
