@@ -101,6 +101,19 @@ function flattenFolders(nodes, out = []) {
 const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '');
 
 /**
+ * 开局先扫一遍**上一轮崩在中途留下的夹具**。
+ * 每一腿自己收尾，但"崩在半路"那一轮收不了尾：实测残骸堆到 26 条笔记里 19 条是夹具，
+ * 于是后面每一腿的"第几行 / 列表长度 / 最新那一篇"都被这些残骸改过 —— 制造的是与产品无关的红
+ * （今天就是这样：保存四格那一腿找不到它自己刚建的那一篇，因为列表里挤了一堆同名前缀的旧货）。
+ * `purgeByTitle` 是函数声明，会提升，所以这里能在它定义之前调用。
+ */
+const FIXTURE_MARKS = [
+  '只读夹具', '常驻夹具', '拖排夹具', '滚动夹具', '状态夹具', '保存状态夹具',
+  '置顶往返夹具', '通扫夹具', '键盘夹具', '附件账夹具', '弹窗夹具',
+];
+for (const mark of FIXTURE_MARKS) await purgeByTitle(mark);
+
+/**
  * ⑤ 那一腿要列表里**真的有一篇**，否则"那颗点可见"会退化成"什么都没量到"。
  * 夹具直接经真核心写入（不是往页面里塞 DOM）—— 列表那一行是核心给的。
  */
@@ -2949,6 +2962,154 @@ function contrastRatio(fg, bg) {
     wide.onBar === narrowUnion,
     JSON.stringify({ narrowUnion, wideOnBar: wide.onBar }));
   await w33.close();
+}
+
+/**
+ * ㉞ §5 最后一行没有机器判据的那一条：「焦点：焦点可见，逻辑顺序合理」。
+ *
+ * 为什么单独一腿而不是塞进第 ⑯ 腿那种"扫 CSS 里有没有 :focus-visible"：
+ * 声明在 CSS 里 ≠ 画得出来 —— 一个 `outline: 0` 的后代规则、一处 `overflow:hidden` 的祖先、
+ * 或者焦点停在一个 0×0 的包裹层上，都会让那句话变成假话。只有真的按 Tab 一站一站走，
+ * 读 `document.activeElement` 的**计算样式与盒子**，量的才是界面。
+ *
+ * 三件事一起判：① 每一站的焦点环真的画上（solid、≥2px、颜色压底色 ≥3:1 —— 非文字对比度那条）；
+ * ② 停靠顺序符合阅读顺序（侧栏 → 列表 → 编辑器 → 底栏，跨栏不许回跳）；
+ * ③ 每一站都在视口里且看得见名字（焦点跑到视口外等于焦点不可见）。
+ * 再补一档 `prefers-reduced-motion: reduce`：时长归零不许把焦点环一起归掉。
+ */
+{
+  const c34 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p34 = await c34.newPage();
+  await p34.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p34.waitForSelector('[data-testid="sidebar"]', { timeout: 15000 });
+  await p34.waitForTimeout(800);
+
+  const probeStop = () => p34.evaluate(() => {
+    const el = document.activeElement;
+    if (!el || el === document.body) return { tag: 'BODY' };
+    // 这一站是不是**来过**：Tab 序的圈数没法先验知道（列表是滚到哪才挂哪一行，
+    // 静态数一遍 DOM 会低估），所以用"元素自己带个记号"来判"走回原点了"。
+    const seen = el instanceof HTMLElement && el.dataset.qTabSeen === '1';
+    if (el instanceof HTMLElement) el.dataset.qTabSeen = '1';
+    const cs = getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    const zone = el.closest('.pane--sidebar') ? 0
+      : el.closest('.pane--list') ? 1
+        : el.closest('.pane--editor') ? 2
+          : el.closest('.dock') ? 3
+            : 9;
+    const tok = (name) => {
+      const s = document.createElement('span');
+      s.style.color = `var(${name})`;
+      document.body.appendChild(s);
+      const v = getComputedStyle(s).color;
+      s.remove();
+      return v;
+    };
+    const accent = tok('--accent');
+    // §5 要的是"焦点看得见"，不是"必须是 outline"。正文那一格用的是画在格子里边的
+    // 2px 内阴影条（`outline: none; box-shadow: inset 2px 0 0 var(--accent)`），
+    // 那只手是刻意的：外描边会被版心的 overflow 裁一半，看着像没焦点。
+    const outlined = cs.outlineStyle !== 'none' && Number.parseFloat(cs.outlineWidth) >= 2;
+    const bar = /inset/.test(cs.boxShadow) && Number.parseFloat((cs.boxShadow.match(/(\d+(\.\d+)?)px/) ?? [])[1] ?? '0') >= 2;
+    return {
+      tag: el.tagName.toLowerCase(),
+      seen,
+      testid: el.getAttribute('data-testid'),
+      name: (el.getAttribute('aria-label') || el.getAttribute('title') || (el.textContent ?? '').trim()).slice(0, 20),
+      zone,
+      ring: outlined ? 'outline' : bar ? 'inset-bar' : 'none',
+      outline: cs.outlineStyle,
+      outlineWidth: cs.outlineWidth,
+      ringColor: outlined ? cs.outlineColor : accent,
+      accent,
+      canvas: tok('--canvas'),
+      shadow: cs.boxShadow.slice(0, 60),
+      w: Math.round(r.width),
+      h: Math.round(r.height),
+      inViewport: r.width > 0 && r.height > 0 && r.top >= 0 && r.bottom <= window.innerHeight,
+    };
+  });
+
+  // ⚠ 起点必须是"文档的第一个焦点位"，不是"当前焦点"：应用打开时会把光标送进正文那一格，
+  // 从那儿按 Tab 量到的第一站是第 3 栏，看着就像"顺序倒了"（第一版就红错在这）。
+  // skip-link 就是那个第一位（它排在所有栏之前）；没有它才退回侧栏第一颗。
+  const started = await p34.evaluate(() => {
+    const el = document.querySelector('.skip-link') ?? document.querySelector('[data-testid="nav-all"]');
+    if (!el) return false;
+    el.focus();
+    return document.activeElement === el;
+  });
+  check('㉞ 仪器自检：能从「文档第一个焦点位」起步（否则量到的是应用自动聚焦的形状）',
+    started === true, JSON.stringify({ started }));
+  // 走到哪儿停：① 进了编辑器那一栏就收（后面的栏不该由这一腿判），② 或者**走回了来过的元素**
+  // （= 这一圈绕完还没到编辑器，那是顺序/栏内焦点位变了，由下面那条自检去红，不是这里静默降级）。
+  // 以前这里写死 140 站，实测"走到编辑器"要 117 站 —— 上限迟早被开发库的行数撞穿（假红）。
+  // 也不能改成"先数一遍 DOM 里的可聚焦元素"：实测数出来 90 < 117，因为列表是滚到哪才挂哪一行，
+  // 静态数一遍会**低估**，比写死更糟。真上界是 Tab 序的周期，而这个只有走一遍才知道。
+  // 只留一个纯防跑飞的大数（正常远到不了：走到编辑器就 break）。
+  const stops = [];
+  let wrapped = false;
+  for (let i = 0; i < 600; i += 1) {
+    await p34.keyboard.press('Tab');
+    await p34.waitForTimeout(80);
+    const stop = await probeStop();
+    stops.push(stop);
+    if (stop.zone === 2) break;
+    if (stop.seen === true) { wrapped = true; break; }
+  }
+  const landed = stops.filter((s) => s.tag !== 'BODY' && s.zone !== 9);
+  check('㉞ 仪器自检：Tab 真的从侧栏一路走到编辑器（走不到就是次数或栏内焦点位变了，这条不许静默降级）',
+    new Set(landed.map((s) => s.zone)).size >= 3 && landed.some((s) => s.zone === 2),
+    JSON.stringify({ landed: landed.length, wrapped, zones: [...new Set(landed.map((s) => s.zone))] }));
+  // 样本量守卫：底下四条用的都是 `every`，空数组会让它们**全绿**。
+  // 变异 I 实测正是这个形状：走不到编辑器时 landed=0，那四条一条都没红，只有这条红 ——
+  // 所以"这一腿到底量到了几站"必须是一条独立的、看得见的判据，不能靠下游顺带发现。
+  check('㉞ 样本量守卫：至少真的量到 20 站（`every` 在空数组上为真 —— 没走到就等于没检查）',
+    landed.length >= 20, JSON.stringify({ landed: landed.length, walked: stops.length }));
+  check('㉞ 每一站的焦点指示都真的画上：outline ≥2px，或正文那种 2px 内描条（"CSS 里写了"不等于屏幕上画了）',
+    landed.every((s) => s.ring === 'outline' || s.ring === 'inset-bar'),
+    JSON.stringify(landed.filter((s) => s.ring === 'none').slice(0, 4)));
+  check('㉞ 焦点指示的颜色就是 --accent，压在底色上够 3:1（§5 非文字对比度 1.4.11）',
+    landed.every((s) => s.ringColor === s.accent && contrastRatio(s.ringColor, s.canvas) >= 3),
+    JSON.stringify(landed.slice(0, 3).map((s) => ({ ring: s.ringColor, bg: s.canvas, ratio: Number(contrastRatio(s.ringColor, s.canvas).toFixed(2)) }))));
+  check('㉞ 停靠顺序符合阅读顺序：侧栏 → 列表 → 编辑器 → 底栏，不许回跳到上一栏',
+    landed.every((s, i) => i === 0 || s.zone >= landed[i - 1].zone),
+    JSON.stringify(landed.map((s) => s.zone)));
+  check('㉞ 焦点不许停在视口外或 0 尺寸的东西上（那等于"焦点看不见"）',
+    landed.every((s) => s.inViewport === true),
+    JSON.stringify(landed.filter((s) => !s.inViewport).slice(0, 3)));
+  check('㉞ 每一站都带着可读的名字（焦点环 + 无名控件 = 键盘用户听到的是"按钮"）',
+    landed.every((s) => (s.name ?? '').trim().length > 0),
+    JSON.stringify(landed.filter((s) => !(s.name ?? '').trim()).slice(0, 3)));
+
+  await p34.screenshot({ path: `${OUT}/46-focus-ring-1440.png` });
+  await p34.close();
+  await c34.close();
+
+  // 动效关掉那一档：时长归零 ≠ 焦点环归零。
+  const rmCtx = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' });
+  const rmPage = await rmCtx.newPage();
+  await rmPage.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await rmPage.waitForSelector('[data-testid="sidebar"]', { timeout: 15000 });
+  await rmPage.evaluate(() => document.activeElement?.blur());
+  await rmPage.keyboard.press('Tab');
+  await rmPage.waitForTimeout(300);
+  const rmStop = await rmPage.evaluate(() => {
+    const el = document.activeElement;
+    const cs = getComputedStyle(el);
+    const first = document.querySelector('.syncbar__glyph');
+    return {
+      motionless: first ? getComputedStyle(first).animationName : null,
+      outline: cs.outlineStyle,
+      width: cs.outlineWidth,
+      shadow: cs.boxShadow.slice(0, 60),
+    };
+  });
+  check('㉞ prefers-reduced-motion 下：该静止的静止了，焦点指示还在（时长归零不许顺手把可见性也归掉）',
+    (rmStop.outline !== 'none' && Number.parseFloat(rmStop.width) >= 2) || /inset/.test(rmStop.shadow),
+    JSON.stringify(rmStop));
+  await rmCtx.close();
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
