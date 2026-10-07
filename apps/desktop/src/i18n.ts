@@ -165,6 +165,8 @@ const MESSAGES: Record<MessageKey, string> = {
   'conflict.replaceWithThis': '用这个替换',
   'conflict.mine': '我这台设备',
   'conflict.theirs': '另一处改动',
+  // §4.5：两栏各自要说出"是哪一版"。rev 只用来辨认版本，不单独出现在界面上（那句人话由这条模板给）。
+  'conflict.versionOf': '第 {n} 版',
   'conflict.manualMerge': '我来合并',
   'conflict.mergeHint': '复制任一份内容，粘贴整理成你想要的样子后点"用这个替换"。',
   'conflict.openNote': '打开笔记',
@@ -177,7 +179,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'settings.accountUser': '用户名',
   'settings.accountPassword': '口令',
   'settings.accountPasswordSet': '已保存口令（留空则不修改）',
-  'settings.credentialStoreNone': '这台设备没有系统凭据库：口令只留在这次运行的内存里，**退出后需要重新填写**一次才能继续同步。保存不会被拒绝，本地记录与搜索也不受影响。',
+  'settings.credentialStoreNone': '这台设备没有系统凭据库：口令只留在这次运行的内存里，退出后需要重新填写一次才能继续同步。保存不会被拒绝，本地记录与搜索也不受影响。',
   'settings.credentialVolatile': '这条口令现在只在这次运行里有效（这台设备没有系统凭据库），退出后需要重填。',
   'settings.credentialGone': '这台设备上上次填的口令已经不在了（口令只活在一次运行里）。账户与服务器地址都还在，重填一次口令就能继续同步。',
   'settings.accountRootPrefix': '存储前缀',
@@ -185,7 +187,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'settings.tlsCaPem': '内网根证书（PEM）',
   'settings.tlsCaPemPlaceholder': '-----BEGIN CERTIFICATE-----（粘贴整份证书）',
   'settings.tlsCaPemSet': '已保存根证书（留空则不修改）',
-  'settings.tlsCaPemHint': '用于自建 CA 或自签证书的 WebDAV。这份证书是**追加**在系统信任库之上，不会替换系统里的根。',
+  'settings.tlsCaPemHint': '用于自建 CA 或自签证书的 WebDAV。这份证书是追加在系统信任库之上，不会替换系统里的根。',
   'settings.tlsCaPemHintKept': '这一格留空表示不改已存的那份；要清空请先切回「跟随系统信任库」。',
   'settings.tlsPinFingerprints': '证书指纹（一行一条 sha256）',
   'settings.tlsPinPlaceholder': '例如 3a7f…（64 位十六进制）',
@@ -217,13 +219,16 @@ const MESSAGES: Record<MessageKey, string> = {
   'settings.proxyUserSet': '已设置（留空则不改）',
   'settings.accountRemoved': '已删除同步账户。笔记都还在本机，只是不再同步了。',
   'settings.removeAccount': '删除同步账户',
-  'settings.removeAccountHint': '只停掉同步：删掉服务器地址与存在系统里的口令，**不删任何笔记**。想连笔记一起清掉请用下面的「清除一切数据」。',
+  'settings.removeAccountHint': '只停掉同步：删掉服务器地址与存在系统里的口令，不删任何笔记。想连笔记一起清掉请用下面的「清除一切数据」。',
   'settings.removeAccountConfirm': '确定删除这台同步服务器？本机笔记不受影响，之后想再同步要重新填地址与口令。',
   'settings.removeAccountYes': '确认删除账户',
   'settings.proxyPassword': '口令',
   'settings.proxyBypass': '绕过（每行一个主机/网段/*.域名）',
   'settings.save': '保存账户',
   'settings.saved': '已保存',
+  // §4.6 三时点里的"存之后"：这台设备没有系统凭据库时口令只活在这次运行里，
+  // 只说"已保存"是半个谎 —— 他下次开机同步必然失败，而界面刚告诉他存好了。
+  'settings.savedVolatile': '已记住。退出后需要重新填写。',
   'settings.enabled': '启用同步',
   'settings.theme': '外观',
   'settings.themeSystem': '跟随系统',
@@ -296,6 +301,9 @@ const MESSAGES: Record<MessageKey, string> = {
   'error.quota_full': '服务器空间不足，同步暂停，本机内容不受影响。',
   'error.protocol_mismatch': '与服务器上的数据格式不匹配，请升级后重试。',
   'error.folder_missing': '找不到默认笔记本，导入没有进行。本机的笔记不受影响，请重启应用再试。',
+  // §4.8「目标位置永远不覆盖已存在的文件」落地那一格：这句话必须说清"什么都没写"，
+  // 否则用户以为备份被半覆盖了。
+  'error.export_target_exists': '导出没有进行：那个位置上已经有一个同名文件，Noto 不覆盖任何已存在的文件。换一个文件名，或先把旧的挪走。',
   'conflict.remoteNotFetched': '没能从服务器取回那一版的正文（可能这一轮同步的预算用完了，或那条记录已被清理）。本机这一版完好，可以再点一次同步，或先保留本机版。',
   'list.contendedNote': '这条在别的设备上有了分歧，等你处理',
   'error.db_too_new': '本地数据来自更新版本的 Noto，已按只读方式打开。',
@@ -352,7 +360,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'error.proxy_credential_missing':
     '这台设备读不到已保存的代理凭据（系统凭据库里那条可能已被删除，或这台设备的口令只在这次运行里有效、应用重启后就没了）。这一轮同步不会带着凭据发出去 —— 请在设置里重填一次代理的用户名与口令。',
   'error.credential_too_long':
-    '这条口令太长了：这台设备一条凭据最多存 **256 个 UTF-16 单元**（普通字符大约 256 个，emoji 这类会占两个）。请换一条短一些的口令。',
+    '这条口令太长了：这台设备一条凭据最多存 256 个 UTF-16 单元（普通字符大约 256 个，emoji 这类会占两个）。请换一条短一些的口令。',
   'error.credential_store_failed':
     '写进系统凭据库时失败了，口令没有保存、账户也没有生效。可以再试一次；若反复失败，请把这条提示与下方详情一起给我。',
   'sync.root_mismatch': '这个服务器上已经是另一个 Noto 库了，已停止同步以免把两个库混在一起。请改用该库原本的路径。',
@@ -402,7 +410,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'settings.serverCaps': '服务器能力（首次连接与每天自动探测）',
   'sync.capsUnknown': '还没有对这台服务器做过能力探测。下一次连上网时会自动探测，并在这里告诉你结果。',
   'sync.capsProtected': '这台服务器支持并发保护（写入策略 {strategy}）：多人同时改会被服务器拦下，不会互相覆盖。',
-  'sync.capsUnprotected': '这台服务器不支持条件写入（策略 S3）：靠"写完再核对"来防覆盖，存在很短的覆盖窗口。建议多台设备**串行**编辑，改完等它同步完再换设备。',
+  'sync.capsUnprotected': '这台服务器不支持条件写入（策略 S3）：靠"写完再核对"来防覆盖，存在很短的覆盖窗口。建议多台设备串行编辑，改完等它同步完再换设备。',
   'sync.capsProbedAt': '上次探测：{when}',
   'sync.cap.conditionalPut': '条件写入',
   'sync.cap.overwriteFMove': '不覆盖式移动',

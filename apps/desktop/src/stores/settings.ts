@@ -227,7 +227,9 @@ export const useSettingsStore = defineStore('settings', () => {
       const saved = await callCommand<Account>(Commands.configureAccount, { ...payload });
       account.value = typeof saved === 'object' && saved !== null ? saved : account.value;
       draft.value = { ...draftFromWire(account.value), password: '' };
-      toasts.push('settings.saved', 'info');
+      // §4.6「存之后」那句话必须按这台设备的真话说：没有系统凭据库时口令只活在这次进程里，
+      // 统一报"已保存"就是当着用户说假话（他下次开机必然同步失败）。
+      toasts.push(credentialVolatile.value ? 'settings.savedVolatile' : 'settings.saved', 'info');
       return true;
     } catch (error) {
       const bridge = asBridgeError(error);

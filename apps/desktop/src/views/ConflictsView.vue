@@ -32,6 +32,14 @@ function choose(card: ConflictCard): void {
 }
 
 /**
+ * §4.5 那句"必须说清本机是哪一版、对面是哪一版"里的两个版本号。
+ * 拿不到就整段不出现 —— 写"第 ? 版"是把缺信息伪装成有信息。
+ */
+function revOf(rev: number | undefined): string {
+  return typeof rev === 'number' ? ` · ${t('conflict.versionOf', { n: rev })}` : '';
+}
+
+/**
  * 「打开笔记」只负责**去看那一篇**，不许顺手裁决。
  *
  * 以前它和「手动合并」共用 `act('manualMerge')` —— 那个动作会 `resolve` 掉这条分歧并关掉卡片。
@@ -105,14 +113,14 @@ onMounted(() => {
         <div v-if="selected" class="conflicts__detail">
           <div class="conflicts__panes">
             <figure class="conflicts__pane">
-              <figcaption>{{ t('conflict.mine') }}</figcaption>
+              <figcaption>{{ t('conflict.mine') }}{{ revOf(selected.localRev) }}</figcaption>
               <pre class="conflicts__text">{{ localText }}</pre>
               <button type="button" class="btn" :data-testid="`conflict-use-${selected.conflictId}`" @click="act('replaceWithLocal')">
                 {{ t('conflict.replaceWithThis') }}
               </button>
             </figure>
             <figure class="conflicts__pane">
-              <figcaption>{{ t('conflict.theirs') }}</figcaption>
+              <figcaption>{{ t('conflict.theirs') }}{{ revOf(selected.remoteRev) }}</figcaption>
               <pre v-if="remoteText" class="conflicts__text">{{ remoteText }}</pre>
               <!-- 右栏空着不等于"对方那一版是空的"。引擎取那一版会失败（请求预算用尽、
                    记录被别的设备清掉、网络断了），那时必须把这句话说出来 ——

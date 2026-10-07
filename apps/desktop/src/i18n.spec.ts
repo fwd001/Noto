@@ -28,6 +28,9 @@ const COMMAND_CODES = [
   'multi_account_unsupported',
   'invalid_account',
   'save_failed',
+  // §4.8「不覆盖已存在的文件」那一格：导出撞到同名文件时以前复用 `save_failed`，
+  // 于是界面只能说"设置没能保存"—— 既没说这是导出，也没说"什么都没写"。
+  'export_target_exists',
   'bad_device',
   'net_config',
   'proxy_credential_missing',
@@ -145,6 +148,31 @@ function keysIn(text: string): string[] {
 }
 
 const usedKeys = new Set(files.flatMap(([, text]) => keysIn(text)));
+
+/**
+ * 界面文案里不许出现 Markdown 语法。这一族是从设计文档往代码里抄的时候带进来的：
+ * Vue 的插值**不解析** Markdown，`**退出后需要重新填写**` 会连着四颗星号原样印在屏幕上，
+ * 用户看到的是一串乱码似的东西，而那句话恰恰是"退出后要干什么"的关键说明。
+ */
+describe('可见文案不许带 Markdown 记号', () => {
+  const MARKDOWN: Array<[string, RegExp]> = [
+    ['星号/下划线强调', /(\*\*|__)(?=\S)[\s\S]*?\1/],
+    ['反引号代码', /`[^`]+`/],
+    ['链接', /\[[^\]]+\]\([^)]+\)/],
+    ['井号标题', /^\s*#{1,6}\s/m],
+  ];
+  const offenders = MESSAGE_KEYS.flatMap((key) =>
+    MARKDOWN.filter(([, re]) => re.test(messageFor(key))).map(([name]) => `${key} ← ${name}`),
+  );
+
+  it('扫到了足够多条文案（否则"零违规"可以是"一条都没扫"）', () => {
+    expect(MESSAGE_KEYS.length).toBeGreaterThan(200);
+  });
+
+  it('每一条文案都是纯文本', () => {
+    expect(offenders, `这些键会在屏幕上印出 Markdown 记号：\n${offenders.join('\n')}`).toEqual([]);
+  });
+});
 
 describe('文案键登记完整性', () => {
   it('扫到了足量的键与文件（防扫描器自己失效变成常绿）', () => {

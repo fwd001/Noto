@@ -1282,9 +1282,14 @@ impl App {
         };
         if path.exists() {
             // 绝不覆盖已有文件：用户指哪儿就写哪儿，指到一份备份上就是毁掉那次备份。
-            return Err(CmdError::of("save_failed", false).with(serde_json::json!({
-                "detail": format!("导出目标已存在，未覆盖：{}", path.display()),
-            })));
+            // 码要单独一个：以前复用 `save_failed`，界面只能说"设置没能保存"——
+            // 既没说这是导出、也没说"没写任何东西"，用户会以为半写进去了（§4.8 那句"不覆盖"
+            // 是承诺，承诺落空时必须说清落空成什么样）。
+            return Err(
+                CmdError::of("export_target_exists", false).with(serde_json::json!({
+                    "detail": format!("导出目标已存在，未覆盖：{}", path.display()),
+                })),
+            );
         }
         notera_importer::write_bundle(&path, &bundle).map_err(|e| {
             CmdError::of("save_failed", false).with(serde_json::json!({ "detail": e.to_string() }))
@@ -4771,6 +4776,33 @@ mod tests {
             )
             .unwrap();
         (root, kid.id, other.id, in_kid)
+    }
+
+    #[test]
+    fn exporting_onto_an_existing_file_is_refused_under_its_own_code_and_writes_nothing() {
+        // §4.8「目标位置永远不覆盖已存在的文件」。这条码以前复用 `save_failed`，界面因此
+        // 只能说"设置没能保存，改动还留在这台设备上"—— 既没说这是导出，也没说"什么都没写"，
+        // 用户只能猜那份备份到底还在不在。码要单独一个，旧文件的字节必须一个都不动。
+        let app = boot("export-no-clobber");
+        let dir = tmpdir("export-no-clobber");
+        let target = dir.join("已有的备份.zip");
+        let original = "这份备份必须一个字节都不动".as_bytes().to_vec();
+        std::fs::write(&target, &original).unwrap();
+
+        let err = commands::dispatch(
+            &app,
+            "export_data",
+            json!({ "path": target.to_string_lossy() }),
+        )
+        .expect_err("目标已存在时必须拒绝，不许覆盖");
+
+        assert_eq!(err.code, "export_target_exists");
+        assert!(!err.retryable, "重试一百次也不会变得可写");
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            original,
+            "旧文件必须原样在"
+        );
     }
 
     #[test]
