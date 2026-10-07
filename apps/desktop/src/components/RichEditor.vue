@@ -873,7 +873,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
         @mousedown.prevent
         @click="toggleMarkKind(item.kind)"
       >
-        {{ item.glyph }}
+        <AppIcon :size="18" :name="item.icon" />
       </button>
     </div>
   </div>

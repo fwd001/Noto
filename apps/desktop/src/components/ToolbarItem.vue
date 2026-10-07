@@ -11,6 +11,7 @@ import { computed, nextTick, ref, type PropType } from 'vue';
 import { t } from '../i18n';
 import AppIcon from './ui/AppIcon.vue';
 import { FONT_SIZE_MENU, INK_COLORS, INK_COLOR_MENU, TOOLBAR_MARK_BUTTONS } from '../editor/marks';
+import type { IconName } from './ui/icons';
 import { TEXT_TYPE_ORDER, type ToolbarItem } from '../editor/toolbarItems';
 import { blockTypeLabel } from '../editor/labels';
 import type { TextBlockType } from '../editor/model';
@@ -71,9 +72,9 @@ const activeInk = computed<string>(() =>
   props.activeColor ? (INK_COLORS[props.activeColor] ?? 'transparent') : 'transparent',
 );
 
-/** glyph 只有一个真相（`editor/marks.ts`）：这里查表，不在此处再抄一份 B/I/U/S。 */
-const glyph = computed(
-  () => TOOLBAR_MARK_BUTTONS.find((entry) => entry.kind === props.item.payload)?.glyph ?? '',
+/** 图标名只有一个真相（`editor/marks.ts`）：这里查表，不在此处再抄一份形状或字母。 */
+const markIcon = computed<IconName | null>(
+  () => TOOLBAR_MARK_BUTTONS.find((entry) => entry.kind === props.item.payload)?.icon ?? null,
 );
 
 /** 触发器上那一小段可见内容：字号档与色点是把状态画在按钮上，不能只藏在菜单里。 */
@@ -148,7 +149,7 @@ const isDisabled = computed(() => props.disabled || (props.item.needsIndent === 
       type="button"
       :class="[
         inPanel ? 'tb__row' : 'tb__btn',
-        { 'tb__btn--mono': item.key === 'code', 'tb__btn--wide': item.kind === 'menu' || item.kind === 'text' },
+        { 'tb__btn--wide': item.kind === 'menu' || item.kind === 'text' },
       ]"
       :title="t(item.label)"
       :aria-label="t(item.label)"
@@ -161,18 +162,20 @@ const isDisabled = computed(() => props.disabled || (props.item.needsIndent === 
     >
       <AppIcon v-if="item.icon" :size="18" :name="item.icon" />
       <template v-else-if="item.kind === 'mark'">
-        <span aria-hidden="true">{{ glyph }}</span>
+        <AppIcon v-if="markIcon" :size="18" :name="markIcon" />
         <template v-if="inPanel">{{ t(item.label) }}</template>
       </template>
       <template v-else-if="item.kind === 'menu' && item.key === 'type'">
         {{ inPanel ? `${t('tb.blockType')}：${typeLabel}` : typeLabel }}
       </template>
       <template v-else-if="item.key === 'size'">
-        A<span v-if="trailing" class="tb__size-hint">{{ trailing }}</span>
+        <AppIcon :size="18" name="mark-size" />
+        <span v-if="trailing" class="tb__size-hint">{{ trailing }}</span>
         <template v-if="inPanel"> {{ t('tb.size') }}</template>
       </template>
       <template v-else-if="item.key === 'color'">
-        A<span class="tb__ink" :style="{ background: activeInk }" aria-hidden="true" />
+        <AppIcon :size="18" name="mark-color" />
+        <span class="tb__ink" :style="{ background: activeInk }" aria-hidden="true" />
         <template v-if="inPanel"> {{ t('tb.textColor') }}</template>
       </template>
       <template v-else>{{ t(item.label) }}</template>
@@ -293,11 +296,6 @@ const isDisabled = computed(() => props.disabled || (props.item.needsIndent === 
 .tb__btn:disabled {
   opacity: 0.45;
   cursor: default;
-}
-
-.tb__btn--mono {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
 }
 
 .tb__btn--wide {

@@ -3,20 +3,26 @@
  * 放这里而不是各自写一遍，是为了让 glyph、文案键、顺序只有一个真相。
  */
 import type { MessageKey } from '../i18n';
+import type { IconName } from '../components/ui/icons';
 
 export interface MarkButton {
   kind: string;
-  glyph: string;
+  /**
+   * §2.4：「文字类（加粗/斜体）用 SVG 路径画，不用 B/I 字形」。
+   * 这里存的必须是图标名，不是要显示的字符 —— 一旦存回字符，四端字体回退就会画出四种形状，
+   * 而且与旁边 1.75px 描边的图标笔触不匹配。
+   */
+  icon: IconName;
   label: MessageKey;
 }
 
 export const MARK_BUTTONS: readonly MarkButton[] = [
-  { kind: 'bold', glyph: 'B', label: 'tb.bold' },
-  { kind: 'italic', glyph: 'I', label: 'tb.italic' },
-  { kind: 'underline', glyph: 'U', label: 'tb.underline' },
-  { kind: 'strike', glyph: 'S', label: 'tb.strike' },
-  { kind: 'code', glyph: '</>', label: 'tb.code' },
-  { kind: 'highlight', glyph: 'H', label: 'tb.highlight' },
+  { kind: 'bold', icon: 'mark-bold', label: 'tb.bold' },
+  { kind: 'italic', icon: 'mark-italic', label: 'tb.italic' },
+  { kind: 'underline', icon: 'mark-underline', label: 'tb.underline' },
+  { kind: 'strike', icon: 'mark-strike', label: 'tb.strike' },
+  { kind: 'code', icon: 'mark-code', label: 'tb.code' },
+  { kind: 'highlight', icon: 'mark-highlight', label: 'tb.highlight' },
 ];
 
 /**

@@ -3112,6 +3112,150 @@ function contrastRatio(fg, bg) {
   await rmCtx.close();
 }
 
+/**
+ * ㉟ §2.4 那句「文字类（加粗/斜体）用 SVG 路径画，不用 B/I 字形」。
+ *
+ * 这一条为什么不能由 `iconSystem.spec.ts` 那条源码扫描来守：它的判据是"元素的全部文字内容是一个
+ * **符号或标点**"，而**拉丁字母被注释明确放过了**，放过的理由写的是「§2.4 认的通用认知」——
+ * 那是把 §2.4 读反了。原话是「用 SVG 路径画，不用 B/I 字形 …… 但语义沿用 B/I/U/S 的通用认知」：
+ * 后半句说的是**画出来的形状要还像那几个字母**，不是许可继续打字母。
+ * 这正是 G77 记过的那个形状：**判据按类别兜，别按枚举** —— 按 `\p{S}` 枚举，落在 `\p{L}` 里的
+ * B/I/U/S/A/H 永远抓不到，而它的危害与 ☰ ▾ 完全相同（四端字体回退画出四种形状，
+ * 且与旁边 1.75px 描边的图标不成套）。
+ *
+ * 判据打在渲染后的 DOM 上，形状是：**一个 `<button>` 的直接文本子节点恰是一个字母或一个数字，
+ * 而它的可访问名来自 `aria-label`/`title`** ⇒ 那个字符不是读给人听的，是在当图标位。
+ * 为什么限定"直接文本子节点"：字号那颗显示的当前档位（`l` / `xl`）包在自己的 span 里，是状态读数；
+ * 块型菜单里的 `H1`/`H2`/`H3` 是文字标签且没有 `aria-label`。两种都不是图标位。
+ */
+{
+  const c35 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p35 = await c35.newPage();
+  await p35.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p35.waitForSelector('[data-testid="sidebar"]', { timeout: 15000 });
+  await p35.click('[data-testid="nav-all"]');
+  await p35.waitForTimeout(500);
+  await p35.click('[data-testid^="note-row-"]').catch(() => {});
+  await p35.waitForTimeout(900);
+
+  const scan = () => p35.evaluate(() => {
+    const rows = [];
+    for (const b of document.querySelectorAll('button')) {
+      const r = b.getBoundingClientRect();
+      if (r.width < 1 && r.height < 1) continue; // 没渲染出来的那颗不在这一条的范围内
+      const own = Array.from(b.childNodes)
+        .filter((n) => n.nodeType === 3)
+        .map((n) => (n.textContent ?? '').trim())
+        .join('');
+      const svg = b.querySelector('svg');
+      rows.push({
+        key: b.closest('[data-tb-key]')?.getAttribute('data-tb-key') ?? null,
+        inPanel: b.closest('[data-testid="tb-more-menu"]') !== null,
+        name: b.getAttribute('aria-label') || b.getAttribute('title') || '',
+        own,
+        icon: svg?.getAttribute('data-icon') ?? null,
+        paths: svg ? svg.querySelectorAll('path').length : 0,
+        iconW: svg ? Math.round(svg.getBoundingClientRect().width) : 0,
+        stroke: svg?.querySelector('g')?.getAttribute('stroke-width') ?? null,
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+      });
+    }
+    return rows;
+  });
+
+  const seen = await scan();
+  await p35.click('[data-testid="nav-settings"]');
+  await p35.waitForTimeout(600);
+  const all = [...seen, ...(await scan())];
+  await p35.click('[data-testid="nav-all"]');
+  await p35.waitForTimeout(500);
+  await p35.click('[data-testid^="note-row-"]').catch(() => {});
+  await p35.waitForTimeout(900);
+
+  check('㉟ 仪器自检：这一腿真的扫到了足够多颗按钮（扫到几颗就判几颗，等于没扫）',
+    all.length >= 60, JSON.stringify({ buttons: all.length }));
+  const offenders = all.filter((b) => /^[\p{L}\p{N}]$/u.test(b.own) && b.name.length > 0);
+  check('㉟ 没有任何一颗按钮在拿"一个字母/一个数字"当图标位（可访问名来自 aria-label，可见内容却只有一个字符）',
+    offenders.length === 0, JSON.stringify(offenders.slice(0, 5)));
+
+  const MARK_CELLS = ['bold', 'italic', 'underline', 'strike', 'size', 'color'];
+  const cells = MARK_CELLS.map((key) => ({
+    key,
+    cell: all.find((b) => b.key === key && !b.inPanel) ?? null,
+  }));
+  check('㉟ 工具条那六颗（四颗文字标记 + 字号 + 颜色）画的都是 mark-* 图标，不再是字母',
+    cells.every((c) => c.cell !== null && (c.cell.icon ?? '').startsWith('mark-')),
+    JSON.stringify(cells.map((c) => ({ key: c.key, icon: c.cell?.icon ?? null }))).slice(0, 400));
+  check('㉟ 每颗都真的画得出东西：svg 里有 path、盒子不是 0×0（"有 svg"不等于"看得见"）',
+    cells.every((c) => c.cell !== null && c.cell.paths >= 1 && c.cell.iconW >= 14),
+    JSON.stringify(cells.map((c) => ({ key: c.key, paths: c.cell?.paths, iconW: c.cell?.iconW }))));
+  check('㉟ 六颗都还有可读名字、触摸目标 ≥44、条上没有残留的字母文本',
+    cells.every((c) => c.cell !== null && c.cell.name.length > 0 && c.cell.w >= 44 && c.cell.h >= 44 && c.cell.own === ''),
+    JSON.stringify(cells.map((c) => ({ key: c.key, w: c.cell?.w, h: c.cell?.h, own: c.cell?.own }))));
+  const strokes = new Set(cells.map((c) => c.cell?.stroke).filter(Boolean));
+  check('㉟ §2.1 同屏同粗细：这一排图标只用一个描边值（混粗细是"看着不专业"最常见的来源）',
+    strokes.size === 1, JSON.stringify([...strokes]));
+
+  // 选区浮出来的那一条：六颗与工具条同一份表，形状不许换。
+  await p35.evaluate(() => window.getSelection()?.removeAllRanges());
+  const at = await p35.evaluate(() => {
+    const el = document.querySelector('.nb-block .nb-content');
+    if (!el) return null;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const tr = range.getBoundingClientRect();
+    if (tr.width < 20) return null;
+    return { x: Math.round(tr.left + 12), y: Math.round(tr.top + 8) };
+  });
+  if (at) {
+    await p35.mouse.dblclick(at.x, at.y);
+    await p35.waitForTimeout(700);
+  }
+  const sel = await p35.evaluate(() => Array.from(document.querySelectorAll('[data-testid="selection-bar"] button')).map((b) => {
+    const svg = b.querySelector('svg');
+    return {
+      icon: svg?.getAttribute('data-icon') ?? null,
+      paths: svg ? svg.querySelectorAll('path').length : 0,
+      own: Array.from(b.childNodes).filter((n) => n.nodeType === 3).map((n) => (n.textContent ?? '').trim()).join(''),
+      name: b.getAttribute('aria-label') ?? '',
+    };
+  }));
+  check('㉟ 选区浮条那六颗也换成 SVG 了，且颗颗有名字（与工具条读同一份表）',
+    sel.length >= 4 && sel.every((s) => (s.icon ?? '').startsWith('mark-') && s.paths >= 1 && s.own === '' && s.name !== ''),
+    JSON.stringify({ count: sel.length, bad: sel.filter((s) => !(s.icon ?? '').startsWith('mark-') || s.own !== '') }));
+
+  await p35.screenshot({ path: `${OUT}/47-mark-icons-1440.png` });
+  await p35.close();
+  await c35.close();
+
+  // 手机宽：格子搬进「更多 ›」面板之后，形状必须是同一份（两处各写一遍迟早一份是字母一份是图）。
+  const c35b = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const p35b = await c35b.newPage();
+  await p35b.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p35b.waitForSelector('[data-testid^="note-row-"]', { timeout: 15000 });
+  await p35b.click('[data-testid^="note-row-"]');
+  await p35b.waitForSelector('.nb-block .nb-content', { timeout: 15000 });
+  await p35b.waitForTimeout(900);
+  await p35b.click('[data-testid="tb-more"]').catch(() => {});
+  await p35b.waitForTimeout(500);
+  const panel = await p35b.evaluate(() => Array.from(document.querySelectorAll('[data-testid="tb-more-menu"] [data-tb-key]')).map((wrap) => {
+    const b = wrap.querySelector('button');
+    const svg = b?.querySelector('svg') ?? null;
+    return {
+      key: wrap.getAttribute('data-tb-key'),
+      icon: svg?.getAttribute('data-icon') ?? null,
+      own: b ? Array.from(b.childNodes).filter((n) => n.nodeType === 3).map((n) => (n.textContent ?? '').trim()).join('') : null,
+    };
+  }));
+  const panelMarks = panel.filter((r) => ['size', 'color', 'bold', 'italic', 'underline', 'strike'].includes(r.key ?? ''));
+  check('㉟ 手机宽「更多 ›」面板里那几行仍是 SVG（面板不是另一套 markup）',
+    panelMarks.length >= 2 && panelMarks.every((r) => (r.icon ?? '').startsWith('mark-')),
+    JSON.stringify({ panelMarks, panel }));
+  await p35b.close();
+  await c35b.close();
+}
+
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
 async function purgeByTitle(prefix) {
   for (const trash of [false, true]) {
