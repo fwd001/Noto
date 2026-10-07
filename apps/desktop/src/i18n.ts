@@ -120,6 +120,9 @@ const MESSAGES: Record<MessageKey, string> = {
   'tb.code': '行内代码',
   'tb.highlight': '高亮',
   'tb.link': '链接',
+  // §3.4 溢出与 §2.4 那颗「更多·溢出」：窄栏里被收走的格子从这一颗进去。
+  'tb.more': '更多',
+  'tb.blockType': '块型',
   'tb.linkPrompt': '输入链接地址',
   'tb.linkApply': '应用',
   'tb.checklist': '清单',

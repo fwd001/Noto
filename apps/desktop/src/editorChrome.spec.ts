@@ -29,13 +29,20 @@ describe('工具条只剩看得懂的那几颗', () => {
     expect(editor).toMatch(/from '\.\.\/editor\/marks'|from '\.\/marks'/);
   });
 
-  it('清单/缩进不再各占一颗：清单进"类型"菜单，缩进留 ⇤ ⇥', () => {
-    const bar = src('components/EditorToolbar.vue');
-    expect(bar).not.toMatch(/emit\('checklist'\)/);
-    expect(bar).toMatch(/emit\('indent', -1\)/);
-    expect(bar).toMatch(/emit\('indent', 1\)/);
-    // 但清单这个能力还在（类型菜单里那一档）。
-    expect(bar).toMatch(/checklistItem/);
+  it('清单/缩进不再各占一颗：清单进"类型"菜单，缩进留两颗图标', async () => {
+    // 判据从"扫 markup 里的字面量"改成扫那张**表**：溢出改造之后一条工具条的 markup
+    // 分布在两个组件里（格子的形状在 ToolbarItem，位置由溢出计划决定），只有表是"哪几颗在条上"的真相。
+    const { TOOLBAR_ITEMS, TEXT_TYPE_ORDER } = await import('./editor/toolbarItems');
+    const keys = TOOLBAR_ITEMS.map((item) => item.key);
+    // 清单不占一条：它只是类型菜单里的一档。
+    expect(keys).not.toContain('checklist');
+    expect(TEXT_TYPE_ORDER).toContain('checklistItem');
+    // 缩进两颗还在，而且都是 SVG 图标（§2：不许出现 ⇤ ⇥ 这类字形）。
+    expect(keys).toEqual(expect.arrayContaining(['outdent', 'indent']));
+    const cell = src('components/ToolbarItem.vue');
+    expect(cell).toMatch(/emit\('indent', props\.item\.key === 'indent' \? 1 : -1\)/);
+    expect(src('editor/toolbarItems.ts')).toMatch(/icon: 'indent-out'/);
+    expect(src('editor/toolbarItems.ts')).toMatch(/icon: 'indent-in'/);
   });
 });
 

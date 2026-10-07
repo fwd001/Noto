@@ -831,6 +831,19 @@ for (const width of WIDTHS) {
   await narrow.waitForTimeout(900);
   const nBase = await narrow.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.nb-block .nb-content')).fontSize));
 
+  // §3.4 的溢出改造之后，390 这一档的这两颗不在条上，而在「更多 ›」面板里。
+  // 先把它开起来 —— 面板里的行与条上的格子是同一个组件，钳位与"看得见的菜单"两档都要成立，
+  // 这一腿因此比原来更硬：以前只量条上那一颗，现在量的是"换了位置的同一颗"。
+  let openedMore = false;
+  if ((await narrow.locator('[data-testid="tb-size"]').count()) === 0) {
+    await narrow.click('[data-testid="tb-more"]');
+    await narrow.waitForTimeout(500);
+    openedMore = true;
+  }
+  check('㉝附 · 手机宽下这两颗确实要从「更多 ›」里进（开完面板才找得到）',
+    openedMore === false || (await narrow.locator('[data-testid="tb-size-menu"], [data-testid="tb-size"]').count()) > 0,
+    JSON.stringify({ openedMore }));
+
   // 两种落点都要量：`rest` = 工具条不动（手机宽下这两颗本来就停在右缘附近，是用户第一次点到的形状），
   // `end` = 把触发器滚到容器右缘（最坏情况）。缺口 G64 就是从 `rest` 这一档量出来的：
   // 390 宽时字号菜单落在 301..481，出界 91px，菜单项中心点 elementFromPoint 直接是 null。
@@ -875,14 +888,22 @@ for (const width of WIDTHS) {
 
   await narrow.dblclick('.nb-block .nb-content', { position: { x: 12, y: 8 } });
   await narrow.waitForTimeout(250);
-  await narrow.click('[data-testid="tb-size"]');
-  await narrow.waitForTimeout(300);
+  // 选完一档，「更多 ›」会收起来（动作做完留着面板是让人以为还要再点一下）。
+  // 所以后面每颗都要"找不到就先开面板"—— 这本身就是 §3.4 收纳之后的正常使用路径。
+  const openTool = async (id) => {
+    if ((await narrow.locator(`[data-testid="${id}"]`).count()) === 0) {
+      await narrow.click('[data-testid="tb-more"]');
+      await narrow.waitForTimeout(450);
+    }
+    await narrow.click(`[data-testid="${id}"]`);
+    await narrow.waitForTimeout(300);
+  };
+  await openTool('tb-size');
   await narrow.click('[data-testid="tb-size-xl"]');
   await narrow.waitForTimeout(500);
   await narrow.dblclick('.nb-block .nb-content', { position: { x: 12, y: 8 } });
   await narrow.waitForTimeout(250);
-  await narrow.click('[data-testid="tb-color"]');
-  await narrow.waitForTimeout(300);
+  await openTool('tb-color');
   await narrow.click('[data-testid="tb-color-red"]');
   await narrow.waitForTimeout(600);
 
@@ -2795,6 +2816,139 @@ function contrastRatio(fg, bg) {
   notes.push(`     G87 横幅实测：${JSON.stringify(bar.text).slice(0, 60)}…；accept_divergence ${accepted} 次`);
   await p32.screenshot({ path: `${OUT}/44-divergence-held-1440.png` });
   await c32.close();
+}
+
+/**
+ * ㉝ §3.4 的工具条溢出：「横向放不下时右缘 28px 渐隐，最右的「更多 ›」收纳溢出项」。
+ *
+ * 这一腿量的不是"有没有那颗按钮"，而是三件容易被互相冒充的事：
+ * ① **收纳**：条上不许留任何一颗在视野外（滚动宽度 == 可视宽度），被放不下的必须换成面板里的行；
+ * ② **一颗都不丢**：条上的格子 + 面板里的格子 = 全部格子（收走一半、忘掉一半是同一族事故）；
+ * ③ 浮层**不参与布局**（§4.9）：打开面板不许把工具条或第一行顶下去。
+ * 宽档反过来：放得下就不许画那颗「更多」（§2.5「能力不存在就根本不渲染那颗控件」）。
+ */
+{
+  const c33 = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const p33 = await c33.newPage();
+  await p33.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p33.waitForSelector('[data-testid="note-row"]', { timeout: 15000 }).catch(() => {});
+  await p33.click('[data-testid="mobile-new"]').catch(() => {});
+  await p33.waitForSelector('.tb', { timeout: 15000 });
+  await p33.waitForTimeout(700);
+
+  const narrow = await p33.evaluate(() => {
+    const bar = document.querySelector('.tb');
+    const more = document.querySelector('[data-testid="tb-more"]');
+    const onBar = Array.from(document.querySelectorAll('.tb [data-tb-key]')).length;
+    if (!bar) return { missing: true };
+    const fade = getComputedStyle(document.querySelector('.tb-wrap') ?? bar, '::after').backgroundImage;
+    const r = more?.getBoundingClientRect();
+    const hit = r ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null;
+    return {
+      total: document.querySelectorAll('[data-tb-key]').length,
+      onBar,
+      moreThere: Boolean(more),
+      moreH: Math.round(r?.height ?? 0),
+      moreHit: Boolean(hit && more?.contains(hit)),
+      moreText: (more?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      moreRight: Math.round(bar.getBoundingClientRect().right - (r?.right ?? 0)),
+      dataMoreRight: bar.getAttribute('data-more-right'),
+      fadeIsGradient: /gradient/.test(fade),
+      scrollWidth: Math.round(bar.scrollWidth),
+      clientWidth: Math.round(bar.clientWidth),
+    };
+  });
+  check('㉝ 仪器自检：390 那一档真的放不下（放得下的话下面全是空判据）',
+    narrow.missing !== true && narrow.moreThere === true && narrow.onBar < 15,
+    JSON.stringify(narrow));
+  check('㉝ 「更多 ›」画在最右、看得见点得着（≥44 高、中心命中自己）',
+    narrow.moreHit === true && narrow.moreH >= 44 && /更多/.test(narrow.moreText),
+    JSON.stringify(narrow));
+  check('㉝ 收纳是真的收纳：条上不留任何视野外的格子（滚动宽 == 可视宽）',
+    narrow.scrollWidth <= narrow.clientWidth + 1,
+    JSON.stringify({ scrollWidth: narrow.scrollWidth, clientWidth: narrow.clientWidth }));
+  check('㉝ 渐隐那句话还在（§3.4 两件事都要：一道 28px 提示 + 一颗收口的按钮）',
+    narrow.dataMoreRight === 'true' && narrow.fadeIsGradient === true,
+    JSON.stringify({ dataMoreRight: narrow.dataMoreRight, fadeIsGradient: narrow.fadeIsGradient }));
+
+  const before = await p33.evaluate(() => {
+    const bar = document.querySelector('.tb');
+    return { top: Math.round(bar?.getBoundingClientRect().top ?? 0), docTop: Math.round(document.querySelector('.editor-doc')?.getBoundingClientRect().top ?? 0) };
+  });
+  await p33.click('[data-testid="tb-more"]');
+  await p33.waitForTimeout(600);
+  const panel = await p33.evaluate(() => {
+    const pop = document.querySelector('[data-testid="tb-more-menu"]');
+    const bar = document.querySelector('.tb');
+    const onBar = Array.from(document.querySelectorAll('.tb [data-tb-key]')).length;
+    const rows = Array.from(document.querySelectorAll('[data-testid="tb-more-menu"] [data-tb-key]'));
+    const first = rows[0]?.querySelector('button')?.getBoundingClientRect();
+    const hit = first ? document.elementFromPoint(first.left + first.width / 2, first.top + first.height / 2) : null;
+    return {
+      exists: Boolean(pop),
+      role: pop?.getAttribute('role') ?? null,
+      rows: rows.length,
+      onBar,
+      total: onBar + rows.length,
+      text: (pop?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      rowH: Math.round(first?.height ?? 0),
+      rowHit: Boolean(hit && rows[0]?.querySelector('button')?.contains(hit)),
+      inBody: pop?.parentElement?.tagName === 'BODY',
+      barTop: Math.round(bar?.getBoundingClientRect().top ?? 0),
+      docTop: Math.round(document.querySelector('.editor-doc')?.getBoundingClientRect().top ?? 0),
+      insideBar: Boolean(pop && bar?.contains(pop)),
+    };
+  });
+  const narrowUnion = panel.onBar + panel.rows;
+  check('㉝ 打开面板：条上 + 面板里都有格子，且条上那一半没被重复画进面板',
+    panel.exists === true && panel.role === 'menu' && panel.rows > 0 && panel.onBar > 0,
+    JSON.stringify({ onBar: panel.onBar, rows: panel.rows, union: narrowUnion }));
+  check('㉝ 面板里的行是整行、读得出名字、点得着（≥44 高，中心命中自己）',
+    panel.rowHit === true && panel.rowH >= 44 && /[一-龥]/.test(panel.text),
+    JSON.stringify({ rowH: panel.rowH, rowHit: panel.rowHit, text: panel.text.slice(0, 80) }));
+  check('㉝ 浮层不参与布局：面板打开时工具条与正文第一行的位置一个像素都不许动',
+    panel.barTop === before.top && panel.docTop === before.docTop,
+    JSON.stringify({ before, after: { barTop: panel.barTop, docTop: panel.docTop } }));
+  check('㉝ 面板 Teleport 出那个裁剪盒（在 overflow-x:auto 里会被整个裁掉 —— G29 同一族）',
+    panel.inBody === true && panel.insideBar === false,
+    JSON.stringify({ inBody: panel.inBody, insideBar: panel.insideBar }));
+
+  await p33.click('[data-testid="tb-more"]');
+  await p33.waitForTimeout(400);
+  const closed = await p33.evaluate(() => ({
+    open: document.querySelector('[data-testid="tb-more-menu"]') !== null,
+    expanded: document.querySelector('[data-testid="tb-more"]')?.getAttribute('aria-expanded') ?? null,
+  }));
+  check('㉝ 再点一下收得回去，aria-expanded 跟着落回 false（不许留一层看不见的浮层）',
+    closed.open === false && closed.expanded === 'false', JSON.stringify(closed));
+  await p33.screenshot({ path: `${OUT}/45-toolbar-overflow-390.png` });
+  await p33.close();
+  await c33.close();
+
+  // 宽档反过来：放得下就不画那颗「更多」。
+  const w33 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const pw = await w33.newPage();
+  await pw.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await pw.waitForSelector('.tb', { timeout: 15000 });
+  await pw.waitForTimeout(700);
+  const wide = await pw.evaluate(() => {
+    const bar = document.querySelector('.tb');
+    return {
+      more: document.querySelector('[data-testid="tb-more"]') !== null,
+      onBar: document.querySelectorAll('.tb [data-tb-key]').length,
+      fade: bar?.getAttribute('data-more-right') ?? null,
+      overflowing: Math.round(bar ? bar.scrollWidth - bar.clientWidth : 0),
+    };
+  });
+  check('㉝ 正对照（宽档）：放得下就不画「更多」，也不画那道渐隐（能力不存在就别摆控件）',
+    wide.more === false && wide.fade === null && wide.onBar > 10,
+    JSON.stringify(wide));
+  // 收纳不许多也不少：窄档"条上 + 面板里"必须等于宽档"全在条上"。
+  // 这条不用 15 那种魔数 —— 两档各量一次，表改了它跟着动。
+  check('㉝ 收纳不丢格子：窄档（条上 + 面板）与宽档（全在条上）是同一批格子',
+    wide.onBar === narrowUnion,
+    JSON.stringify({ narrowUnion, wideOnBar: wide.onBar }));
+  await w33.close();
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
