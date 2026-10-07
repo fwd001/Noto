@@ -3355,6 +3355,148 @@ function contrastRatio(fg, bg) {
   }
 }
 
+/**
+ * ㊲ §5 那句「触摸目标 ≥44×44」的**全应用**扫描。
+ *
+ * 以前这一条是"每条腿量自己那几颗"：⑲ 量滑杆那一行、㉔ 量底栏、㉟ 量工具条六颗 ——
+ * 加一颗新按钮没人重量，44 这件事就只覆盖"当时想到的那些"。这一腿改成扫六个界面上
+ * **所有**可交互元素，判据是命中区（宽或高 <44 就出局），出局之后分三类：
+ * ① 整行都是命中区（原生 `<input>` 包在 `min-height:--touch` 的 `<label>` 里 ——
+ *    复选框那颗 22×22、滑杆那颗 24 高都属于这一类，点文案一样切换，这是刻意的实现）；
+ * ② 登记过的豁免（见 `EXEMPT`，每条都要写清为什么，且**必须真的命中过**，不然表里那条是历史残留）；
+ * ③ 其余一律红。
+ *
+ * ⚠ 顺带把规范内部的一处冲突钉成断言：§1.4 那张"控件高度"表给的是
+ * 导航行 32 / 工具条图标 32 / 文件夹行 34 / 输入框 36，而 §5 要求一切触摸目标 ≥44 ——
+ * 两个数不可能同时满足。应用一路选的是 §5（无障碍底线优先，实测这四类都是 44/45），
+ * 所以这里断言的是"这四类 ≥44"，不是"它们等于 §1.4 的数"。冲突本身记在 CHANGELOG 第 17 刀。
+ */
+{
+  const EXEMPT = [
+    { cls: 'titlebar__button', why: '桌面壳自绘标题栏三颗（实测 39 高）：§1.4 给"标题栏"的数就是 40，而这一族只存在于桌面窗口，触摸端没有它' },
+    { cls: 'skip-link', why: '键盘用的跳转链：未聚焦时视觉隐藏，不是给指点用的目标' },
+    { cls: 'editor-file-input', why: '1×1 的隐藏取文件入口：它不吃点击，真正的入口是工具条那颗 ≥44 的「插入附件」' },
+  ];
+  /**
+   * **已知不合格**（不是豁免）：这一族确实小于 44，登记在案、等一次设计决定，
+   * 但不许有第二样东西悄悄加进来 —— 下面那条漂移守卫就是干这个的。
+   * G92：块把手 `--nb-hit: 24px`，两道把手 + 4px gap 正好占满 `--nb-handle-gutter: 52px`。
+   * 要按 §5 做到 44，道宽就得 52 → 92（正文那一栏在 390 上从 358 掉到 318），
+   * 或者竖着叠（92 高会压到上下邻块的把手，落点变模糊）。两条都是**布局决定**，不由门禁替人做。
+   */
+  const KNOWN_SMALL = [{ cls: 'nb-handle', gap: 'G92', h: 24 }];
+  const INTERACTIVE = 'button,input,select,textarea,a[href],[role="checkbox"],[role="switch"],[role="button"],[role="menuitem"],[role="tab"]';
+  const scanSmall = (page) => page.evaluate((sel) => {
+    const small = [];
+    let total = 0;
+    for (const el of document.querySelectorAll(sel)) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue; // 这一屏没画出来的不在这一条的管辖内
+      total += 1;
+      if (r.height >= 43.5 && r.width >= 43.5) continue;
+      const row = el.closest('label');
+      const rr = row ? row.getBoundingClientRect() : null;
+      small.push({
+        tag: el.tagName.toLowerCase(),
+        cls: (typeof el.className === 'string' ? el.className : '').split(/\s+/).filter(Boolean)[0] ?? '',
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+        byLabel: !!rr && rr.height >= 43.5 && rr.width >= 43.5,
+        name: (el.getAttribute('aria-label') || el.getAttribute('title') || (el.textContent ?? '').trim()).slice(0, 16),
+      });
+    }
+    return { total, small };
+  }, INTERACTIVE);
+
+  const swept = { total: 0, small: [] };
+  const roleHeights = {};
+  const sweepView = async (page, tag) => {
+    const r = await scanSmall(page);
+    swept.total += r.total;
+    for (const s of r.small) swept.small.push({ ...s, view: tag });
+  };
+
+  for (const width of [1440, 390]) {
+    const ctx = await browser.newContext({ viewport: { width, height: width === 1440 ? 900 : 844 } });
+    const page = await ctx.newPage();
+    await page.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await page.waitForSelector('[data-testid="sidebar"]', { timeout: 15000 });
+    // 用 evaluate 点，不用 page.click：手机宽那一档侧栏是抽屉，`nav-all` 在屏幕外，
+    // Playwright 的可见性检查会直接等超时（第一版就崩在这）。
+    await page.evaluate(() => document.querySelector('[data-testid="nav-all"]')?.click());
+    await page.waitForTimeout(600);
+    await page.click('[data-testid^="note-row-"]').catch(() => {});
+    await page.waitForTimeout(900);
+    await sweepView(page, `${width}/笔记+编辑器`);
+    if (width === 1440) {
+      roleHeights.navBtn = await page.evaluate(() => Math.round(document.querySelector('.nav-btn')?.getBoundingClientRect().height ?? 0));
+      roleHeights.treeRow = await page.evaluate(() => Math.round(document.querySelector('.tree__row')?.getBoundingClientRect().height ?? 0));
+      roleHeights.input = await page.evaluate(() => Math.round(document.querySelector('.input')?.getBoundingClientRect().height ?? 0));
+      roleHeights.tbBtn = await page.evaluate(() => Math.round(document.querySelector('.tb__btn')?.getBoundingClientRect().height ?? 0));
+    }
+    // 搜索那一格（搜索框 + 清除那颗都在这一屏）
+    await page.evaluate(() => {
+      const s = document.querySelector('input[type="search"], .input');
+      if (s) { s.focus(); }
+    });
+    await page.waitForTimeout(300);
+    await sweepView(page, `${width}/搜索聚焦`);
+    for (const nav of ['nav-trash', 'nav-conflicts', 'nav-settings']) {
+      await page.evaluate((id) => document.querySelector(`[data-testid="${id}"]`)?.click(), nav);
+      await page.waitForTimeout(700);
+      await sweepView(page, `${width}/${nav}`);
+    }
+    if (width === 390) {
+      // 手机宽：侧栏是抽屉，不打开就扫不到那一族（而那一族正是触摸端最常点的）。
+      // 打开之后**先证明它真的在屏上**再扫 —— 拿"元素数量"当导航成功的证据是踩过的坑。
+      await page.evaluate(() => document.querySelector('[data-testid="nav-all"]')?.click());
+      await page.waitForTimeout(500);
+      await page.evaluate(() => document.querySelector('[data-testid="sidebar-handle"], [data-testid="open-sidebar"]')?.click());
+      await page.waitForTimeout(700);
+      const drawerIn = await page.evaluate(() => {
+        const r = document.querySelector('.pane--sidebar')?.getBoundingClientRect();
+        return r ? r.x >= 0 && r.width > 100 : false;
+      });
+      check('㊲ 仪器自检：手机宽那一档抽屉真的打开了（没打开就扫不到侧栏那一族，扫描数会假小）',
+        drawerIn === true, JSON.stringify({ drawerIn }));
+      await sweepView(page, '390/抽屉打开');
+    }
+    await page.close();
+    await ctx.close();
+  }
+
+  check('㊲ 仪器自检：这一腿真的扫到了足够多颗可交互元素（各视口 × 各界面加起来 ≥200）',
+    swept.total >= 200, JSON.stringify({ total: swept.total }));
+  const exemptHits = swept.small.filter((s) => EXEMPT.some((e) => s.cls === e.cls));
+  const knownHits = swept.small.filter((s) => KNOWN_SMALL.some((e) => e.cls === s.cls));
+  const isCovered = (s) => EXEMPT.some((e) => e.cls === s.cls) || KNOWN_SMALL.some((e) => e.cls === s.cls);
+  const labelExempt = swept.small.filter((s) => s.byLabel && !isCovered(s));
+  const violations = swept.small.filter((s) => !s.byLabel && !isCovered(s));
+  check('㊲ 六个界面 × 两个视口里，没有任何一颗可交互控件的命中区小于 44（"整行都是命中区"、豁免表、已知不合格表之外的都算违规）',
+    violations.length === 0, JSON.stringify(violations.slice(0, 6)));
+  check('㊲ "整行都是命中区"那一臂真的在判东西（复选框 / 滑杆这一族：原生控件小，label 是 44）',
+    labelExempt.length >= 4, JSON.stringify({ count: labelExempt.length, sample: labelExempt.slice(0, 3) }));
+  const usedExempt = new Set(exemptHits.map((s) => s.cls));
+  const staleExempt = EXEMPT.filter((e) => !usedExempt.has(e.cls)).map((e) => e.cls);
+  check('㊲ 豁免表不许悄悄变长，也不许留着已经不再命中的那几条（每条都要真的在这次的界面上出现）',
+    staleExempt.length === 0, JSON.stringify({ staleExempt, used: [...usedExempt], registered: EXEMPT.map((e) => e.cls) }));
+  /**
+   * 已知不合格那一族单独一条漂移守卫：**种类数不许变多**。
+   * G92 那一格是量出来的既成事实（等一次设计决定），谁再往这族里加一颗小控件这里就红 ——
+   * 免得"豁免表"变成越用越宽的兜底。
+   */
+  const knownKinds = new Set(knownHits.map((s) => s.cls));
+  check('㊲ 已知不合格表（G92 那一族）不许长出新成员：这次出现的种类必须恰好是登记的那一类',
+    knownHits.length > 0 && knownKinds.size === KNOWN_SMALL.length && [...knownKinds].every((c) => KNOWN_SMALL.some((e) => e.cls === c)),
+    JSON.stringify({ kinds: [...knownKinds], registered: KNOWN_SMALL.map((e) => e.cls), count: knownHits.length }));
+  check('㊲ §1.4 与 §5 冲突的裁定写死：这四类控件跟的是 §5 的 44，不是 §1.4 的 32 / 34 / 36',
+    roleHeights.navBtn >= 44 && roleHeights.treeRow >= 44 && roleHeights.input >= 44 && roleHeights.tbBtn >= 44,
+    JSON.stringify(roleHeights));
+  notes.push(`     §5 全应用扫描：${swept.total} 颗可交互元素，小命中区 ${swept.small.length} 颗`
+    + `（整行接管 ${labelExempt.length}、豁免 ${exemptHits.length}、已知不合格 G92 ${knownHits.length}、违规 ${violations.length}）；`
+    + `四类控件实测 ${roleHeights.navBtn}/${roleHeights.treeRow}/${roleHeights.input}/${roleHeights.tbBtn}`);
+}
+
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
 async function purgeByTitle(prefix) {
   for (const trash of [false, true]) {
