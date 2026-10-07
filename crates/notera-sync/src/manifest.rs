@@ -256,11 +256,7 @@ impl Manifest {
     /// 两边用同一个算法算，量的是**形状掉了多少**，不是精确条数。
     /// 一条记录若既在基线又被窗口改动，会被数两次：两侧都这么数，所以比值不受影响。
     pub fn declared_records(&self) -> usize {
-        self.segments
-            .iter()
-            .map(|s| s.count as usize)
-            .sum::<usize>()
-            + self.window.entries.len()
+        self.segments.iter().map(|s| s.count).sum::<usize>() + self.window.entries.len()
     }
 
     /// 重算条目计数。
