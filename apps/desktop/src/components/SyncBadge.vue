@@ -73,6 +73,12 @@ watch(
     <button v-if="sync.showRetry" type="button" class="syncbar__action" data-testid="sync-retry" @click="sync.syncNow()">
       {{ t('sync.retry') }}
     </button>
+    <!-- 设计稿第 1 页这一格还画了一颗独立的「去设置」。**这里没照画，理由是量出来的**：
+         加上它之后同步条在 520 高的窗口里长到 156，把「设置」入口与库读数一起顶出视口，
+         侧栏自己多出 57px 可滚溢出 —— 那是 §3.2 的硬承诺（"窗口再矮，设置也永远可达"）。
+         同一份规范里两句打架时，留承诺那句、撤装饰那句：上面那句话本身已经写着
+         "要同步，先去设置里打开"，而整块徽标可点就落在那一页（腿 ㉛/㊵ 量的就是这条）。
+         要恢复这颗按钮，先回答 §7 的 G31（矮窗口谁让谁）。 -->
     <span class="visually-hidden" role="status" aria-live="polite">{{ detailText }}</span>
     <!-- 那一句"为什么"必须**看得见**。PROXY.md §7 说徽标要"停在『需要凭据』"，
          而核心给的说法（`sync.needs_credentials` 那格文案）以前只进 `aria-live`
@@ -151,7 +157,10 @@ watch(
 
 .syncbar__action {
   align-self: flex-start;
-  min-height: 28px;
+  /* §5：一切触摸目标 ≥44。这一颗以前是 28 高（「重试」也是同一族，只是它平时不渲染，
+     所以那条 44pt 的全应用扫描一直没扫到它 —— 加「去设置」把它一起抓出来了）。 */
+  min-height: var(--touch);
+  min-width: var(--touch);
   padding: 0 var(--sp-3);
   border: 0;
   border-radius: var(--r-chip);

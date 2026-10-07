@@ -23,7 +23,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'sidebar.moveTo': '移动到…',
   'sidebar.deleteFolder': '删除文件夹',
   // §3.2 侧栏底部那行读数：让人知道"东西在哪、有多大"。不出现协议词。
-  'sidebar.libraryReadout': '本机 {notes} 篇 · {folders} 个文件夹 · {size}',
+  'sidebar.libraryReadout': '本地库 {notes} 条 · 占用 {size}',
   'sidebar.deleteFolderHint': '删除文件夹不会删除其中的笔记，它们会回到"未归类"。',
   'sidebar.root': '未归类',
   'sidebar.collapse': '折叠侧栏',
@@ -143,6 +143,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'sync.idle': '未配置同步',
   'sync.idleGoConfigure': '未配置同步 —— 点这里去设置',
   'sync.disabled': '同步已关闭',
+  'sync.disabledDesc': '改动已经存在本机。要同步，先去设置里打开。',
   'sync.needsPassword': '需要重新填写口令',
   // §4.3「服务器丢了很多条记录 → 人工确认，不许静默兜底」（缺口 G87）。
   // 三个面各有各的活：徽标那一格要说"哪一种静止"，横幅要说"少了多少 + 这一轮没做什么"，

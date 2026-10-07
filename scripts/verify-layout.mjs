@@ -1943,7 +1943,14 @@ const TRAP_SCAN = () => {
     (shot.syncbar.text ?? '').split('未配置同步').length === 2, JSON.stringify(shot.syncbar));
   check('㉔ 侧栏那一栏自己不许有可滚溢出（滚的只能是里面那段）', shot.sideOverflowY <= 1, JSON.stringify(shot));
   check('㉔ 里面那段文件夹列表确实溢出可滚（样本量判据：否则上一条只是"没内容可滚"的恒真）', shot.folderScrollY > 0, JSON.stringify(shot));
-  check('㉔ 库读数要读出真数字（含"篇"和数字），不是空壳', /篇/.test(shot.readout.text ?? '') && /\d/.test(shot.readout.text ?? ''), JSON.stringify(shot.readout));
+  // 措辞跟着设计稿第 1 页对齐（「本地库 128 条 · 占用 24 MB」），判据的强度不降：
+  // 仍然要求"条数是真的数字"，另加一条"体积要说得出单位"——只把钉住的字从"篇"换成"条"是退让，
+  // 所以这里把两件事分开钉：数字 + 单位，而不是只钉某个量词。
+  check('㉔ 库读数要读出真数字与体积（设计稿那一格：条数 + 占用），不是空壳',
+    /本地库/.test(shot.readout.text ?? '') && /条/.test(shot.readout.text ?? '')
+      && /\d/.test(shot.readout.text ?? '') && /(KB|MB|GB|B)\b/.test(shot.readout.text ?? '')
+      && /占用/.test(shot.readout.text ?? ''),
+    JSON.stringify(shot.readout));
   check('㉔ 样本量：文件夹确实塞到 12 个（否则"没溢出"是恒真）', madeCount >= 12, JSON.stringify({ madeCount }));
   check('㉔ 未配置那一格渲染成静止那枚云，且 animation-name 是 none（静止绝不像在忙，§2.3）',
     shot.syncIcon === 'sync-idle' && shot.syncSpin === 'none', JSON.stringify({ icon: shot.syncIcon, spin: shot.syncSpin }));
@@ -3802,6 +3809,102 @@ function contrastRatio(fg, bg) {
   await ctx.close();
   await purgeByTitle('拖放夹具');
   notes.push(`     拖放实测：图片→正文 1 块（sha256 已落库）、PDF→附件行、非文件不提示、只读拒绝且出门数不变（${before}→${attachCalls}）`);
+}
+
+/**
+ * ㊵ 设计稿第 1 页那一格：静止的"同步已关闭"要说出**这意味着什么**，并给一颗点得着的「去设置」。
+ *
+ * 这一格平时到不了（开发库里没配账户 ⇒ 量到的是"未配置"那一格），所以照 ㉛ 的做法
+ * 只替换 `account` 那一发（`enabled:false`），其余都走真核心真渲染。
+ * 顺带把 §3.2 那条"再矮也要让设置可达"在**这一格变高之后**重新量一遍 ——
+ * 加一行按钮最容易顶掉的就是这条。
+ */
+{
+  const fakeDisabled = async (height) => {
+    const c = await browser.newContext({ viewport: { width: 1440, height } });
+    const p = await c.newPage();
+    await p.route('**/cmd/account', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: 'acct-45',
+          baseUrl: 'https://dav.invalid/dav',
+          username: 'u',
+          enabled: false,
+          hasCredential: true,
+          credentialLive: true,
+          credentialPersistent: true,
+        }),
+      }));
+    await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await p.waitForSelector('[data-testid="sidebar"]', { timeout: 15000 });
+    await p.waitForTimeout(900);
+    return { c, p };
+  };
+
+  const { c: c45, p: p45 } = await fakeDisabled(900);
+  const cell = await p45.evaluate(() => {
+    const bar = document.querySelector('[data-testid="syncbar"]');
+    // 只读**看得见**的那份文字：`.visually-hidden` 那格是给读屏器的 aria-live，
+    // 用 textContent 一起读会把同一句话数两遍（第 3 刀那次就是这么误判"界面说了两遍"的）。
+    const visible = Array.from(bar?.childNodes ?? [])
+      .filter((n) => n.nodeType === 1 && !n.classList.contains('visually-hidden'))
+      .map((n) => n.textContent?.trim() ?? '')
+      .filter((s) => s.length > 0);
+    const desc = document.querySelector('[data-testid="sync-detail"]');
+    const dr = desc?.getBoundingClientRect();
+    return {
+      visible,
+      hasBtn: document.querySelector('[data-testid="sync-go-settings"]') !== null,
+      descH: dr ? Math.round(dr.height) : 0,
+      descHit: dr !== undefined && dr !== null
+        ? desc.contains(document.elementFromPoint(Math.round(dr.x + dr.width / 2), Math.round(dr.y + dr.height / 2)))
+        : false,
+    };
+  });
+  check('㊵ 「同步已关闭」那一格说的是这件事意味着什么（改动还在本机 + 去哪儿打开），不是把开关名字念一遍',
+    cell.visible.some((s) => /同步已关闭/.test(s))
+      && cell.visible.some((s) => /改动已经存在本机/.test(s) && /先去设置里打开/.test(s)),
+    JSON.stringify(cell));
+  check('㊵ 那一句话是**看得见**的一行（不是只活在 title / aria-live 里），且它自己就是一块点得着的地方',
+    cell.descH >= 20 && cell.descHit === true, JSON.stringify(cell));
+  check('㊵ 没有再画那颗独立的「去设置」：它会把同步条顶到 156 高、520 窗口里把"设置"挤出视口（§3.2 优先，理由记在组件注释里）',
+    cell.hasBtn === false, JSON.stringify({ hasBtn: cell.hasBtn }));
+  await p45.click('[data-testid="sync-badge"]');
+  await p45.waitForTimeout(700);
+  const landed = await p45.evaluate(() => document.querySelector('[data-testid="account-save"]') !== null);
+  check('㊵ 点那一格真的把人带到配同步的页面（"先去设置里打开"这句必须是事实）', landed === true, JSON.stringify({ landed }));
+  await p45.screenshot({ path: `${OUT}/51-sync-disabled-cell-1440.png` });
+  await p45.close();
+  await c45.close();
+
+  // §3.2 的那条承诺在这一格多了一行之后还成立吗：矮窗口里三块常驻必须都还在视口内，
+  // 且侧栏自己不许长出第二层滚动（滚的只能是里面那段文件夹）。
+  const { c: c45s, p: p45s } = await fakeDisabled(520);
+  const short = await p45s.evaluate(() => {
+    const side = document.querySelector('.pane--sidebar');
+    const v = (sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return { missing: true };
+      const r = el.getBoundingClientRect();
+      return { h: Math.round(r.height), inViewport: r.top >= 0 && r.bottom <= window.innerHeight + 1 };
+    };
+    return {
+      syncbar: v('[data-testid="syncbar"]'),
+      settings: v('[data-testid="nav-settings"]'),
+      readout: v('[data-testid="library-readout"]'),
+      sideOverflowY: side ? side.scrollHeight - side.clientHeight : -1,
+    };
+  });
+  check('㊵ 520 高的窗口里：同步条、设置入口、库读数三块仍然全部常驻可见（§3.2）',
+    [short.syncbar, short.settings, short.readout].every((b) => b.missing !== true && b.inViewport === true),
+    JSON.stringify(short));
+  check('㊵ 加了这一行之后侧栏自己仍然不许有可滚溢出（滚的只能是里面那段文件夹）',
+    short.sideOverflowY <= 1, JSON.stringify({ sideOverflowY: short.sideOverflowY }));
+  await p45s.close();
+  await c45s.close();
+  notes.push(`     静止格「同步已关闭」实测：${JSON.stringify(cell.visible).slice(0, 90)}；520 高读数 ${JSON.stringify(short)}`);
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */

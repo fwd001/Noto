@@ -153,6 +153,11 @@ export const useSyncStore = defineStore('sync', () => {
     if (shownBadge.value === 'idle' && idleReason.value === 'password') {
       return messageFor('settings.credentialGone');
     }
+    // 「同步已关闭」那一格要说的是**这件事对用户意味着什么**（改动还在本机）与下一步去哪儿，
+    // 而不是把那个开关的名字重念一遍（设计稿第 1 页那一句：「改动已经存在本机。要同步，先去设置里打开。」）。
+    if (shownBadge.value === 'idle' && idleReason.value === 'disabled') {
+      return messageFor('sync.disabledDesc');
+    }
     return state.value.messageKey ? messageFor(state.value.messageKey) : null;
   });
   const showRetry = computed(() => state.value.badge === 'failed' && state.value.retryable);
