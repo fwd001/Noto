@@ -3359,12 +3359,19 @@ function contrastRatio(fg, bg) {
  * ㊲ §5 那句「触摸目标 ≥44×44」的**全应用**扫描。
  *
  * 以前这一条是"每条腿量自己那几颗"：⑲ 量滑杆那一行、㉔ 量底栏、㉟ 量工具条六颗 ——
- * 加一颗新按钮没人重量，44 这件事就只覆盖"当时想到的那些"。这一腿改成扫六个界面上
- * **所有**可交互元素，判据是命中区（宽或高 <44 就出局），出局之后分三类：
+ * 加一颗新按钮没人重量，44 这件事就只覆盖"当时想到的那些"。这一腿改成扫各界面上
+ * **所有**可交互元素，判据是命中区（宽或高 <44 就出局），出局之后分四类：
  * ① 整行都是命中区（原生 `<input>` 包在 `min-height:--touch` 的 `<label>` 里 ——
  *    复选框那颗 22×22、滑杆那颗 24 高都属于这一类，点文案一样切换，这是刻意的实现）；
  * ② 登记过的豁免（见 `EXEMPT`，每条都要写清为什么，且**必须真的命中过**，不然表里那条是历史残留）；
- * ③ 其余一律红。
+ * ③ **只在鼠标端**小着的那一族（见 `DESKTOP_SMALL`）；④ 其余一律红。
+ *
+ * ⚠ **判的是能力位，不是视口宽度**（这一条是本腿自己错过之后补上的）：
+ * 编辑器块把手在 `@media (pointer: coarse)` 下就是 44×44（触摸端另给一条道宽 = `--touch`），
+ * 而鼠标端是 24。我第一版只把视口改成 390 就当"触摸档"扫，Chromium 没有 `hasTouch` 就不报
+ * coarse ⇒ 那条媒体查询压根没生效，量到 24 就登记成一条产品缺陷 G92。**产品当时是对的，错的是探针。**
+ * 所以这里加了两条自检：触摸档必须真的 `matchMedia('(pointer: coarse)')` 为真，
+ * 且把手在那一档必须真是 44 —— 谁把 `pointer: coarse` 那条规则删了，红的是这两条而不是"用户目标太小"。
  *
  * ⚠ 顺带把规范内部的一处冲突钉成断言：§1.4 那张"控件高度"表给的是
  * 导航行 32 / 工具条图标 32 / 文件夹行 34 / 输入框 36，而 §5 要求一切触摸目标 ≥44 ——
@@ -3373,18 +3380,17 @@ function contrastRatio(fg, bg) {
  */
 {
   const EXEMPT = [
-    { cls: 'titlebar__button', why: '桌面壳自绘标题栏三颗（实测 39 高）：§1.4 给"标题栏"的数就是 40，而这一族只存在于桌面窗口，触摸端没有它' },
+    { cls: 'titlebar__button', why: '桌面壳自绘标题栏三颗（实测 46×39）：§1.4 给"标题栏"的数就是 40，真移动壳里没有这一族（浏览器里跑移动视口仍会画出来，因为能力位说是桌面）' },
     { cls: 'skip-link', why: '键盘用的跳转链：未聚焦时视觉隐藏，不是给指点用的目标' },
     { cls: 'editor-file-input', why: '1×1 的隐藏取文件入口：它不吃点击，真正的入口是工具条那颗 ≥44 的「插入附件」' },
   ];
   /**
-   * **已知不合格**（不是豁免）：这一族确实小于 44，登记在案、等一次设计决定，
-   * 但不许有第二样东西悄悄加进来 —— 下面那条漂移守卫就是干这个的。
-   * G92：块把手 `--nb-hit: 24px`，两道把手 + 4px gap 正好占满 `--nb-handle-gutter: 52px`。
-   * 要按 §5 做到 44，道宽就得 52 → 92（正文那一栏在 390 上从 358 掉到 318），
-   * 或者竖着叠（92 高会压到上下邻块的把手，落点变模糊）。两条都是**布局决定**，不由门禁替人做。
+   * 鼠标端小着、触摸端不小的那一族。§5 那句话的主语是"触摸目标"，
+   * 而 24 的把手在鼠标端与旁边 27 的行高是配套的（放大到 44 会让相邻行的命中区互相压住）。
+   * 登记在这里而不是"看不见"：下面那条漂移守卫要求**这一族在鼠标端确实出现过**，
+   * 且**不许有第二样东西加进来**。
    */
-  const KNOWN_SMALL = [{ cls: 'nb-handle', gap: 'G92', h: 24 }];
+  const DESKTOP_SMALL = [{ cls: 'nb-handle', h: 24, touchH: 44 }];
   const INTERACTIVE = 'button,input,select,textarea,a[href],[role="checkbox"],[role="switch"],[role="button"],[role="menuitem"],[role="tab"]';
   const scanSmall = (page) => page.evaluate((sel) => {
     const small = [];
@@ -3408,26 +3414,42 @@ function contrastRatio(fg, bg) {
     return { total, small };
   }, INTERACTIVE);
 
-  const swept = { total: 0, small: [] };
+  const swept = { total: 0, touch: [], desktop: [] };
   const roleHeights = {};
-  const sweepView = async (page, tag) => {
+  let coarseInTouch = null;
+  let gripInTouch = null;
+  const sweepView = async (page, tag, touch) => {
     const r = await scanSmall(page);
     swept.total += r.total;
-    for (const s of r.small) swept.small.push({ ...s, view: tag });
+    for (const s of r.small) (touch ? swept.touch : swept.desktop).push({ ...s, view: tag });
   };
 
-  for (const width of [1440, 390]) {
-    const ctx = await browser.newContext({ viewport: { width, height: width === 1440 ? 900 : 844 } });
+  for (const [width, touch] of [[1440, false], [390, true]]) {
+    // 触摸档必须真的被报成 coarse，否则 `@media (pointer: coarse)` 那一族规则全都不生效
+    const ctx = await browser.newContext(
+      touch
+        ? { viewport: { width, height: 844 }, hasTouch: true, isMobile: true }
+        : { viewport: { width, height: 900 } },
+    );
     const page = await ctx.newPage();
     await page.goto(URL_BASE, { waitUntil: 'networkidle' });
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 15000 });
+    if (touch) {
+      coarseInTouch = await page.evaluate(() => window.matchMedia('(pointer: coarse)').matches);
+    }
     // 用 evaluate 点，不用 page.click：手机宽那一档侧栏是抽屉，`nav-all` 在屏幕外，
     // Playwright 的可见性检查会直接等超时（第一版就崩在这）。
     await page.evaluate(() => document.querySelector('[data-testid="nav-all"]')?.click());
     await page.waitForTimeout(600);
     await page.click('[data-testid^="note-row-"]').catch(() => {});
     await page.waitForTimeout(900);
-    await sweepView(page, `${width}/笔记+编辑器`);
+    if (touch) {
+      gripInTouch = await page.evaluate(() => {
+        const g = document.querySelector('[data-testid="drag-handle"]');
+        return g ? Math.round(g.getBoundingClientRect().height) : null;
+      });
+    }
+    await sweepView(page, `${width}/笔记+编辑器`, touch);
     if (width === 1440) {
       roleHeights.navBtn = await page.evaluate(() => Math.round(document.querySelector('.nav-btn')?.getBoundingClientRect().height ?? 0));
       roleHeights.treeRow = await page.evaluate(() => Math.round(document.querySelector('.tree__row')?.getBoundingClientRect().height ?? 0));
@@ -3440,26 +3462,26 @@ function contrastRatio(fg, bg) {
       if (s) { s.focus(); }
     });
     await page.waitForTimeout(300);
-    await sweepView(page, `${width}/搜索聚焦`);
+    await sweepView(page, `${width}/搜索聚焦`, touch);
     for (const nav of ['nav-trash', 'nav-conflicts', 'nav-settings']) {
       await page.evaluate((id) => document.querySelector(`[data-testid="${id}"]`)?.click(), nav);
       await page.waitForTimeout(700);
-      await sweepView(page, `${width}/${nav}`);
+      await sweepView(page, `${width}/${nav}`, touch);
     }
-    if (width === 390) {
-      // 手机宽：侧栏是抽屉，不打开就扫不到那一族（而那一族正是触摸端最常点的）。
+    if (touch) {
+      // 触摸档：侧栏是抽屉，不打开就扫不到那一族（而那一族正是手指最常点的）。
       // 打开之后**先证明它真的在屏上**再扫 —— 拿"元素数量"当导航成功的证据是踩过的坑。
       await page.evaluate(() => document.querySelector('[data-testid="nav-all"]')?.click());
       await page.waitForTimeout(500);
-      await page.evaluate(() => document.querySelector('[data-testid="sidebar-handle"], [data-testid="open-sidebar"]')?.click());
+      await page.evaluate(() => document.querySelector('[data-testid="sidebar-handle"]')?.click());
       await page.waitForTimeout(700);
       const drawerIn = await page.evaluate(() => {
         const r = document.querySelector('.pane--sidebar')?.getBoundingClientRect();
         return r ? r.x >= 0 && r.width > 100 : false;
       });
-      check('㊲ 仪器自检：手机宽那一档抽屉真的打开了（没打开就扫不到侧栏那一族，扫描数会假小）',
+      check('㊲ 仪器自检：触摸档抽屉真的打开了（没打开就扫不到侧栏那一族，扫描数会假小）',
         drawerIn === true, JSON.stringify({ drawerIn }));
-      await sweepView(page, '390/抽屉打开');
+      await sweepView(page, '390/抽屉打开', touch);
     }
     await page.close();
     await ctx.close();
@@ -3467,34 +3489,50 @@ function contrastRatio(fg, bg) {
 
   check('㊲ 仪器自检：这一腿真的扫到了足够多颗可交互元素（各视口 × 各界面加起来 ≥200）',
     swept.total >= 200, JSON.stringify({ total: swept.total }));
-  const exemptHits = swept.small.filter((s) => EXEMPT.some((e) => s.cls === e.cls));
-  const knownHits = swept.small.filter((s) => KNOWN_SMALL.some((e) => e.cls === s.cls));
-  const isCovered = (s) => EXEMPT.some((e) => e.cls === s.cls) || KNOWN_SMALL.some((e) => e.cls === s.cls);
-  const labelExempt = swept.small.filter((s) => s.byLabel && !isCovered(s));
-  const violations = swept.small.filter((s) => !s.byLabel && !isCovered(s));
-  check('㊲ 六个界面 × 两个视口里，没有任何一颗可交互控件的命中区小于 44（"整行都是命中区"、豁免表、已知不合格表之外的都算违规）',
-    violations.length === 0, JSON.stringify(violations.slice(0, 6)));
+  /**
+   * 这一条是本腿存在的首要理由：**触摸档必须真的被浏览器报成 coarse**。
+   * 我第一版就是漏了这个，把"视口 390"当"触摸档"扫，量到 24 的把手登记成产品缺陷 G92 ——
+   * 而产品早就给 `pointer: coarse` 写了 44 的规则，只是那条规则在这一档里根本没生效。
+   */
+  check('㊲ 仪器自检：触摸档真的是 coarse 指针（否则 `@media (pointer: coarse)` 那一族规则全都不生效，量到的都是鼠标端的形状）',
+    coarseInTouch === true, JSON.stringify({ coarseInTouch }));
+  check('㊲ 触摸档里块把手真的是 44 高（`pointer: coarse` 那条放大规则还在，且真的画得出来）',
+    gripInTouch !== null && gripInTouch >= 44, JSON.stringify({ gripInTouch }));
+  const isCovered = (s) => EXEMPT.some((e) => e.cls === s.cls);
+  const labelOf = (list) => list.filter((s) => s.byLabel && !isCovered(s));
+  const touchViolations = swept.touch.filter((s) => !s.byLabel && !isCovered(s));
+  check('㊲ 触摸档（390 + coarse）里没有任何一颗可交互控件的命中区小于 44 —— §5 那条说的就是这一档',
+    touchViolations.length === 0, JSON.stringify(touchViolations.slice(0, 6)));
   check('㊲ "整行都是命中区"那一臂真的在判东西（复选框 / 滑杆这一族：原生控件小，label 是 44）',
-    labelExempt.length >= 4, JSON.stringify({ count: labelExempt.length, sample: labelExempt.slice(0, 3) }));
-  const usedExempt = new Set(exemptHits.map((s) => s.cls));
+    labelOf(swept.touch).length + labelOf(swept.desktop).length >= 4,
+    JSON.stringify({ touch: labelOf(swept.touch).length, desktop: labelOf(swept.desktop).length }));
+  const allSmall = [...swept.touch, ...swept.desktop];
+  const usedExempt = new Set(allSmall.filter(isCovered).map((s) => s.cls));
   const staleExempt = EXEMPT.filter((e) => !usedExempt.has(e.cls)).map((e) => e.cls);
   check('㊲ 豁免表不许悄悄变长，也不许留着已经不再命中的那几条（每条都要真的在这次的界面上出现）',
     staleExempt.length === 0, JSON.stringify({ staleExempt, used: [...usedExempt], registered: EXEMPT.map((e) => e.cls) }));
   /**
-   * 已知不合格那一族单独一条漂移守卫：**种类数不许变多**。
-   * G92 那一格是量出来的既成事实（等一次设计决定），谁再往这族里加一颗小控件这里就红 ——
-   * 免得"豁免表"变成越用越宽的兜底。
+   * 鼠标端那一族的双向漂移守卫：**不许多，也不许已经消失还继续挂着**。
+   * 把手在鼠标端 24（与 27 那一行的行高配套）、在触摸端 44 —— 两边各一条判据钉住，
+   * 于是"谁把 coarse 那条规则的数改了"与"谁新加了一颗小控件"都跑不掉。
    */
-  const knownKinds = new Set(knownHits.map((s) => s.cls));
-  check('㊲ 已知不合格表（G92 那一族）不许长出新成员：这次出现的种类必须恰好是登记的那一类',
-    knownHits.length > 0 && knownKinds.size === KNOWN_SMALL.length && [...knownKinds].every((c) => KNOWN_SMALL.some((e) => e.cls === c)),
-    JSON.stringify({ kinds: [...knownKinds], registered: KNOWN_SMALL.map((e) => e.cls), count: knownHits.length }));
+  const deskSmall = swept.desktop.filter((s) => !s.byLabel && !isCovered(s));
+  const deskKinds = new Set(deskSmall.map((s) => s.cls));
+  const deskUnknown = [...deskKinds].filter((c) => !DESKTOP_SMALL.some((e) => e.cls === c));
+  const deskStale = DESKTOP_SMALL.filter((e) => !deskKinds.has(e.cls)).map((e) => e.cls);
+  check('㊲ 鼠标端"小着的那一族"必须恰好是登记的那一类：新加的不许悄悄进来，消失的也不许继续挂着',
+    deskUnknown.length === 0 && deskStale.length === 0,
+    JSON.stringify({ deskUnknown, deskStale, kinds: [...deskKinds], count: deskSmall.length }));
+  const gripDesktop = swept.desktop.find((s) => s.cls === 'nb-handle');
+  check('㊲ 鼠标端把手仍是 24（与 27 的行高配套）—— 它与上面"触摸档 44"是一对，改任何一边都要同时改判据',
+    gripDesktop !== null && gripDesktop.h === DESKTOP_SMALL[0].h, JSON.stringify({ gripDesktop }));
   check('㊲ §1.4 与 §5 冲突的裁定写死：这四类控件跟的是 §5 的 44，不是 §1.4 的 32 / 34 / 36',
     roleHeights.navBtn >= 44 && roleHeights.treeRow >= 44 && roleHeights.input >= 44 && roleHeights.tbBtn >= 44,
     JSON.stringify(roleHeights));
-  notes.push(`     §5 全应用扫描：${swept.total} 颗可交互元素，小命中区 ${swept.small.length} 颗`
-    + `（整行接管 ${labelExempt.length}、豁免 ${exemptHits.length}、已知不合格 G92 ${knownHits.length}、违规 ${violations.length}）；`
-    + `四类控件实测 ${roleHeights.navBtn}/${roleHeights.treeRow}/${roleHeights.input}/${roleHeights.tbBtn}`);
+  notes.push(`     §5 全应用扫描：${swept.total} 颗可交互元素；触摸档小命中区 ${swept.touch.length} 颗`
+    + `（整行接管 ${labelOf(swept.touch).length}、违规 ${touchViolations.length}），鼠标档 ${swept.desktop.length} 颗`
+    + `（登记那一族 ${deskSmall.length}）；把手实测 鼠标 ${gripDesktop ? gripDesktop.h : '?'}`
+    + ` / 触摸 ${gripInTouch}；四类控件实测 ${roleHeights.navBtn}/${roleHeights.treeRow}/${roleHeights.input}/${roleHeights.tbBtn}`);
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
