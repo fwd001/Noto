@@ -56,6 +56,11 @@ export const useEditorStore = defineStore('editor', () => {
   const inTrash = ref(false);
   const localDraft = ref<NoteDoc | null>(null);
   const lastSavedAt = ref<number | null>(null);
+  /**
+   * 这一篇最后一次落笔的时刻（核心给的 `updatedAt`，原样存，格式化在呈现层）。
+   * 设计稿编辑器角上那句 `改于 14:22` 读的就是这一格；null 时那一格**根本不画**。
+   */
+  const noteUpdatedAt = ref<string | null>(null);
   const pendingAttachments = ref<Record<string, Attachment>>({});
 
   const versionTooNew = computed(() => docVersion.value > SUPPORTED_DOC_VERSION);
@@ -129,6 +134,7 @@ export const useEditorStore = defineStore('editor', () => {
     }
     noteId.value = note.id;
     rev.value = typeof note.rev === 'number' ? note.rev : 0;
+    noteUpdatedAt.value = typeof note.updatedAt === 'string' ? note.updatedAt : null;
     docVersion.value = typeof note.doc?.v === 'number' ? note.doc.v : SUPPORTED_DOC_VERSION;
     inTrash.value = note.deletedAt !== null && note.deletedAt !== undefined;
     blocks.value = docToBlocks(note.doc);
@@ -162,6 +168,7 @@ export const useEditorStore = defineStore('editor', () => {
     if (id === null) {
       noteId.value = null;
       blocks.value = [];
+      noteUpdatedAt.value = null;
       // `inTrash` 是"这一篇在回收站里"的状态，没有"这一篇"就不该留着它 —— 否则空编辑器会把
       // 只读原因说成 `inTrash`（用户读到的是"这条在最近删除里"，而屏幕上什么都没有）。
       inTrash.value = false;
@@ -310,6 +317,9 @@ export const useEditorStore = defineStore('editor', () => {
       const note = await callCommand<Note>(Commands.editNote, { id: targetId, doc, expectedRev: rev.value });
       if (noteId.value !== targetId) return;
       if (typeof note?.rev === 'number') rev.value = note.rev;
+      // 「改于」跟着这次落库的时刻走：核心在写回包里给的就是新的 `updatedAt`，
+      // 不取的话屏幕上会停在这篇**被打开时**的那一版时间（用户刚存完却看到旧时刻）。
+      if (typeof note?.updatedAt === 'string') noteUpdatedAt.value = note.updatedAt;
       if (JSON.stringify(currentDoc()) !== sentSignature) {
         // 在飞的这段时间里正文又变了：这次回包不代表当前状态。保持 dirty、
         // 不应用回包、不写 lastSavedAt，另起一轮把新版本存进去。
@@ -602,6 +612,7 @@ export const useEditorStore = defineStore('editor', () => {
     isEmpty,
     ready,
     lastSavedAt,
+    noteUpdatedAt,
     localDraft,
     open,
     hydrate,

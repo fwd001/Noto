@@ -72,6 +72,9 @@ const MESSAGES: Record<MessageKey, string> = {
   'editor.placeholder': '请输入标题和正文',
   // §4.1 保存四格的文案（措辞按规范原话：说清"东西在哪、稳不稳"，不用"已保存"这种状态词糊过去）
   'editor.saved': '已存在本机',
+  // 设计稿编辑器角上第三那句（`已存在本机` `412 字` `改于 14:22`）。时间由 `formatModified` 给，
+  // 取不到时刻时**这一句整条不画** —— 所以这里不许出现"刚刚"这种可以自己编的默认值。
+  'editor.modifiedAt': '改于 {time}',
   'editor.saving': '正在保存',
   'editor.unsaved': '还有改动没存',
   'editor.readOnly': '只读',

@@ -40,6 +40,7 @@ import {
   type TextBlockType,
 } from '../editor/model';
 import { useEditorStore } from '../stores/editor';
+import { formatModified } from '../util/format';
 import { useSettingsStore } from '../stores/settings';
 import { useShellStore } from '../stores/shell';
 import { useToastStore } from '../stores/toasts';
@@ -90,6 +91,8 @@ const activeMarks = ref<string[]>([]);
 const activeFontSize = ref<string | null>(null);
 const activeColor = ref<string | null>(null);
 const charCount = computed(() => docCharCount(blocks.value));
+/** 设计稿那句 `改于 14:22`：读核心的 `updatedAt`。取不到就整条不画，不许编一个"刚刚"。 */
+const modifiedAt = computed(() => formatModified(store.noteUpdatedAt));
 
 /** "/" 面板：查询串为 null 表示当前不是命令输入。选中项用键盘维护。 */
 const slashQ = ref<string | null>(null);
@@ -912,6 +915,7 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
         />
         <span class="text-sm">{{ store.saveLabel }}</span>
       </span>
+      <span v-if="modifiedAt" class="text-sm text-muted" data-testid="editor-modified">{{ t('editor.modifiedAt', { time: modifiedAt }) }}</span>
       <button v-if="!readOnly && currentBlock" type="button" class="btn btn--quiet text-sm" :title="t('editor.deleteBlock')" @click="onDeleteBlock">
         {{ t('editor.deleteBlock') }}
       </button>

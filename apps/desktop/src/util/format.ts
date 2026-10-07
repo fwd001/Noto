@@ -40,6 +40,27 @@ export function formatWhen(value: string | null | undefined, now: number = Date.
   return sameYear ? `${md} ${pad(date.getHours())}:${pad(date.getMinutes())}` : `${date.getFullYear()}-${md}`;
 }
 
+/**
+ * 编辑器角上那一格「改于 {时间}」：要的是**墙上时刻**，不是会自己老掉的相对时间。
+ *
+ * 与 `formatWhen` 分开是有原因的：那一格（§4.3 的"上一次：3 分钟前"）说的是"距今多久"，
+ * 而这一格说的是一篇笔记最后一次落笔是几点 —— 用相对时间写它，屏幕上的字会自己变旧，
+ * 而它下面那句「已存在本机」说的却是此刻的状态，两行对不上。
+ * 同一天 `HH:MM`、同年 `M月D日`、跨年带年份；取不到时间给**空串**，调用方据此不画那一格
+ * （不许替它编一个"刚刚"，那是 §4.3 那条口径的同一个道理）。
+ */
+export function formatModified(value: string | null | undefined, now: number = Date.now()): string {
+  const date = toDate(value);
+  if (!date) return '';
+  const today = new Date(now);
+  const md = `${date.getMonth() + 1}月${date.getDate()}日`;
+  if (date.getFullYear() !== today.getFullYear()) return `${date.getFullYear()}年${md}`;
+  if (date.getMonth() === today.getMonth() && date.getDate() === today.getDate()) {
+    return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+  return md;
+}
+
 export function formatBytes(value: number | null | undefined): string {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return '—';
   if (value < 1024) return `${value} B`;

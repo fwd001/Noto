@@ -110,7 +110,7 @@ const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '');
 const FIXTURE_MARKS = [
   '只读夹具', '常驻夹具', '拖排夹具', '滚动夹具', '状态夹具', '保存状态夹具',
   '置顶往返夹具', '通扫夹具', '键盘夹具', '附件账夹具', '弹窗夹具', '拖放夹具',
-  '分档夹具',
+  '分档夹具', '改于夹具',
 ];
 for (const mark of FIXTURE_MARKS) await purgeByTitle(mark);
 
@@ -4170,6 +4170,124 @@ function contrastRatio(fg, bg) {
   await p47b.close();
   await c47b.close();
   notes.push(`     列表读数实测：核心 ${rows.length} 行（置顶 ${pinnedSet.size}）⇒ 屏幕「${foot.text}」；注入满页 ⇒「${loaded}」`);
+}
+
+/**
+ * ㊸ 编辑器角上那句 `改于 14:22`（设计稿第 1 页第三句，也是文案清单里的最后一格）。
+ *
+ * 核心一直在发 `NoteDto.updatedAt`，而 editor store 里连这一位都没存过 —— 于是界面无从说
+ * "这篇是几点改的"。这一腿钉四件事：
+ *  ① 屏幕上那句与**库里读回来的**时刻一致（期望值在这里按同一条规则独立算一遍：同一天 `HH:MM`、
+ *     同年 `M月D日`、跨年带年份 —— 单位是"墙上时刻"，不是会自己变旧的"3 分钟前"）；
+ *  ② 在界面里真打一个字、存进去之后，那一格要**跟着新时刻走**（停在被打开那一版的时间 = 说了旧话）；
+ *  ③ 那一排里不许混进相对时间的说法（用 `formatWhen` 替掉 `formatModified` 就是这个形状 ——
+ *     那句话会自己变旧，而它下面写着「已存在本机」说的是此刻）；
+ *  ④ 390 那一档角上那一排不许横向溢出（多一句就把 `412 字` 与那颗「删除此块」挤出去）。
+ * "回包缺 updatedAt 时整条不画"那一格留在单测里，理由写在下面 ③ 那段注释上。
+ */
+{
+  const MOD_MARK = '改于夹具·这一篇用来量编辑器角上那句';
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: { v: 1, content: [{ id: 'modblk001', type: 'paragraph', content: [{ text: MOD_MARK }] }] },
+  });
+  const noteId = made?.id;
+  const pad2 = (n) => String(n).padStart(2, '0');
+  /** 与 `formatModified` 同一条规则，但在这里独立算一遍（两边同源就分辨不出漂移）。 */
+  const expectLabel = (stamp) => {
+    const d = new Date(stamp);
+    const now = new Date();
+    if (Number.isNaN(d.getTime())) return null;
+    if (d.getFullYear() !== now.getFullYear()) return `改于 ${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+    if (d.toDateString() === now.toDateString()) return `改于 ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    return `改于 ${d.getMonth() + 1}月${d.getDate()}日`;
+  };
+  const LABEL = '[data-testid="editor-modified"]';
+  const readLabel = (page) => page.evaluate((sel) => document.querySelector(sel)?.innerText?.trim() ?? null, LABEL);
+
+  const c48 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p48 = await c48.newPage();
+  const mErrors = [];
+  p48.on('console', (m) => { if (m.type() === 'error') mErrors.push(m.text()); });
+  await p48.goto(URL_BASE, { waitUntil: 'networkidle' });
+  const openedRow = await p48.evaluate(async (id) => {
+    const el = document.querySelector(`[data-testid="note-row-${id}"]`);
+    if (!el) return false;
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    return true;
+  }, noteId);
+  await p48.waitForSelector(LABEL, { timeout: 9000 }).catch(() => undefined);
+  await p48.waitForTimeout(400);
+  const stored = await cmd('get_note', { id: noteId });
+  const label0 = await readLabel(p48);
+  check('㊸ 仪器自检：这一篇真的从列表被点开、角上那一格画出来了（不然下面全是空判据）',
+    openedRow === true && label0 !== null, JSON.stringify({ openedRow, label0, noteId: noteId ?? null }));
+  check('㊸ 屏幕上那句的时刻 = 库里读回来的 updatedAt（同一天要说墙上 HH:MM，不许是"3 分钟前"）',
+    label0 === expectLabel(stored?.updatedAt), JSON.stringify({ onScreen: label0, core: stored?.updatedAt, expected: expectLabel(stored?.updatedAt) }));
+
+  // ② 真打一个字 → 存进去 → 那一格要跟上新时刻
+  const before = String(stored?.updatedAt ?? '');
+  await p48.click('[data-testid="editor-doc"]');
+  await p48.keyboard.type('补一句让这篇真的变新');
+  await p48.waitForTimeout(2600);
+  let after = before;
+  for (let i = 0; i < 24; i += 1) {
+    const fresh = await cmd('get_note', { id: noteId });
+    after = String(fresh?.updatedAt ?? '');
+    if (after !== before) break;
+    await p48.waitForTimeout(250);
+  }
+  await p48.waitForTimeout(500);
+  const label1 = await readLabel(p48);
+  check('㊸ 真打字存进去之后 updatedAt 确实前进了（核心这一侧先要成立）',
+    after !== before, JSON.stringify({ before, after }));
+  check('㊸ 而屏幕上那一格跟着换成新时刻（停在被打开那一版的时间 = 对着用户说旧话）',
+    label1 === expectLabel(after), JSON.stringify({ onScreen: label1, core: after, expected: expectLabel(after) }));
+
+  /**
+   * ③ 这一格说的是**墙上时刻**，不许混进相对时间。
+   *
+   * 原来这里想量的是"回包缺 updatedAt 时整条不画"，用 `page.route` 换掉 `get_note` ——
+   * 探针实测那样会把**整个编辑面板**弄没（blank 的角、没有 doc），因为那条路由把首帧
+   * 自动打开的那一篇也换成了夹具这一篇，`noteId` 与列表选中项从此对不上 ——
+   * 是探针造的假形状，不是产品能走到的状态（`updatedAt` 这一位核心一直在发）。
+   * "缺字段就不画"那格留在单测里（`formatModified.spec.ts` 的 null ⇒ 空串 + `editorModified.spec.ts`
+   * 的回包缺位），这一格改量一条真的、且更容易被写错的事：这一排里不许出现相对时间说法
+   *   —— 用 `formatWhen`（"3 分钟前"）替掉 `formatModified` 就是这个形状，它会让这句话自己变旧。
+   */
+  const cornerWords = await p48.evaluate(() => {
+    const corner = document.querySelector('.editor-corner');
+    return corner ? corner.innerText.replace(/\s+/g, ' ').trim() : null;
+  });
+  check('㊸ 角上那一排不许混进相对时间（"刚刚 / 分钟前 / 小时前 / 天前"是 §4.3 另一个口径，混进来这句话会自己变旧）',
+    cornerWords !== null && /改于/.test(cornerWords) && !/刚刚|分钟前|小时前|天前/.test(cornerWords),
+    JSON.stringify({ cornerWords }));
+  await p48.screenshot({ path: `${OUT}/54-editor-modified-1440.png` });
+  await p48.close();
+  await c48.close();
+
+  // ④ 390 那一档：角上那一排（字数 + 保存 + 改于 + 删除此块）不许横向溢出
+  const c48c = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const p48c = await c48c.newPage();
+  await p48c.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p48c.evaluate((id) => document.querySelector(`[data-testid="note-row-${id}"]`)?.dispatchEvent(new MouseEvent('click', { bubbles: true })), noteId);
+  await p48c.waitForTimeout(1500);
+  const narrow = await p48c.evaluate((sel) => {
+    const label = document.querySelector(sel);
+    const corner = label?.parentElement;
+    return {
+      label: label?.innerText?.trim() ?? null,
+      overflowX: corner ? corner.scrollWidth - corner.clientWidth : -1,
+      cornerH: corner ? Math.round(corner.getBoundingClientRect().height) : -1,
+    };
+  }, LABEL);
+  check('㊸ 390 那一档角上那一排：那句"改于"还在，且横向不许溢出（多一句不许把字数与那颗按钮挤出去）',
+    narrow.label !== null && narrow.overflowX <= 1, JSON.stringify(narrow));
+  check('㊸ 这一腿 console error 为零', mErrors.length === 0, mErrors.slice(0, 3).join(' | '));
+  await p48c.close();
+  await c48c.close();
+  await cmd('purge_note', { id: noteId });
+  notes.push(`     「改于」实测：核心 ${before.slice(11, 16)} ⇒ 屏幕「${label0}」；存过一次之后 ${after.slice(11, 16)} ⇒ 屏幕「${label1}」；角上那一排「${(cornerWords ?? '').slice(0, 40)}」`);
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
