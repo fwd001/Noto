@@ -15,7 +15,7 @@ const notes = useNoteStore();
 const shell = useShellStore();
 
 const showLink = computed(() => sync.linkDown);
-const showOffline = computed(() => !sync.linkDown && sync.badge === 'offline');
+const showOffline = computed(() => !sync.linkDown && sync.shownBadge === 'offline');
 const showDb = computed(() => shell.libraryReadOnly);
 const showSearchError = computed(() => notes.searchErrorKey !== null);
 const searchErrorText = computed(() => messageFor(notes.searchErrorKey ?? 'error.fallback'));

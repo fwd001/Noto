@@ -138,6 +138,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'sync.idle': '未配置同步',
   'sync.idleGoConfigure': '未配置同步 —— 点这里去设置',
   'sync.disabled': '同步已关闭',
+  'sync.needsPassword': '需要重新填写口令',
   'settings.dangerZone': '危险操作',
   'settings.erase': '清除一切数据…',
   'settings.eraseHint': '删除本机全部笔记、文件夹、附件与同步配置，恢复到刚安装的状态。此操作不可撤销，也没有回收站。',
@@ -157,6 +158,9 @@ const MESSAGES: Record<MessageKey, string> = {
   'sync.localReady': '本地已保存，网络恢复后会自动继续。',
   'sync.plainHttp': '当前使用未加密传输，仅建议在内网。',
   'sync.insecureWarn': '未加密传输：只有内网才建议这样设置。',
+  // §4.7：这一档要说的是"链路上别人读得到你同步的内容"，而不是一句温和的"建议" ——
+  // 与上面那句明文 HTTP 共用一句话时，最危险的那一档听起来和最轻的那一档一样。
+  'sync.certSkipWarn': '跳过证书校验：同步过程中，链路上的人能读到你同步的内容，也能伪装成你那台服务器。只在你自己的内网里用。',
 
   /* 冲突收件箱 */
   'conflict.title': '需要处理的版本',

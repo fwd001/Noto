@@ -53,7 +53,7 @@ const shellAttrs = computed(() => ({
  * 窄屏下侧栏是抽屉，`.syncbar` 平时根本不在屏幕上 ⇒ 底栏是手机上**唯一**能说清
  * "此刻到底有没有在同步"的地方。写死成"立即同步"就等于把这五种事实从手机上拿掉了。
  */
-const dockSyncIcon = computed<IconName>(() => SYNC_ICONS[sync.badge] ?? 'sync-failed');
+const dockSyncIcon = computed<IconName>(() => SYNC_ICONS[sync.shownBadge] ?? 'sync-failed');
 
 function handleEvent(event: UiEvent): void {
   if (event.kind === 'sync') {

@@ -115,19 +115,46 @@ export const useSyncStore = defineStore('sync', () => {
 
   const badge = computed(() => state.value.badge);
   /**
-   * 静止态（`idle`）要说清是**哪一种**静止：没配过 vs 配了但关了。
+   * 静止态（`idle`）要说清是**哪一种**静止：没配过 vs 配了但关了 vs 配了但这一轮没口令。
    *
-   * 两者都该静止、都不该转圈，但把"已关闭"报成"未配置同步"是另一句假话 ——
-   * 用户会去翻一个填得满满当当的表单（`sync.needsCredentials` 踩过同一形：G38）。
+   * 三者都该静止、都不该转圈，但把"已关闭"念成"未配置同步"是另一句假话 —— 用户会去翻一个
+   * 填得满满当当的表单（`sync.needsCredentials` 踩过同一形：G38）。第三句是 §2.3 明写的
+   * 第五格三句之一，而它此前在界面上**不存在**：核心缺凭据时发的是 `offline` +
+   * `sync.needsCredentials`，于是屏幕上只有"离线" —— 说的是"网络断了"，
+   * 真相是"这台设备的口令只活在上一次运行里"（缺口 G86）。
    */
   const syncActive = computed(() => useSettingsStore().syncActive);
-  const configuredButOff = computed(() => useSettingsStore().hasAccount && !syncActive.value);
-  const label = computed(() =>
-    state.value.badge === 'idle' && configuredButOff.value
-      ? messageFor('sync.disabled')
-      : messageFor(BADGE_LABEL_KEYS[state.value.badge]),
+  const idleReason = computed<'unconfigured' | 'disabled' | 'password' | null>(() => {
+    const settings = useSettingsStore();
+    if (!settings.hasAccount) return 'unconfigured';
+    if (!settings.syncActive) return 'disabled';
+    if (settings.credentialSavedButGone) return 'password';
+    return null;
+  });
+  /**
+   * 屏幕上那一格。"这一轮没有口令"归**第五格**（根本没在同步），不归"离线" ——
+   * 门没开和线路断了是两件不同的事，而 §2.3 把它列在第五格的三句里。
+   * 「本地服务连不上」优先级更高（§4.3），所以 linkDown 时一个字都不改。
+   */
+  const shownBadge = computed(() =>
+    link.value !== 'unreachable' && badge.value === 'offline' && idleReason.value === 'password'
+      ? 'idle'
+      : badge.value,
   );
-  const detail = computed(() => (state.value.messageKey ? messageFor(state.value.messageKey) : null));
+  const label = computed(() => {
+    if (shownBadge.value === 'idle') {
+      if (idleReason.value === 'disabled') return messageFor('sync.disabled');
+      if (idleReason.value === 'password') return messageFor('sync.needsPassword');
+    }
+    return messageFor(BADGE_LABEL_KEYS[shownBadge.value]);
+  });
+  /** 折成第五格时，原因那句也要换成说得准的那一句（核心给的是"还没有可用的登录凭据"）。 */
+  const detail = computed(() => {
+    if (shownBadge.value === 'idle' && idleReason.value === 'password') {
+      return messageFor('settings.credentialGone');
+    }
+    return state.value.messageKey ? messageFor(state.value.messageKey) : null;
+  });
   const showRetry = computed(() => state.value.badge === 'failed' && state.value.retryable);
   const percent = computed(() => {
     const progress = state.value.progress;
@@ -224,7 +251,11 @@ export const useSyncStore = defineStore('sync', () => {
     // 所以 `no_account` 那条 catch 在旧形状上是死代码（仍然留着：核心那侧同步补了具名码，
     // 真回错时得接住）。真正守位置的是这里 —— **徽标只说真话**，
     // 而"点了该有去处"（把人带去设置页）归 `SyncBadge` 自己判，store 不偷偷换视图。
-    if (!syncActive.value) {
+    // 而"这一台设备的口令只剩个引用"必须走**同一道**闸门（缺口 G86 的另一半）：
+    // `syncActive` 看的是配置，配置确实是开着的那一格 —— 可这一轮注定 407。
+    // 放它出门的结果是徽标从"需要重新填写口令"翻成"同步失败"，
+    // 用户照着"失败"去查网络，而该做的动作是重填一次口令。
+    if (!syncActive.value || idleReason.value === 'password') {
       markNoAccount();
       return;
     }
@@ -256,6 +287,8 @@ export const useSyncStore = defineStore('sync', () => {
     state,
     link,
     badge,
+    shownBadge,
+    idleReason,
     label,
     detail,
     syncActive,

@@ -11,12 +11,12 @@ import { SYNC_ICONS } from './ui/icons';
 const sync = useSyncStore();
 const shell = useShellStore();
 
-const iconName = computed<IconName>(() => SYNC_ICONS[sync.badge] ?? 'sync-failed');
+const iconName = computed<IconName>(() => SYNC_ICONS[sync.shownBadge] ?? 'sync-failed');
 const detailText = computed(() => (sync.detail ? `${sync.label} · ${sync.detail}` : sync.label));
 const title = computed(() => {
-  if (sync.badge === 'failed') return t('sync.localReady');
-  // 静止那两格要说清"点它会去哪儿"，否则这枚控件看着像坏了。
-  if (sync.badge === 'idle') return t('sync.idleGoConfigure');
+  if (sync.shownBadge === 'failed') return t('sync.localReady');
+  // 静止那三格要说清"点它会去哪儿"，否则这枚控件看着像坏了。
+  if (sync.shownBadge === 'idle') return t('sync.idleGoConfigure');
   return sync.label;
 });
 
@@ -31,8 +31,9 @@ const title = computed(() => {
  */
 function onClick(): void {
   void sync.syncNow();
-  // 门控在 store 里（没配/关掉时它不发请求、也不点亮徽标），这里只补"去处"。
-  if (!sync.syncActive) shell.goto('settings');
+  // 门控在 store 里（没配 / 关掉 / 这一轮没口令时它不发请求、也不点亮徽标），这里只补"去处"。
+  // 第三句那一格点了要能**走到重填的那一格** —— 只把徽标说清、不给出口，等于把人留在原地读标语。
+  if (!sync.syncActive || sync.idleReason === 'password') shell.goto('settings');
 }
 
 /** 开机问一次，一轮跑完再问一次 —— "上一次成功"必须是核心那个**持久**的时间，不是本次会话凑的。 */
@@ -51,18 +52,18 @@ watch(
 <template>
   <!-- §3.2：这一块是**状态陈述 + 可点动作**，不是提示条；它常驻，不跟文件夹列表一起滚。
        §4.3：五种事实一句不许少，"上一次：{时间}"只在真拿到时间时出现。 -->
-  <div class="syncbar" :data-badge="sync.badge" data-testid="syncbar">
+  <div class="syncbar" :data-badge="sync.shownBadge" data-testid="syncbar">
     <button
       type="button"
       class="syncbar__title"
-      :data-badge="sync.badge"
+      :data-badge="sync.shownBadge"
       :title="title"
-      :aria-busy="sync.badge === 'syncing' ? 'true' : 'false'"
+      :aria-busy="sync.shownBadge === 'syncing' ? 'true' : 'false'"
       :disabled="sync.busy"
       data-testid="sync-badge"
       @click="onClick()"
     >
-      <AppIcon class="syncbar__glyph" :name="iconName" :data-spin="sync.badge === 'syncing' ? 'true' : 'false'" />
+      <AppIcon class="syncbar__glyph" :name="iconName" :data-spin="sync.shownBadge === 'syncing' ? 'true' : 'false'" />
       <span>{{ sync.label }}</span>
       <span v-if="sync.percent !== null" class="syncbar__progress">{{ t('sync.progress', { done: sync.percent, total: 100 }) }}</span>
     </button>

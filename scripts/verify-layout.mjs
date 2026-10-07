@@ -2566,6 +2566,156 @@ function contrastRatio(fg, bg) {
   await cmd('purge_note', { id: made.id });
 }
 
+/**
+ * ㉛ §2.3 第五格的第三句「需要重新填写口令」（G86）与 §4.7 那一档的显著告警（G88）。
+ *
+ * 这一腿拦的是 `account`（不是同步事件）：第三句的判据是"配置里挂着引用、这一轮拿不到"，
+ * 而那是 `account` 的载荷直接说的事 —— 核心在缺凭据时发的 `badge: Offline` +
+ * `sync.needsCredentials` 把这件事报成了"离线"（§4.3 里那句说的是"改动会先存在本机"）。
+ * 量的都是渲染后的几何与计算样式，不是 DOM 存在。
+ */
+{
+  const c31 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p31 = await c31.newPage();
+  let syncNowSent = 0;
+  await p31.route('**/cmd/account', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'acct-31',
+        baseUrl: 'https://dav.invalid/dav',
+        username: 'u',
+        enabled: true,
+        hasCredential: true,
+        credentialLive: false,
+        credentialPersistent: false,
+      }),
+    }),
+  );
+  await p31.route('**/cmd/sync_now', (route) => {
+    syncNowSent += 1;
+    return route.continue();
+  });
+  await p31.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p31.waitForSelector('[data-testid="sync-badge"]', { timeout: 15000 });
+  await p31.waitForTimeout(800);
+
+  const cell = await p31.evaluate(() => {
+    const btn = document.querySelector('[data-testid="sync-badge"]');
+    const glyph = btn?.querySelector('svg');
+    const bar = document.querySelector('[data-testid="syncbar"]');
+    const desc = document.querySelector('[data-testid="sync-detail"]');
+    const anims = glyph ? glyph.getAnimations().length : -1;
+    const r = btn?.getBoundingClientRect();
+    const hit = r ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null;
+    return {
+      text: (btn?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      icon: glyph?.getAttribute('data-icon') ?? null,
+      spin: glyph ? getComputedStyle(glyph).animationName : null,
+      anims,
+      h: Math.round(r?.height ?? 0),
+      hitSelf: Boolean(hit && btn?.contains(hit)),
+      badgeAttr: bar?.getAttribute('data-badge') ?? null,
+      desc: desc ? (desc.textContent ?? '').replace(/\s+/g, ' ').trim() : null,
+      descH: desc ? Math.round(desc.getBoundingClientRect().height) : 0,
+    };
+  });
+  check('㉛ 缺口令那一格说的是第三句，不是"离线"也不是"未配置同步"（§2.3 三句分得开）',
+    cell.text.includes('需要重新填写口令') && !cell.text.includes('离线') && !cell.text.includes('未配置'),
+    JSON.stringify(cell));
+  check('㉛ 那一格用的是第五格的字形（云 + 一道横杠），而且**绝对静止**：animation-name=none、getAnimations 抓到 0 个',
+    cell.icon === 'sync-idle' && cell.spin === 'none' && cell.anims === 0 && cell.badgeAttr === 'idle',
+    JSON.stringify(cell));
+  check('㉛ 原因那一句必须**看得见**（屏幕上那一行有高度），不许只挂在 title / aria-live 上',
+    cell.desc !== null && cell.descH > 0 && /重填|重新填/.test(cell.desc),
+    JSON.stringify({ desc: cell.desc, descH: cell.descH }));
+  check('㉛ 那颗徽标本身是个点得着的目标（≥44 高、中心命中自己）',
+    cell.h >= 44 && cell.hitSelf === true, JSON.stringify({ h: cell.h, hitSelf: cell.hitSelf }));
+
+  // 第三句的出口：点它要走到"重填口令"那一格，而不是发一轮注定 407 的同步。
+  await p31.click('[data-testid="sync-badge"]');
+  await p31.waitForTimeout(700);
+  const afterClick = await p31.evaluate(() => ({
+    onSettings: document.querySelector('[data-testid="account-password"]') !== null,
+    pwdPlaceholder: document.querySelector('[data-testid="account-password"]')?.getAttribute('placeholder') ?? '',
+  }));
+  check('㉛ 点那一格真的把人带去设置里重填（不是原地读标语）',
+    afterClick.onSettings === true, JSON.stringify(afterClick));
+  check('㉛ 这一路**一发 sync_now 都没出门**：注定 407 的一轮不该把"重填口令"翻成"同步失败"',
+    syncNowSent === 0, JSON.stringify({ syncNowSent }));
+
+  // §4.7：最危险那一档的显著告警。要真把它选出来，量渲染出来的那条，而不是源文件里的类名。
+  const pickTls = async (label) => {
+    // ⚠ 这里不许按 Escape "清理残留面板"：在这一页 Escape 的语义是**离开设置**（上一刀就是这么红的），
+    // 于是按钮 itself 都不在屏幕上了。开面板有两条路：点它；点不动就聚焦后按 Enter（键盘等价路径，§5）。
+    const panelUp = () =>
+      p31
+        .waitForSelector('[data-testid="app-select-panel"]', { state: 'visible', timeout: 2500 })
+        .then(() => true)
+        .catch(() => false);
+    await p31.click('[data-testid="account-tls"]').catch(() => {});
+    if (!(await panelUp())) {
+      await p31.locator('[data-testid="account-tls"]').focus().catch(() => {});
+      await p31.keyboard.press('Enter').catch(() => {});
+      if (!(await panelUp())) return false;
+    }
+    const opt = p31.locator('[role="option"]').filter({ hasText: label }).first();
+    if ((await opt.count()) === 0) {
+      await p31.locator('[data-testid="account-tls"]').focus().catch(() => {});
+      return false;
+    }
+    await opt.click().catch(() => {});
+    await p31.waitForTimeout(500);
+    return true;
+  };
+  check('㉛ 仪器自检：TLS 那一档真的选得出来（选不出来下面几条全是空判据）',
+    (await pickTls('不校验')) === true, JSON.stringify({ picked: '不校验' }));
+  const warn = await p31.evaluate(() => {
+    const el = document.querySelector('[data-testid="warn-cert-skip"]');
+    if (!el) return { missing: true };
+    // 这条在设置那一栏的下方：先把它滚进可视范围，再量"看得见"。
+    // 在自身会滚的栏里量"整块在视口内"量的其实是滚动位置，不是这条告警画没画（仪器自己会红错方向）。
+    el.scrollIntoView({ block: 'center' });
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return {
+      text: (el.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      h: Math.round(r.height),
+      inViewport: r.top >= 0 && r.bottom <= window.innerHeight,
+      hitSelf: Boolean(hit && el.contains(hit)),
+      role: el.getAttribute('role'),
+      color: cs.color,
+      bg: cs.backgroundColor,
+      // 同屏那句明文 HTTP 的告警不该把这一档的词也念一遍
+      httpCopyShown: (document.body.textContent ?? '').includes('未加密传输：只有内网才建议这样设置'),
+    };
+  });
+  check('㉛ 选了"不校验"那一档，屏幕上立刻出现一条**显著告警**（role=alert、有高度、滚到中间时中心命中自己）',
+    warn.missing !== true && warn.role === 'alert' && warn.h > 0 && warn.inViewport === true && warn.hitSelf === true,
+    JSON.stringify(warn));
+  check('㉛ 那句话点明的是"链路上别人能读到、还能伪装成你的服务器"，不是一句温和的建议',
+    /能读到/.test(warn.text) && /伪装/.test(warn.text) && /内网/.test(warn.text),
+    JSON.stringify({ text: warn.text }));
+  check('㉛ 这一档的词与明文 HTTP 那一档**不是同一句**（共用一句 = 最危险的那档听起来最轻）',
+    warn.httpCopyShown === false && warn.text.includes('跳过证书校验'),
+    JSON.stringify({ httpCopyShown: warn.httpCopyShown }));
+  check('㉛ 告警文字的对比度按渲染出来的那对颜色量要读得清（§5 ≥4.5:1）',
+    warn.missing !== true && contrastRatio(warn.color, warn.bg) >= 4.5,
+    JSON.stringify({ color: warn.color, bg: warn.bg, ratio: Number(contrastRatio(warn.color ?? '', warn.bg ?? '').toFixed(2)) }));
+
+  // 正对照：能力不存在就不画那条 —— 换回严格档之后屏幕上不该还留着警告。
+  const backToStrict = await pickTls('严格');
+  const gone = (await p31.locator('[data-testid="warn-cert-skip"]').count()) === 0;
+  check('㉛ 换回"严格"那一档之后这条告警就不画（不是灰着留着）',
+    backToStrict === true && gone, JSON.stringify({ backToStrict, gone }));
+
+  notes.push(`     第五格第三句实测：${cell.text}；字形 ${cell.icon}/${cell.spin}/anims ${cell.anims}；sync_now 出门 ${syncNowSent} 次`);
+  await p31.screenshot({ path: `${OUT}/43-fifth-cell-password-1440.png` });
+  await c31.close();
+}
+
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
 async function purgeByTitle(prefix) {
   for (const trash of [false, true]) {

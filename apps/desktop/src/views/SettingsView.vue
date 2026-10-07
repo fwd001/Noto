@@ -341,8 +341,16 @@ function jumpTo(id: string): void {
               testid="account-tls"
               @update:model-value="settings.draft.tlsPolicy.kind = $event as typeof settings.draft.tlsPolicy.kind"
             />
-            <span v-if="settings.draft.tlsPolicy.kind === 'insecureLocal'" class="field-hint field-hint--warn">{{ t('sync.insecureWarn') }}</span>
           </label>
+
+          <!-- §4.7「该档必须显著告警」。这一档与上面那格明文 HTTP **各有各的话**：
+               共用一句"未加密传输：只有内网才建议这样设置"会让最危险的那一档（链路上能被读、
+               也能被伪装成你的服务器）听起来和最轻的那一档一样轻（缺口 G88）。
+               形态也要分档：一句 `field-hint` 是"提示"，不是一条警告。 -->
+          <div v-if="settings.draft.tlsPolicy.kind === 'insecureLocal'" class="banner banner--danger" role="alert" data-testid="warn-cert-skip">
+            <AppIcon :size="18" name="warn" />
+            <span>{{ t('sync.certSkipWarn') }}</span>
+          </div>
 
           <!-- 选了 `ca_bundle` / `pin` 才出来的两格。此前这两档在下拉里能选到，却没有任何输入口
                —— 于是"内网自签主路径"（PROXY.md §6）在界面上根本走不到，选它只会在保存时被
