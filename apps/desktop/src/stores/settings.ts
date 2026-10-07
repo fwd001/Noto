@@ -348,7 +348,12 @@ export const useSettingsStore = defineStore('settings', () => {
     lastReport.value = null;
     try {
       const info = await callCommand<BackupInfo>(Commands.backupDb, path ? { path } : {});
-      if (info) lastReport.value = { path: info.path, sha256: info.sha256.slice(0, 12) };
+      if (info) {
+        lastReport.value = { path: info.path, sha256: info.sha256.slice(0, 12) };
+        // 刚产出的那份必须立刻出现在选择器里，否则用户会以为"备份没做成"，
+        // 而下一格要选的正是它。
+        await loadBackups();
+      }
       return info ?? null;
     } catch (error) {
       const bridge = asBridgeError(error);
@@ -359,7 +364,29 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  /** 恢复只排期：真正落地在下次启动，所以这里必须明说"要重启"。 */
+  /**
+   * 备份清单（§6「后端已实现、界面上还没有」那一格）。
+   *
+   * 核心那侧已经做了三件界面替它做不了的事：按时间倒序、逐个自校验、坏档跳过。
+   * 所以这里**只搬运不加工** —— 前端不许再排一次序或猜"哪份可用"，那会是同一件事的第二套真相。
+   */
+  const backups = ref<BackupInfo[]>([]);
+  const backupsFailed = ref(false);
+
+  async function loadBackups(): Promise<void> {
+    try {
+      const list = await callCommand<BackupInfo[]>(Commands.listBackups, {});
+      backups.value = Array.isArray(list) ? list : [];
+      backupsFailed.value = false;
+    } catch {
+      // 读清单失败要说得出来，但不弹错误 toast：这一屏是"顺便看一眼"，
+      // 弹出来会把用户正在做的别的操作盖掉。渲染侧改说「这份清单没能取到」并留着手填路径那条路。
+      // 清单要一起清掉：留着上一次那份，用户就可能去选一份**现在已经不知道还在不在**的备份。
+      backups.value = [];
+      backupsFailed.value = true;
+    }
+  }
+
   /**
    * 清除一切数据，恢复到刚装好的状态。
    *
@@ -382,6 +409,7 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  /** 恢复只排期：真正落地在下次启动，所以这里必须明说"要重启"。 */
   async function restoreDb(path: string): Promise<RestoreOutcome | null> {
     dataBusy.value = true;
     lastReport.value = null;
@@ -457,6 +485,9 @@ export const useSettingsStore = defineStore('settings', () => {
     importData,
     importFiles,
     backupDb,
+    backups,
+    backupsFailed,
+    loadBackups,
     restoreDb,
     eraseAllData,
     describeReport,

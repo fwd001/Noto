@@ -2211,7 +2211,10 @@ function contrastRatio(fg, bg) {
       },
       primary: pick('[data-testid="account-save"]'),
       press: pick('[data-testid="new-folder"]'),
-      danger: pick('[data-testid="restore-db"]'),
+      // 危险变体的样本从 `restore-db` 挪到 `erase-arm`：第 19 刀把"恢复"做成了清单里逐行的
+      // 「恢复这版」（那颗才是危险变体），手填路径那格降级成 `btn--quiet`。
+      // 样本跟着挪，判据一个字没放宽 —— 红的是落点，不是产品（第 13 刀 `editorChrome.spec` 同一族）。
+      danger: pick('[data-testid="erase-arm"]'),
       input: pick('[data-testid="account-baseUrl"]'),
       toastHost: host ? { w: Math.round(host.getBoundingClientRect().width), centered: Math.abs((host.getBoundingClientRect().left + host.getBoundingClientRect().right) / 2 - window.innerWidth / 2) <= 1 } : { missing: true },
     };
@@ -3533,6 +3536,153 @@ function contrastRatio(fg, bg) {
     + `（整行接管 ${labelOf(swept.touch).length}、违规 ${touchViolations.length}），鼠标档 ${swept.desktop.length} 颗`
     + `（登记那一族 ${deskSmall.length}）；把手实测 鼠标 ${gripDesktop ? gripDesktop.h : '?'}`
     + ` / 触摸 ${gripInTouch}；四类控件实测 ${roleHeights.navBtn}/${roleHeights.treeRow}/${roleHeights.input}/${roleHeights.tbBtn}`);
+}
+
+/**
+ * ㊳ §6 那一格「备份选择器」：核心早就有 `list_backups`（自校验 + 按时间倒序 + 坏档跳过），
+ * 前端只在命令表里登了名、一次没调过 —— 于是"从备份恢复"要用户**手敲绝对路径**。
+ *
+ * 这一腿走真核心真文件，顺序本身就是判据：
+ * 清掉上一轮的备份产物与排期标记 → 量"还没有备份"那一格 → 在界面上点「备份本地库」
+ * → 量那一份立刻出现在清单里（§6 许的是"做完就能选"）→ 点「恢复这版」只弹确认浮层、
+ * **这一刻 restore_db 一发都没出门** → 取消仍不出门 → 确认才出门一次且带的就是那一份的 path。
+ * 收尾再清一次：残留的 `restore-pending.json` 会让下一次启动真的去恢复。
+ */
+{
+  const DATA_DIR = process.env.NOTERA_DEV_DATA || 'D:/code/Notes/.notera-dev';
+  const backupDir = `${DATA_DIR}/backups`;
+  const pendingFile = `${DATA_DIR}/restore-pending.json`;
+  const wipeBackupArtifacts = () => {
+    if (fs.existsSync(backupDir)) {
+      for (const f of fs.readdirSync(backupDir)) fs.rmSync(`${backupDir}/${f}`, { force: true });
+    }
+    fs.rmSync(pendingFile, { force: true });
+  };
+  wipeBackupArtifacts();
+
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  let restoreCalls = 0;
+  let lastRestoreBody = '';
+  await page.route('**/cmd/restore_db', (route) => {
+    restoreCalls += 1;
+    lastRestoreBody = String(route.request().postData() ?? '');
+    return route.continue();
+  });
+  await page.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await page.evaluate(() => document.querySelector('[data-testid="nav-settings"]')?.click());
+  await page.waitForTimeout(900);
+  await page.evaluate(() => document.querySelector('#sec-data')?.scrollIntoView({ block: 'start' }));
+  await page.waitForTimeout(300);
+
+  const empty = await page.evaluate(() => ({
+    shown: document.querySelector('[data-testid="backup-empty"]') !== null,
+    failed: document.querySelector('[data-testid="backup-failed"]') !== null,
+    rows: document.querySelectorAll('[data-testid^="backup-row-"]').length,
+    text: document.querySelector('[data-testid="backup-empty"]')?.textContent?.trim() ?? '',
+  }));
+  check('㊳ 没有备份时那一格说的是"还没有备份过"，且不画任何一行（空态不是空表）',
+    empty.shown === true && empty.failed === false && empty.rows === 0 && empty.text.includes('还没有备份'),
+    JSON.stringify(empty));
+
+  /**
+   * 点一颗并报告"点到了没有"。为什么不用 `page.click` 直接点：
+   * 它点不到会等 30 秒然后抛异常，整条门禁**一行读数都不打印**（变异 R1 实测就是这样）。
+   * 门禁要能在产品坏的时候说清是哪一格坏，所以这里把"没点到"变成一个读数。
+   */
+  const tap = async (sel) => {
+    try {
+      await page.locator(sel).first().click({ timeout: 5000 });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  /** 等一颗出现（附到 DOM 即可）。备份要拷近 10 MB，定长等待会读到"还没回来"的那一帧。 */
+  const waitSel = async (sel, ms = 9000) => {
+    try {
+      await page.locator(sel).first().waitFor({ state: 'attached', timeout: ms });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const tappedBackup = await tap('[data-testid="backup-db"]');
+  const rowAppeared = await waitSel('[data-testid="backup-row-0"]');
+  await page.waitForTimeout(300);
+  const row = await page.evaluate(() => {
+    const li = document.querySelector('[data-testid="backup-row-0"]');
+    const btn = document.querySelector('[data-testid="backup-restore-0"]');
+    const r = btn?.getBoundingClientRect();
+    const meta = li?.querySelector('.backup-row__meta')?.textContent?.trim() ?? '';
+    const center = r ? document.elementFromPoint(Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)) : null;
+    return {
+      rows: document.querySelectorAll('[data-testid^="backup-row-"]').length,
+      meta,
+      rawStamp: /T\d{6}Z/.test(meta),
+      hasVersion: /v\d+/.test(meta),
+      hasSize: /\d+(\.\d+)? ?(B|KB|MB|GB)/.test(meta),
+      h: r ? Math.round(r.height) : 0,
+      selfHit: center?.closest('button')?.getAttribute('data-testid') === 'backup-restore-0',
+      emptyGone: document.querySelector('[data-testid="backup-empty"]') === null,
+    };
+  });
+  check('㊳ 点「备份本地库」做完之后那一份立刻出现在清单里，空态同时收掉（做完就能选）',
+    tappedBackup === true && rowAppeared === true && row.rows === 1 && row.emptyGone === true,
+    JSON.stringify({ tappedBackup, rowAppeared, ...row }));
+  check('㊳ 行上三个事实都读得懂：时间不是紧凑 UTC 生串、有体积、有库版本',
+    row.rawStamp === false && row.hasSize === true && row.hasVersion === true, JSON.stringify(row));
+  check('㊳ 「恢复这版」是 ≥44 的触摸目标，中心命中它自己', row.h >= 44 && row.selfHit === true, JSON.stringify(row));
+
+  // 判"浮层不参与布局"要量**高度**不是视口位置：Playwright 点击前会把目标滚进视野，
+  // 用 `getBoundingClientRect().top` 会把"我自己滚了页"读成"浮层把布局顶动了"（第 ㉑ 腿同一族）。
+  const beforeBox = await page.evaluate(() => Math.round(document.querySelector('#sec-data')?.getBoundingClientRect().height ?? -1));
+  const tappedRow = await tap('[data-testid="backup-restore-0"]');
+  await page.waitForTimeout(500);
+  const dlg = await page.evaluate(() => {
+    const d = document.querySelector('[data-testid="restore-confirm"]');
+    const r = d?.getBoundingClientRect();
+    return {
+      open: d !== null,
+      text: d?.textContent?.trim() ?? '',
+      inViewport: r ? r.top >= 0 && r.bottom <= window.innerHeight : false,
+    };
+  });
+  check('㊳ 点「恢复这版」只弹出确认浮层：这一刻 restore_db 一发都没出门（不可逆的排期要有闸门）',
+    dlg.open === true && dlg.inViewport === true && restoreCalls === 0, JSON.stringify({ open: dlg.open, inViewport: dlg.inViewport, restoreCalls }));
+  check('㊳ 浮层说清"下次启动替换当前库、未同步的改动会被覆盖"—— 既不说成错误，也不说成可撤销',
+    dlg.text.includes('下次启动') && dlg.text.includes('覆盖'), JSON.stringify(dlg.text.slice(0, 120)));
+  const afterBox = await page.evaluate(() => Math.round(document.querySelector('#sec-data')?.getBoundingClientRect().height ?? -2));
+  check('㊳ 浮层不参与布局：打开它之后 #sec-data 的高度一个像素都没变（§4.9）',
+    beforeBox === afterBox && beforeBox > 0, JSON.stringify({ beforeBox, afterBox }));
+
+  const tappedCancel = await tap('[data-testid="app-dialog-cancel"]');
+  await page.waitForTimeout(400);
+  const cancelled = await page.evaluate(() => document.querySelector('[data-testid="restore-confirm"]') === null);
+  check('㊳ 「取消」收掉浮层且仍然一发都没发',
+    tappedRow === true && tappedCancel === true && cancelled === true && restoreCalls === 0,
+    JSON.stringify({ tappedRow, tappedCancel, cancelled, restoreCalls }));
+
+  const tappedAgain = await tap('[data-testid="backup-restore-0"]');
+  const dialogBack = await waitSel('[data-testid="app-dialog-confirm"]', 2500);
+  const tappedConfirm = dialogBack ? await tap('[data-testid="app-dialog-confirm"]') : false;
+  await page.waitForTimeout(1200);
+  const staged = await page.evaluate(() => ({
+    closed: document.querySelector('[data-testid="restore-confirm"]') === null,
+    toast: Array.from(document.querySelectorAll('[data-testid^="toast"]')).map((t) => t.textContent?.trim()).join(' / '),
+  }));
+  check('㊳ 确认才出门：restore_db 恰好 1 次，且带的就是清单里那一份的 path',
+    tappedAgain === true && tappedConfirm === true && restoreCalls === 1 && /notera-\d{8}T\d{6}Z[^"\\]*\.sqlite/.test(lastRestoreBody),
+    JSON.stringify({ tappedAgain, tappedConfirm, restoreCalls, body: lastRestoreBody.slice(0, 120) }));
+  check('㊳ 做完说的是"要重启"（§4.8：排到下次启动是正常结果，不是错误）',
+    staged.closed === true && /重启/.test(staged.toast), JSON.stringify(staged));
+
+  await page.screenshot({ path: `${OUT}/49-backup-picker-1440.png` });
+  await page.close();
+  await ctx.close();
+  wipeBackupArtifacts();
+  notes.push(`     备份选择器实测：空态 → 1 行（${row.meta}）→ 浮层不出门 → 确认出门 ${restoreCalls} 次；产物与排期标记已清掉`);
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */

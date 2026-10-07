@@ -4,9 +4,10 @@ import { computed, onMounted, ref } from 'vue';
 import SyncBadge from '../components/SyncBadge.vue';
 import AppSelect from '../components/ui/AppSelect.vue';
 import AppCheckbox from '../components/ui/AppCheckbox.vue';
+import AppDialog from '../components/ui/AppDialog.vue';
 import AppRange from '../components/ui/AppRange.vue';
 import { currentTransport } from '../api/bridge';
-import type { ProxyMode, TlsPolicyKind } from '../api/types';
+import type { BackupInfo, ProxyMode, TlsPolicyKind } from '../api/types';
 import { useSettingsStore } from '../stores/settings';
 import { useSyncStore } from '../stores/sync';
 import { useNoteStore } from '../stores/notes';
@@ -16,7 +17,7 @@ import { useFolderStore } from '../stores/folders';
 import { useShellStore } from '../stores/shell';
 import { shortcutsFor, type PlatformCaps } from '../platform/caps';
 import { t, messageFor } from '../i18n';
-import { formatBytes, formatNumber, formatWhen } from '../util/format';
+import { formatBytes, formatNumber, formatWhen, stampToIso } from '../util/format';
 import { FONT_SCALE_MAX, FONT_SCALE_MIN, type ImportFilesReport, type ThemeMode } from '../stores/settings';
 import { capChips, capsState } from '../sync/serverCaps';
 import AppIcon from '../components/ui/AppIcon.vue';
@@ -115,6 +116,7 @@ onMounted(async () => {
   pinText.value = (settings.draft.tlsPolicy.fingerprints ?? []).join('\n');
   await settings.loadAccount();
   await settings.loadStats();
+  await settings.loadBackups();
   bypassText.value = (settings.draft.proxy.bypass ?? []).join('\n');
   // 回填必须在 loadAccount 之后：那一步会用核心的 DTO 重建 draft，
   // 早先设进去的值会被换掉（这条 lane 的"改一次设置就得重填"就是这个坑）。
@@ -202,6 +204,26 @@ async function doRestore(): Promise<void> {
   }
   restoreHint.value = '';
   await settings.restoreDb(path);
+}
+
+/**
+ * 备份选择器（§6 那一格：核心有清单接口，前端以前从没调过）。
+ *
+ * 清单是**主路径**，手填路径降级成兜底。顺序与"哪份可用"都不在这儿决定 ——
+ * 核心已经按时间倒序排好、并把自检不过的跳掉了，前端再排一次就是同一件事的第二套真相。
+ */
+const restorePick = ref<BackupInfo | null>(null);
+
+/** 紧凑 UTC 串（`20261007T091530Z`）→ 人类可读；认不出来就原样显示，宁可看见生串也不留空白。 */
+function backupTime(stamp: string): string {
+  return formatWhen(stampToIso(stamp)) || stamp;
+}
+
+async function confirmRestore(): Promise<void> {
+  const picked = restorePick.value;
+  restorePick.value = null;
+  if (!picked) return;
+  await settings.restoreDb(picked.path);
 }
 
 /**
@@ -604,8 +626,46 @@ function jumpTo(id: string): void {
               </ul>
             </div>
             <button type="button" class="btn" :disabled="settings.dataBusy" data-testid="backup-db" @click="doBackup">{{ t('settings.backup') }}</button>
-            <button type="button" class="btn btn--danger" :disabled="settings.dataBusy" data-testid="restore-db" @click="doRestore">{{ t('settings.restore') }}</button>
           </div>
+
+          <!-- §6 那一格：核心早就有"自校验 + 按时间倒序 + 坏档跳过"的备份清单接口，前端一次没调过，
+               于是恢复只能手敲绝对路径。清单是主路径，手填降级成兜底（有人会把备份拷到 U 盘）。 -->
+          <div class="field" data-testid="backup-list">
+            <span class="text-sm">{{ t('settings.backupList') }}</span>
+            <p v-if="settings.backupsFailed" class="field-hint" data-testid="backup-failed">{{ t('settings.backupFailed') }}</p>
+            <p v-else-if="settings.backups.length === 0" class="field-hint" data-testid="backup-empty">{{ t('settings.backupEmpty') }}</p>
+            <ul v-else class="backup-rows">
+              <li v-for="(b, i) in settings.backups" :key="b.path" class="backup-row" :data-testid="`backup-row-${i}`">
+                <span class="backup-row__meta">{{ t('settings.backupMeta', { time: backupTime(b.createdAt), size: formatBytes(b.bytes), version: b.userVersion }) }}</span>
+                <button
+                  type="button"
+                  class="btn btn--danger"
+                  :disabled="settings.dataBusy"
+                  :data-testid="`backup-restore-${i}`"
+                  @click="restorePick = b"
+                >
+                  {{ t('settings.backupRestore') }}
+                </button>
+              </li>
+            </ul>
+          </div>
+          <div class="row">
+            <button type="button" class="btn btn--quiet" :disabled="settings.dataBusy" data-testid="restore-db" @click="doRestore">{{ t('settings.restore') }}</button>
+          </div>
+
+          <AppDialog
+            :open="restorePick !== null"
+            :title="t('settings.restoreConfirmTitle')"
+            :confirm-label="t('settings.restoreConfirmOk')"
+            testid="restore-confirm"
+            @close="restorePick = null"
+            @confirm="confirmRestore"
+          >
+            <p class="field-hint" data-testid="restore-confirm-meta">
+              {{ t('settings.backupMeta', { time: backupTime(restorePick?.createdAt ?? ''), size: formatBytes(restorePick?.bytes ?? 0), version: restorePick?.userVersion ?? 0 }) }}
+            </p>
+            <p class="field-hint">{{ t('settings.restoreConfirmBody') }}</p>
+          </AppDialog>
           <label class="row">
             <span class="text-sm">{{ t('settings.importModeEmpty') }}</span>
             <AppSelect
@@ -696,6 +756,33 @@ function jumpTo(id: string): void {
   min-height: 44px;
   align-items: center;
   gap: 0.5rem;
+}
+
+.backup-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 一行一份备份：左边说"是哪一份"，右边那颗才是动作。
+   动作不许挤在文字里 —— 恢复是不可逆的排期，点错的成本比多看一眼高。 */
+.backup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: var(--touch);
+  padding: 0 var(--sp-2) 0 0;
+  border-radius: var(--r-row);
+}
+
+.backup-row__meta {
+  font-size: var(--text-sm);
+  color: var(--body);
+  overflow-wrap: anywhere;
 }
 
 .folder-pick {

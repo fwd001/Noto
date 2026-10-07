@@ -14,6 +14,17 @@ function pad(value: number): string {
   return value < 10 ? `0${value}` : String(value);
 }
 
+/**
+ * 备份产物的时间戳是核心从文件 mtime 造的紧凑 UTC 串（`20261007T091530Z`），
+ * `new Date()` 不认它 —— 直接丢给 `formatWhen` 会**静默返回空串**，界面上那一格就没了时间。
+ * 所以先转成 ISO；转不动就原样返回，宁可看见生串也不看见空白。
+ */
+export function stampToIso(value: string): string {
+  const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(value);
+  if (!m) return value;
+  return `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`;
+}
+
 /** 显示用：只按"何时"排给人看，绝不参与任何新旧判定（判定在本地核心）。 */
 export function formatWhen(value: string | null | undefined, now: number = Date.now()): string {
   const date = toDate(value);
