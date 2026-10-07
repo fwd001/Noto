@@ -72,6 +72,8 @@ const MESSAGES: Record<MessageKey, string> = {
   'editor.discardMyDraft': '放弃我的改动',
   'editor.versionTooNew': '这条笔记由更新版本的 Noto 保存，请升级后编辑（当前可查看）。',
   'editor.libraryReadOnly': '本机的数据由更新版本的 Noto 写入，这一版只能查看（怎么继续见上方横幅）。',
+  'editor.dropHere': '松手就加进来',
+  'editor.notWritable': '这一条现在不能加东西。',
   'editor.unknownBlock': '暂不支持的内容（已原样保留）',
   'editor.attachmentMissing': '附件不在这台设备上，正在等待下载',
   // 本机不可用的其余各格（只有一半 / 校验不过 / 服务器那边也没有或坏了 / 连账都没有）。

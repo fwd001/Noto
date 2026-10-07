@@ -40,10 +40,13 @@ import {
   type TextBlockType,
 } from '../editor/model';
 import { useEditorStore } from '../stores/editor';
+import { useSettingsStore } from '../stores/settings';
 import { useShellStore } from '../stores/shell';
+import { useToastStore } from '../stores/toasts';
 import type { Inline } from '../api/types';
 import { t, type MessageKey } from '../i18n';
 import { attachmentNotice } from '../editor/attachmentNotice';
+import { roleForFile } from '../editor/attachmentWire';
 import AppIcon from './ui/AppIcon.vue';
 import { SAVE_ICONS, type IconName } from './ui/icons';
 
@@ -74,6 +77,8 @@ const store = useEditorStore();
 /** 保存那一格的图形：与文案同读 `store.saveKind`（表在 `ui/icons.ts`，四格共用一张纸这个载体）。 */
 const saveIcon = computed<IconName>(() => SAVE_ICONS[store.saveKind ?? ''] ?? 'save-saved');
 const shell = useShellStore();
+const settings = useSettingsStore();
+const toasts = useToastStore();
 
 const docEl = ref<HTMLElement | null>(null);
 const blocks = computed(() => store.blocks);
@@ -563,6 +568,58 @@ async function onAttachPicked(event: Event): Promise<void> {
   if (input) input.value = '';
 }
 
+/**
+ * 拖文件进窗口（§6 那一格：能力位 `dragAndDrop` 早就开了，缺的只是这一个处理器）。
+ *
+ * 分流只有一条规则：图片进正文、其余进附件行 —— 与工具条那两颗按钮同一套语义；
+ * 落地走的是**同一个** `store.attachFile`（32 MiB 上限、空文件、rev 接管、失败各自的回执都在那里，
+ * 不在这里再实现一遍）。只有一件事必须在这儿做：**不能写的时候要说得出为什么**，
+ * 而不是"松手了，什么都没发生"（`attachFile` 在只读时是静默 return 的）。
+ */
+const dropping = ref(false);
+
+/** 只读那一格的说法与正文上方那条横幅同一份键表，不分两处各写一句。 */
+const DROP_BLOCKED_KEYS: Record<string, MessageKey> = {
+  libraryReadOnly: 'editor.libraryReadOnly',
+  versionTooNew: 'editor.versionTooNew',
+  inTrash: 'state.inTrash',
+};
+
+function draggedFiles(event: DragEvent): File[] {
+  if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) return [];
+  return Array.from(event.dataTransfer?.files ?? []);
+}
+
+function onDragOver(event: DragEvent): void {
+  if (!settings.caps.dragAndDrop || draggedFiles(event).length === 0) return;
+  // 不拦这一下，浏览器会自己去"打开"这个文件 —— 整个界面被换掉，用户以为程序崩了
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = store.writeBlocked ? 'none' : 'copy';
+  dropping.value = true;
+}
+
+function onDragLeave(event: DragEvent): void {
+  // 从容器移到它的子元素上同样会触发 dragleave：指针还在这一栏里就不许把提示收掉
+  const next = event.relatedTarget;
+  if (next instanceof Node && event.currentTarget instanceof Node && event.currentTarget.contains(next)) return;
+  dropping.value = false;
+}
+
+async function onDrop(event: DragEvent): Promise<void> {
+  dropping.value = false;
+  const files = draggedFiles(event);
+  if (files.length === 0) return;
+  // 只要真的是文件，就先拦下浏览器的默认行为（它会自己去打开这个文件），
+  // 再谈这一档能不能写 —— 顺序反了就等于"拒绝的同时把整个界面换掉"。
+  event.preventDefault();
+  if (!settings.caps.dragAndDrop) return;
+  if (store.writeBlocked) {
+    toasts.push(DROP_BLOCKED_KEYS[store.readOnlyReason ?? ''] ?? 'editor.notWritable', 'warn');
+    return;
+  }
+  for (const file of files) await store.attachFile(roleForFile(file), file);
+}
+
 // 全局快捷键（Shift+F）递过来的意图，走的还是上面这条唯一的路径。
 watch(
   () => store.attachRequest,
@@ -646,7 +703,14 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
 </script>
 
 <template>
-  <div class="editor">
+  <div class="editor" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
+    <!-- 只在指针真的带着文件进来时出现（§4.9：浮层不参与布局；能力不存在时这颗压根不画）。
+         `pointer-events:none` 是必须的 —— 它一旦吃住指针，drop 就落不到容器上，
+         提示会变成"看得见但松不了手"的那一层。 -->
+    <div v-if="dropping" class="editor-drop" data-testid="editor-drop" role="status">
+      <AppIcon :size="20" name="attach-file" />
+      <span>{{ t('editor.dropHere') }}</span>
+    </div>
     <!-- 附件的唯一取文件入口。`aria-hidden` + 不占位：它不是给用户看的控件，
          但必须真的在 DOM 里 —— 端到端就是往它塞文件来验这条边的。 -->
     <input
@@ -885,6 +949,25 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
   flex-direction: column;
   min-height: 0;
   flex: 1;
+  /* 拖放提示是浮在这一栏上的，所以它得是定位父级 */
+  position: relative;
+}
+
+.editor-drop {
+  position: absolute;
+  inset: var(--sp-2);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  border: 2px dashed var(--accent);
+  border-radius: var(--r-card);
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  pointer-events: none;
 }
 
 /* 隐藏的取文件入口：不占位、不吃焦点，但留在可测的 DOM 里。 */

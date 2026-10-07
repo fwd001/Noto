@@ -109,7 +109,7 @@ const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '');
  */
 const FIXTURE_MARKS = [
   '只读夹具', '常驻夹具', '拖排夹具', '滚动夹具', '状态夹具', '保存状态夹具',
-  '置顶往返夹具', '通扫夹具', '键盘夹具', '附件账夹具', '弹窗夹具',
+  '置顶往返夹具', '通扫夹具', '键盘夹具', '附件账夹具', '弹窗夹具', '拖放夹具',
 ];
 for (const mark of FIXTURE_MARKS) await purgeByTitle(mark);
 
@@ -3683,6 +3683,125 @@ function contrastRatio(fg, bg) {
   await ctx.close();
   wipeBackupArtifacts();
   notes.push(`     备份选择器实测：空态 → 1 行（${row.meta}）→ 浮层不出门 → 确认出门 ${restoreCalls} 次；产物与排期标记已清掉`);
+}
+
+/**
+ * ㊴ 拖文件进窗口（§6：能力位 `dragAndDrop` 早就开了，缺的只是那一个处理器）。
+ *
+ * 判的是"真拖一次会发生什么"，全部走真核心：
+ * 拖图片 → 进正文、`attach_file` 出门一次、**库里真的多了一个带 sha256 的图片块**（不是只多了个 DOM）；
+ * 拖 PDF → 进附件行；只读那一条（回收站里）→ 一发都不出门，且屏幕上说得出为什么；
+ * 拖的不是文件（选区里的文字）→ 提示压根不出现（能力不存在就别摆控件）。
+ */
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  let attachCalls = 0;
+  await page.route('**/cmd/attach_file', (route) => {
+    attachCalls += 1;
+    return route.continue();
+  });
+
+  const note = await cmd('create_note', {
+    folderId: null,
+    doc: { v: 1, content: [{ id: 'dropblk00001', type: 'paragraph', content: [{ text: '拖放夹具：这一篇用来接拖进来的文件' }] }] },
+  });
+  const noteId = note?.id ?? null;
+  await page.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await page.waitForSelector('[data-testid="sidebar"]', { timeout: 15000 });
+  if (noteId) {
+    await page.click(`[data-testid="note-row-${noteId}"]`).catch(() => {});
+    await page.waitForTimeout(1200);
+  }
+
+  /** 造一次真拖放：先 dragover（读提示），再 drop（读结果）。 */
+  const dragIn = (files) => page.evaluate(async (specs) => {
+    const el = document.querySelector('.editor');
+    if (!el) return { missing: true };
+    const blocksBefore = document.querySelectorAll('.nb-block').length;
+    const dt = new DataTransfer();
+    for (const s of specs) dt.items.add(new File([new Uint8Array(s.bytes)], s.name, { type: s.type }));
+    el.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 150));
+    const hint = document.querySelector('[data-testid="editor-drop"]');
+    const cs = hint ? getComputedStyle(hint) : null;
+    const seen = {
+      hint: hint?.textContent?.trim() ?? null,
+      pointerEvents: cs?.pointerEvents ?? null,
+      position: cs?.position ?? null,
+    };
+    el.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 200));
+    return {
+      ...seen,
+      hintGone: document.querySelector('[data-testid="editor-drop"]') === null,
+      blocksBefore,
+      blocksAfter: document.querySelectorAll('.nb-block').length,
+      chips: document.querySelectorAll('.nb-chip').length,
+      images: document.querySelectorAll('.nb-block img, .nb-block [data-shape="image"]').length,
+    };
+  }, files);
+
+  const PNG = [137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4];
+  const first = await dragIn([{ name: '拖进来的一张.png', type: 'image/png', bytes: PNG }]);
+  check('㊴ 仪器自检：这一腿真的开到了那篇夹具笔记的编辑器里（不然下面全是空判据）',
+    first.missing !== true && first.blocksBefore >= 1, JSON.stringify(first));
+  check('㊴ 拖着文件进来时提示才出现，写的是"松手就加进来"，且它不挡住指针、不占布局',
+    first.hint === '松手就加进来' && first.pointerEvents === 'none' && first.position === 'absolute',
+    JSON.stringify(first));
+  check('㊴ 松手之后：提示收掉、正文多了一块图片、attach_file 恰好出门一次',
+    first.hintGone === true && first.blocksAfter === first.blocksBefore + 1
+      && first.images >= 1 && attachCalls === 1,
+    JSON.stringify({ ...first, attachCalls }));
+
+  // 落库要等那一次防抖保存（debounce + 往返），定长等待会读到"库里还是老样子"那一帧 ——
+  // 轮询到块数真的变了再判（判据一个字不放宽，放宽的只是时间）。
+  let stored = { blocks: [] };
+  for (let i = 0; i < 30; i += 1) {
+    const doc = await cmd('get_note', { id: noteId });
+    stored = { blocks: doc?.doc?.content ?? [], rev: doc?.rev ?? null };
+    if (stored.blocks.length >= 2) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  const imageBlock = stored.blocks.find((b) => b.type === 'image' || b.shape === 'image');
+  check('㊴ 库里真的收了这件附件（读回核心那侧的块，带 sha256 才算落盘，不是只多了个 DOM）',
+    Boolean(imageBlock) && typeof imageBlock?.attrs?.sha256 === 'string' && imageBlock.attrs.sha256.length === 64,
+    JSON.stringify({ blocks: stored.blocks.length, rev: stored.rev, imageBlock: imageBlock ?? null }));
+
+  const second = await dragIn([{ name: '拖进来的一份.pdf', type: 'application/pdf', bytes: [37, 80, 68, 45, 49, 46, 52] }]);
+  check('㊴ 拖进来的不是图片 ⇒ 走附件那一行（芯片出现），仍然一次命令',
+    second.blocksAfter === second.blocksBefore + 1 && second.chips >= 1 && attachCalls === 2,
+    JSON.stringify({ ...second, attachCalls }));
+
+  const textOnly = await page.evaluate(async () => {
+    const el = document.querySelector('.editor');
+    const dt = new DataTransfer();
+    dt.setData('text/plain', '这不是文件');
+    el.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 150));
+    return { hint: document.querySelector('[data-testid="editor-drop"]') !== null };
+  });
+  check('㊴ 拖进来的不是文件（选区里的文字）⇒ 提示压根不出现（不误报、也不吃掉正常拖选）',
+    textOnly.hint === false, JSON.stringify(textOnly));
+
+  // 只读那一格：把这篇丢进回收站再拖一次 —— 必须一发都不出门，且说得出为什么
+  await cmd('delete_note', { id: noteId });
+  await page.evaluate(() => document.querySelector('[data-testid="nav-trash"]')?.click());
+  await page.waitForTimeout(900);
+  await page.click(`[data-testid="note-row-${noteId}"]`).catch(() => {});
+  await page.waitForTimeout(1100);
+  const before = attachCalls;
+  const blocked = await dragIn([{ name: '只读时拖的.png', type: 'image/png', bytes: PNG }]);
+  const said = await page.evaluate(() => document.body.innerText.includes('最近删除'));
+  check('㊴ 只读那条（在回收站里）拖进来：一发都不出门，且屏幕上说得出为什么',
+    blocked.missing !== true && attachCalls === before && said === true,
+    JSON.stringify({ before, after: attachCalls, blocksAfter: blocked.blocksAfter, said }));
+
+  await page.screenshot({ path: `${OUT}/50-file-drop-1440.png` });
+  await page.close();
+  await ctx.close();
+  await purgeByTitle('拖放夹具');
+  notes.push(`     拖放实测：图片→正文 1 块（sha256 已落库）、PDF→附件行、非文件不提示、只读拒绝且出门数不变（${before}→${attachCalls}）`);
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */

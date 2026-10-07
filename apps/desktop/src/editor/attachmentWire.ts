@@ -41,6 +41,14 @@ export class AttachmentEmpty extends Error {
 }
 
 /**
+ * 拖进来的文件按类型分流：图片进正文，其余进附件行 —— 与工具条那两颗按钮同一套语义。
+ * 单独一个函数是为了让"拖放"和"选文件"两条入口共用同一个判据，而不是各写一遍 `startsWith`。
+ */
+export function roleForFile(file: { type: string }): 'inline' | 'file' {
+  return file.type.startsWith('image/') ? 'inline' : 'file';
+}
+
+/**
  * File → base64。
  *
  * 分块 `btoa`：`String.fromCharCode(...bytes)` 在几 MB 上会直接把栈撑爆，
