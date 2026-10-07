@@ -15,7 +15,7 @@ import { emptyDoc } from '../editor/model';
 import { useEditorStore } from './editor';
 import { useSettingsStore } from './settings';
 import { useToastStore } from './toasts';
-import { t } from '../i18n';
+import { t, type MessageKey } from '../i18n';
 
 export type ListMode = { kind: 'all' } | { kind: 'folder'; folderId: string | null } | { kind: 'trash' };
 
@@ -67,6 +67,18 @@ export const useNoteStore = defineStore('notes', () => {
     let exact = 0;
     for (const hit of hits.value) if (hit.exact === true) exact += 1;
     return { exact, fuzzy: hits.value.length - exact };
+  });
+
+  /**
+   * 列表栏底部那一格的**读数与用哪句**（呈现层的事实，不是组件里的字符串拼装）。
+   *
+   * 三种不画的形状：搜索态（那里说的是「找到 N 条」，两句并存会各说一件不同的事）、
+   * 空库（归空态文案）、以及还在加载第一页。
+   * `hasMore` 那一格必须换句子：还有下一页没取回来时说「共 N 条」就是把数报少。
+   */
+  const listReadout = computed<{ key: MessageKey; count: number } | null>(() => {
+    if (hits.value !== null || loading.value || rows.value.length === 0) return null;
+    return { key: hasMore.value ? 'list.rowsLoaded' : 'list.totalCount', count: rows.value.length };
   });
 
   let requestId = 0;
@@ -386,6 +398,7 @@ export const useNoteStore = defineStore('notes', () => {
     query,
     hits,
     searchTiers,
+    listReadout,
     searching,
     searchErrorKey,
     titles,

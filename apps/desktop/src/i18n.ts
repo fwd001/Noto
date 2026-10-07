@@ -60,7 +60,11 @@ const MESSAGES: Record<MessageKey, string> = {
   'list.cancel': '取消',
   'list.confirm': '确认',
   'list.loadMore': '加载更多',
-  'list.rowsLoaded': '已载入 {count} 条',
+  // 列表栏底部那一格（设计稿第 1 页写的是「共 128 条 · 按更新时间排列」）。
+  // 那句"按更新时间排列"在本产品里是**半句谎话**：核心真实的序是 `pinned DESC, updated_at DESC, id`
+  // （`notera-store/src/store.rs:1506`），置顶的那一批永远在前。这里说的是同一件事的真版本。
+  'list.totalCount': '共 {count} 条 · 置顶在前，按更新时间',
+  'list.rowsLoaded': '已载入 {count} 条 · 置顶在前，按更新时间',
 
   /* 编辑器 */
   'editor.untitled': '无标题',

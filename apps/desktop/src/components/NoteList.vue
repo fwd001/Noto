@@ -303,6 +303,13 @@ function createFrom(tpl: NoteTemplate): void {
       </div>
     </div>
 
+    <!-- 列表栏底部那一格（设计稿第 1 页列表栏最后一行）。也在滚动区外面：它说的是"这一栏总共几行"，
+         跟着内容滚走就成了一条要划到才看得见的信息。搜索时这一格不出现（上面那格在说「找到 N 条」，
+         两个数一起说的是两件不同的事）。 -->
+    <p v-if="notes.listReadout !== null" class="list-foot" data-testid="list-count">
+      {{ t(notes.listReadout.key, { count: notes.listReadout.count }) }}
+    </p>
+
     <p v-if="notes.hasMore && total > 0" class="list-status">
       <button type="button" class="btn btn--quiet" data-testid="load-more" @click="notes.loadMore()">{{ t('list.loadMore') }}</button>
     </p>
@@ -476,6 +483,14 @@ function createFrom(tpl: NoteTemplate): void {
   font-size: var(--text-sm);
   color: var(--mute);
   text-align: center;
+  flex: 0 0 auto;
+}
+
+.list-foot {
+  padding: var(--sp-2) var(--sp-4);
+  border-top: 1px solid var(--line);
+  font-size: var(--text-xs);
+  color: var(--mute);
   flex: 0 0 auto;
 }
 

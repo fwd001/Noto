@@ -4046,6 +4046,132 @@ function contrastRatio(fg, bg) {
   notes.push(`     分档实测：载荷 ${both.payload.length} 条（精准 ${exactN} / 模糊 ${fuzzyN}）⇒ 屏幕「${both.screen.exact}」「${both.screen.fuzzy}」；单档一发 ${only.screen.exact}/${only.screen.fuzzy}`);
 }
 
+/**
+ * ㊷ 列表栏底部那一格（设计稿第 1 页列表栏最后一行「共 128 条 · 按更新时间排列」）。
+ *
+ * 这一腿存在的理由不是"有没有画那一行"，而是那一行**声称了两件事**：
+ *  ① 一个数（这一栏到底几篇）—— 数字要和核心 `list_notes` 真回的行数对上，
+ *     而"还有下一页没取回来"那一格必须换成「已载入」（说「共 200 条」就是把数报少，
+ *     这一格用注入的 200 行造出来，因为开发库里凑不出 200 篇还不脏库）；
+ *  ② 一个顺序（"按更新时间"）—— 核心的真序是 `pinned DESC, updated_at DESC, id`
+ *     （`notera-store/src/store.rs:1506`），照抄设计稿那句就是半句谎话，所以文案写的是
+ *     「置顶在前，按更新时间」，而**这句话声称的顺序由这一腿打在渲染后的行序上**：
+ *     已渲染的那一批里，出现过未置顶之后不许再出现置顶。配正对照（两种都得有，否则恒真）。
+ * 再加两条反向：搜索时这一格必须消失（那时屏幕上说的是「找到 N 条」），以及它跟 ㊶ 一样
+ * 在滚动区外面（滚列表时它的 top 不许动）。
+ */
+{
+  const c47 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p47 = await c47.newPage();
+  const rErrors = [];
+  p47.on('console', (m) => { if (m.type() === 'error') rErrors.push(m.text()); });
+  await p47.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p47.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  await p47.waitForTimeout(700);
+
+  const back = await cmd('list_notes', { limit: 200, offset: 0, trash: false });
+  const rows = Array.isArray(back) ? back : [];
+  const foot = await p47.evaluate(() => {
+    const el = document.querySelector('[data-testid="list-count"]');
+    const r = el?.getBoundingClientRect();
+    const first = document.querySelector('[data-testid^="note-row-"]');
+    return {
+      text: el?.innerText?.trim() ?? null,
+      h: r ? Math.round(r.height) : 0,
+      top: r ? Math.round(r.top) : -1,
+      rowTop: first ? Math.round(first.getBoundingClientRect().top) : -1,
+      rendered: Array.from(document.querySelectorAll('[data-testid^="note-row-"]')).map((n) => (n.getAttribute('data-testid') ?? '').replace('note-row-', '')),
+    };
+  });
+  check('㊷ 仪器自检：这一栏真画出了行，底部那一格也看得见（量到空栏时下面全是空判据）',
+    foot.rendered.length >= 2 && foot.h >= 12 && foot.text !== null, JSON.stringify({ rendered: foot.rendered.length, h: foot.h, text: foot.text }));
+  check('㊷ 屏幕上那句里的数字 = 核心 list_notes 真回的行数（这一栏没有下一页，所以说的是「共」）',
+    foot.text === `共 ${rows.length} 条 · 置顶在前，按更新时间`, JSON.stringify({ onScreen: foot.text, coreRows: rows.length }));
+
+  const pinnedSet = new Set(rows.filter((r) => r.pinned === true).map((r) => r.id));
+  const pflags = rows.map((r) => r.pinned === true);
+  const firstUnPayload = pflags.indexOf(false);
+  const corePrefix = rows.map((r) => r.id);
+  check('㊷ 正对照：载荷里置顶与未置顶两种都有（只有一种时下面两条顺序判据都是恒真的）',
+    pflags.includes(true) && firstUnPayload >= 0, JSON.stringify({ pinned: pinnedSet.size, total: rows.length }));
+  check('㊷ 屏幕那一批的 id 序列 = 载荷 id 序列的前缀（界面不许自己重排，虚拟滚动也不许挑着画 —— 那一格声称的序要能追到核心那一份）',
+    foot.rendered.length >= 2 && foot.rendered.every((id, i) => corePrefix[i] === id),
+    JSON.stringify({ onScreen: foot.rendered.slice(0, 4), core: corePrefix.slice(0, 4) }));
+  check('㊷ 那句"置顶在前"打在核心给的回上：出现过未置顶之后不许再有置顶（`store.rs:1506` 的 pinned DESC 那一截）',
+    firstUnPayload >= 0 && pflags.slice(firstUnPayload).every((f) => f === false), JSON.stringify({ firstUnPayload, head: pflags.slice(0, 6) }));
+
+  // 滚动区外面：滚它 150px，行要动而这一格不许动（与 ㊶ 同一个形状，两处都在外面是设计决定）。
+  await p47.evaluate(() => {
+    const vp = document.querySelector('.list-viewport');
+    if (vp) vp.scrollTop = 150;
+  });
+  await p47.waitForTimeout(200);
+  const footScrolled = await p47.evaluate(() => {
+    const el = document.querySelector('[data-testid="list-count"]');
+    const row = document.querySelector('[data-testid^="note-row-"]');
+    const vp = document.querySelector('.list-viewport');
+    return {
+      top: el ? Math.round(el.getBoundingClientRect().top) : -1,
+      rowTop: row ? Math.round(row.getBoundingClientRect().top) : -1,
+      scrollTop: vp ? Math.round(vp.scrollTop) : -1,
+      inVp: el && vp ? vp.contains(el) : null,
+    };
+  });
+  check('㊷ 这一格在列表滚动区外面：滚 150px 之后行的 top 动了、它的 top 一动不动',
+    footScrolled.scrollTop >= 100 && footScrolled.rowTop !== foot.rowTop && footScrolled.top === foot.top && footScrolled.inVp === false,
+    JSON.stringify({ footTop: [foot.top, footScrolled.top], rowTop: [foot.rowTop, footScrolled.rowTop], inVp: footScrolled.inVp }));
+
+  // 搜索那一格不许并存（两个数各说一件事）。
+  await p47.fill('[data-testid="search-input"]', '布局门禁夹具');
+  await p47.waitForSelector('[data-testid="search-summary"]', { timeout: 9000 }).catch(() => undefined);
+  await p47.waitForTimeout(300);
+  const whileSearching = await p47.evaluate(() => ({
+    foot: document.querySelector('[data-testid="list-count"]')?.innerText?.trim() ?? null,
+    tier: document.querySelector('[data-testid="search-summary"]')?.innerText?.trim() ?? null,
+  }));
+  check('㊷ 搜索时这一格消失：不许「共 N 条」和「找到 N 条」同时在屏幕上',
+    whileSearching.foot === null && whileSearching.tier !== null, JSON.stringify(whileSearching));
+  await p47.fill('[data-testid="search-input"]', '');
+  await p47.waitForTimeout(400);
+  const afterClear = await p47.evaluate(() => document.querySelector('[data-testid="list-count"]')?.innerText?.trim() ?? null);
+  check('㊷ 清空搜索之后那一格回得来（不是被搜索态永久吃掉）',
+    afterClear === `共 ${rows.length} 条 · 置顶在前，按更新时间`, JSON.stringify({ onScreen: afterClear }));
+  await p47.close();
+  await c47.close();
+
+  // 「已载入」那一格：注入恰好一页（200 行）⇒ 界面不许说「共 200 条」。
+  const c47b = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p47b = await c47b.newPage();
+  const fakeRows = Array.from({ length: 200 }, (_, i) => ({
+    id: `ffff0000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    title: `注入行 ${i}`,
+    summary: '这一行是注入进来的，只为造出"还有下一页"那一格',
+    pinned: false,
+    charCount: 9,
+    hasAttachment: false,
+    updatedAt: '2026-10-01T00:00:00Z',
+    deletedAt: null,
+    folderId: '00000000-0000-7000-8000-6e6f74657261',
+    folderName: '默认本',
+  }));
+  await p47b.route('**/cmd/list_notes', (route) => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(fakeRows),
+  }));
+  const bErrors = [];
+  p47b.on('console', (m) => { if (m.type() === 'error') bErrors.push(m.text()); });
+  await p47b.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p47b.waitForSelector('[data-testid="list-count"]', { timeout: 12000 }).catch(() => undefined);
+  await p47b.waitForTimeout(500);
+  const loaded = await p47b.evaluate(() => document.querySelector('[data-testid="list-count"]')?.innerText?.trim() ?? null);
+  check('㊷ 还有下一页那一格（注入满页 200 行）：屏幕上必须换成「已载入 200 条」，不许说「共」',
+    loaded === '已载入 200 条 · 置顶在前，按更新时间', JSON.stringify({ onScreen: loaded }));
+  check('㊷ 这一腿 console error 为零（注入的满页不许把界面弄出报错）', [...bErrors].length === 0, bErrors.slice(0, 3).join(' | '));
+  await p47b.screenshot({ path: `${OUT}/53-list-count-1440.png` });
+  await p47b.close();
+  await c47b.close();
+  notes.push(`     列表读数实测：核心 ${rows.length} 行（置顶 ${pinnedSet.size}）⇒ 屏幕「${foot.text}」；注入满页 ⇒「${loaded}」`);
+}
+
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
 async function purgeByTitle(prefix) {
   for (const trash of [false, true]) {
