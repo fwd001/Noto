@@ -114,6 +114,18 @@ const FIXTURE_MARKS = [
 for (const mark of FIXTURE_MARKS) await purgeByTitle(mark);
 
 /**
+ * 文件夹那一族也一样要扫：⑧ 那一腿每跑一次建一颗带当批戳的"牺牲品"（`布局夹具删 HHMMSS`），
+ * 崩在半路那一轮就永远留着它。残骸不是无害的 —— 编辑器那颗文件夹下拉的**选项数**变了，
+ * 浮层就变高，390 那一档"选项点得着"那条腿的落点跟着挪（今天这条红就是这么来的：
+ * 库里躺着 3 颗上一轮崩掉留下的牺牲品）。`布局夹具本/子` 是"复用而不是再造"的那两颗，不扫。
+ */
+{
+  const stale = flattenFolders(await cmd('list_folders', {})).filter((f) => (f.name ?? '').startsWith('布局夹具删'));
+  for (const f of stale) await cmd('delete_folder', { id: f.id });
+  if (stale.length > 0) console.log(`开局清掉 ${stale.length} 颗上一轮留下的夹具文件夹：${stale.map((f) => f.name).join('、')}`);
+}
+
+/**
  * ⑤ 那一腿要列表里**真的有一篇**，否则"那颗点可见"会退化成"什么都没量到"。
  * 夹具直接经真核心写入（不是往页面里塞 DOM）—— 列表那一行是核心给的。
  */
@@ -3254,6 +3266,93 @@ function contrastRatio(fg, bg) {
     JSON.stringify({ panelMarks, panel }));
   await p35b.close();
   await c35b.close();
+}
+
+/**
+ * ㊱ §3.1 那三个断点与两条栏宽，量的是**边界上那一像素**渲染成什么形状。
+ *
+ * 为什么单独一腿：以前的各腿都停在"某一档下长什么样"（900 / 1100 / 1440 / 1800 / 390 / 520），
+ * 没有一条量"档在哪儿分"。`layoutFor` 有实现、`--sidebar-w/--list-w` 在 tokens 里，
+ * 但把 1180 改成 1200 全仓不会红 —— 而 §3.1 那句"≥1180 三栏 / 820–1179 两栏 / <820 单栏"
+ * 是一整套布局承诺的地基。单测 `layoutBreakpoints.spec.ts` 钉的是数，这一腿钉的是**画出来的形状**
+ * （数对了但 CSS 那侧的 `[data-layout]` 规则写反，只有这里抓得到）。
+ */
+{
+  /** §3.1：边界那一像素归上一档。 */
+  const CASES = [
+    { w: 819, layout: 'one' },
+    { w: 820, layout: 'two' },
+    { w: 1179, layout: 'two' },
+    { w: 1180, layout: 'three' },
+  ];
+  for (const c of CASES) {
+    const ctx = await browser.newContext({ viewport: { width: c.w, height: 900 } });
+    const p = await ctx.newPage();
+    await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await p.waitForSelector('[data-testid="sidebar"]', { timeout: 15000 });
+    await p.waitForTimeout(500); // 抽屉那条 transform 是 220ms，读得太早量到的是过渡中间值
+    const geo = await p.evaluate(() => {
+      const rect = (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: Math.round(r.x), right: Math.round(r.right), w: Math.round(r.width) };
+      };
+      return {
+        layout: document.querySelector('.app-shell')?.getAttribute('data-layout') ?? null,
+        sidebar: rect('.pane--sidebar'),
+        list: rect('.pane--list'),
+        editor: rect('[data-testid="editor-pane"]'),
+        back: document.querySelector('[data-testid="back-to-list"]') !== null,
+      };
+    });
+    check(`㊱ ${c.w}px 这一档归 §3.1 的「${c.layout}」栏（壳上那位属性就是渲染依据）`,
+      geo.layout === c.layout, JSON.stringify(geo));
+    if (c.layout === 'three') {
+      check(`㊱ ${c.w}px 三栏：侧栏在流内、贴着左缘那一侧、宽 260，列表宽 340，编辑器占剩下的`,
+        // 侧栏的 x 不是 0 而是 4 —— 壳自己让出 `--sp-1` 那一圈内衬（§3.2 常驻结构那一条腿量的就是它），
+        // 所以"在流内"的判据是"紧靠左缘那一侧"，不是"坐标为零"。第一版写死 0 是我想当然。
+        geo.sidebar !== null && geo.sidebar.x >= 0 && geo.sidebar.x <= 8 && geo.sidebar.w === 260
+          && geo.list !== null && geo.list.w === 340
+          && geo.editor !== null && geo.editor.w > 100,
+        JSON.stringify(geo));
+      check(`㊱ ${c.w}px 三栏不该有「‹ 返回」（那是单栏那一档的出口）`, geo.back === false, JSON.stringify({ back: geo.back }));
+    } else {
+      check(`㊱ ${c.w}px ${c.layout} 栏：侧栏真的在屏幕外（抽屉没开时不许看得见），且 DOM 里还在`,
+        geo.sidebar !== null && geo.sidebar.right <= 0, JSON.stringify(geo.sidebar));
+      if (c.layout === 'two') {
+        check(`㊱ ${c.w}px 两栏：列表与编辑器同时在（"侧栏变抽屉"不等于"少一栏"）`,
+          geo.list !== null && geo.list.w > 100 && geo.editor !== null && geo.editor.w > 100,
+          JSON.stringify({ list: geo.list, editor: geo.editor }));
+        check(`㊱ ${c.w}px 两栏不该有「‹ 返回」`, geo.back === false, JSON.stringify({ back: geo.back }));
+      }
+    }
+    if (c.layout === 'one') {
+      // 单栏那一档要真的能"列表 ⇄ 编辑器"，并且 ‹ 是那条回去的路
+      await p.click('[data-testid^="note-row-"]').catch(() => {});
+      await p.waitForTimeout(600);
+      const opened = await p.evaluate(() => ({
+        list: document.querySelector('.pane--list') !== null,
+        editor: document.querySelector('[data-testid="editor-pane"]')?.getBoundingClientRect().width ?? 0,
+        back: document.querySelector('[data-testid="back-to-list"]') !== null,
+      }));
+      check(`㊱ ${c.w}px 单栏：打开一篇之后只剩编辑器，且「‹ 返回」出现在那儿`,
+        opened.list === false && opened.editor > 100 && opened.back === true, JSON.stringify(opened));
+      await p.click('[data-testid="back-to-list"]');
+      await p.waitForTimeout(600);
+      const back = await p.evaluate(() => ({
+        list: (document.querySelector('.pane--list')?.getBoundingClientRect().width ?? 0) > 100,
+        editor: document.querySelector('[data-testid="editor-pane"]') !== null,
+      }));
+      check(`㊱ ${c.w}px 单栏：那颗「‹」真的把界面带回列表（不是只隐藏编辑器）`,
+        back.list === true && back.editor === false, JSON.stringify(back));
+    }
+    if (c.w === 820 || c.w === 1180) {
+      await p.screenshot({ path: `${OUT}/48-breakpoints-${c.w}.png` });
+    }
+    await p.close();
+    await ctx.close();
+  }
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
