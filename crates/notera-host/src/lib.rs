@@ -884,7 +884,11 @@ impl App {
     }
 
     pub fn stats(&self) -> Result<StatsDto, CmdError> {
-        Ok(self.inner.store.stats()?.into())
+        let mut dto: StatsDto = self.inner.store.stats()?.into();
+        // 设备的身份取**存储层**那一份：记录信封上的 `device` 字段就是它（`meta.device_id`），
+        // 界面上说"这一台是谁"必须与"这些记录是谁写的"同源。
+        dto.device_id = self.inner.store.device_id().to_string();
+        Ok(dto)
     }
 
     /// 编辑器打开一篇笔记时，一次问清"这篇引用的每个对象，本机账上到底是什么状态"。
@@ -5098,6 +5102,7 @@ mod tests {
             [
                 "attachments",
                 "dbBytes",
+                "deviceId",
                 "folders",
                 "ftsEntries",
                 "inflightOps",
@@ -5115,6 +5120,25 @@ mod tests {
         );
         assert_eq!(got["notes"], 0);
         assert_eq!(got["notesInTrash"], 0);
+
+        // §6 那格「设备身份 —— 每条记录带 device_id，界面上从没出现过"是哪台设备改的"」的入口。
+        // 先钉"这一台是谁"发得出去、且**不是每次现生成**：界面上那句「这台设备：…」要是每次都换，
+        // 它就不是身份而是一串噪声，冲突/版本那一侧将来也没法比"对面是哪一台"。
+        let device = got["deviceId"].as_str().expect("deviceId 该是字符串");
+        assert!(
+            !device.is_empty(),
+            "deviceId 是空串：这台设备的身份没进线格式，界面无从说"
+        );
+        assert_eq!(
+            device,
+            app.config().device_id,
+            "stats 发的设备身份与配置里那份不一致：界面上说的「这一台」和记录信封上的 device 就不是同一台"
+        );
+        let again = commands::dispatch(&app, "stats", json!({})).unwrap();
+        assert_eq!(
+            again["deviceId"], got["deviceId"],
+            "同一本库两次问出两个设备身份：那是每次现生成的，不是身份"
+        );
     }
 
     /// 凭据这一格从 0.0.29 起才有分量：`hasCredential` 的意思是"系统凭据里真有一条"，

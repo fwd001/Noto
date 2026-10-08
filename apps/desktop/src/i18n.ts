@@ -286,6 +286,8 @@ const MESSAGES: Record<MessageKey, string> = {
   'settings.restoreConfirmOk': '排到下次启动恢复',
   'settings.report': '结果：{text}',
   'settings.storage': '本地占用 {size}',
+  // §6「设备身份」那一格的入口：这一串就是记录信封上的 device（不是昵称，也不许每次现取一个）。
+  'settings.device': '这台设备：{id}',
   'settings.notesCount': '{count} 条笔记 · {folders} 个文件夹',
   'settings.trashCount': '最近删除 {count} 条',
   'settings.attachments': '{count} 个附件',

@@ -541,6 +541,12 @@ function jumpTo(id: string): void {
               <dd>{{ t('settings.attachments', { count: formatNumber(settings.stats.attachments) }) }}</dd>
               <dd>{{ t('settings.storage', { size: formatBytes(settings.stats.dbBytes) }) }}</dd>
               <dd>{{ t('settings.inflight', { count: formatNumber(settings.stats.inflightOps) }) }}</dd>
+              <!-- §6「设备身份」：这一串就是记录信封上的 device，不是昵称。
+                   缺这一格（对面是个没升级的核心）时整行不出现 —— 宁可不说，
+                   也不说一句「这台设备：」后面空着，那等于宣称这台设备没有身份。 -->
+              <dd v-if="settings.stats.deviceId" data-testid="device-id">
+                {{ t('settings.device', { id: settings.stats.deviceId }) }}
+              </dd>
             </div>
           </dl>
         </div>

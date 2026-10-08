@@ -217,6 +217,13 @@ pub struct StatsDto {
     pub inflight_ops: u32,
     /// 这本库比本程序新（ADR-0012 只读闸门）。界面据此挂"请升级以编辑"的全局横幅。
     pub library_read_only: bool,
+    /// 这台设备的身份（`meta.device_id`，安装时生成一次、跨同步不变）。
+    ///
+    /// §6 那条「每条记录带 device_id，界面上从没出现过"是哪台设备改的"」的入口：
+    /// 先让"这一台是谁"上屏，冲突/版本那一侧的"对面是哪一台"才有可比的东西。
+    /// 取的是**存储层那一份**（记录信封上的 `device` 就是它），不是配置里的字符串 ——
+    /// 两者应当相等，这条不变量在 `lib.rs` 的 stats 契约测试里钉着。
+    pub device_id: String,
 }
 
 impl From<StoreStats> for StatsDto {
@@ -231,6 +238,8 @@ impl From<StoreStats> for StatsDto {
             search_generation: s.search_generation,
             inflight_ops: s.outbox_pending,
             library_read_only: s.library_read_only,
+            // 设备的身份不在存储层的统计数字里，由 `App::stats()` 那一层填（同源是 `meta.device_id`）。
+            device_id: String::new(),
         }
     }
 }

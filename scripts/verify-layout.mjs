@@ -4354,6 +4354,92 @@ function contrastRatio(fg, bg) {
   notes.push(`     同步排队数实测：7/2 ⇒「${seven.backlog}」；0/0 ⇒「${zero.backlog}」；没账户 ⇒ 不出现；缺键 ⇒ 不出现`);
 }
 
+/**
+ * ㊺ §6 最后一格「设备身份 —— 每条记录带 device_id，界面上从没出现过"是哪台设备改的"」的前半。
+ *
+ * 设置页那几行统计后面多了一行「这台设备：<uuid>」，读的是核心 `stats` 的 `deviceId`
+ * （`meta.device_id`，与记录信封上的 `device` 同源）。四个形状各一条，外加一条**顺带补的 §5 欠账**：
+ *  · 值与真桥发的一致（键名漂了就红 —— 这条边的旧事故是设置页三行恒为「—」）；
+ *  · 重开一次还是同一串（身份不是每次现取的）；
+ *  · **320 一档不许裁这串**（`el.scrollWidth - el.clientWidth` 必须是 0）。
+ *    两个量法上的坑都在这儿：① 390 那一档这行**本来就装得下**，判据在那儿是恒真的 —— 降到 320 才有牙
+ *    （探针：加 `white-space: nowrap` 之后 390 读 0、320 读 55）；
+ *    ② 别看"整页横向溢出"和"右缘越过视口"那两个 —— 探针实测它们**一动不动**
+ *    （溢出发生在控件自己的内容里，祖先不涨、页面不滚），留着只当读数。
+ *    另：§5 那行写着"文本裁切会在两个视口 × 六个界面上通扫"，而门禁里从来没有这么一遍（缺口 G95）；
+ *    这一条只量我自己加的这一行，不是那条承诺的执行者。
+ *  · 缺 `deviceId`（老核心）⇒ 那一行整条不出现，而同块的「本地占用」还在 ——
+ *    正对照防的就是"其实整块没渲染，所以看起来'没出现'是对的"（㊸ 那一刀踩过）。
+ */
+{
+  const DEVICE = '[data-testid="device-id"]';
+  const readDevice = (page) => page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    const r = el?.getBoundingClientRect() ?? null;
+    const dds = Array.from(document.querySelectorAll('.stats dd')).map((n) => n.innerText.trim());
+    return {
+      text: el?.innerText?.trim() ?? null,
+      clipped: el ? Math.round(el.scrollWidth - el.clientWidth) : -1,
+      // 溢出常常发生在祖先（卡片/整页）身上，量控件自己那对 scrollWidth 是看不见的；
+      // 而 innerText 也看不见裁剪 —— 要问的是"这一串有没有真的落在看得见的画面里"。
+      edgeOver: r ? Math.round(r.right - window.innerWidth) : -1,
+      pageOverflowX: Math.round(document.documentElement.scrollWidth - document.documentElement.clientWidth),
+      lines: el ? el.getClientRects().length : 0,
+      statsBlock: document.querySelector('.stats') !== null,
+      storageRow: dds.some((s) => s.includes('本地占用')),
+    };
+  }, DEVICE);
+
+  const core = await cmd('stats', {});
+  const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await c.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p.evaluate(() => document.querySelector('[data-testid="nav-settings"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  await p.waitForTimeout(900);
+  const wide = await readDevice(p);
+  check('㊺ 仪器自检（正对照）：设置页那几行统计真渲染了（否则"那一行没出现"只是整块没画）',
+    wide.statsBlock === true && wide.storageRow === true, JSON.stringify(wide));
+  check('㊺ 屏幕上那串 = 真核心 stats 发的 deviceId（键名漂了、或界面自己编了一串，都先红在这条）',
+    wide.text === `这台设备：${core.deviceId}` && typeof core.deviceId === 'string' && core.deviceId.length >= 8,
+    JSON.stringify({ onScreen: wide.text, core: core.deviceId }));
+
+  await p.reload({ waitUntil: 'networkidle' });
+  await p.evaluate(() => document.querySelector('[data-testid="nav-settings"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  await p.waitForTimeout(900);
+  const again = await readDevice(p);
+  check('㊺ 重开一次还是同一串：那是身份，不是每次现生成的噪声',
+    again.text === wide.text && again.text !== null, JSON.stringify({ first: wide.text, again: again.text }));
+
+  await p.setViewportSize({ width: 320, height: 844 });
+  await p.waitForTimeout(600);
+  const narrow = await readDevice(p);
+  check('㊺ 320 视口下这串 UUID 必须整条看得见：控件自己的横向溢出必须是 0，且整串还在文本里（§5 不许静默裁掉）',
+    narrow.text !== null
+      && narrow.text.includes(String(core.deviceId))
+      && narrow.clipped <= 1,
+    JSON.stringify({ clipped: narrow.clipped, edgeOver: narrow.edgeOver, pageOverflowX: narrow.pageOverflowX, lines: narrow.lines }));
+  await p.screenshot({ path: `${OUT}/56-device-id-320.png` });
+  await p.close();
+  await c.close();
+
+  const legacy = { notes: 5, notesInTrash: 0, folders: 2, attachments: 0, ftsEntries: 5, dbBytes: 4096, searchGeneration: 1, inflightOps: 0, libraryReadOnly: false };
+  const c2 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p2 = await c2.newPage();
+  await p2.route('**/cmd/stats', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(legacy) }));
+  await p2.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p2.evaluate(() => document.querySelector('[data-testid="nav-settings"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  await p2.waitForTimeout(900);
+  const old = await readDevice(p2);
+  check('㊺ 老核心缺 deviceId 那一格时整行不出现（不许画出「这台设备：」后面空着），而同块其余统计照旧在',
+    old.text === null && old.statsBlock === true && old.storageRow === true, JSON.stringify(old));
+  check('㊺ 这一腿 console error 为零', errs.length === 0, errs.slice(0, 3).join(' | '));
+  await p2.close();
+  await c2.close();
+  notes.push(`     设备身份实测：核心 ${(core.deviceId ?? '').slice(0, 13)}… ⇒ 屏幕「${wide.text}」；320 下自己溢出 ${narrow.clipped}px、占 ${narrow.lines} 行；老核心 ⇒ 不出现`);
+}
+
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
 async function purgeByTitle(prefix) {
   for (const trash of [false, true]) {
