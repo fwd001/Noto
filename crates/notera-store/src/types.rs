@@ -507,6 +507,23 @@ pub struct TombstoneRow {
     pub created_at: String,
 }
 
+/// 一条历史版本在界面上的**那一行**（§6「版本历史浏览」）。
+///
+/// 刻意**不带 doc**：一篇笔记的保留窗口是 200 行（DATA-MODEL §4.4），把 200 份正文一次发给界面
+/// 是这一格最容易写出来的性能事故 —— 列表只要"有哪一版、谁在什么时候改的、和现在是不是同一份"，
+/// 要看正文是点进去之后的另一次读。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RevisionMeta {
+    pub rev: i64,
+    /// `local` / `remote` / `merged` / `conflict_copy` / `restored`（迁移里的 CHECK）。
+    /// 注意 `restored` 说的是"从回收站回来"，**不是**"回到旧版本" —— 界面上那句话别说反。
+    pub origin: String,
+    pub device_id: String,
+    pub created_at: String,
+    /// 这一版的正文哈希。界面拿它与当前那一版比，才知道"这一版其实就是现在"。
+    pub content_hash: String,
+}
+
 /// 一次附件传输的最小信息（队列按体积排序，预算按字节数截断）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttachmentJob {

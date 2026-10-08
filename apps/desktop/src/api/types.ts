@@ -179,6 +179,35 @@ export interface AttachmentInventory {
   totals: AttachmentInventoryTotals;
 }
 
+/**
+ * §6「版本历史浏览」：这一篇的历史（列表只带元信息，正文按版另读一次）。
+ *
+ * 键名由 Rust 那条契约测试钉住（`tests/note_revisions.rs`）。两处刻意的"没有"：
+ *  · **没有 contentHash** —— 界面要的那句话是"这一版跟现在一样吗"，核心算完再发（§4.5：不许拿哈希代替内容）；
+ *  · **列表里没有正文** —— 保留窗口是每篇 200 行，一次列表发 200 份正文就是把这篇乘 200 端上桥。
+ */
+export interface NoteRevisionRow {
+  rev: number;
+  /** local | remote | merged | conflict_copy | restored（restored = 从回收站回来，不是退回旧版）。 */
+  origin: string;
+  deviceId: string;
+  createdAt: string;
+  sameAsNow: boolean;
+}
+
+export interface NoteRevisions {
+  rows: NoteRevisionRow[];
+  currentRev: number;
+  syncRev: number;
+  /** 还有更早的版本没列出来（一次上限 100 行）。 */
+  truncated: boolean;
+}
+
+export interface RevisionDoc {
+  rev: number;
+  doc: NoteDoc;
+}
+
 export interface Attachment {
   id: Uuid;
   noteId?: Uuid;
@@ -469,6 +498,10 @@ export const Commands = {
   attachmentStates: 'attachment_states',
   /** §6「附件管理器」：全库对象的账（只读一条 SQL；引用数含回收站里的笔记）。 */
   attachmentInventory: 'attachment_inventory',
+  /** §6「版本历史浏览」：这一篇的历史（只读、倒序、最多 100 行，不带正文）。 */
+  noteRevisions: 'note_revisions',
+  /** 某一版的正文（点开那一行才读，一次一发）。 */
+  noteRevision: 'note_revision',
   stats: 'stats',
   syncNow: 'sync_now',
   /** 同步的那几项事实（阶段、**上一次成功时间**、待处理数、开放冲突数、能否重试）。

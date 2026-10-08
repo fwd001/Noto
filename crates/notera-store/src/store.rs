@@ -1589,6 +1589,37 @@ impl Store {
         }
     }
 
+    /// 这一篇的历史（§6「版本历史浏览」）：**按 rev 倒序、只回元信息**，最多 `limit` 行。
+    ///
+    /// 为什么不在这里带正文：保留窗口是每篇 200 行（DATA-MODEL §4.4），一次列表把 200 份正文
+    /// 发出去 = 设置页那次 `stats` 直发的另一种形状 —— 界面上那一行只需要"哪一版、谁、何时"。
+    /// 倒序是刻意的：界面要说的是"最近这一版"，正序就得在前端再排一次（第二套真相）。
+    pub fn note_revisions(
+        &self,
+        note: &EntityId,
+        limit: usize,
+    ) -> Result<Vec<RevisionMeta>, StoreError> {
+        let note = note.clone();
+        let limit = limit.min(i64::MAX as usize) as i64;
+        self.with_read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT r.rev, r.origin, r.device_id, r.created_at, r.content_hash
+                   FROM note_revisions r WHERE r.note_id = ?1
+                  ORDER BY r.rev DESC LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![note.as_str(), limit], |r| {
+                Ok(RevisionMeta {
+                    rev: r.get(0)?,
+                    origin: r.get(1)?,
+                    device_id: r.get(2)?,
+                    created_at: r.get(3)?,
+                    content_hash: r.get(4)?,
+                })
+            })?;
+            rows.collect::<Result<_, _>>().map_err(StoreError::from)
+        })
+    }
+
     pub fn stats(&self) -> Result<StoreStats, StoreError> {
         let conn = self.read()?;
         let one = |sql: &str| -> Result<i64, StoreError> {

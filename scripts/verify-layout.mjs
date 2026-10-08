@@ -298,6 +298,11 @@ for (const width of WIDTHS) {
   const errors = [];
   const page = await browser.newPage({ viewport: { width, height: 950 } });
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text().slice(0, 160)); });
+  // 浏览器那句 "Failed to load resource: 400" 不带 URL —— 一条说不出是哪个请求的红要查一小时。
+  // 这里把 4xx 的 URL 一起收进同一个数组，判据不变（还是"为零"），红的时候直接指名。
+  page.on('response', (r) => {
+    if (r.status() >= 400) errors.push(`HTTP ${r.status()} ${r.url().replace(/^http:\/\/127\.0\.0\.1:17323\/cmd\//, 'cmd/')}`);
+  });
   page.on('pageerror', (e) => errors.push(String(e).slice(0, 160)));
   await page.goto(URL_BASE, { waitUntil: 'networkidle' });
   await page.waitForSelector('[data-testid="sidebar"]', { timeout: 15000 });
@@ -5102,6 +5107,207 @@ function contrastRatio(fg, bg) {
   check('㊿ 这一腿所有上下文 console error 为零', allErrs.length === 0, allErrs.slice(0, 3).join(' | '));
   await purgeByTitle(FIX);
   notes.push(`     附件账本实测：真核心 ${rtot?.count ?? '?'} 份 · ${rtot?.bytes ?? '?'} B（不在本机 ${rtot?.unavailableCount ?? '?'} 份、隔离 ${rtot?.quarantinedCount ?? '?'} 份）⇒ 注入 3/1/2 份三句各读各列 ⇒ 空态与故障态分得开 ⇒ 认不出的到期时刻不说天数`);
+}
+
+/**
+ * 51 §6 第 8 格「版本历史浏览」（缺口 G100）。
+ *
+ * 病的形状：每条笔记每个版本都留在本机（`note_revisions`，含来源与设备标记，保留窗口 200 行），
+ * 而界面上从来没有一处能说出"这篇有过几版、哪一版是谁改的、能不能退回那一版" ——
+ * 用户丢了内容只有一个出口：冲突收件箱（而那要求对面也改过）。
+ *
+ * 判据问的五件事，各自防一种坏实现：
+ *  · **列表行数与"就是现在"那一枚，都跟着真核心的那份账**（写死的样例、或压根不读核心的实现在这条红）；
+ *  · **点开旧版读到的是那一版的正文**（差分：夹具那两版文字刻意不同，读错一版立刻露出来）；
+ *  · **覆盖要两步**，而且覆盖之后屏幕上真的是那一版、核心里 rev 前进了、**旧的那几版一行都没少**
+ *    （回滚走的是 `edit_note` 那唯一一条写出口 —— 它不许是一条绕过 CAS 的旁路）；
+ *  · **只读的场合根本不渲染那颗覆盖按钮**（§2.5：能力不存在就别画，也不画灰着的）——
+ *    现场用"把这篇丢进回收站再打开"造出来；
+ *  · **界面不许说协议词汇**（origin 那五个词是账上的列名）+ 截断与读不到各有各的一句话。
+ */
+{
+  const MARK = '版本夹具';
+  await purgeByTitle(MARK);
+  const para = (id, text) => ({ id, type: 'paragraph', content: [{ text }] });
+  const V1 = `${MARK} ${stamp}`;
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: { v: 1, content: [para(`vb1${stamp}`, V1), para(`vb2${stamp}`, '第一版写的字')] },
+  });
+  const noteId = made?.id;
+  await cmd('edit_note', {
+    id: noteId,
+    doc: { v: 1, content: [para(`vb1${stamp}`, V1), para(`vb2${stamp}`, '第二版改过的字')] },
+    expectedRev: 1,
+  });
+  const core = await cmd('note_revisions', { id: noteId });
+  const coreRows = Array.isArray(core?.rows) ? core.rows : [];
+  const nowCount = coreRows.filter((r) => r.sameAsNow === true).length;
+
+  const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await c.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  await p.evaluate((id) => document.querySelector(`[data-testid="note-row-${id}"]`)
+    ?.dispatchEvent(new MouseEvent('click', { bubbles: true })), noteId);
+  await p.waitForSelector('[data-testid="editor-modified"]', { timeout: 9000 }).catch(() => undefined);
+  await p.waitForTimeout(500);
+  await p.locator('[data-testid="version-history"]').first().click({ timeout: 4000 }).catch(() => undefined);
+  await p.waitForTimeout(700);
+
+  const panel = () => p.evaluate(() => {
+    const box = document.querySelector('[data-testid="version-panel"]');
+    const text = (sel) => box?.querySelector(sel)?.textContent?.trim() ?? null;
+    return {
+      open: !!box,
+      rows: box ? Array.from(box.querySelectorAll('[data-testid^="version-row-"]')).map((el) => el.textContent?.trim() ?? '') : [],
+      nowTags: box ? box.querySelectorAll('[data-testid="version-now-tag"]').length : 0,
+      empty: text('[data-testid="version-empty"]'),
+      failed: text('[data-testid="version-failed"]'),
+      truncated: text('[data-testid="version-truncated"]'),
+      preview: text('[data-testid="version-preview"]'),
+      restore: text('[data-testid="version-restore"]'),
+      confirm: text('[data-testid="version-restore-confirm"]'),
+      all: box?.textContent ?? '',
+    };
+  });
+  const docText = () => p.evaluate(() => document.querySelector('[data-testid="editor-doc"]')?.innerText ?? '');
+  const shot = await panel();
+
+  check('51 仪器自检：编辑器角上那颗「版本」点得开，浮层里真的列出了行（不在的话下面全是空判据）',
+    shot.open === true && shot.rows.length > 0, JSON.stringify({ open: shot.open, rows: shot.rows.length }));
+  check('51 列表行数 = 真核心那份账的行数（写死的样例、或压根不读核心的实现在这条红）',
+    shot.rows.length === coreRows.length, JSON.stringify({ screen: shot.rows.length, core: coreRows.length, rows: shot.rows }));
+  check('51「就是现在」那一枚的个数 = 核心说 sameAsNow 的行数（多画是把旧版说成现在，少画是用户分不清看的是哪一版）',
+    shot.nowTags === nowCount && nowCount === 1, JSON.stringify({ screen: shot.nowTags, core: nowCount }));
+  check('51 界面不许说协议词汇（origin 那五个词是账上的列名，不是给人看的话）',
+      !/\b(local|remote|merged|conflict_copy|restored)\b/i.test(shot.all), shot.all.slice(0, 160));
+
+  // 点开**旧的那一版**：读到的必须是旧版的字，而不是现在这一版的。
+  await p.locator(`[data-testid="version-row-${coreRows[coreRows.length - 1].rev}"]`).first().click({ timeout: 4000 });
+  await p.waitForTimeout(900);
+  const old = await panel();
+  check('51 点开旧版 ⇒ 预览里是那一版的正文，不是现在这一版（夹具那两版文字刻意不同）',
+    old.preview?.includes('第一版写的字') === true && !old.preview.includes('第二版改过的字'),
+    JSON.stringify({ preview: old.preview?.slice(0, 120) }));
+  check('51 旧版那一行给得出"用这一版覆盖现在"这颗出口（§4.4 那条口径：终态要给能点的动作）',
+    old.restore !== null, JSON.stringify({ restore: old.restore, confirm: old.confirm }));
+
+  // 覆盖要两步：第一下只把确认摆出来，不许直接写。
+  await p.locator('[data-testid="version-restore"]').first().click({ timeout: 4000 });
+  await p.waitForTimeout(500);
+  const armed = await panel();
+  const midDoc = await docText();
+  check('51 第一下只出确认，正文一个字都不许动（"覆盖"是这一格里最不可逆的那一发）',
+    armed.confirm !== null && midDoc.includes('第二版改过的字'),
+    JSON.stringify({ confirm: armed.confirm !== null, doc: midDoc.slice(0, 80) }));
+
+  await p.locator('[data-testid="version-restore-yes"]').first().click({ timeout: 4000 });
+  await p.waitForFunction(() => document.querySelector('[data-testid="editor-doc"]')?.innerText?.includes('第一版写的字') === true,
+    null, { timeout: 8000, polling: 200 }).catch(() => undefined);
+  const afterCore = await cmd('note_revisions', { id: noteId });
+  const afterDoc = await docText();
+  const afterPanel = await panel();
+  const afterNowCount = (afterCore?.rows ?? []).filter((r) => r.sameAsNow === true).length;
+  check('51 确认之后屏幕上真的是那一版（编辑器跟着重读，不停在旧正文上）',
+    afterDoc.includes('第一版写的字') && !afterDoc.includes('第二版改过的字'), afterDoc.slice(0, 120));
+  check('51 覆盖之后浮层里那一排也跟着刷新：行数与"就是现在"的个数都对得上新的那份账',
+    afterPanel.rows.length === (afterCore?.rows?.length ?? -1) && afterPanel.nowTags === afterNowCount && afterNowCount >= 2,
+    JSON.stringify({ rows: afterPanel.rows.length, nowTags: afterPanel.nowTags, core: afterCore?.rows?.length, coreNow: afterNowCount }));
+  check('51 核心里 rev 前进了、而且旧的那几版一行都没少（回滚不是删除历史）',
+    afterCore?.currentRev === coreRows.length + 1 && afterCore?.rows?.length === coreRows.length + 1,
+    JSON.stringify({ before: coreRows.length, after: afterCore?.rows?.length, currentRev: afterCore?.currentRev }));
+  check('51 覆盖出来的那一行自己就是"现在"',
+    afterCore?.rows?.[0]?.sameAsNow === true && afterCore?.rows?.[0]?.rev === afterCore?.currentRev,
+    JSON.stringify(afterCore?.rows?.[0]));
+
+  // 只读那一档：把这篇丢进回收站再打开 ⇒ 覆盖那颗根本不该存在（§2.5，不画灰的）。
+  await cmd('delete_note', { id: noteId });
+  await p.evaluate(() => document.querySelector('[data-testid="nav-trash"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  await p.waitForTimeout(700);
+  await p.evaluate((id) => document.querySelector(`[data-testid="note-row-${id}"]`)
+    ?.dispatchEvent(new MouseEvent('click', { bubbles: true })), noteId);
+  await p.waitForTimeout(900);
+  await p.locator('[data-testid="version-history"]').first().click({ timeout: 4000 }).catch(() => undefined);
+  await p.waitForTimeout(600);
+  // 点的必须是**与现在不同**的那一版：同一份正文那一行本来就不该给覆盖按钮（M4 那一次变异
+  // 就是这么藏过去的 —— 覆盖之后 rev 1 与 rev 3 逐字节相同，点 rev 1 时两种实现都不画那颗）。
+  const older = (afterCore?.rows ?? []).find((r) => r.sameAsNow !== true);
+  await p.locator(`[data-testid="version-row-${older?.rev ?? 1}"]`).first().click({ timeout: 4000 }).catch(() => undefined);
+  await p.waitForTimeout(700);
+  const ro = await panel();
+  // 这一条**必须先证明预览真的打开了**：上一版只断"覆盖那颗不在"，而那一次连那一行都没点开
+  // （`previewing` 还是 null ⇒ 按钮本来就不该在）—— M4 摘掉 `canWrite` 那道门照样全绿，
+  // 就是这么被骗过去的。空判据比没有判据更糟（§45）。
+  check('51 仪器自检（回收站）：与现在不同的那一版点得开、预览读得出来，才轮到问那颗按钮在不在',
+    ro.rows.length > 0 && ro.preview !== null && older !== undefined,
+    JSON.stringify({ rows: ro.rows.length, older: older?.rev, preview: ro.preview?.slice(0, 60) ?? null }));
+  check('51 在回收站里：历史照样读得到，但"覆盖现在"那颗根本不渲染（只读不是错误，也不该给一个点不动的按钮）',
+    ro.rows.length > 0 && ro.restore === null, JSON.stringify({ rows: ro.rows.length, restore: ro.restore }));
+  await p.close();
+  await c.close();
+
+  // 两种"没有"与截断：注入三种形状，各自一句话（同一套手法见 ㊿）。
+  const inject = async (label, fulfill) => {
+    const ic = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const ip = await ic.newPage();
+    const ie = [];
+    ip.on('console', (m) => { if (m.type() === 'error') ie.push(m.text()); });
+    await ip.route('**/cmd/note_revisions', fulfill);
+    await ip.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await ip.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+    await ip.evaluate((id) => document.querySelector(`[data-testid="note-row-${id}"]`)
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true })), noteId);
+    await ip.waitForTimeout(900);
+    await ip.locator('[data-testid="version-history"]').first().click({ timeout: 4000 }).catch(() => undefined);
+    await ip.waitForTimeout(700);
+    const got = await ip.evaluate(() => {
+      const box = document.querySelector('[data-testid="version-panel"]');
+      const text = (sel) => box?.querySelector(sel)?.textContent?.trim() ?? null;
+      return {
+        rows: box ? box.querySelectorAll('[data-testid^="version-row-"]').length : 0,
+        empty: text('[data-testid="version-empty"]'),
+        failed: text('[data-testid="version-failed"]'),
+        truncated: text('[data-testid="version-truncated"]'),
+      };
+    });
+    await ip.close();
+    await ic.close();
+    return { got, ie, label };
+  };
+
+  {
+    const { got, ie } = await inject('truncated', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        rows: [{ rev: 7, origin: 'local', deviceId: 'd', createdAt: '2026-10-08T09:00:00Z', sameAsNow: true }],
+        currentRev: 7, syncRev: 7, truncated: true,
+      }),
+    }));
+    check('51 被上限截断要说出来（不许让更早的那些版本静默消失）',
+      got.truncated !== null && /100 版/.test(got.truncated), JSON.stringify(got));
+    errs.push(...ie.filter((m) => !/Failed to load resource/i.test(m)));
+  }
+  {
+    const { got } = await inject('failed', (route) => route.fulfill({ status: 500, body: 'boom' }));
+    check('51 读不到 ⇒ 说"这份历史没能取到"，不许说成"这篇还没有第二个版本"（把故障说成空）',
+      got.failed !== null && /没能/.test(got.failed) && got.empty === null, JSON.stringify(got));
+  }
+  {
+    const { got } = await inject('empty', (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ rows: [], currentRev: 0, syncRev: 0, truncated: false }),
+    }));
+    check('51 扫过且为空 ⇒ 说"还没有第二个版本"，且没有那句"没能取到"',
+      got.empty !== null && got.failed === null && got.rows === 0, JSON.stringify(got));
+  }
+
+  check('51 这一腿 console error 为零（注入那几法的资源错误除外）', errs.length === 0, errs.slice(0, 3).join(' | '));
+  await purgeByTitle(MARK);
+  notes.push(`     版本历史实测：真核心 ${coreRows.length} 版（${nowCount} 行说"就是现在"）⇒ 点开旧版读到的是那一版的正文 ⇒ 两步覆盖之后屏幕上真的是那一版、rev 前进到 ${afterCore?.currentRev}、历史 ${afterCore?.rows?.length} 行一行没少 ⇒ 回收站里那颗覆盖按钮不渲染 ⇒ 截断/读不到/为空三句话分得开`);
 }
 
 /**

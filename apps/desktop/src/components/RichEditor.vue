@@ -41,6 +41,7 @@ import {
 } from '../editor/model';
 import { useEditorStore } from '../stores/editor';
 import { formatModified } from '../util/format';
+import VersionHistory from './VersionHistory.vue';
 import { useSettingsStore } from '../stores/settings';
 import { useShellStore } from '../stores/shell';
 import { useToastStore } from '../stores/toasts';
@@ -916,6 +917,8 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
         <span class="text-sm">{{ store.saveLabel }}</span>
       </span>
       <span v-if="modifiedAt" class="text-sm text-muted" data-testid="editor-modified">{{ t('editor.modifiedAt', { time: modifiedAt }) }}</span>
+      <!-- §6「版本历史浏览」：紧挨着那行"改于"，因为那行本来就在说"这是哪一版"。 -->
+      <VersionHistory v-if="store.noteId" :note-id="store.noteId" />
       <button v-if="!readOnly && currentBlock" type="button" class="btn btn--quiet text-sm" :title="t('editor.deleteBlock')" @click="onDeleteBlock">
         {{ t('editor.deleteBlock') }}
       </button>

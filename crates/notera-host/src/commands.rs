@@ -228,6 +228,48 @@ pub struct AttachmentInventoryDto {
     pub totals: AttachmentTotalsDto,
 }
 
+/// §6「版本历史」列表里的一行（正文不在这里 —— 见 `note_revision`）。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevisionRowDto {
+    pub rev: i64,
+    /// `local` / `remote` / `merged` / `conflict_copy` / `restored`。
+    /// **`restored` 说的是"从回收站回来"**，不是"回到旧版本" —— 界面那句话别说反。
+    pub origin: String,
+    pub device_id: String,
+    pub created_at: String,
+    /// 这一版的正文与当前那一版逐字节相同。由核心判 —— `content_hash` 一个字都不过桥
+    /// （§4.5：绝不能用一串哈希代替内容）。
+    pub same_as_now: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteRevisionsDto {
+    pub rows: Vec<RevisionRowDto>,
+    /// 本机认为的最新一版（`notes.rev`）。
+    pub current_rev: i64,
+    /// 双方都确认过的那一版（`notes.sync_rev`）。两者不等 = 本机还有个头部没公告。
+    pub sync_rev: i64,
+    /// 列表被上限截断：还有更早的版本没列出来，界面要说出这一句。
+    pub truncated: bool,
+}
+
+/// 某一版的正文（点开列表里那一行时才读，一次一发）。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevisionDocDto {
+    pub rev: u64,
+    pub doc: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteRevisionCmd {
+    pub id: String,
+    pub rev: u64,
+}
+
 /// 库统计的对外视图。
 ///
 /// 这条边以前是 `serde_json::to_value(StoreStats)` 直发 —— 存储层的字段名（`notes_trash`、
@@ -738,6 +780,18 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
             j(app.attachment_states(&c.shas)?)
         }
         "attachment_inventory" => j(app.attachment_inventory()?),
+        // §6「版本历史浏览」：列表与单版正文都是只读 —— 覆盖动作走已有的 `edit_note`
+        // （CAS + 唯一写出口），不在这里另开一条写路径。
+        "note_revisions" => {
+            let c: IdCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            j(app.note_revisions(&c.id)?)
+        }
+        "note_revision" => {
+            let c: NoteRevisionCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            j(app.note_revision(&c.id, c.rev)?)
+        }
         // 用户在坏图占位上点「重试取回」。为什么是一条命令而不是后台自己再试一次：
         // 后台对 `absent`/`error` 收手是**刻意的**（§27/§28 那两条保证句要的就是不每 20 s 空转），
         // 而收手的代价是那一格永远不会自愈。重开它的凭据只能是用户的一次意图。

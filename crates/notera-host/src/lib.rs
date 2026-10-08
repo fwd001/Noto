@@ -17,7 +17,8 @@ pub mod platform;
 use commands::{
     AccountDraftCmd, AccountDto, AttachmentInventoryDto, AttachmentRowDto, AttachmentStateDto,
     AttachmentTotalsDto, CmdError, ConflictDto, DivergenceHeldDto, ExportCmd, FolderDto, ImportCmd,
-    ListNotesCmd, NoteDto, NoteListDto, SearchCmd, SearchHitDto, StatsDto, SyncStatusDto,
+    ListNotesCmd, NoteDto, NoteListDto, NoteRevisionsDto, RevisionDocDto, RevisionRowDto,
+    SearchCmd, SearchHitDto, StatsDto, SyncStatusDto,
 };
 use notera_config::{
     AccountConfig, AppConfig, ConfigRepository, ProxyMode, ProxyProfile, TlsPolicyKind,
@@ -918,6 +919,11 @@ impl App {
     /// 与账本上那句"最早哪天可释放"必须算同一段时间，两处各写一个 30 就是两本账。
     pub const QUARANTINE_GRACE_DAYS: i64 = 30;
 
+    /// 版本列表一次最多回多少行。保留窗口是"最近 200 行 + `rev ≥ sync_rev` 的永不删"
+    /// （DATA-MODEL §4.4），所以一篇长期不同步的笔记**可以超过 200 行** —— 这一格必须有上限，
+    /// 而且截断了要说出来（`truncated`），不许悄悄把前面那些版本变没。
+    pub const REVISION_PAGE: usize = 100;
+
     /// §6「附件管理器」那一格的账：**只读、一条 SQL、不下载任何字节**。
     ///
     /// 为什么不让界面自己拼：`attachment_states` 是"问一批答一批"（编辑器按篇问），
@@ -977,6 +983,63 @@ impl App {
             });
         }
         Ok(AttachmentInventoryDto { rows, totals })
+    }
+
+    /// §6「版本历史浏览」：这一篇的历史（DATA-MODEL §4.4 的保留窗口内，倒序）。
+    ///
+    /// 两处刻意的取舍：
+    ///  · **`content_hash` 不过桥**。界面要的是"这一版跟现在一样吗"，那就由核心把这句话算完
+    ///    （`sameAsNow`）—— §4.5 那句"绝不能用一串哈希代替内容"管的就是这一族。
+    ///  · **`currentRev` 与 `syncRev` 一起给**。"这一版是不是已经传上去了"是界面上第二句话，
+    ///    而它只能由核心判（`rev != sync_rev` = 本机还有个头部没公告）；前端自己数就是第二套真相。
+    pub fn note_revisions(&self, id: &str) -> Result<NoteRevisionsDto, CmdError> {
+        let eid = EntityId::parse(id).map_err(|_| CmdError::of("bad_id", false))?;
+        // 这一篇不在了 ⇒ 回一份空账，而不是 400。这是**挂载时的背景读**：编辑器可能正指向一个
+        // 刚在别处被删掉的 id（`get_note` 对同一种情形回的是 null 而不是错），这里发 400
+        // 只会变成界面上一个没人看得懂的红色请求。形状错误（id 不合法）仍然当场拒。
+        let note = match self.inner.store.get_note(&eid)? {
+            Some(n) => n,
+            None => {
+                return Ok(NoteRevisionsDto {
+                    rows: Vec::new(),
+                    current_rev: 0,
+                    sync_rev: 0,
+                    truncated: false,
+                })
+            }
+        };
+        let metas = self.inner.store.note_revisions(&eid, Self::REVISION_PAGE)?;
+        let listed = metas.len();
+        Ok(NoteRevisionsDto {
+            rows: metas
+                .into_iter()
+                .map(|m| RevisionRowDto {
+                    rev: m.rev,
+                    origin: m.origin,
+                    device_id: m.device_id,
+                    created_at: m.created_at,
+                    same_as_now: m.content_hash == note.content_hash,
+                })
+                .collect(),
+            current_rev: note.rev.get() as i64,
+            sync_rev: note.sync_rev.get() as i64,
+            truncated: listed >= Self::REVISION_PAGE,
+        })
+    }
+
+    /// 某一版的正文（点开列表里那一行时才读，一次一发）。
+    ///
+    /// 没有这一版 ⇒ `not_found`，而不是回一个空 doc：界面拿空 doc 会画出"这一版什么都没写"，
+    /// 而事实是"这一版已经不在了"（GC 收走了），两句话在用户那儿完全不同。
+    pub fn note_revision(&self, id: &str, rev: u64) -> Result<RevisionDocDto, CmdError> {
+        let eid = EntityId::parse(id).map_err(|_| CmdError::of("bad_id", false))?;
+        let want = Rev(rev);
+        let doc = self
+            .inner
+            .store
+            .revision_doc(&eid, want)?
+            .ok_or_else(|| CmdError::of("not_found", true))?;
+        Ok(RevisionDocDto { rev, doc })
     }
 
     pub fn open_conflicts(&self) -> Result<Vec<ConflictDto>, CmdError> {
