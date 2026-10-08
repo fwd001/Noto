@@ -519,3 +519,24 @@ pub struct AttachmentJob {
     /// 于是"服务器上有同名对象所以跳过"那个省流量的例外对它不成立 —— 见 SYNC-PROTOCOL §13。
     pub remote_state: String,
 }
+
+/// 设置页「附件管理器」那一格的一行：这台设备上**一份对象**的账（全表，一次读）。
+///
+/// 为什么是命名字段而不是元组：这六个数各自来自一列，界面上三句话分别读其中三个
+/// （"不在这台设备上"看 `local_state`、"在隔离区"看 `quarantined_at`、"几篇在用"看 `refs`）。
+/// 写成 `(String, i64, String, String, Option<String>, i64)` 之后，哪一位是哪个意思
+/// 只能靠数位置 —— 数错一位就是一句语法正确、数字错误的实话。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttachmentInventoryRow {
+    pub sha256: String,
+    /// 账上登记的字节数（`size` 列）。只有账没有字节的那些行也带着它 —— 那是对面同步
+    /// 过来的一张图"应该有多大"，界面上"这几份一共 N MB"读的就是这一列。
+    pub size: i64,
+    pub local_state: String,
+    pub remote_state: String,
+    /// 进了 GC 隔离区的那一行才有；值是**隔离发生**的时刻，不是到期时刻。
+    /// 宽限期（几天后可释放）是 host 的策略，存储层不复制一份 30 天。
+    pub quarantined_at: Option<String>,
+    /// `COUNT(DISTINCT note_id)`，且**含回收站里的笔记**（笔记行没真删，它的链接就还在）。
+    pub refs: i64,
+}

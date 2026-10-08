@@ -960,6 +960,38 @@ impl Store {
         .unwrap_or_else(|| ("absent".into(), "absent".into()))
     }
 
+    /// 全库附件的账（§6「附件管理器」那一格要的那张表）。
+    ///
+    /// 为什么要有这一条而不是让界面去拼：`attachment_states` 是**问一批答一批**（编辑器打开
+    /// 一篇笔记时用），而"这台机器上到底有多少份字节、缺多少、隔离区里压着多少"要的是全表；
+    /// 前端拿 sha 列表自己数就是第二份真相（`stats` 只有总数与总字节，没有缺/隔离的拆分）。
+    ///
+    /// `refs` 用 `COUNT(DISTINCT note_id)` 且**不过滤 `notes.deleted_at`** —— 回收站里的笔记行
+    /// 还在，它的链接也还在，那份字节就还不能算"没人要"（`syncml.rs` 的 GC 判据同一口径）。
+    /// `attachments.deleted_at` 原样放进 `quarantined_at`：宽限期怎么算、还剩几天是 host 的策略
+    /// （`Timestamp` 在那儿），存储层不自己复制一份 30 天。
+    pub fn attachment_inventory(&self) -> Result<Vec<AttachmentInventoryRow>, StoreError> {
+        self.with_read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT a.sha256, a.size, a.local_state, a.remote_state, a.deleted_at,
+                        (SELECT COUNT(DISTINCT na.note_id) FROM note_attachments na
+                          WHERE na.sha256 = a.sha256)
+                   FROM attachments a ORDER BY a.sha256",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok(AttachmentInventoryRow {
+                    sha256: r.get(0)?,
+                    size: r.get(1)?,
+                    local_state: r.get(2)?,
+                    remote_state: r.get(3)?,
+                    quarantined_at: r.get(4)?,
+                    refs: r.get(5)?,
+                })
+            })?;
+            rows.collect::<Result<_, _>>().map_err(StoreError::from)
+        })
+    }
+
     /// 一次问清一批对象**在这台设备上**的账（编辑器打开一篇笔记时用，见 host 的
     /// `attachment_states`）。为什么要有批量这一条：单 sha 版要开 N 个只读事务，
     /// 而"打开一篇有几十张图的笔记"正是它最常被调到的场景。

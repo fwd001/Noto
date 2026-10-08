@@ -142,6 +142,43 @@ export interface AttachmentLedgerState {
   remoteState: string;
 }
 
+/**
+ * §6「附件管理器」那一格：这台设备上**全部**对象的账（只读、不下载任何字节）。
+ *
+ * 键名由 Rust 那条契约测试钉住（`tests/attachment_inventory.rs`）—— 这一格有六个数，
+ * 数错一个界面就多说一句假话，所以界面**只搬运不加工**：拆账的 SQL 在存储层，
+ * "隔离"与"本机没字节"两件事各自来自各自的列。
+ */
+export interface AttachmentInventoryRow {
+  sha256: string;
+  bytes: number;
+  /** missing | partial | available | error（DATA-MODEL §8）。 */
+  localState: string;
+  /** unknown | absent | present | error。 */
+  remoteState: string;
+  /** 有几篇笔记引用它（含回收站里那些 —— 链接还在就还不能算没人要）。 */
+  refs: number;
+  /** 隔离区里那份从什么时候起**有资格**被回收；不在隔离区、或时间源读不出来 ⇒ `null`。
+   *  到期不等于已经离开磁盘：不可逆那一步还要等一轮同步并对远端确认一次。 */
+  quarantinedUntil: string | null;
+}
+
+export interface AttachmentInventoryTotals {
+  count: number;
+  bytes: number;
+  /** 字节不在这台设备上的份数与字节（`localState != 'available'`）。 */
+  unavailableCount: number;
+  unavailableBytes: number;
+  /** 在隔离区里的份数与字节：过了宽限期之后**可以**释放多少（没说已经释放）。 */
+  quarantinedCount: number;
+  quarantinedBytes: number;
+}
+
+export interface AttachmentInventory {
+  rows: AttachmentInventoryRow[];
+  totals: AttachmentInventoryTotals;
+}
+
 export interface Attachment {
   id: Uuid;
   noteId?: Uuid;
@@ -430,6 +467,8 @@ export const Commands = {
   /** 读侧批量问账：这篇笔记引用的每个对象，本机到底有没有可用字节。只读账、不下载字节 ——
    *  一颗芯片的显示判据不该触发一次 32 MiB 的读盘。 */
   attachmentStates: 'attachment_states',
+  /** §6「附件管理器」：全库对象的账（只读一条 SQL；引用数含回收站里的笔记）。 */
+  attachmentInventory: 'attachment_inventory',
   stats: 'stats',
   syncNow: 'sync_now',
   /** 同步的那几项事实（阶段、**上一次成功时间**、待处理数、开放冲突数、能否重试）。

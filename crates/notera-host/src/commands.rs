@@ -194,6 +194,40 @@ pub struct AttachmentStateDto {
     pub remote_state: String,
 }
 
+/// §6「附件管理器」那一格的一行：一份对象在这台设备与服务器上的账。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentRowDto {
+    pub sha256: String,
+    pub bytes: i64,
+    pub local_state: String,
+    pub remote_state: String,
+    /// 有几条笔记引用它 —— **含回收站里的那些**（链接还在就还不能算没人要，与 GC 同一口径）。
+    pub refs: i64,
+    /// 在隔离区里的那一份什么时候到期可释放；不在隔离区、或时间源读不出来时是 `null`。
+    pub quarantined_until: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentTotalsDto {
+    pub count: i64,
+    pub bytes: i64,
+    /// 字节**不在这台设备上**的份数与字节（`local_state != 'available'`）。
+    pub unavailable_count: i64,
+    pub unavailable_bytes: i64,
+    /// 隔离区里的份数与字节：过了宽限期之后**可以**释放多少（没说已释放）。
+    pub quarantined_count: i64,
+    pub quarantined_bytes: i64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentInventoryDto {
+    pub rows: Vec<AttachmentRowDto>,
+    pub totals: AttachmentTotalsDto,
+}
+
 /// 库统计的对外视图。
 ///
 /// 这条边以前是 `serde_json::to_value(StoreStats)` 直发 —— 存储层的字段名（`notes_trash`、
@@ -703,6 +737,7 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
                 serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.attachment_states(&c.shas)?)
         }
+        "attachment_inventory" => j(app.attachment_inventory()?),
         // 用户在坏图占位上点「重试取回」。为什么是一条命令而不是后台自己再试一次：
         // 后台对 `absent`/`error` 收手是**刻意的**（§27/§28 那两条保证句要的就是不每 20 s 空转），
         // 而收手的代价是那一格永远不会自愈。重开它的凭据只能是用户的一次意图。

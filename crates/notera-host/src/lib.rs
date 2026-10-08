@@ -15,17 +15,17 @@ pub mod devserver;
 pub mod platform;
 
 use commands::{
-    AccountDraftCmd, AccountDto, AttachmentStateDto, CmdError, ConflictDto, DivergenceHeldDto,
-    ExportCmd, FolderDto, ImportCmd, ListNotesCmd, NoteDto, NoteListDto, SearchCmd, SearchHitDto,
-    StatsDto, SyncStatusDto,
+    AccountDraftCmd, AccountDto, AttachmentInventoryDto, AttachmentRowDto, AttachmentStateDto,
+    AttachmentTotalsDto, CmdError, ConflictDto, DivergenceHeldDto, ExportCmd, FolderDto, ImportCmd,
+    ListNotesCmd, NoteDto, NoteListDto, SearchCmd, SearchHitDto, StatsDto, SyncStatusDto,
 };
 use notera_config::{
     AccountConfig, AppConfig, ConfigRepository, ProxyMode, ProxyProfile, TlsPolicyKind,
 };
 use notera_core::{Clock, DeviceId, EntityId, EntityKind, Rev, SystemClock, Timestamp};
 use notera_store::{
-    ApplyOp as StoreApplyOp, ConflictRow, Folder, MatchKind, Note, NoteListRow, NoteQuery,
-    SearchPath, Store, StoreError,
+    ApplyOp as StoreApplyOp, AttachmentInventoryRow, ConflictRow, Folder, MatchKind, Note,
+    NoteListRow, NoteQuery, SearchPath, Store, StoreError,
 };
 use notera_sync::plan::{Decision, LocalView, RemoteView};
 use notera_sync::{ApplyOp, EngineConfig, LocalError, LocalPort, Phase, RoundStats, SyncEvent};
@@ -912,6 +912,71 @@ impl App {
                 remote_state,
             })
             .collect())
+    }
+
+    /// 隔离区的宽限期（天）。**只有这一处**定义这个数：GC 的 cutoff（`quarantine_cutoff`）
+    /// 与账本上那句"最早哪天可释放"必须算同一段时间，两处各写一个 30 就是两本账。
+    pub const QUARANTINE_GRACE_DAYS: i64 = 30;
+
+    /// §6「附件管理器」那一格的账：**只读、一条 SQL、不下载任何字节**。
+    ///
+    /// 为什么不让界面自己拼：`attachment_states` 是"问一批答一批"（编辑器按篇问），
+    /// `stats` 只有总数与总字节，而这一格要的是"缺多少 / 隔离区压着多少 / 最早哪天可释放"。
+    /// 前端拿 sha 列表去数就是第二份真相（引用数尤其：回收站里的笔记也算引用，
+    /// 那条口径只有存储层的 SQL 说得准）。
+    ///
+    /// 时间源读不出来时 `quarantinedUntil` 给 `null` —— 界面就不说"还剩几天"。
+    /// 这一族的方向从来是"宁可不报，不要报一个假的"（GC 那侧同一件事是"不删"）。
+    pub fn attachment_inventory(&self) -> Result<AttachmentInventoryDto, CmdError> {
+        let now_ms = Timestamp::parse(&self.inner.store.now()).and_then(|t| t.as_millis());
+        let grace_ms = Self::QUARANTINE_GRACE_DAYS * 86_400_000;
+        let mut totals = AttachmentTotalsDto {
+            count: 0,
+            bytes: 0,
+            unavailable_count: 0,
+            unavailable_bytes: 0,
+            quarantined_count: 0,
+            quarantined_bytes: 0,
+        };
+        let mut rows = Vec::new();
+        for row in self.inner.store.attachment_inventory()? {
+            let AttachmentInventoryRow {
+                sha256,
+                size: bytes,
+                local_state,
+                remote_state,
+                quarantined_at: deleted_at,
+                refs,
+            } = row;
+            let quarantined_until = match (deleted_at.as_deref(), now_ms) {
+                (Some(deleted), Some(_)) => Timestamp::parse(deleted)
+                    .and_then(|t| t.as_millis())
+                    .map(|ms| Timestamp::from_millis(ms + grace_ms).as_str().to_string()),
+                _ => None,
+            };
+            totals.count += 1;
+            totals.bytes += bytes;
+            if local_state != "available" {
+                totals.unavailable_count += 1;
+                totals.unavailable_bytes += bytes;
+            }
+            if deleted_at.is_some() {
+                totals.quarantined_count += 1;
+                totals.quarantined_bytes += bytes;
+                // 两个数**各自来自各自的列**，这里不凭"隔离 ⇒ 本机没字节"去推断：
+                // 那两层是两件事（`mark_attachments_quarantined` 会顺手写 missing，但账不能这么串），
+                // 界面要分开说，合起来说就会有一句对不上。
+            }
+            rows.push(AttachmentRowDto {
+                sha256,
+                bytes,
+                local_state,
+                remote_state,
+                refs,
+                quarantined_until,
+            });
+        }
+        Ok(AttachmentInventoryDto { rows, totals })
     }
 
     pub fn open_conflicts(&self) -> Result<Vec<ConflictDto>, CmdError> {
@@ -2634,10 +2699,9 @@ impl App {
     /// 30 天这个数不是抠出来的：它要盖住"用户清空回收站 → 过一阵才发现要找回那张图"的实际
     /// 尺度，又不至于让一个纯本机的目录无限涨。测试不依赖它（cutoff 由调用方给）。
     fn quarantine_cutoff(&self) -> String {
-        const GRACE_DAYS: i64 = 30;
         let ms = notera_core::Timestamp::parse(&self.inner.store.now())
             .and_then(|t| t.as_millis())
-            .map(|v| v - GRACE_DAYS * 86_400_000);
+            .map(|v| v - Self::QUARANTINE_GRACE_DAYS * 86_400_000);
         match ms {
             Some(v) => notera_core::Timestamp::from_millis(v).as_str().to_string(),
             None => "0000-01-01T00:00:00.000Z".to_string(),

@@ -287,6 +287,14 @@ const MESSAGES: Record<MessageKey, string> = {
   'settings.storage': '本地占用 {size}',
   // §6「设备身份」那一格的入口：这一串就是记录信封上的 device（不是昵称，也不许每次现取一个）。
   'settings.device': '这台设备：{id}',
+  // §6「附件管理器」：三个数各说各的事，谁也不覆盖谁（缺字节 ≠ 在隔离区，两本账来源不同列）。
+  'settings.attachmentLedger': '附件',
+  'settings.attachmentSummary': '这台设备上有 {count} 份附件 · 共 {size}',
+  'settings.attachmentAbsent': '另有 {count} 份（{size}）的字节不在这台设备上 —— 在笔记里点开那张图可以重试取回',
+  'settings.attachmentQuarantine': '{count} 份已不再被任何笔记引用，正放在隔离区（{size}）；最早 {when}之后可以回收',
+  'settings.attachmentDays': '{n} 天',
+  'settings.attachmentEmpty': '这台设备还没有附件',
+  'settings.attachmentFailed': '这份清单没能取到',
   'settings.notesCount': '{count} 条笔记 · {folders} 个文件夹',
   'settings.trashCount': '最近删除 {count} 条',
   'settings.attachments': '{count} 个附件',

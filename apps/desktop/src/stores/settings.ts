@@ -13,9 +13,11 @@ import {
   type RestoreOutcome,
   type EraseOutcome,
   type StoreStats,
+  type AttachmentInventory,
 } from '../api/types';
 import { draftFromWire, toWire } from '../sync/accountWire';
 import { asBridgeError } from '../util/errors';
+import { daysUntil } from '../util/format';
 import { localCaps, normalizeCaps, type PlatformCaps } from '../platform/caps';
 import { useShellStore } from './shell';
 import { useToastStore } from './toasts';
@@ -447,6 +449,38 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   /**
+   * §6「附件管理器」：这台设备上**全部**对象的账（一次读、只搬不加工）。
+   *
+   * 三个数分开摆是有原因的：「字节不在这台设备上」与「在隔离区里」是两本账
+   * （GC 隔离那一步会顺手把 `localState` 写成 missing，但两件事的来源列不同），
+   * 合成一句就会出现"份数对不上"的那类假话。拆账的 SQL 在存储层，引用数含回收站里的笔记。
+   * 失败口径与备份清单同一套：清掉旧数据并说"没能取到"，不许留着上一次那份。
+   */
+  const attachmentInventory = ref<AttachmentInventory | null>(null);
+  const attachmentsFailed = ref(false);
+  /** 最早那一份隔离的字节还剩几天（没有任何**说得清天数**的隔离项 ⇒ null，界面就不画倒计时）。 */
+  const quarantineDaysLeft = computed<number | null>(() => {
+    const days = (attachmentInventory.value?.rows ?? [])
+      .map((row) => daysUntil(row.quarantinedUntil))
+      .filter((d): d is number => d !== null);
+    // 按"换算出来的天数"取最小，而不是按字符串排序取第一条：认不出来的那一格不该
+    // 把整句倒计时拖没（明明还有一份说得清"几天之后"），也不该让界面说一个 NaN 天。
+    return days.length > 0 ? Math.min(...days) : null;
+  });
+
+  async function loadAttachmentInventory(): Promise<void> {
+    try {
+      const got = await callCommand<AttachmentInventory>(Commands.attachmentInventory, {});
+      // 载荷形状不认就当没读到：留着上一次那份，用户会以为那还是这台设备的账。
+      attachmentInventory.value = got && Array.isArray(got.rows) && got.totals ? got : null;
+      attachmentsFailed.value = attachmentInventory.value === null;
+    } catch {
+      attachmentInventory.value = null;
+      attachmentsFailed.value = true;
+    }
+  }
+
+  /**
    * 清除一切数据，恢复到刚装好的状态。
    *
    * 不可撤销，所以调用方（设置页）必须先做二次确认；这里再传一次 `confirmed`，
@@ -468,8 +502,7 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  /** 恢复只排期：真正落地在下次启动，所以这里必须明说"要重启"。 */
-  async function restoreDb(path: string): Promise<RestoreOutcome | null> {
+  /** 恢复只排期：真正落地在下次启动，所以这里必须明说"要重启"。 */  async function restoreDb(path: string): Promise<RestoreOutcome | null> {
     dataBusy.value = true;
     lastReport.value = null;
     try {
@@ -548,6 +581,10 @@ export const useSettingsStore = defineStore('settings', () => {
     backups,
     backupsFailed,
     loadBackups,
+    attachmentInventory,
+    attachmentsFailed,
+    quarantineDaysLeft,
+    loadAttachmentInventory,
     restoreDb,
     eraseAllData,
     describeReport,

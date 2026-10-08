@@ -61,6 +61,17 @@ export function formatModified(value: string | null | undefined, now: number = D
   return md;
 }
 
+/**
+ * 隔离区那一格要的是"还剩几天"，不是绝对时刻：字节要几十天之后才**有资格**离开磁盘，
+ * 人对「3 月 7 日」没有紧迫感、也不容易发现自己看的是去年的日历。
+ * 取不到或时间源读不出来 ⇒ **null**，调用方据此不画倒计时（宁可不报，也不猜一个数）。
+ */
+export function daysUntil(value: string | null | undefined, now: number = Date.now()): number | null {
+  const date = toDate(value);
+  if (!date) return null;
+  return Math.max(0, Math.ceil((date.getTime() - now) / DAY));
+}
+
 export function formatBytes(value: number | null | undefined): string {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return '—';
   if (value < 1024) return `${value} B`;

@@ -123,7 +123,7 @@ const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '');
 const FIXTURE_MARKS = [
   '只读夹具', '常驻夹具', '拖排夹具', '滚动夹具', '状态夹具', '保存状态夹具',
   '置顶往返夹具', '通扫夹具', '键盘夹具', '附件账夹具', '弹窗夹具', '拖放夹具',
-  '分档夹具', '改于夹具', '移到夹具',
+  '分档夹具', '改于夹具', '移到夹具', '附件夹具',
 ];
 for (const mark of FIXTURE_MARKS) await purgeByTitle(mark);
 
@@ -550,19 +550,29 @@ for (const width of WIDTHS) {
   // ① 设置页一栏到底
   await page.evaluate(() => document.querySelector('[data-testid="nav-settings"]').click());
   await page.waitForTimeout(1200);
-  const cards = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('.settings__grid > .card')).map((el) => {
-      const r = el.getBoundingClientRect();
-      return { x: Math.round(r.x), w: Math.round(r.width) };
-    }),
-  );
-  check(`宽 ${width}：设置页卡片数 = 6`, cards.length === 6, `实到 ${cards.length}`);
-  const xs = [...new Set(cards.map((c) => c.x))];
-  const ws = [...new Set(cards.map((c) => c.w))];
+  const cards = await page.evaluate(() => {
+    const list = Array.from(document.querySelectorAll('.settings__grid > .card'));
+    return {
+      n: list.length,
+      rail: document.querySelectorAll('.settings__rail-item').length,
+      boxes: list.map((el) => {
+        const r = el.getBoundingClientRect();
+        return { x: Math.round(r.x), w: Math.round(r.width) };
+      }),
+    };
+  });
+  // 这条从"数一个写死的 6"改成"卡片数 = 分节导航数"：写死的那个数每加一格就要有人记得来改，
+  // 忘了就是假红（第 31 刀加「附件」这一格时它就是这么红的）；而真正会出错的是**两边不一致**——
+  // 加了卡片忘了导航（那一格永远跳不到）或加了导航忘了卡片（点了没反应）。
+  // 只留一个下限当守卫，防的是"两边都空着也相等"那种空判据。
+  check(`宽 ${width}：设置页每一节都有对应的卡片（卡片数 = 分节导航数，且不少于 7）`,
+    cards.n === cards.rail && cards.n >= 7, `卡片 ${cards.n} / 导航 ${cards.rail}`);
+  const xs = [...new Set(cards.boxes.map((c) => c.x))];
+  const ws = [...new Set(cards.boxes.map((c) => c.w))];
   check(`宽 ${width}：所有卡片左缘同一个值`, xs.length === 1, `x ∈ ${JSON.stringify(xs)}`);
   check(`宽 ${width}：所有卡片宽度同一个值`, ws.length === 1, `w ∈ ${JSON.stringify(ws)}`);
   await page.screenshot({ path: `${OUT}/21-settings-${width}.png`, fullPage: true });
-  notes.push(`     宽 ${width} 卡片几何 = ${JSON.stringify(cards[0])} ×${cards.length}`);
+  notes.push(`     宽 ${width} 卡片几何 = ${JSON.stringify(cards.boxes[0])} ×${cards.n}`);
 
   // ④ 一个视图只有一层滚动条：文档不许滚，且内容全在内层那一栏的滚动范围里
   const layers = await page.evaluate(() => {
@@ -4867,6 +4877,231 @@ function contrastRatio(fg, bg) {
   await p.close();
   await c.close();
   notes.push(`     偏好过桥实测：库 ${before ?? '（空）'} ⇒ 差分点「${target}」⇒ 核心读回 ${afterClick} ⇒ 抹掉本机那份重开仍在 ⇒ 缓存${target}/库${opposite} 时屏幕跟库 ⇒ 归还 ${restored}`);
+}
+
+/**
+ * ㊿ §6 第 9 格「附件管理器」的读侧（缺口 G99）。
+ *
+ * 病的形状与 ㉟（备份清单）、㊽（偏好）同族：核心早就知道"这台设备上有多少份字节、
+ * 多少份的字节不在本机、多少份压在隔离区里"，而界面一句都没说过 —— 用户唯一能看到的
+ * 是一个总数（`stats`），于是"少了 800 MB"与"隔离区里压着 800 MB 等着释放"在界面上是同一句话。
+ *
+ * 判据问的四件事，各自防一种坏实现：
+ *  · **真账一致**：屏幕上那两个数是从真核心的 `attachment_inventory` 来的，不是写死的样例。
+ *    这一条同时反着问 —— 核心说 `unavailableCount=0` 时界面**不许**凭空造一句"另有 N 份"。
+ *  · **三句话各读各的列**（差分正对照）：注入一份三个数刻意互不相同的载荷（3 / 1 / 2 份，
+ *    1.5 MB / 40.0 MB / 2.0 MB）。只有一处读法的话，把"共多少"与"缺多少"串成一列照样绿。
+ *  · **两种"没有"分得开**：扫过且为空 ⇒ 说"这台设备还没有附件"；读不到 ⇒ 说"这份清单没能取到"。
+ *    合成一句就是拿"没有"骗人（备份那一格的口径同一套）。
+ *  · **说不出天数就不许说天数**：隔离区有货但到期时刻认不出来 ⇒ 整句倒计时不出现，
+ *    且界面上不许出现 `NaN`。
+ *
+ * 真账那一份字节是**内容固定**的：blob 按 sha256 寻址，反复跑只落同一个对象，开发库不涨
+ * （这一条是第 29 刀那条纪律的自觉应用 —— 工装自己也是污染源）。
+ */
+{
+  const FIX = '附件夹具';
+  const DAY = 86_400_000;
+  await purgeByTitle(FIX);
+
+  // 真核心落一份字节：走的是界面在用的同一条命令（attach_file），不是绕过桥直接写库。
+  const blk = `an${stamp}`;
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: { v: 1, content: [{ id: blk, type: 'paragraph', content: [{ text: `${FIX} ${stamp}` }] }] },
+  });
+  await cmd('attach_file', {
+    noteId: made?.id,
+    blockId: blk,
+    role: 'file',
+    bytesBase64: Buffer.from('notera-layout-inventory').toString('base64'),
+    mediaType: 'image/png',
+    filename: 'ledger.png',
+  });
+  const real = await cmd('attachment_inventory', {});
+  const rtot = real?.totals ?? null;
+
+  /** 卡片上那五句话：拿到文本就是"界面说了这句"，null 就是"这句没出现"。 */
+  const readLedger = (p) => p.evaluate(() => {
+    const text = (id) => document.querySelector(`[data-testid="${id}"]`)?.textContent?.trim() ?? null;
+    const card = document.querySelector('#sec-attachments');
+    return {
+      summary: text('attachment-summary'),
+      absent: text('attachment-absent'),
+      quarantine: text('attachment-quarantine'),
+      empty: text('attachment-empty'),
+      failed: text('attachment-failed'),
+      all: card ? `${card.textContent}` : '',
+    };
+  });
+
+  /**
+   * @param inject 可选：`(route) => …`。注入只在读侧（这一格没有写路径），
+   *               注入完必须还给真账 —— 由 G 臂复核。
+   */
+  const openLedger = async (inject) => {
+    const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const p = await c.newPage();
+    const errs = [];
+    p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    if (inject) await p.route('**/cmd/attachment_inventory', inject);
+    await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await p.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+    await p.evaluate(() => document.querySelector('[data-testid="nav-settings"]')
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    await p.waitForTimeout(1300);
+    return { c, p, errs, got: await readLedger(p) };
+  };
+
+  const allErrs = [];
+  const digits = (s) => (s ?? '').match(/[\d.]+/g)?.map(Number) ?? [];
+
+  // ── A：真账 ──────────────────────────────────────────────────────────────
+  {
+    const { c, p, errs, got } = await openLedger(null);
+    allErrs.push(...errs);
+    const count = rtot?.count ?? 0;
+    check('㊿ 仪器自检：附件那一格真在设置页里（五句都读不到就是界面换了 testid，后面全是空判据）',
+      got.all.length > 0, JSON.stringify({ all: got.all.slice(0, 60) }));
+    check('㊿ 真账有货就要说出来，且说的份数 = 核心那份的份数（写死的样例数、或压根不读核心的实现在这条红）',
+      count > 0 && got.summary !== null && digits(got.summary).includes(count),
+      JSON.stringify({ core: count, summary: got.summary }));
+    // 反着问：核心说"没有不在这台上的字节"时，界面不许凭空造那一句。
+    const absentN = rtot?.unavailableCount ?? 0;
+    check('㊿ 「另有 N 份不在本机」只在核心真说了 N>0 时出现（N=0 还出这句就是编的）',
+      absentN > 0 ? digits(got.absent).includes(absentN) : got.absent === null,
+      JSON.stringify({ core: absentN, absent: got.absent }));
+    const qN = rtot?.quarantinedCount ?? 0;
+    check('㊿ 隔离那句跟着核心的份数走（0 份就整句不出现，不许说"还有 0 天"）',
+      qN > 0 ? digits(got.quarantine).includes(qN) : got.quarantine === null,
+      JSON.stringify({ core: qN, quarantine: got.quarantine }));
+    if (count === 0) {
+      check('㊿ 真账扫过且为空 ⇒ 说"还没有附件"而不是留白', got.empty !== null, JSON.stringify(got));
+    }
+    check('㊿ 界面不许说协议词汇（sha / local_state / available / quarantine 这些是账上的列名，不是给人看的话）',
+      !/sha256|local_state|remote_state|quarantine|blob|available|missing/i.test(got.all),
+      got.all.slice(0, 120));
+    check('㊿ 真账这一轮 console error 为零', errs.length === 0, errs.slice(0, 3).join(' | '));
+    await p.close();
+    await c.close();
+  }
+
+  // ── B：三句话各读各的列（三个份数、三个体积全都取互不相同的数）────────────
+  {
+    const iso = (ms) => new Date(Date.now() + ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const three = {
+      rows: [
+        { sha256: 'a'.repeat(64), bytes: 100, localState: 'available', remoteState: 'present', refs: 1, quarantinedUntil: null },
+        { sha256: 'b'.repeat(64), bytes: 48, localState: 'missing', remoteState: 'present', refs: 0, quarantinedUntil: iso(9 * DAY) },
+        { sha256: 'c'.repeat(64), bytes: 8, localState: 'missing', remoteState: 'absent', refs: 0, quarantinedUntil: iso(4 * DAY + DAY / 2) },
+      ],
+      totals: {
+        count: 3, bytes: 1.5 * 1024 * 1024,
+        unavailableCount: 1, unavailableBytes: 40 * 1024 * 1024,
+        quarantinedCount: 2, quarantinedBytes: 2 * 1024 * 1024,
+      },
+    };
+    const { c, p, errs, got } = await openLedger((route) => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify(three),
+    }));
+    allErrs.push(...errs);
+    check('㊿ 注入正对照·第一句读 count/bytes（3 份 · 1.5 MB）—— 串到别列就红',
+      got.summary?.includes('3') === true && got.summary?.includes('1.5 MB') === true,
+      JSON.stringify({ summary: got.summary }));
+    check('㊿ 注入正对照·第二句读 unavailableCount/Bytes（1 份 · 40.0 MB），且不许把第一句的数抄过来',
+      got.absent?.includes('1 份') === true && got.absent?.includes('40.0 MB') === true && !got.absent.includes('1.5 MB'),
+      JSON.stringify({ absent: got.absent }));
+    check('㊿ 注入正对照·第三句读 quarantinedCount/Bytes（2 份 · 2.0 MB），天数说的是**最早**到期的那一份（4.5 天 ⇒ 最早 5 天）',
+      got.quarantine?.includes('2 份') === true && got.quarantine?.includes('2.0 MB') === true
+        && /最早 5 天/.test(got.quarantine ?? ''),
+      JSON.stringify({ quarantine: got.quarantine }));
+    // 那句里的数字是"最早"那一份的：别的行可能更晚，说成一个共同的日期就是把账说错。
+    // 并且**不许承诺"到点就删"** —— 宽限期过后还要走一轮同步、对远端 HEAD 确认那边还有一份，
+    // 才是不可逆的那一步（`purge_verified_blobs`）。倒计时只说明"什么时候可以回收"。
+    check('㊿ 倒计时只说"可以回收"，不许把带前置条件的删除说成到点必删',
+      !/真正删除|一定会删|届时删除/.test(got.quarantine ?? ''),
+      JSON.stringify({ quarantine: got.quarantine }));
+    check('㊿ 注入形状下不该出现的两句都没出现（空态与失败态不跟真账抢话）',
+      got.empty === null && got.failed === null, JSON.stringify({ empty: got.empty, failed: got.failed }));
+    check('㊿ 注入这一轮 console error 为零', errs.length === 0, errs.slice(0, 3).join(' | '));
+    await p.close();
+    await c.close();
+  }
+
+  // ── C / D：两种"没有"必须分得开 ──────────────────────────────────────────
+  {
+    const zero = {
+      rows: [],
+      totals: { count: 0, bytes: 0, unavailableCount: 0, unavailableBytes: 0, quarantinedCount: 0, quarantinedBytes: 0 },
+    };
+    const { c, p, errs, got } = await openLedger((route) => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify(zero),
+    }));
+    allErrs.push(...errs);
+    check('㊿ 扫过且为空 ⇒ 只说"还没有"那一句，其它三句都不出现',
+      got.empty !== null && /还没有/.test(got.empty) && !/没能|取不到/.test(got.empty)
+        && got.summary === null && got.absent === null && got.quarantine === null && got.failed === null,
+      JSON.stringify(got));
+    await p.close();
+    await c.close();
+  }
+  {
+    const { c, p, errs, got } = await openLedger((route) => route.fulfill({ status: 500, body: 'boom' }));
+    // 这一发是我自己让它 500 的：浏览器必然记一条 "Failed to load resource"。
+    // 把这类噪音原样算成"应用报错"会让这条腿永远红，而真正的东西是**除了这一条以外**应用没嚷。
+    const noise = errs.filter((m) => !/Failed to load resource/i.test(m));
+    allErrs.push(...noise);
+    // 这两句是**同一格上的两个分支**，只看"哪颗 testid 在"的话，把两句文案对调也照样绿 ——
+    // 所以这里量的是话：故障那格必须说"没能"，且不许说成"还没有"。
+    check('㊿ 读不到 ⇒ 说"这份清单没能取到"，且绝不许说成"还没有附件"（把故障说成空是这一格最容易撒的谎）',
+      got.failed !== null && /没能/.test(got.failed) && !/还没有/.test(got.failed)
+        && got.empty === null && got.summary === null, JSON.stringify(got));
+    check('㊿ 注入 500 那一发除了浏览器自己的资源错误之外，应用没有再报别的',
+      noise.length === 0, JSON.stringify(errs.slice(0, 3)));
+    await p.close();
+    await c.close();
+  }
+
+  // ── E：隔离有货但到期时刻认不出来 ────────────────────────────────────────
+  {
+    const odd = {
+      rows: [{ sha256: 'd'.repeat(64), bytes: 7, localState: 'missing', remoteState: 'present', refs: 0, quarantinedUntil: '不是时间' }],
+      totals: { count: 1, bytes: 7, unavailableCount: 1, unavailableBytes: 7, quarantinedCount: 1, quarantinedBytes: 7 },
+    };
+    const { c, p, errs, got } = await openLedger((route) => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify(odd),
+    }));
+    allErrs.push(...errs);
+    check('㊿ 说不出"几天之后"就整句不出现（而不是"还有 NaN 天"、也不是"还有 0 天"）',
+      got.quarantine === null && !/NaN/.test(got.all), JSON.stringify({ quarantine: got.quarantine, all: got.all.slice(0, 140) }));
+    check('㊿ 同一份账里说得清的那两句还在说（一句读不出来不许把整格带走）',
+      got.summary?.includes('1') === true && got.absent !== null, JSON.stringify({ summary: got.summary, absent: got.absent }));
+    await p.close();
+    await c.close();
+  }
+
+  // ── G：注入没弄脏真账（这一格是只读的，读了也别写回去）────────────────────
+  {
+    const after = await cmd('attachment_inventory', {});
+    check('㊿ 四发注入之后真账还是那一套数（只读格不许被读侧改动）',
+      JSON.stringify(after?.totals) === JSON.stringify(rtot),
+      JSON.stringify({ before: rtot, after: after?.totals }));
+    const { c, p, errs, got } = await openLedger(null);
+    allErrs.push(...errs);
+    check('㊿ 关掉注入重开，屏幕上说的还是真账那一个份数',
+      got.summary !== null && digits(got.summary).includes(rtot?.count ?? -1),
+      JSON.stringify({ core: rtot?.count, summary: got.summary }));
+    // 留一份看得见的现场（这一格在设置页很下面，不滚进去截到的就是上面那几格）。
+    await p.evaluate(() => document.querySelector('#sec-attachments')?.scrollIntoView({ block: 'center' }));
+    await p.waitForTimeout(500);
+    await p.screenshot({ path: `${OUT}/59-attachment-ledger-1440.png` });
+    await p.close();
+    await c.close();
+  }
+
+  check('㊿ 这一腿所有上下文 console error 为零', allErrs.length === 0, allErrs.slice(0, 3).join(' | '));
+  await purgeByTitle(FIX);
+  notes.push(`     附件账本实测：真核心 ${rtot?.count ?? '?'} 份 · ${rtot?.bytes ?? '?'} B（不在本机 ${rtot?.unavailableCount ?? '?'} 份、隔离 ${rtot?.quarantinedCount ?? '?'} 份）⇒ 注入 3/1/2 份三句各读各列 ⇒ 空态与故障态分得开 ⇒ 认不出的到期时刻不说天数`);
 }
 
 /**

@@ -117,6 +117,7 @@ onMounted(async () => {
   await settings.loadAccount();
   await settings.loadStats();
   await settings.loadBackups();
+  await settings.loadAttachmentInventory();
   bypassText.value = (settings.draft.proxy.bypass ?? []).join('\n');
   // 回填必须在 loadAccount 之后：那一步会用核心的 DTO 重建 draft，
   // 早先设进去的值会被换掉（这条 lane 的"改一次设置就得重填"就是这个坑）。
@@ -219,6 +220,24 @@ function backupTime(stamp: string): string {
   return formatWhen(stampToIso(stamp)) || stamp;
 }
 
+/**
+ * 隔离区那一句整句在脚本里拼，天数取不到时**整句不画**。
+ * 半句话（"…；最早 之后可以回收"）比没有那一句更糟：用户会以为现在就能回收。
+ * 措辞刻意说"可以回收"而不是"到点就删"：过了宽限期只是**有资格**回收，
+ * 不可逆的那一步还要等一轮同步、对远端确认那边确实还有一份（核心 `purge_verified_blobs`）。
+ */
+const attachmentQuarantineLine = computed(() => {
+  const totals = settings.attachmentInventory?.totals;
+  if (!totals || totals.quarantinedCount <= 0) return '';
+  const days = settings.quarantineDaysLeft;
+  if (days === null) return '';
+  return t('settings.attachmentQuarantine', {
+    count: totals.quarantinedCount,
+    size: formatBytes(totals.quarantinedBytes),
+    when: t('settings.attachmentDays', { n: days }),
+  });
+});
+
 async function confirmRestore(): Promise<void> {
   const picked = restorePick.value;
   restorePick.value = null;
@@ -271,6 +290,7 @@ const sections = [
   { id: 'sec-sync', label: 'sync.detail' },
   { id: 'sec-appearance', label: 'settings.theme' },
   { id: 'sec-data', label: 'settings.data' },
+  { id: 'sec-attachments', label: 'settings.attachmentLedger' },
   { id: 'sec-danger', label: 'settings.dangerZone' },
   { id: 'sec-keys', label: 'settings.shortcuts' },
 ];
@@ -698,6 +718,36 @@ function jumpTo(id: string): void {
              块级类用 `.card`（设置页其余 5 个块都是它）——原先我写的是
              `.section`，而那个类**在样式表里根本没有定义**，于是这一块的
              内边距/间距/背景全走浏览器默认，与上下几块对不齐（用户反馈"没对齐"）。 -->
+        <!-- §6「附件管理器」：这台设备上全部对象的账。三个数各说各的事 ——
+             缺字节（可以重试取回）与在隔离区（还没删、删之前可撤销）是两件事，
+             合成一句就会有一份数对不上。这里只搬运不加工：拆账在存储层。 -->
+        <div id="sec-attachments" class="card">
+          <h2 class="card__title">{{ t('settings.attachmentLedger') }}</h2>
+          <p v-if="settings.attachmentsFailed" class="text-sm text-muted" data-testid="attachment-failed">
+            {{ t('settings.attachmentFailed') }}
+          </p>
+          <template v-else-if="settings.attachmentInventory">
+            <p v-if="settings.attachmentInventory.totals.count > 0" class="text-sm" data-testid="attachment-summary">
+              {{ t('settings.attachmentSummary', {
+                count: settings.attachmentInventory.totals.count,
+                size: formatBytes(settings.attachmentInventory.totals.bytes),
+              }) }}
+            </p>
+            <p v-if="settings.attachmentInventory.totals.unavailableCount > 0" class="text-sm text-muted" data-testid="attachment-absent">
+              {{ t('settings.attachmentAbsent', {
+                count: settings.attachmentInventory.totals.unavailableCount,
+                size: formatBytes(settings.attachmentInventory.totals.unavailableBytes),
+              }) }}
+            </p>
+            <p v-if="attachmentQuarantineLine" class="text-sm text-muted" data-testid="attachment-quarantine">
+              {{ attachmentQuarantineLine }}
+            </p>
+            <p v-if="settings.attachmentInventory.totals.count === 0" class="text-sm text-muted" data-testid="attachment-empty">
+              {{ t('settings.attachmentEmpty') }}
+            </p>
+          </template>
+        </div>
+
         <div id="sec-danger" class="card card--danger">
           <h2 class="card__title">{{ t('settings.dangerZone') }}</h2>
           <p class="field-hint">{{ t('settings.eraseHint') }}</p>
