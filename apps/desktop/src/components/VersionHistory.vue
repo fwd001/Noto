@@ -16,6 +16,7 @@ import { useEditorStore } from '../stores/editor';
 import { useVersionsStore } from '../stores/versions';
 import { t } from '../i18n';
 import { formatWhen } from '../util/format';
+import { diffDocs, type BlockMark } from '../util/docDiff';
 
 const props = defineProps<{ noteId: string }>();
 
@@ -70,6 +71,41 @@ async function pick(rev: number): Promise<void> {
 function rowIsCurrent(rev: number): boolean {
   return versions.rows.find((r) => r.rev === rev)?.sameAsNow === true;
 }
+
+/**
+ * 那一版与**库里现在那一版**的块级差异（§6-8 的 diff 那一半）。
+ * 基准取 `versions.nowDoc`（核心归一化过的那份），不取编辑器内存里的 `currentDoc()` ——
+ * 两边必须是同一套序列化，否则"块上带不带空 attrs"这种结构噪声会被说成"只是格式不同"
+ * （腿 51 第一次就是这样打红的）。未保存的草稿归"正在保存"那一格说，不在这里混。
+ */
+const diff = computed(() => diffDocs(versions.preview?.doc, versions.nowDoc));
+const previewBlocks = computed(() => {
+  const content = (versions.preview?.doc as { content?: unknown } | undefined)?.content;
+  if (!Array.isArray(content)) return [];
+  return content
+    .map((b) => {
+      const block = b as { id?: unknown; content?: Array<{ text?: unknown }> };
+      const text = Array.isArray(block.content)
+        ? block.content.map((p) => (typeof p?.text === 'string' ? p.text : '')).join('')
+        : '';
+      return { id: typeof block.id === 'string' ? block.id : '', text };
+    })
+    .filter((b) => b.text.trim() !== '');
+});
+function markOf(id: string): BlockMark | null {
+  return diff.value.marks[id] ?? null;
+}
+function markLabel(mark: BlockMark): string {
+  if (mark === 'changed') return t('editor.markChanged');
+  if (mark === 'restyled') return t('editor.markRestyled');
+  return t('editor.markRemoved');
+}
+/** 这一块相对现在的差异标签；`same` 与没进账的返回空串（界面就不画那一枚）。 */
+function markText(id: string): string {
+  const mark = markOf(id);
+  return !mark || mark === 'same' ? '' : markLabel(mark);
+}
+const diffTotals = computed(() => diff.value.changed + diff.value.restyled + diff.value.removed + diff.value.added);
 
 async function confirmRestore(rev: number): Promise<void> {
   const to = await versions.restore(props.noteId, rev);
@@ -132,8 +168,16 @@ async function confirmRestore(rev: number): Promise<void> {
         </p>
         <div v-if="versions.preview" class="versions__preview" data-testid="version-preview">
           <p class="versions__preview-title">{{ t('editor.versionPreview') }}</p>
-          <p v-for="(line, i) in versions.previewLines" :key="i" class="versions__line">{{ line }}</p>
-          <p v-if="versions.previewLines.length === 0" class="text-sm text-muted">
+          <!-- diff 那一行：四个数各自一句话说清"跟现在比差在哪"，全 0 时说的是"逐字相同"。 -->
+          <p class="text-sm text-muted" data-testid="version-diff">
+            {{ diffTotals === 0 ? t('editor.diffSame') : t('editor.diffSummary', {
+              changed: diff.changed, restyled: diff.restyled, removed: diff.removed, added: diff.added,
+            }) }}
+          </p>
+          <p v-for="b in previewBlocks" :key="b.id" class="versions__line">
+            <span v-if="markText(b.id)" class="versions__mark" :data-testid="`version-mark-${b.id}`">{{ markText(b.id) }}</span>{{ b.text }}
+          </p>
+          <p v-if="previewBlocks.length === 0" class="text-sm text-muted">
             {{ t('editor.versionBlank') }}
           </p>
           <div v-if="canWrite && previewing !== null && !rowIsCurrent(previewing)" class="versions__actions">
@@ -241,6 +285,14 @@ async function confirmRestore(rev: number): Promise<void> {
   color: var(--body);
   font-size: var(--text-sm);
   line-height: 1.5;
+}
+.versions__mark {
+  margin-inline-end: var(--sp-2);
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-chip);
+  background: var(--sunken);
+  color: var(--mute);
+  font-size: var(--text-xs);
 }
 .versions__actions {
   margin-top: var(--sp-2);

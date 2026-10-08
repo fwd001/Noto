@@ -112,6 +112,12 @@ const MESSAGES: Record<MessageKey, string> = {
   'editor.versionRestoreDone': '已用第 {from} 版覆盖，现在这一版是第 {to} 版。',
   'editor.versionRestoreFailed': '这一版没覆盖成功 —— 这篇可能在别处被改过了。',
   'editor.versionClose': '收起',
+  // §6-8 的 diff（G100 后一半）：按块比，四种状态各有各的一句话（"字一样、格式不同"不许并成"一样"）。
+  'editor.diffSame': '这一版与现在逐字相同',
+  'editor.diffSummary': '与现在相比：文字不同 {changed} 段 · 只是格式不同 {restyled} 段 · 现在没有 {removed} 段 · 后来新增 {added} 段',
+  'editor.markChanged': '与现在文字不同',
+  'editor.markRestyled': '字一样、格式不同',
+  'editor.markRemoved': '现在没有这段',
   'editor.originLocal': '本机改的',
   'editor.originRemote': '从服务器拉回来的',
   'editor.originMerged': '合并出来的',

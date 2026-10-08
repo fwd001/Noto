@@ -45,6 +45,15 @@ export const useVersionsStore = defineStore('versions', () => {
   const loading = ref(false);
   const preview = ref<RevisionDoc | null>(null);
   const previewFailed = ref(false);
+  /**
+   * diff 的"现在"这一侧取**库里那一版**，不取编辑器内存里的那份。
+   *
+   * 两个原因：① 两边都得是核心归一化过的 JSON —— 编辑器现拼的 `currentDoc()` 与库里存的
+   *   在"块上带不带 `attrs:{}`"这类事上不一致，会把逐字相同的一段说成"只是格式不同"
+   *   （腿 51 就是这么打红的：标题块文字一模一样却被标了格式差别）；
+   * ② 那句话本来就该是"这一版 vs 已经存在本机的那一版"，未保存的草稿归"正在保存"那一格说。
+   */
+  const nowDoc = ref<NoteDoc | null>(null);
 
   /** 有没有"还没公告出去"的版（`rev != syncRev`）—— 界面上那句"最新一版还没传上去"读的就是这个。 */
   const hasUnpublished = computed(() => currentRev.value > syncRev.value);
@@ -59,6 +68,13 @@ export const useVersionsStore = defineStore('versions', () => {
     failed.value = false;
     preview.value = null;
     previewFailed.value = false;
+    nowDoc.value = null;
+  }
+
+  /** 库里那一版（diff 的基准）。读不到就当没有 —— 宁可不标差异，也不拿一份错基准去比。 */
+  async function readNowDoc(id: string): Promise<void> {
+    const note = await callCommand<{ doc?: NoteDoc }>(Commands.getNote, { id }).catch(() => null);
+    nowDoc.value = note?.doc ?? null;
   }
 
   async function load(id: string): Promise<void> {
@@ -76,12 +92,14 @@ export const useVersionsStore = defineStore('versions', () => {
       syncRev.value = usable ? Number(got.syncRev) || 0 : 0;
       truncated.value = usable ? got.truncated === true : false;
       failed.value = !usable;
+      await readNowDoc(id);
     } catch {
       rows.value = [];
       currentRev.value = 0;
       syncRev.value = 0;
       truncated.value = false;
       failed.value = true;
+      nowDoc.value = null;
     } finally {
       loading.value = false;
     }
@@ -136,6 +154,7 @@ export const useVersionsStore = defineStore('versions', () => {
     loading,
     preview,
     previewFailed,
+    nowDoc,
     hasUnpublished,
     previewLines,
     reset,

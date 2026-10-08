@@ -5130,14 +5130,30 @@ function contrastRatio(fg, bg) {
   await purgeByTitle(MARK);
   const para = (id, text) => ({ id, type: 'paragraph', content: [{ text }] });
   const V1 = `${MARK} ${stamp}`;
+  // 两版刻意做成"改一段 / 删一段 / 加一段"三种各占一块（外加标题那块两边相同）——
+  // diff 那四个数只有在三种同时存在时才互相分得开（见 §6-8 的 diff 判据）。
   const made = await cmd('create_note', {
     folderId: null,
-    doc: { v: 1, content: [para(`vb1${stamp}`, V1), para(`vb2${stamp}`, '第一版写的字')] },
+    doc: {
+      v: 1,
+      content: [
+        para(`vb1${stamp}`, V1),
+        para(`vb2${stamp}`, '第一版写的字'),
+        para(`vb3${stamp}`, '旧版独有、现在没有的那段'),
+      ],
+    },
   });
   const noteId = made?.id;
   await cmd('edit_note', {
     id: noteId,
-    doc: { v: 1, content: [para(`vb1${stamp}`, V1), para(`vb2${stamp}`, '第二版改过的字')] },
+    doc: {
+      v: 1,
+      content: [
+        para(`vb1${stamp}`, V1),
+        para(`vb2${stamp}`, '第二版改过的字'),
+        para(`vb4${stamp}`, '现在才有、旧版没有的那段'),
+      ],
+    },
     expectedRev: 1,
   });
   const core = await cmd('note_revisions', { id: noteId });
@@ -5170,6 +5186,8 @@ function contrastRatio(fg, bg) {
       preview: text('[data-testid="version-preview"]'),
       restore: text('[data-testid="version-restore"]'),
       confirm: text('[data-testid="version-restore-confirm"]'),
+      diff: text('[data-testid="version-diff"]'),
+      marks: box ? Array.from(box.querySelectorAll('[data-testid^="version-mark-"]')).map((el) => el.textContent?.trim() ?? '') : [],
       all: box?.textContent ?? '',
     };
   });
@@ -5194,6 +5212,12 @@ function contrastRatio(fg, bg) {
     JSON.stringify({ preview: old.preview?.slice(0, 120) }));
   check('51 旧版那一行给得出"用这一版覆盖现在"这颗出口（§4.4 那条口径：终态要给能点的动作）',
     old.restore !== null, JSON.stringify({ restore: old.restore, confirm: old.confirm }));
+  // diff 那一行：夹具两版刻意做成"改一段 / 删一段 / 加一段"，四个数只有在三种同时存在时才互相分得开。
+  check('51 diff 按块说出四种差别（文字不同 1 · 格式不同 0 · 现在没有 1 · 后来新增 1），并给对应的段落挂了标签',
+    /文字不同 1 段/.test(old.diff ?? '') && /只是格式不同 0 段/.test(old.diff ?? '')
+      && /现在没有 1 段/.test(old.diff ?? '') && /后来新增 1 段/.test(old.diff ?? '')
+      && old.marks.length === 2,
+    JSON.stringify({ diff: old.diff, marks: old.marks }));
 
   // 覆盖要两步：第一下只把确认摆出来，不许直接写。
   await p.locator('[data-testid="version-restore"]').first().click({ timeout: 4000 });
@@ -5222,6 +5246,15 @@ function contrastRatio(fg, bg) {
   check('51 覆盖出来的那一行自己就是"现在"',
     afterCore?.rows?.[0]?.sameAsNow === true && afterCore?.rows?.[0]?.rev === afterCore?.currentRev,
     JSON.stringify(afterCore?.rows?.[0]));
+
+  // 覆盖之后再点开**同一版**：diff 必须改口说"逐字相同"（四个数全 0 也要是一句人话，
+  // 不能是一行"文字不同 0 段 · 格式不同 0 段…"那种没人读的清单）。
+  await p.locator(`[data-testid="version-row-${coreRows[coreRows.length - 1].rev}"]`).first().click({ timeout: 4000 });
+  await p.waitForTimeout(900);
+  const sameNow = await panel();
+  check('51 覆盖之后重开同一版：diff 改口说"逐字相同"，一枚标签都不留',
+    /逐字相同/.test(sameNow.diff ?? '') && !/文字不同/.test(sameNow.diff ?? '') && sameNow.marks.length === 0,
+    JSON.stringify({ diff: sameNow.diff, marks: sameNow.marks }));
 
   // 只读那一档：把这篇丢进回收站再打开 ⇒ 覆盖那颗根本不该存在（§2.5，不画灰的）。
   await cmd('delete_note', { id: noteId });
