@@ -226,6 +226,9 @@ async function boot(): Promise<void> {
   }, LINK_PROBE_INTERVAL_MS);
 
   void loadCaps(callCommand).then((caps) => settings.setCaps(caps));
+  // 偏好从库里读回来（§6 第 6 格）。放在后台那一组里是刻意的：首帧已经按本机那份画过了，
+  // 这一发只是把"只存在 WebView profile 里"升级成"跟着本地库走"，不该排在首帧路径上。
+  void settings.hydratePrefs();
   void settings.loadAccount();
   void settings.loadStats();
   void conflicts.load();

@@ -384,3 +384,73 @@ fn sync_status_carries_the_backlog_counters() {
         "没配账户时 pendingOps 竟然不是 0：{after} —— 那一格到底在数什么要重新对账"
     );
 }
+
+/// §6 第 6 格「偏好」过桥（G98 前半）：`set_pref` / `get_prefs` 的真 JSON 形状，加上
+/// **改偏好不许产生一轮待发工作**。
+///
+/// 为什么在这一格里钉：核心这张作用域表（`settings(scope='ui')`，DATA-MODEL §4.1）早就在了，
+/// 而前端从没调用过 —— 主题字号只活在 WebView2 的 profile 里，profile 一重置、库一还原，
+/// 笔记一条不少而设置回到默认。界面上"这台设备的选择"从此要有个能查的地方。
+///
+/// 最后那两条钉的是设计承诺而不是巧合：`store.rs` 写着 UI 作用域"永不上传"（刻意不碰 outbox），
+/// 因为**跨设备那一半还没拍板**；要是这里松一笔，改个字号就会攒进待发队列，
+/// 等于用一个未定的口径先付了同步的代价。
+#[test]
+fn prefs_round_trip_and_never_reach_the_outbox() {
+    let dir = Tmp::new("prefs");
+    let app = App::boot(dir.path()).expect("核心启动");
+
+    let empty = call(&app, "get_prefs", json!({}));
+    assert!(
+        empty.is_object(),
+        "get_prefs 必须回一个平铺 map（前端就在这一层找键）：{empty}"
+    );
+
+    let wrote = call(&app, "set_pref", json!({ "key": "theme", "value": "dark" }));
+    assert_eq!(
+        wrote,
+        Value::Null,
+        r#"set_pref 的成功载荷要的是裸 null，包一层外部标签前端就当"没有这格"静默丢掉""#
+    );
+
+    let got = call(&app, "get_prefs", json!({}));
+    assert_eq!(got["theme"], json!("dark"), "写完读回来不是同一值：{got}");
+
+    call(
+        &app,
+        "set_pref",
+        json!({ "key": "theme", "value": "light" }),
+    );
+    let again = call(&app, "get_prefs", json!({}));
+    assert_eq!(again["theme"], json!("light"), "同键要覆盖：{again}");
+    assert_eq!(
+        again.as_object().map(|m| m.len()),
+        Some(1),
+        "同一 key 竟然攒出第二条（读侧只能看见其中一份真相）：{again}"
+    );
+
+    call(
+        &app,
+        "set_pref",
+        json!({ "key": "fontScale", "value": 1.25 }),
+    );
+    let with_number = call(&app, "get_prefs", json!({}));
+    assert_eq!(
+        with_number["fontScale"],
+        json!(1.25),
+        "数字偏好回来换了形状（前端 clamp 读的是 number）：{with_number}"
+    );
+
+    let status = call(&app, "sync_status", json!({}));
+    assert_eq!(
+        status["pendingOps"],
+        json!(0),
+        "改偏好产生了待发操作 —— UI 作用域按 DATA-MODEL §4.1 永不上传：{status}"
+    );
+
+    let bad = dispatch(&app, "set_pref", json!({ "key": "  ", "value": 1 }));
+    assert!(
+        bad.is_err(),
+        "空 key 被静默收下，等于往库里写一条谁都读不到的偏好"
+    );
+}

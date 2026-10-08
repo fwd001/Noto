@@ -413,6 +413,11 @@ export const Commands = {
   createFolder: 'create_folder',
   renameFolder: 'rename_folder',
   deleteFolder: 'delete_folder',
+  // §6 第 6 格「偏好」的桥：核心那份作用域化存储（`settings(key, scope='ui')`）一直在，
+  // 而主题/字号以前只躺在 localStorage 里 —— WebView2 的 profile 被重置就回到默认，
+  // 而本地库带着备份走。这一对命令把选择放进库里（DATA-MODEL §4.1）。
+  getPrefs: 'get_prefs',
+  setPref: 'set_pref',
   listNotes: 'list_notes',
   getNote: 'get_note',
   search: 'search',

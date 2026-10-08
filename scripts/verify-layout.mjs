@@ -128,6 +128,19 @@ const FIXTURE_MARKS = [
 for (const mark of FIXTURE_MARKS) await purgeByTitle(mark);
 
 /**
+ * 可见偏好也要**钉回基准**（第 30 刀之后新加的一条）。
+ *
+ * 病是这一刀自己带出来的：以前主题/字号只活在每个 Playwright context 各自的 localStorage 里，
+ * 腿与腿之间互不影响，崩在半路那一轮也留不下什么。现在它们进了**本地库**（§6 第 6 格），
+ * 于是"量浅色的腿"开始读上一轮留下来的深色 —— 今天就是这样：一轮变异跑崩在半路，
+ * 库里留下 `theme=dark` 与 `fontScale=1.6`，两条 token 腿当场读到 `rgb(255, 143, 156)`（暗色那颗红）
+ * 而**永久红下去**。持久化把"临时现场"变成了"共享现场"，那它就得和夹具一起被收。
+ */
+for (const [key, value] of [['theme', 'system'], ['fontScale', 1]]) {
+  await cmd('set_pref', { key, value });
+}
+
+/**
  * 文件夹那一族也一样要扫：⑧ 那一腿每跑一次建一颗带当批戳的"牺牲品"（`布局夹具删 HHMMSS`），
  * 崩在半路那一轮就永远留着它。残骸不是无害的 —— 编辑器那颗文件夹下拉的**选项数**变了，
  * 浮层就变高，390 那一档"选项点得着"那条腿的落点跟着挪（今天这条红就是这么来的：
@@ -1389,6 +1402,9 @@ const TRAP_SCAN = () => {
         return { v: el?.value ?? '', max: el?.max ?? '', readout, fill: el ? getComputedStyle(el).getPropertyValue('--app-range-fill').trim() : '' };
       });
       check('触屏按 End：滑杆真的走到最大、读数与填色都跟着变（控件写的那一位就是被读的那一位）', after.v === after.max && after.v !== before && after.fill === '100%', JSON.stringify({ before, after }));
+      // 收尾把字号还给基准。第 30 刀之后偏好**进了本地库**，这一按不再是"这个 context 里的事"：
+      // 不复原就漏给后面所有腿 —— 那条收尾不变量（㊾）第一次跑就抓到库里躺着 fontScale=1.6。
+      await cmd('set_pref', { key: 'fontScale', value: 1 });
     }
     check(`宽 ${width} · ⑱ 这一腿 console error 为零`, sErrors.length === 0, sErrors.slice(0, 3).join(' | '));
     notes.push(`     设置页控件通扫 宽 ${width}：${JSON.stringify(got)}`);
@@ -3701,7 +3717,13 @@ function contrastRatio(fg, bg) {
   const tappedAgain = await tap('[data-testid="backup-restore-0"]');
   const dialogBack = await waitSel('[data-testid="app-dialog-confirm"]', 2500);
   const tappedConfirm = dialogBack ? await tap('[data-testid="app-dialog-confirm"]') : false;
-  await page.waitForTimeout(1200);
+  // 等的是"那句反馈出现了"，不是等一个舒服的数字：`restore_db` 要拷一份库，慢的时候 1200 ms 读不到
+  // （今天这一条红就是这样：`toast:""` 而请求确实发了 1 次）。判据一个字不放宽 ——
+  // 仍然必须看见"重启"那句，只是最多给它 4 s（toast 自己的 TTL 是 4.5 s，再长就自己消失了）。
+  await page.waitForFunction(
+    () => Array.from(document.querySelectorAll('[data-testid^="toast"]')).some((t) => (t.textContent ?? '').includes('重启')),
+    null, { timeout: 4000, polling: 150 },
+  ).catch(() => undefined);
   const staged = await page.evaluate(() => ({
     closed: document.querySelector('[data-testid="restore-confirm"]') === null,
     toast: Array.from(document.querySelectorAll('[data-testid^="toast"]')).map((t) => t.textContent?.trim()).join(' / '),
@@ -4735,6 +4757,133 @@ function contrastRatio(fg, bg) {
   await c.close();
   await purgeByTitle(MARK); // 夹具笔记不留（文件夹按名字复用，下一轮接着用）
   notes.push(`     「移到」调用边实测：${defaultName} ⇒ 甲（核心 ${String(coreA).slice(0, 8)}…）⇒ 回${defaultName} ⇒ 390 选乙（核心 ${String(coreB).slice(0, 8)}…）；四次按钮读数都跟着变，选项里空 value 那一格已不存在`);
+}
+
+/**
+ * ㊽ §6 第 6 格「偏好」过桥的调用边（缺口 G98 的前半）。
+ *
+ * 病的形状与 ㊼ 同族：核心那张作用域偏好表（`settings(scope='ui')`，DATA-MODEL §4.1）与
+ * `get_prefs` / `set_pref` 两条命令一直在 dispatch 里，而前端**一次都没调用过** ——
+ * 主题与字号只活在 WebView2 的 profile 里：profile 被重置、整库备份还原、换用户目录之后，
+ * 笔记一条不少而设置回到默认。屏幕上那句话（"你的选择"）其实只在这台机器的缓存里。
+ *
+ * 判据问三件事，各自防一种坏实现：
+ *  · 点了要**立刻**在渲染结果上看得见（`dataset.theme`），这是老判据已经在管的；
+ *  · 点了要**真落库**（读真核心的 `get_prefs`），只写 localStorage 的实现在这里红 ——
+ *    这正是 ㊼ 那颗假按钮的兄弟：看得见、点得着、说得出口，但事实没动；
+ *  · 读回来要以**库为权威**：抹掉本机那份再重开还得在；两份不一致时屏幕跟库走。
+ *    注入只做读侧，`hydratePrefs` 有回声闸门 —— "注入的那一发没被写回库里"由第 6 项复核。
+ * 三档目标值（`target`）是**差分挑的**：与库里当前那一格相反。写死一档的话，
+ * 上一轮崩在半路留下的值会让"落库"那条读到本来就在那儿的东西（M-B 摘掉落库照样 8 绿就是这么被骗的）。
+ */
+{
+  const prefsNow = async () => (await cmd('get_prefs', {}))?.theme ?? null;
+  const screenTheme = (page) => page.evaluate(() => document.documentElement.dataset.theme ?? null);
+  const pressed = (page, mode) => page.evaluate((m) => document.querySelector(`[data-testid="theme-${m}"]`)
+    ?.getAttribute('aria-pressed') ?? null, mode);
+
+  const before = await prefsNow();
+  /**
+   * 这一腿**必须做成差分**：目标是"与库里当前那一格相反"的那一档。
+   * 上一版写死点深色 —— 于是当库里恰好因为上一轮崩在半路而留着 dark 时，"落库"那条读到的
+   * 是本来就在那儿的值（M-B 摘掉落库那一步照样 8 绿，就是这么被骗的）。
+   */
+  const target = before === 'dark' ? 'light' : 'dark';
+  const opposite = target === 'dark' ? 'light' : 'dark';
+  const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await c.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  await p.waitForTimeout(700);
+  await p.evaluate(() => document.querySelector('[data-testid="nav-settings"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  await p.waitForTimeout(900);
+
+  const startPressed = await pressed(p, 'dark');
+  check('㊽ 仪器自检：设置页那三颗主题按钮真在（不在的话下面全是空判据）',
+    startPressed !== null, JSON.stringify({ before, startPressed }));
+
+  await p.locator(`[data-testid="theme-${target}"]`).first().click({ timeout: 4000 });
+  await p.waitForTimeout(900);
+  check('㊽ 点了立刻要看得见（渲染后的深浅，不是 DOM 里有没有那个类）',
+    (await screenTheme(p)) === target && (await pressed(p, target)) === 'true',
+    JSON.stringify({ screen: await screenTheme(p), target }));
+  // 合并窗口 300 ms + 一发网络：等的是"这一发真出门了"，不是等一个舒服的数字。
+  const afterClick = await prefsNow();
+  check('㊽ 过桥的那一发真落库：核心 get_prefs 读回来是点下去的那一档（只写 localStorage 的实现在这条红）',
+    afterClick === target && target !== before, JSON.stringify({ afterClick, before, target }));
+
+  // 这一条是那一格的全部意义：**把本机那份抹掉**（= WebView2 的 profile 被重置、换用户目录、
+  // 整库备份还原到另一台），重开之后设置还得在 —— 只能从库里读回来。
+  // 只 reload 不清 localStorage 的话，M-A（启动不读库）照样绿：读的是缓存，不是那条桥。
+  await p.evaluate(() => localStorage.clear());
+  await p.reload({ waitUntil: 'networkidle' });
+  await p.waitForTimeout(1200);
+  // 重开之后要**再走回设置页**再读那颗按钮：主题三颗只在设置那一面存在，
+  // 站在笔记页读 `aria-pressed` 读到的是 null —— 上一版这条红就是红在这里（仪器自己的错）。
+  await p.evaluate(() => document.querySelector('[data-testid="nav-settings"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  await p.waitForTimeout(800);
+  check('㊽ 抹掉本机那份再重开，设置还得在（库里读回来 —— 这一格存在的意义就在这条上）',
+    (await screenTheme(p)) === target && (await pressed(p, target)) === 'true' && (await prefsNow()) === target,
+    JSON.stringify({ screen: await screenTheme(p), pressed: await pressed(p, target), core: await prefsNow(), target }));
+
+  // 正对照：**库与本机两份不一致时，屏幕要跟库走**。
+  // 缓存里种的是刚点下去的那一档、注入的库是另一档 —— 两个值刻意取反（上一版注入的正是默认浅色，
+  // "跟库走"与"跟默认走"在数据上分不开，摘掉读取照样绿，那就是空判据）。
+  const c2 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await c2.addInitScript((value) => {
+    localStorage.setItem('notera.ui.v1', JSON.stringify({ theme: value }));
+  }, target);
+  const p2 = await c2.newPage();
+  const errs2 = [];
+  p2.on('console', (m) => { if (m.type() === 'error') errs2.push(m.text()); });
+  await p2.route('**/cmd/get_prefs', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ theme: opposite, fontScale: 1 }),
+  }));
+  await p2.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p2.waitForTimeout(1400);
+  const injected = await p2.evaluate(() => document.documentElement.dataset.theme ?? null);
+  check('㊽ 本机那份与库不一致 ⇒ 屏幕跟库走（防的是"桥只是写着玩，读的还是本机缓存"）',
+    injected === opposite, JSON.stringify({ injected, seeded: target, library: opposite }));
+  check('㊽ 注入腿自己没弄脏库：路由那一发不该被写回去（回声闸门）',
+    (await prefsNow()) === target, JSON.stringify({ after: await prefsNow(), target }));
+
+  // 收尾：开发库不许带着这一腿的选择离开。
+  await p.evaluate(() => document.querySelector('[data-testid="nav-settings"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  await p.waitForTimeout(700);
+  await p.locator(`[data-testid="theme-${before ?? 'system'}"]`).first().click({ timeout: 4000 }).catch(() => {});
+  await p.waitForTimeout(1100);
+  const restored = await prefsNow();
+  check('㊽ 收尾：把库里的偏好还给这台设备原来的那一格（工装自己也是污染源）',
+    before === null ? restored === null || restored === 'system' : restored === before,
+    JSON.stringify({ before, restored }));
+  check('㊽ 这一腿 console error 为零', errs.length === 0 && errs2.length === 0, [...errs, ...errs2].slice(0, 3).join(' | '));
+
+  await p2.close();
+  await c2.close();
+  await p.close();
+  await c.close();
+  notes.push(`     偏好过桥实测：库 ${before ?? '（空）'} ⇒ 差分点「${target}」⇒ 核心读回 ${afterClick} ⇒ 抹掉本机那份重开仍在 ⇒ 缓存${target}/库${opposite} 时屏幕跟库 ⇒ 归还 ${restored}`);
+}
+
+/**
+ * ㊾ 收尾不变量：**可见偏好要回到基准**。
+ *
+ * 第 30 刀之后主题/字号进了本地库，于是它们从"每条腿各自的临时现场"变成
+ * "跨腿、跨轮共享的现场" —— 今天两条 token 腿读到 `rgb(255, 143, 156)`（暗色那颗红）而永久红下去，
+ * 就是上一轮变异跑崩在半路、库里留下了 `theme=dark`。开局钉一次不够：还得有人证明
+ * **这一轮跑完没人把它改走**（改走了就是下一条腿在量一个自己不认识的环境，那种红查起来极贵）。
+ */
+{
+  const tail = await cmd('get_prefs', {});
+  const theme = tail?.theme ?? 'system';
+  const scale = tail?.fontScale ?? 1;
+  check('㊾ 收尾不变量：跑完这一轮，库里的可见偏好还在基准上（theme=system、fontScale=1）',
+    theme === 'system' && scale === 1, JSON.stringify({ theme, scale, raw: tail }));
+  notes.push(`     收尾偏好读数：theme=${theme} · fontScale=${scale}`);
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */

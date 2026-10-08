@@ -34,6 +34,8 @@ export interface ImportFilesReport {
 const STORAGE_KEY = 'notera.ui.v1';
 export const FONT_SCALE_MIN = 0.85;
 export const FONT_SCALE_MAX = 1.6;
+/** 字号是滑杆，一拖就是几十次变化 ⇒ 落库要合并成一次（每帧一次写事务不是"持久"，是负担）。 */
+export const PREFS_PERSIST_MS = 300;
 
 export interface UiPrefs {
   theme: ThemeMode;
@@ -43,23 +45,39 @@ export interface UiPrefs {
 }
 
 const DEFAULT_PREFS: UiPrefs = { theme: 'system', fontScale: 1, transparency: true, trayHint: false };
+const PREF_KEYS: readonly (keyof UiPrefs)[] = ['theme', 'fontScale', 'transparency', 'trayHint'];
 
 function clampScale(value: number): number {
   if (!Number.isFinite(value)) return 1;
   return Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, Math.round(value * 100) / 100));
 }
 
+/**
+ * 一份归一化，两条来路共用（localStorage 与核心的作用域偏好表）。
+ * 写第二份解析早晚漂移 —— 而这里漂一次就是"屏幕上深浅两套同时存在"那种形状。
+ */
+export function normalizePrefs(input: unknown): UiPrefs {
+  const raw = (input ?? {}) as Record<string, unknown>;
+  return {
+    theme: raw.theme === 'light' || raw.theme === 'dark' ? raw.theme : 'system',
+    fontScale: clampScale(typeof raw.fontScale === 'number' ? raw.fontScale : 1),
+    transparency: raw.transparency !== false,
+    trayHint: raw.trayHint === true,
+  };
+}
+
+/** 库里一条我们写过的键都没有 ⇒ 别拿默认值盖掉本机这一份（第一次启动的那位用户没做错什么）。 */
+function hasStoredPrefs(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null) return false;
+  const map = value as Record<string, unknown>;
+  return PREF_KEYS.some((key) => map[key] !== undefined);
+}
+
 function readPrefs(): UiPrefs {
   try {
     const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY) : null;
     if (!raw) return { ...DEFAULT_PREFS };
-    const parsed = JSON.parse(raw) as Partial<UiPrefs>;
-    return {
-      theme: parsed.theme === 'light' || parsed.theme === 'dark' ? parsed.theme : 'system',
-      fontScale: clampScale(typeof parsed.fontScale === 'number' ? parsed.fontScale : 1),
-      transparency: parsed.transparency !== false,
-      trayHint: parsed.trayHint === true,
-    };
+    return normalizePrefs(JSON.parse(raw) as unknown);
   } catch {
     return { ...DEFAULT_PREFS };
   }
@@ -154,11 +172,52 @@ export const useSettingsStore = defineStore('settings', () => {
   const fontScale = computed(() => prefs.value.fontScale);
   const usesPlainHttp = computed(() => /^http:\/\//i.test(draft.value.baseUrl ?? ''));
 
+  /**
+   * §6 第 6 格「偏好」的那半截能自己走完的路：选择落进**本地库**（`settings(scope='ui')`），
+   * 而不是只躺在 WebView2 的 profile 里 —— profile 被重置、换用户目录、整库备份搬到另一台机器，
+   * 笔记一条不少而主题字号回到默认，那句话叫"设置说了不算"。
+   * 跨设备那一半**没做也不吹**：核心写得很明白（`store.rs:1598` 附近）——
+   * UI 作用域"永不上传"、优先级 `device > ui > global` 与 DATA-MODEL §6"设备作用域不跨设备"一致，
+   * `all_records()` 只带 folders / notes / 墓碑。那一半按 §40 记成待决（G98），不在界面上画承诺。
+   */
+  async function hydratePrefs(): Promise<void> {
+    try {
+      const stored = await callCommand<unknown>(Commands.getPrefs, {});
+      if (!hasStoredPrefs(stored)) return;
+      prefs.value = normalizePrefs(stored);
+      // 读回来的那一份就是"已经落库的那一份"：不这么记一下，hydrate 会把自己刚读到的值再写回去，
+      // 而那条回声会让"界面改了没有"这类判据读成真的改过。
+      persisted = { ...prefs.value };
+    } catch {
+      // 桥不通/库读不动时**保留本机这一份**：取回偏好失败，不该变成把用户的选择洗成默认。
+    }
+  }
+
+  let persisted = { ...prefs.value };
+  let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** 把这一份变化落成库里的键（只发真的变了的那几格，合并成一次）。 */
+  function schedulePersist(next: UiPrefs): void {
+    const changed = PREF_KEYS.filter((key) => next[key] !== persisted[key]);
+    if (changed.length === 0) return;
+    persisted = { ...next };
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => {
+      persistTimer = null;
+      for (const key of changed) {
+        // 失败不打扰用户（改个字号不该弹错误），但本机那份已经在 localStorage 里，
+        // 下一次启动照样读得回来 —— 少的那一半是"随库走"，不是"这一台也不记得"。
+        void callCommand(Commands.setPref, { key, value: next[key] }).catch(() => undefined);
+      }
+    }, PREFS_PERSIST_MS);
+  }
+
   watch(
     prefs,
     (next) => {
       writePrefs(next);
       applyThemeToDocument();
+      schedulePersist(next);
     },
     { deep: true },
   );
@@ -472,6 +531,7 @@ export const useSettingsStore = defineStore('settings', () => {
     dataBusy,
     lastReport,
     applyThemeToDocument,
+    hydratePrefs,
     trackSystemTheme,
     setTheme,
     setFontScale,
