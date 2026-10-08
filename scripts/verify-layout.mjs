@@ -4440,6 +4440,144 @@ function contrastRatio(fg, bg) {
   notes.push(`     设备身份实测：核心 ${(core.deviceId ?? '').slice(0, 13)}… ⇒ 屏幕「${wide.text}」；320 下自己溢出 ${narrow.clipped}px、占 ${narrow.lines} 行；老核心 ⇒ 不出现`);
 }
 
+/**
+ * ㊻ §5 那行「文本裁切：不许静默裁掉（自动化会在两个视口 × 六个界面上扫描）」的**执行者**（缺口 G95）。
+ *
+ * 定义要说清，否则要么冤枉要么漏：
+ *  · 只看**自己带文字**的那一格（容器的溢出由它的文字子节点各自回答），量 `scrollWidth - clientWidth`；
+ *  · 溢出 > 1px 还不算违规 —— 往上到根只要有一格**能横向滚**（`overflowX: auto|scroll|overlay`）
+ *    就是"有办法看到全部文字"，那正是 §3.4 要的工具条横滚与虚拟列表；
+ *    真正的违规是"所有祖先都把这条路堵死"（`overflow: hidden` 不算能滚）；
+ *  · `text-overflow: ellipsis` 只是形状，不是判据；判据问的是"这段字在界面上还能不能读全"。
+ *  · **排除**只给读屏器的那一格（`.visually-hidden` 的 `clip-path: inset(50%)` 形状）：
+ *    它按定义就是不给视觉用户看的，而 §4.3/㉗ 那两条另外在管"该看得见的原因有没有只挂在 aria-live 上"。
+ *
+ * 四条判据互相咬着：
+ *  · **到了哪个面读界面自己声明的状态**（`data-active` / 那一面的根节点），不读"我点成功了" ——
+ *    390 那一档侧栏是抽屉，`nav-*` 得先开抽屉才点得动，而"点成功"根本不证明落到了那个面；
+ *  · 零违规（产品侧的那一句）；
+ *  · **每个组合各自一枚正对照**：在这个面上现场塞一枚已知被裁的假元素，扫描器必须点名它。
+ *    为什么是每个面各一枚、而不是全局一枚：那才是"这一格的零违规是真扫出来的"的凭据 ——
+ *    `390/conflicts` 整个面只有 9 个文字块，任何"样本量下限"都守不住它，这一条守得住；
+ *  · 这一腿 console error 为零。
+ */
+{
+  const SCAN = () => {
+    const SCROLLABLE = /auto|scroll|overlay/;
+    const out = [];
+    let sampled = 0;
+    for (const el of Array.from(document.querySelectorAll('body *'))) {
+      const directText = Array.from(el.childNodes).some((n) => n.nodeType === 3 && (n.textContent ?? '').trim().length > 0);
+      if (!directText) continue;
+      const cs = getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) continue;
+      if (cs.clipPath !== 'none' || cs.position === 'absolute' && rect.width <= 2) continue; // 只给读屏器的那一格
+      sampled += 1;
+      const over = Math.round(el.scrollWidth - el.clientWidth);
+      if (over <= 1) continue;
+      let reachable = false;
+      for (let a = el; a && a !== document.documentElement; a = a.parentElement) {
+        const acs = getComputedStyle(a);
+        if (SCROLLABLE.test(acs.overflowX) || SCROLLABLE.test(acs.overflow)) { reachable = true; break; }
+      }
+      if (reachable) continue;
+      out.push({
+        cls: typeof el.className === 'string' ? el.className.slice(0, 34) : '',
+        testid: el.getAttribute('data-testid') ?? '',
+        over,
+        text: (el.textContent ?? '').trim().slice(0, 24),
+      });
+    }
+    return { out, sampled };
+  };
+
+  const VIEWS = ['all', 'trash', 'search', 'editor', 'settings', 'conflicts'];
+  const tap = async (page, sel, ms = 4000) => {
+    try { await page.locator(sel).first().click({ timeout: ms }); return true; } catch { return false; }
+  };
+  /** "到了那个面"读**界面自己声明的状态**，不读"我点成功了"：
+   *  `nav-*` 的 `data-active` 由 `shell.view` / `notes.mode.kind` 算出来，落在别的面上就是 false；
+   *  search 读输入框里真留着那串字，editor / conflicts 读那一面自己的根节点在不在。 */
+  const ONSITE = {
+    all: () => document.querySelector('[data-testid="nav-all"]')?.getAttribute('data-active') === 'true',
+    trash: () => document.querySelector('[data-testid="nav-trash"]')?.getAttribute('data-active') === 'true',
+    settings: () => document.querySelector('[data-testid="nav-settings"]')?.getAttribute('data-active') === 'true',
+    conflicts: () => document.querySelector('[data-testid="conflicts-view"]') !== null,
+    search: () => (document.querySelector('[data-testid="search-input"]')?.value ?? '').length > 0,
+    editor: () => document.querySelector('[data-testid="editor-doc"]') !== null,
+  };
+  const gotoView = async (page, view) => {
+    // 只有"侧栏里那一格"要先开抽屉；search / editor 在列表栏自己身上 ——
+    // 抽屉开着会把它们盖住（上一版探针就是这么把 390 那两面点成 tap=false 的）。
+    // 宽屏那档 `open-sidebar` 存在就直接用，窄屏退到移动端 dock 的 `mobile-sidebar`。
+    const nav = { all: 'nav-all', trash: 'nav-trash', settings: 'nav-settings', conflicts: 'nav-conflicts' }[view];
+    if (nav) {
+      if (!(await tap(page, '[data-testid="open-sidebar"]', 1200))) await tap(page, '[data-testid="mobile-sidebar"]', 1500);
+      return tap(page, `[data-testid="${nav}"]`, 2500);
+    }
+    if (view === 'search') {
+      if (!(await tap(page, '[data-testid="search-input"]', 2500))) return false;
+      await page.keyboard.type('布局门禁夹具');
+      return true;
+    }
+    return tap(page, '[data-testid^="note-row-"]', 2500);
+  };
+
+  // 每个组合自己的正对照（仪器的牙齿，不是产品断言）：产品里没有一个"长文本 + 祖先全是 hidden"的
+  // 现成形状可借 —— 列表那一栏的祖先 `overflow-y:auto` 会把 `overflow-x` 的计算值也带成 auto（那是
+  // CSS 规则），于是"能横滚"就等于"读得到"。所以现场造一枚**已知的假裁切**挂到 body 上：
+  // 报不出来就是扫描器在这一格瞎了，上面那句"零违规"也就什么都没说。
+  const PROBE_ON = () => {
+    const el = document.createElement('p');
+    el.className = 'zz-clip-probe';
+    el.style.cssText = 'white-space:nowrap;overflow:hidden;width:80px';
+    el.textContent = '探针专用的一段很长很长的中文文字用来测扫描器';
+    document.body.appendChild(el);
+  };
+  const PROBE_OFF = () => document.querySelectorAll('.zz-clip-probe').forEach((n) => n.remove());
+
+  const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await c.newPage();
+  const gErrors = [];
+  p.on('console', (m) => { if (m.type() === 'error') gErrors.push(m.text()); });
+  const report = [];
+  for (const width of [1440, 390]) {
+    for (const view of VIEWS) {
+      await p.setViewportSize({ width, height: 900 });
+      await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+      await p.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+      await p.waitForTimeout(600);
+      await gotoView(p, view);
+      await p.waitForTimeout(800);
+      const onFace = await p.evaluate(`(${ONSITE[view].toString()})()`);
+      const scan = await p.evaluate(SCAN); // 真读数：产品判据只看这一份
+      await p.evaluate(PROBE_ON);
+      const withProbe = await p.evaluate(SCAN);
+      await p.evaluate(PROBE_OFF);
+      report.push({
+        width, view, onFace, sampled: scan.sampled, hits: scan.out,
+        control: withProbe.out.some((h) => h.cls.includes('zz-clip-probe')),
+      });
+    }
+  }
+  const missed = report.filter((r) => r.onFace !== true);
+  check('㊻ 仪器自检：12 个组合（两个视口 × 六个面）每一个都读得出"确实落在这个面上"',
+    missed.length === 0 && report.length === 12, JSON.stringify({ missed, n: report.length }));
+  const blind = report.filter((r) => r.control !== true);
+  check('㊻ 每个面各自一枚正对照：塞进去的假裁切必须被点名 —— 点不出名的那一格，"零违规"就什么都没说',
+    blind.length === 0, JSON.stringify({ blind, counts: report.map((r) => `${r.width}/${r.view}:${r.sampled}`) }));
+  const dirty = report.filter((r) => r.hits.length > 0);
+  check('㊻ §5 那句"文本不许静默裁掉"：12 个组合里没有任何一段字被祖先链彻底堵死读不全',
+    dirty.length === 0, JSON.stringify(dirty.slice(0, 4)));
+  check('㊻ 这一腿 console error 为零', gErrors.length === 0, gErrors.slice(0, 3).join(' | '));
+
+  await p.close();
+  await c.close();
+  notes.push(`     文本裁切通扫：${report.length} 个组合（两个视口 × 六个面）、共扫到 ${report.reduce((a, r) => a + r.sampled, 0)} 个文字块、0 处读不全；每个组合各塞一枚假裁切，${report.filter((r) => r.control).length}/${report.length} 个都被点名`);
+}
+
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
 async function purgeByTitle(prefix) {
   for (const trash of [false, true]) {
