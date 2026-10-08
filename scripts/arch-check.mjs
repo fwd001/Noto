@@ -684,6 +684,23 @@ check('hygiene:no-vacuous-source-scan', 'ARCHITECTURE-MAP §8（门禁必须真�
     scratch.join('\n    '));
 }
 
+/**
+ * `target/` 只能是 cargo 自己的地盘（缺口 G97 的第二臂）。
+ * 撞到的现场：`target/` 根下躺着 **133 个散文件**（历次会话把 cargo 的构建目录当 `.logs` 用 ——
+ * `add-rule-30.mjs`、`agent1.log`、`__pycache__`…）。后果不是脏，是**判断失真**：
+ * 那条 382 GB 里哪些能一把 `cargo clean` 掉、哪些是人写的东西，从目录上分不开，
+ * 于是"要不要清构建缓存"这个问题没人敢答。工装写进 `.logs/`（那里有预算看守），别写这里。
+ */
+{
+  const targetDir = join(ROOT, 'target');
+  const cargoOwned = /^(debug|release|tmp|package|node_modules|\.dist-shims|CACHEDIR\.TAG|\.[a-z0-9._-]+\.json|flywheel\.toml|[a-z0-9_]+-[a-z0-9_]+-windows-(gnu|msvc)|x86_64-.*|i686-.*|aarch64-.*)$/;
+  const strays = existsSync(targetDir)
+    ? readdirSync(targetDir).filter((name) => !cargoOwned.test(name))
+    : [];
+  check('hygiene:no-scratch-in-target', 'ARCHITECTURE-MAP §8（构建目录只放构建产物，工装残骸写进 .logs 才有预算看守）', strays,
+    `这些文件躺在 target/ 根下，不是 cargo 的产物：\n    ${strays.slice(0, 12).join('\n    ')}`);
+}
+
 let failed = 0;
 for (const r of results) {
   if (!r.ok) failed++;

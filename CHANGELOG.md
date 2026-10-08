@@ -3291,8 +3291,20 @@ Rust 那条测试把语义钉住（`phase == "unconfigured"` 且 `pendingOps == 
 
 **没动的两块（要用户拍，不代决定）**：`target/`（cargo 构建缓存，清掉要重编十几分钟）、
 `.git` 137 MB（大头是历史里累计的证据 png；根治要定"截图是否每张永久进库"的口径）。
+→ **用户当天拍了 `cargo clean` 全清**，于是这一格也办了：`target/` **382 GB**（四个 toolchain 的产物叠在
+一棵树里 —— `debug`、`release`、`x86_64-pc-windows-gnu`、`tmp`），清完 **D: 从 98% 用满回到 24%**
+（可用 14 GB ⇒ 363 GB）。清它之前必须先按 PID 停掉在跑的 dev 桥（它锁着 `notera-cli.exe`，
+构建/删除直接 `Permission denied`）—— 这条老规矩这次也救了一次：`cargo clean` 跑到那儿会卡住。
 
-实测：`arch-check` **33/33**、`clean-scratch --self-test` 五臂全过、变异三刀各红；
+**顺着清完才看得见的第二格（G97 的第二臂）**：`target/` 根下躺着 **133 个散文件**
+（`add-rule-30.mjs`、`agent1.log`、`__pycache__`、`docs-031.mjs`…）—— 历次会话把 cargo 的构建目录当 `.logs` 用了。
+后果不是脏，是**判断失真**：那 382 GB 里哪些能一把 `cargo clean`、哪些是人写的东西，从目录上分不开，
+于是"要不要清构建缓存"这个问题没人敢答（我也一样，第一版只报了"382 GB 全可再生"就问了）。
+补成机器判据：`arch-check` 第 34 条 `hygiene:no-scratch-in-target` —— `target/` 根下只允许 cargo 自己的名字，
+其余算违规。**差分打牙**：放一枚 `target/probe-stray.txt` ⇒ 立刻 FAIL（"33/34"），撤掉 ⇒ PASS。
+
+实测：`arch-check` **34/34**（第 33、34 两条的差分都现场打过：`.logs` 超预算 ⇒ 红、往 `target/` 根下放一枚散文件 ⇒ 红）、
+`clean-scratch --self-test` 五臂全过、变异三刀各红；
 本刀只动工装与文档，**不改产品代码 ⇒ 版本号不升**。
 
 ### 已知限制（明确记为 BLOCKED / 待决，不当作已完成）
