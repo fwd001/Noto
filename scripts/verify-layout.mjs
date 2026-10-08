@@ -101,6 +101,19 @@ function flattenFolders(nodes, out = []) {
 const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '');
 
 /**
+ * 开局先收一次**工装自己的残骸**（缺口 G97 的看守）。
+ * 上一版的病：这条腿曾在这里抛 EPERM 把整条门禁打断（备份文件还被核心握着），
+ * 而崩在半路那一轮既收不了尾、也不清 `.logs` —— 实测 `.logs` 涨到 197 MB。
+ * `sweep` 自己把 EPERM 收成 leftover（重试两次，剩下的下一次再收），所以这里不需要 try。
+ */
+{
+  const { sweep } = await import('./clean-scratch.mjs');
+  const r = sweep();
+  if (r.doomed.length || r.backupsRemoved) console.log(`开局收残骸：删 ${r.doomed.length} 项工装旧物、${r.backupsRemoved} 份备份 ⇒ ${r.beforeMb} MB → ${r.afterMb} MB`);
+  for (const l of r.leftovers) console.log(`  带不走（下次再收）：${l}`);
+}
+
+/**
  * 开局先扫一遍**上一轮崩在中途留下的夹具**。
  * 每一腿自己收尾，但"崩在半路"那一轮收不了尾：实测残骸堆到 26 条笔记里 19 条是夹具，
  * 于是后面每一腿的"第几行 / 列表长度 / 最新那一篇"都被这些残骸改过 —— 制造的是与产品无关的红
@@ -3561,10 +3574,23 @@ function contrastRatio(fg, bg) {
   const backupDir = `${DATA_DIR}/backups`;
   const pendingFile = `${DATA_DIR}/restore-pending.json`;
   const wipeBackupArtifacts = () => {
+    // Windows：核心可能还握着刚写的那份备份 ⇒ `rmSync` 抛 EPERM。上一版这里直接抛出去，
+    // 整条门禁在最后一腿之前断了（而崩在半路那一轮既不收尾、也不清盘，残骸越攒越多）。
+    // 现在带不走就记 leftover，下一轮开局由 `clean-scratch` 再收一次。
+    const stuck = [];
+    const rm = (path) => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try { fs.rmSync(path, { force: true }); return; } catch (error) {
+          if (attempt === 2) stuck.push(`${path} —— ${error.code ?? error.message}`);
+          else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
+        }
+      }
+    };
     if (fs.existsSync(backupDir)) {
-      for (const f of fs.readdirSync(backupDir)) fs.rmSync(`${backupDir}/${f}`, { force: true });
+      for (const f of fs.readdirSync(backupDir)) rm(`${backupDir}/${f}`);
     }
-    fs.rmSync(pendingFile, { force: true });
+    rm(pendingFile);
+    for (const s of stuck) console.log(`  备份带不走（下一轮开局再收）：${s}`);
   };
   wipeBackupArtifacts();
 

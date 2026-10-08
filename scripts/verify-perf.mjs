@@ -446,4 +446,14 @@ const failed = rows.filter((r) => !r.ok);
 console.log(`\n${rows.length - failed.length}/${rows.length} 通过`);
 console.log(`读数：${JSON.stringify(numbers)}`);
 if (failed.length) console.log('失败步骤：' + failed.map((f) => f.step).join(' / '));
+
+// 夹具库收尾就删（缺口 G97）：20000 条那一档是 43 MB 的 sqlite，而 `RUN_TAG` 一变就多一份 ——
+// 实测 `.logs` 因为这三份 43 MB 涨到 197 MB。要看现场就 `KEEP=1` 跑。
+if (process.env.KEEP !== '1') {
+  for (const dir of [EMPTY_DIR, BIG_DIR]) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (error) { console.log(`夹具库带不走（下次由 clean-scratch 收）：${dir} —— ${error.code ?? error.message}`); }
+  }
+} else {
+  console.log(`KEEP=1：沿用现场 ${BIG_DIR}（${(fs.statSync(`${BIG_DIR}/notera.sqlite`, { throwIfNoEntry: false })?.size ?? 0) / 1048576 | 0} MB）`);
+}
 process.exit(failed.length ? 1 : 0);

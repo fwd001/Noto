@@ -652,6 +652,38 @@ const vacuous = scans.filter((s) => s.files === 0).map((s) => rel(s.dir));
 check('hygiene:no-vacuous-source-scan', 'ARCHITECTURE-MAP §8（门禁必须真的看了文件）', vacuous,
   `这些源码扫描一个文件都没看到，等于没检查：\n    ${vacuous.join('\n    ')}`);
 
+/**
+ * 工装残骸的看守自己也得是活的（缺口 G97）。
+ * 两臂：① 拿合成序列验"何时该删"那套数学（`--self-test` 的五臂）；
+ * ② 对盘上的 `.logs` 做一次真预算检查 —— 这一臂以前**根本没有**，
+ *   所以 `verify-perf` 每换一个 RUN_TAG 留下 43 MB 也没人红，实测涨到 197 MB。
+ * `.logs` 不存在（CI 的干净工作树）时第二臂跳过，不编造违规。
+ */
+{
+  const { spawnSync } = await import('node:child_process');
+  const { BUDGET } = await import('./clean-scratch.mjs');
+  const bytesOf = (dir) => {
+    let sum = 0;
+    for (const name of readdirSync(dir)) {
+      const full = join(dir, name);
+      let s = null;
+      try { s = statSync(full); } catch { continue; }
+      sum += s.isDirectory() ? bytesOf(full) : s.size;
+    }
+    return sum;
+  };
+  const scratch = [];
+  const probe = spawnSync(process.execPath, [join(ROOT, 'scripts', 'clean-scratch.mjs'), '--self-test'], { encoding: 'utf8' });
+  if (probe.status !== 0) scratch.push(`clean-scratch --self-test 退出码 ${probe.status}\n    ${(probe.stdout ?? '') + (probe.stderr ?? '')}`);
+  const logsDir = join(ROOT, '.logs');
+  if (existsSync(logsDir)) {
+    const mb = bytesOf(logsDir) / 1048576;
+    if (mb > BUDGET.logsMaxMb) scratch.push(`.logs 已 ${mb.toFixed(1)} MB > 预算 ${BUDGET.logsMaxMb} MB —— 跑 \`node scripts/clean-scratch.mjs\` 收`);
+  }
+  check('hygiene:scratch-budget-guarded', 'ARCHITECTURE-MAP §8（工装残骸要有上界，删除判据要能被合成序列验）', scratch,
+    scratch.join('\n    '));
+}
+
 let failed = 0;
 for (const r of results) {
   if (!r.ok) failed++;
