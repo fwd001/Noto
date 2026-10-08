@@ -5311,6 +5311,108 @@ function contrastRatio(fg, bg) {
 }
 
 /**
+ * 52 所有浮层展开之后都得在视口里（缺口 G101 的看守）。
+ *
+ * 病的形状：`AppPopover` 的 CSS 只会一味朝下开、按 `right: 0` 贴右，于是面板会跑到视口外 ——
+ * 390 触摸档上编辑器角那颗「版本」实测 `x=-11 · bottom=1137`（视口 844），
+ * 1440×900 也漏（`y=891 · bottom=1147`）。里面那两颗动作看不见也点不到。
+ * §5 那条文本裁切通扫量的是**默认渲染**的界面：浮层不点不开、开了从来没人量过几何 ——
+ * 这不是产品的偶发，是判据的空档：所有走 `AppPopover` 的浮层（侧栏删除确认 / 列表「新建 ›」模板 /
+ * 编辑器「版本」）在窄视口与矮窗口下都没人量过。
+ *
+ * 两个视口 × 三个面（1440 三栏、390 编辑器面、390 抽屉面）逐个点开，配两道防空判据的守卫：
+ *  · 每一轮必须真的点开 N 个（少于就是"根本没打开"，下面全是空判据 —— 这条守卫在本腿写下时
+ *    就把一版扫到 0 个的选择器喊红过）；
+ *  · 至少有一个浮层是**朝上开**的（`panel.bottom <= trigger.top`）—— 少了它，"都在视口内"
+ *    可能只是因为这一屏本来就不需要翻转，翻转那条分支从来没执行过也没人知道。
+ */
+{
+  const sweep = async (width, height, face) => {
+    const mobile = width < 820;
+    const c = await browser.newContext({
+      viewport: { width, height },
+      ...(mobile ? { hasTouch: true, isMobile: true } : {}),
+    });
+    const p = await c.newPage();
+    const errs = [];
+    p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await p.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+    if (face === 'drawer') {
+      // 390 是单栏：侧栏那些行只有把抽屉拉开才在 DOM 里（而拉开之后编辑器就不在了 —— 两种现场分开量）。
+      await p.evaluate(() => document.querySelector('[data-testid="mobile-sidebar"]')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+      await p.waitForTimeout(800);
+    } else {
+      await p.evaluate(() => document.querySelector('[data-testid^="note-row-"]')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+      await p.waitForTimeout(1200);
+    }
+    // Headless UI 在 `.app-popover` 与那颗按钮之间**自己插了一层 div**（`data-headlessui-state`），
+    // 所以不能用 `> button` —— 第一版就是写成子代选择器，扫到 0 个浮层，
+    // 而"都在视口内"那两条在空数组上照样绿（是下面那道守卫把它喊红的）。
+    const found = await p.evaluate(() => Array.from(
+      document.querySelectorAll('.app-popover button[data-testid]'),
+      (el) => el.getAttribute('data-testid') ?? '?',
+    ));
+    const measured = [];
+    for (const testid of found) {
+      await p.evaluate((id) => document.querySelector(`.app-popover button[data-testid="${id}"]`)
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true })), testid);
+      await p.waitForTimeout(450);
+      const box = await p.evaluate(() => {
+        const panels = Array.from(document.querySelectorAll('[data-testid="app-popover-panel"]'))
+          .filter((el) => el.getBoundingClientRect().height > 0);
+        const el = panels[panels.length - 1];
+        const btn = el?.closest('.app-popover')?.querySelector('button');
+        if (!el || !btn) return null;
+        const r = el.getBoundingClientRect();
+        const t = btn.getBoundingClientRect();
+        return { x: Math.round(r.x), y: Math.round(r.y), right: Math.round(r.right), bottom: Math.round(r.bottom), up: r.bottom <= t.top + 1 };
+      });
+      if (box) measured.push({ testid, ...box });
+      await p.keyboard.press('Escape').catch(() => undefined);
+      await p.waitForTimeout(250);
+    }
+    // 收尾：这一轮点开的浮层一个都不许留着 —— 残留的面板会拦后面腿的 hover
+    //（第 33 刀第一次就是这么把一条更早的腿弄成超时的）。
+    const leftover = await p.evaluate(() => document.querySelectorAll('[data-testid="app-popover-panel"]').length);
+    await p.close();
+    await c.close();
+    return { measured, errs, leftover, vw: width, vh: height };
+  };
+
+  const wide = await sweep(1440, 900, 'wide');
+  const nEd = await sweep(390, 844, 'editor');
+  const nDr = await sweep(390, 844, 'drawer');
+  const narrow = {
+    measured: [...nEd.measured, ...nDr.measured],
+    errs: [...nEd.errs, ...nDr.errs],
+    leftover: nEd.leftover + nDr.leftover,
+    vw: 390,
+    vh: 844,
+  };
+  const outside = (r) => r.measured.filter((m) => m.x < 0 || m.y < 0 || m.right > r.vw || m.bottom > r.vh);
+
+  check('52 这一轮真的把浮层都点开了（1440 三栏 ≥3；390 编辑器面与抽屉面各 ≥1）—— 少于就是空判据',
+    wide.measured.length >= 3 && nEd.measured.length >= 1 && nDr.measured.length >= 1,
+    JSON.stringify({ wide: wide.measured.map((m) => m.testid), editor: nEd.measured.map((m) => m.testid), drawer: nDr.measured.map((m) => m.testid) }));
+  check('52 1440×900：每一个展开的浮层盒子都在视口里',
+    outside(wide).length === 0, JSON.stringify(outside(wide)));
+  check('52 390×844：每一个展开的浮层盒子都在视口里（G101 报的就是这一档）',
+    outside(narrow).length === 0, JSON.stringify(outside(narrow)));
+  check('52 至少有一个浮层是朝上开的（翻转那条分支真的执行过，不是"这一屏本来就放得下"）',
+    wide.measured.some((m) => m.up) || narrow.measured.some((m) => m.up),
+    JSON.stringify({ wide: wide.measured.map((m) => `${m.testid}:${m.up ? '上' : '下'}`), narrow: narrow.measured.map((m) => `${m.testid}:${m.up ? '上' : '下'}`) }));
+  check('52 这一腿自己点开的浮层一个都不许留着（残留的面板会拦后面腿的 hover）',
+    wide.leftover === 0 && narrow.leftover === 0,
+    JSON.stringify({ wide: wide.leftover, editor: nEd.leftover, drawer: nDr.leftover }));
+  check('52 两个视口各自 console error 为零', wide.errs.length === 0 && narrow.errs.length === 0,
+    [...wide.errs, ...narrow.errs].slice(0, 3).join(' | '));
+  notes.push(`     浮层几何实测：1440 打开 ${wide.measured.length} 个（朝上 ${wide.measured.filter((m) => m.up).length}）· 390 打开 ${narrow.measured.length} 个（朝上 ${narrow.measured.filter((m) => m.up).length}）· 越出视口 0 · 残留 0`);
+}
+
+/**
  * ㊾ 收尾不变量：**可见偏好要回到基准**。
  *
  * 第 30 刀之后主题/字号进了本地库，于是它们从"每条腿各自的临时现场"变成
