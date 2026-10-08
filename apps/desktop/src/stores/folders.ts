@@ -82,6 +82,13 @@ export const useFolderStore = defineStore('folders', () => {
   const errorKey = ref<string | null>(null);
   const flat = computed<FlatFolder[]>(() => flattenTree(nodes.value));
   const byId = computed(() => new Map(flat.value.map((entry) => [entry.node.id, entry])));
+  /**
+   * 「默认本」那一格（核心 bootstrap 出来的 `system_kind='default'`）：
+   * 它是产品里**唯一**的"还没整理"去处 —— 笔记必须属于某个文件夹（`list_notes` 内连接 folders，
+   * `create_note` / `set_note_folder` 的入参都是非空 uuid）。界面上两处要认它：
+   * 编辑器顶栏「移到」的落点，与删除文件夹那条确认文案里说的去处。
+   */
+  const defaultNode = computed(() => flat.value.find((entry) => entry.node.systemKind === 'default') ?? null);
 
   async function load(): Promise<void> {
     loading.value = true;
@@ -138,5 +145,5 @@ export const useFolderStore = defineStore('folders', () => {
     return byId.value.get(id)?.node.name ?? '';
   }
 
-  return { nodes, flat, byId, loading, errorKey, load, create, rename, remove, nameOf };
+  return { nodes, flat, byId, defaultNode, loading, errorKey, load, create, rename, remove, nameOf };
 });

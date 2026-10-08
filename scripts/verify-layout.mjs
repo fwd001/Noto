@@ -123,7 +123,7 @@ const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '');
 const FIXTURE_MARKS = [
   '只读夹具', '常驻夹具', '拖排夹具', '滚动夹具', '状态夹具', '保存状态夹具',
   '置顶往返夹具', '通扫夹具', '键盘夹具', '附件账夹具', '弹窗夹具', '拖放夹具',
-  '分档夹具', '改于夹具',
+  '分档夹具', '改于夹具', '移到夹具',
 ];
 for (const mark of FIXTURE_MARKS) await purgeByTitle(mark);
 
@@ -4602,6 +4602,139 @@ function contrastRatio(fg, bg) {
   await p.close();
   await c.close();
   notes.push(`     文本裁切通扫：${report.length} 个组合（两个视口 × 六个面）、共扫到 ${report.reduce((a, r) => a + r.sampled, 0)} 个文字块、0 处读不全；每个组合各塞一枚假裁切，${report.filter((r) => r.control).length}/${report.length} 个都被点名`);
+}
+
+/**
+ * ㊼ §2.4 那一格「移到」的**调用边**（缺口 G96）。
+ *
+ * 那颗下拉一直都在（`WorkspaceView.vue` 编辑器顶栏，`testid="move-folder"`），门禁也一直有腿在量它
+ * "浮层完整在视口内、选项点得着"（几何那一族，⑮/㉟ 那条链）。但**没有任何一条判据问过：
+ * 选完之后，库里那一篇的 `folder_id` 到底变没变** —— 于是"按钮换了个名字、库一动没动"这种坏实现
+ * 可以一路绿着进仓库（[[dead-controls-family-verify-the-bit-actually-read]] 那一族：
+ * 控件写的那一位是不是被读的那一位，要量，不能默认）。
+ *
+ * 判据的分工要说清，别和老腿重复：
+ *  · 老腿问"看得见、点得着"（几何）；这一腿问"点下去改了事实"（调用边 + 读模型）。
+ *  · **双向**都量：移到甲 ⇒ 核心 `folderId == 甲`；选回**默认本** ⇒ 核心 `folderId == 默认本`。
+ *    单向的话，"选项列表里只有一格有效"的坏实现照样过。
+ *  · 屏幕读数与核心读数**各取一次**：只读屏幕会放过"写了但没回读"，只读核心会放过"库改了按钮没换"。
+ *  · 390 那一端再走一遍 —— §2.4 那句"各端一致"不能只在宽屏量过。
+ */
+{
+  const TRIGGER = '[data-testid="move-folder"]';
+  const MARK = '移到夹具';
+  const NAME_A = '移到夹具甲';
+  const NAME_B = '移到夹具乙';
+  await purgeByTitle(MARK); // 崩在半路那一轮的残留
+
+  // 文件夹按名字复用而不是每跑一次再造一颗（⑧/⑨ 那一刀的教训：夹具自己也是污染源）。
+  // ⚠ `list_folders` 给的是一棵树，要摊平再找。
+  const tree = flattenFolders(await cmd('list_folders', {}));
+  const byName = (n) => tree.find((f) => f.name === n && f.systemKind == null);
+  const folderA = byName(NAME_A) ?? (await cmd('create_folder', { parentId: null, name: NAME_A }));
+  const folderB = byName(NAME_B) ?? (await cmd('create_folder', { parentId: null, name: NAME_B }));
+  if (!folderA?.id || !folderB?.id) throw new Error(`造不出"移到"夹具文件夹：${JSON.stringify({ a: folderA, b: folderB }).slice(0, 160)}`);
+  // 「未归类」在产品里不存在（笔记必须属于某个文件夹：`list_notes` 内连接 folders，
+  // `set_note_folder` 的入参是非空 uuid）—— 真正的"还没整理"那一格是核心 bootstrap 的**默认本**。
+  const defaultFolder = tree.find((f) => f.systemKind === 'default');
+  const defaultId = defaultFolder?.id ?? '';
+  const defaultName = defaultFolder?.name ?? '';
+  if (!defaultId) throw new Error('库里没有 systemKind=default 的默认本：「移到」的落点无从量起');
+
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: { v: 1, content: [{ id: `mv${stamp.slice(0, 6)}`, type: 'paragraph', content: [{ text: `${MARK} ${stamp}：这一篇要在两个文件夹之间来回移动` }] }] },
+  });
+  const noteId = made?.id;
+  if (!noteId) throw new Error(`造不出"移到"夹具笔记：${JSON.stringify(made).slice(0, 120)}`);
+
+  /** 按钮上那行读数 + 它此刻可不可用（`disabled` 属性与 `aria-disabled` 两套机制都读 —— 只接一套就会假绿）。 */
+  const labelNow = (page) => page.evaluate((sel) => {
+    const btn = document.querySelector(sel);
+    return {
+      text: btn?.querySelector('.app-select__value')?.innerText?.trim() ?? null,
+      disabled: btn?.hasAttribute('disabled') === true || btn?.getAttribute('aria-disabled') === 'true',
+    };
+  }, TRIGGER);
+  const pickOption = async (page, name) => {
+    const up = () => page.waitForSelector('[data-testid="app-select-panel"]', { state: 'visible', timeout: 2500 }).then(() => true).catch(() => false);
+    await page.click(TRIGGER).catch(() => {});
+    if (!(await up())) {
+      await page.locator(TRIGGER).focus().catch(() => {});
+      await page.keyboard.press('Enter').catch(() => {});
+      if (!(await up())) return false;
+    }
+    const opt = page.locator('[role="option"]').filter({ hasText: name }).first();
+    if ((await opt.count()) === 0) return false;
+    lastOptionValues = await page.evaluate(() => Array.from(document.querySelectorAll('[data-testid="app-select-panel"] [role="option"]'))
+      .map((o) => o.getAttribute('data-value') ?? ''));
+    await opt.click().catch(() => {});
+    await page.waitForTimeout(700);
+    return true;
+  };
+  const coreFolder = async () => (await cmd('get_note', { id: noteId }))?.folderId ?? null;
+  /** 面板开着时把**所有选项的落库位置**读一遍：`value: ''` 那一格就是那颗选了必 400 的假按钮（G96 的形状）。 */
+  let lastOptionValues = [];
+  const listedIds = async (folderId) => {
+    const rows = await cmd('list_notes', { folderId, trash: false });
+    return (Array.isArray(rows) ? rows : []).map((n) => n.id);
+  };
+  const openNote = async (page) => {
+    await page.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await page.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+    await page.waitForTimeout(600);
+    const row = page.locator(`[data-testid="note-row-${noteId}"]`).first();
+    await row.scrollIntoViewIfNeeded().catch(() => {});
+    await row.click({ timeout: 4000 }).catch(() => {});
+    await page.waitForTimeout(1000);
+  };
+
+  const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await c.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  await openNote(p);
+
+  const start = await labelNow(p);
+  const startCore = await coreFolder();
+  check('㊼ 仪器自检：选中那篇之后「移到」可用，且按钮读数 = 核心里那一位对应的名字（读数与事实同源才算量到了起点）',
+    start.disabled === false && start.text === defaultName && startCore === defaultId,
+    JSON.stringify({ start, startCore, want: { text: defaultName, id: defaultId } }));
+
+  const pickedA = await pickOption(p, NAME_A);
+  const afterA = await labelNow(p);
+  check('㊼ 仪器自检：选项真选得出来，而且**每一格都有落库的位置**（空 value 那一格选了必 400 —— G96 的形状）',
+    pickedA === true && afterA.text === NAME_A
+      && lastOptionValues.length >= 2 && lastOptionValues.every((v) => v !== ''),
+    JSON.stringify({ pickedA, afterA, lastOptionValues }));
+  const coreA = await coreFolder();
+  check('㊼ 调用边：选到「甲」之后，真核心里那一篇的 folderId 就是甲（按钮只换名字、库没动，红在这条）',
+    coreA === folderA.id, JSON.stringify({ coreA, want: folderA.id, label: afterA.text }));
+  const [inA, inDefault] = [await listedIds(defaultId), await listedIds(folderA.id)];
+  check('㊼ 读模型跟着挪：甲的列表里有它、默认本的列表里没有它（写了但读侧看不见，等于没写）',
+    inDefault.includes(noteId) && !inA.includes(noteId), JSON.stringify({ inDefault: inDefault.includes(noteId), inA: inA.includes(noteId) }));
+
+  const pickedHome = await pickOption(p, defaultName);
+  const afterHome = await labelNow(p);
+  const coreBack = await coreFolder();
+  check('㊼ 正对照（反向）：选回「默认本」也真落库 ⇒ 单向判据会被"只有一格有效"的坏实现骗过',
+    pickedHome === true && afterHome.text === defaultName && coreBack === defaultId,
+    JSON.stringify({ pickedHome, afterHome, coreBack, want: defaultId }));
+
+  // 390 那一端：同一件事必须也真改到库（各端一致不是只量宽屏）。
+  await p.setViewportSize({ width: 390, height: 900 });
+  await openNote(p);
+  const pickedB = await pickOption(p, NAME_B);
+  const coreB = await coreFolder();
+  check('㊼ 390（窄屏那一端）选到「乙」同样真落库：§2.4 那句"各端一致"不能只在宽屏量过',
+    pickedB === true && coreB === folderB.id, JSON.stringify({ pickedB, coreB, want: folderB.id }));
+  await p.screenshot({ path: `${OUT}/58-move-to-390.png` });
+
+  check('㊼ 这一腿 console error 为零', errs.length === 0, errs.slice(0, 3).join(' | '));
+  await p.close();
+  await c.close();
+  await purgeByTitle(MARK); // 夹具笔记不留（文件夹按名字复用，下一轮接着用）
+  notes.push(`     「移到」调用边实测：${defaultName} ⇒ 甲（核心 ${String(coreA).slice(0, 8)}…）⇒ 回${defaultName} ⇒ 390 选乙（核心 ${String(coreB).slice(0, 8)}…）；四次按钮读数都跟着变，选项里空 value 那一格已不存在`);
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */

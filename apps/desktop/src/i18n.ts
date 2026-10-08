@@ -24,8 +24,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'sidebar.deleteFolder': '删除文件夹',
   // §3.2 侧栏底部那行读数：让人知道"东西在哪、有多大"。不出现协议词。
   'sidebar.libraryReadout': '本地库 {notes} 条 · 占用 {size}',
-  'sidebar.deleteFolderHint': '删除文件夹不会删除其中的笔记，它们会回到"未归类"。',
-  'sidebar.root': '未归类',
+  'sidebar.deleteFolderHint': '删除文件夹不会删除其中的笔记，它们会回到「{folder}」。',
   'sidebar.collapse': '折叠侧栏',
   'sidebar.expand': '展开侧栏',
   'sidebar.newSubfolder': '在这里新建子文件夹',

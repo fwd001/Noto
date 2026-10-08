@@ -283,7 +283,7 @@ export const useNoteStore = defineStore('notes', () => {
     }
   }
 
-  async function moveTo(id: string, folderId: string | null): Promise<void> {
+  async function moveTo(id: string, folderId: string): Promise<void> {
     try {
       const note = await callCommand<Note>(Commands.setNoteFolder, { id, folderId });
       applyNoteUpdate(note);

@@ -107,7 +107,7 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
             :label="t('sidebar.deleteFolder')"
           >
             <template #default="{ close }">
-              <p class="tree__confirm-text">{{ t('sidebar.deleteFolderHint') }}</p>
+              <p class="tree__confirm-text">{{ t('sidebar.deleteFolderHint', { folder: folders.defaultNode?.node.name ?? '' }) }}</p>
               <span class="tree__confirm-row">
                 <button type="button" class="btn btn--danger" data-testid="folder-delete-confirm" @click="close(); removeFolder(row.node.id)">{{ t('list.confirm') }}</button>
                 <button type="button" class="btn btn--quiet" @click="close()">{{ t('list.cancel') }}</button>

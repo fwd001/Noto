@@ -23,7 +23,15 @@ const shell = useShellStore();
 
 const currentRow = computed(() => notes.rowById(notes.selectedId));
 const title = computed(() => currentRow.value?.title || t('editor.untitled'));
-const folderId = computed(() => currentRow.value?.folderId ?? '');
+/**
+ * 「未归类」这一格在产品里**不存在**，可它一直在下拉里（缺口 G96）：
+ *  · `list_notes` 把笔记**内连接**到 folders 上 —— 不属于任何文件夹的笔记根本列不出来；
+ *  · `create_note` 与 `set_note_folder` 的入参都是非空 uuid（核心 `default_folder_id()` 兜的就是「默认本」）；
+ *  · 于是那一格 `value: ''` 选下去必然 `bad_args` ⇒ 一次 400，屏幕上的位置一个字都没变。
+ * 真正的"还没整理"就是核心 bootstrap 出来的**默认本**，所以这一格改指它，而不是再画一个做不到的状态。
+ */
+const defaultFolderId = computed(() => folders.defaultNode?.node.id ?? '');
+const folderId = computed(() => currentRow.value?.folderId ?? defaultFolderId.value);
 const pinned = computed(() => currentRow.value?.pinned === true);
 const canEdit = computed(() => notes.selectedId !== null && !editor.loading);
 
@@ -35,14 +43,13 @@ watch(() => notes.selectedId, (id) => { void editor.open(id); }, { immediate: tr
 function moveToFolder(id: string): void {
   const noteId = notes.selectedId;
   if (!noteId) return;
-  void notes.moveTo(noteId, id || null);
+  void notes.moveTo(noteId, id);
 }
 
-/** 「移动到其他文件夹」那一份选项：根 + 全部文件夹（路径拼出来当标签）。 */
-const folderChoices = computed(() => [
-  { value: '', label: t('sidebar.root') },
-  ...folders.flat.map((entry) => ({ value: entry.node.id, label: entry.path.join(' / ') })),
-]);
+/** 「移到」那一份选项：**只有真文件夹**。以前头一格是「未归类」(`value: ''`)，
+ *  而核心没有"不属于文件夹"这一态（见上面 `defaultFolderId` 那段）⇒ 那颗选了必失败。 */
+const folderChoices = computed(() =>
+  folders.flat.map((entry) => ({ value: entry.node.id, label: entry.path.join(' / ') })));
 </script>
 
 <template>
@@ -180,7 +187,7 @@ const folderChoices = computed(() => [
 
 /* 编辑器顶栏。
    原来只有 `gap: var(--sp-2)`（8px）+ `nowrap`，而这一栏里挤着
-   「未归类下拉 · 固定 · 删除」三件东西 —— 8px 间距让它们看着像**一串挤在一起的
+   「归属下拉 · 固定 · 删除」三件东西 —— 8px 间距让它们看着像**一串挤在一起的
    按钮**，而不是"这篇笔记的属性"（用户反馈"对不齐、层级乱"）。
 
    这里把「固定 / 删除」这类**危险/次要动作**用 `margin-left:auto` 推到右侧，
