@@ -177,17 +177,29 @@ async function ensureSeededNote() {
   const folderId = plain?.id ?? (await cmd('create_folder', { parentId: null, name: '布局夹具本' }))?.id;
   if (!folderId) throw new Error('造不出一个普通文件夹：⑧ 那条判据无从量起');
 
-  // ⑨ 那一腿要一个**历史嵌套**的子层：拍平之后它必须还在（不能因为不渲染层级就消失），
-  //    而且与父级同一左缘。先查再造，免得每次跑门禁都多堆一个文件夹。
-  const existingChild = folders.find((f) => f.parentId === folderId);
-  const childId = existingChild?.id ?? (await cmd('create_folder', { parentId: folderId, name: '布局夹具子' }))?.id;
-  if (!childId) throw new Error('造不出历史子层：⑨ 那条"拍平不许丢文件夹"的判据无从量起');
-
   // ⑧′ 那一腿要一颗**可以被真删掉**的本：每次跑现造现删，不许复用（复用过的就在回收站里了）。
   //    代价是每次留下一条文件夹墓碑 —— 核心目前没有 purge_folder / restore_folder 命令。
+  // ⑨′ 那一腿要的是"**核心交给界面的那棵树里带一个子层**"这个形状。
+  //    0.0.107（第 38 刀）之后命令层一律拒嵌套 ⇒ 现造造不出来（缺口 G106：以前这一步靠开发库里
+  //    躺着的那颗 `布局夹具子` 蒙过，换任何一台干净机器都会红在开局）。
+  //    所以这里不再造夹具，也不返回一个假的 id —— 由腿自己把那棵树换一棵（route 注入），
+  //    夹具只负责提供一个能当父级的普通本。
+  //
+  //    顺带补一条**同级的本**：腿 ⑳ 那句"侧栏至少三排文件夹"是防空判据，而它的第三排以前
+  //    正是那颗子层凑的数（我撤掉子层那一刻就把这条判据饿红了 —— 2026-10-09 干净库整跑量到的）。
+  //    口径是"只允许一层"，所以凑数要用同级的本来凑，不是想办法把嵌套造出来。
+  const siblings = folders.filter((f) => f.systemKind == null && f.parentId == null);
+  if (siblings.length < 3) {
+    for (const nm of ['布局夹具本二', '布局夹具本三']) {
+      if (!siblings.some((f) => f.name === nm)) {
+        const extra = await cmd('create_folder', { parentId: null, name: nm });
+        if (extra?.id) siblings.push(extra);
+      }
+    }
+  }
   const sacrifice = await cmd('create_folder', { parentId: null, name: `布局夹具删 ${stamp}` });
   if (!sacrifice?.id) throw new Error(`造不出待删的文件夹：${JSON.stringify(sacrifice).slice(0, 120)}`);
-  return { noteId: id, folderId, childId, sacrificeId: sacrifice.id };
+  return { noteId: id, folderId, sacrificeId: sacrifice.id };
 }
 
 /**
@@ -479,16 +491,76 @@ for (const width of WIDTHS) {
       xs: [...new Set(rows.map((r) => Math.round(r.getBoundingClientRect().left)))],
       rowCount: rows.length,
       parentX: leftOf(ids[0]),
-      childX: leftOf(ids[1]),
       move: document.querySelectorAll('[data-testid="folder-move"]').length,
       sub: document.querySelectorAll('[data-testid^="folder-new-sub-"]').length,
     };
-  }, [seed.folderId, seed.childId]);
+  }, [seed.folderId]);
   check(
-    `宽 ${width}：文件夹平铺一层（历史子层还在、与父级同一左缘，且没有"移动到父级"/"在这下面新建"）`,
-    flat.rowCount > 0 && flat.xs.length === 1 && flat.parentX !== null && flat.parentX === flat.childX && flat.move === 0 && flat.sub === 0,
+    `宽 ${width}：文件夹平铺一层（所有行同一左缘，且没有"移动到父级"/"在这下面新建"）`,
+    flat.rowCount > 0 && flat.xs.length === 1 && flat.parentX !== null && flat.move === 0 && flat.sub === 0,
     JSON.stringify(flat),
   );
+
+  /**
+   * ⑨′ "历史子层不许因为不渲染层级就找不到"这一格（缺口 G106 之后只能这么造现场）。
+   *
+   * 0.0.107 起命令层拒绝嵌套，所以"库里带子层"这一形状**今天造不出来** —— 它只能来自旧库。
+   * 以前的写法是现造一个子层，于是在干净库上整条 lane 开局就抛（一直红着的那条前置），
+   * 而在开发库上能过全靠 0.0.107 **之前**遗留的那颗 `布局夹具子`：一条判据的夹具依赖
+   * 被这条判据自己封掉的产品行为。现在改成把核心交给界面的那棵树换成一棵带子层的
+   * （route 注入，腿 ㉗/㉓ 早就是这么干的），并配一条**不注入就没有那一排**的对照 ——
+   * 没有它，"注入才看得见"和"本来就一直在屏幕上"在数据上长得一模一样。
+   */
+  const LEGACY_CHILD = 'legacy-child-flatten-probe';
+  const realTree = await cmd('list_folders', {});
+  const tree = Array.isArray(realTree) ? realTree : [];
+  const legacyParent = tree.find((f) => f.id === seed.folderId);
+  if (legacyParent) {
+    legacyParent.children = [
+      ...(legacyParent.children ?? []),
+      { children: [], color: null, id: LEGACY_CHILD, name: '历史子层', noteCount: 0, parentId: seed.folderId, systemKind: null },
+    ];
+  }
+  const legacyJson = JSON.stringify(tree);
+  const lctx = await browser.newContext({ viewport: { width, height: width === 1440 ? 950 : 844 } });
+  const lp = await lctx.newPage();
+  const lErrs = [];
+  lp.on('pageerror', (e) => lErrs.push(String(e).slice(0, 140)));
+  await lp.route('**/cmd/list_folders', (route) =>
+    route.fulfill({ status: 200, headers: { 'content-type': 'application/json' }, body: legacyJson }),
+  );
+  await lp.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await lp.waitForSelector('[data-testid="folder-row"]', { timeout: 15000 });
+  await lp.waitForTimeout(800);
+  const inj = await lp.evaluate((ids) => {
+    const rowOf = (id) => {
+      const el = document.querySelector(`[data-testid="folder-${id}"]`);
+      return el ? el.closest('.tree__row') : null;
+    };
+    const left = (el) => (el ? Math.round(el.getBoundingClientRect().left) : null);
+    const p = rowOf(ids[0]);
+    const c = rowOf(ids[1]);
+    return {
+      hasParent: Boolean(p),
+      hasChild: Boolean(c),
+      parentX: left(p),
+      childX: left(c),
+      childText: c ? c.innerText.replace(/\s+/g, ' ').trim() : null,
+    };
+  }, [seed.folderId, LEGACY_CHILD]);
+  check(`宽 ${width} ⑨′ 样本量：注入那棵树里父级与子层都进了界面`, inj.hasParent === true && inj.hasChild === true, JSON.stringify(inj));
+  check(`宽 ${width} ⑨′ 历史子层拍平之后还在这一排里，且与父级同一左缘（"不渲染层级"不等于"藏起来"）`,
+    inj.hasChild === true && inj.childX !== null && inj.childX === inj.parentX, JSON.stringify(inj));
+  check(`宽 ${width} ⑨′ 那一行念得出"父 / 子"这条路径（用户要看得懂它挂在谁下面）`,
+    (inj.childText ?? '').includes('历史子层'), String(inj.childText));
+  await lp.unroute('**/cmd/list_folders');
+  await lp.reload({ waitUntil: 'networkidle' });
+  await lp.waitForSelector('[data-testid="folder-row"]', { timeout: 15000 });
+  await lp.waitForTimeout(800);
+  const ctl = await lp.evaluate((id) => Boolean(document.querySelector(`[data-testid="folder-${id}"]`)), LEGACY_CHILD);
+  check(`宽 ${width} ⑨′ 对照臂：不注入时那个子层不在屏幕上（上面三条不是恒真）`, ctl === false, String(ctl));
+  check(`宽 ${width} ⑨′ 这一格 console error 为零`, lErrs.length === 0, lErrs.slice(0, 3).join(' | '));
+  await lctx.close();
 
   // ⑩ 快捷新建的模板那颗 ▾。单测能证明 build() 造的载荷对，证明不了**点下去有没有 dispatch**、
   //    也证明不了编辑器按那份载荷画没画出来 —— 而"控件存在但没有效果"正是本项目踩过的那一族。
@@ -1059,6 +1131,10 @@ for (const width of WIDTHS) {
         if (!el) return null;
         // 要按**文字实际排到的右缘**取点：编辑区有 `--editor-measure` 那个宽度上限，
         // 拿块的盒子右缘去点会点到空白处（没有选区 ⇒ 那条工具条本来就不该出现）。
+        // 还要先把这一段**滚进视野**：这一腿原来直接拿块的屏幕坐标去点，于是点数少的时候
+        // 段落落在视口之下（2026-10-09 干净库实测 `y=6344` / `y=2733`），点下去命中的是空白，
+        // 读数 `missing:true` —— 红的是"没选到字"，不是"工具条出界"（缺口 G107 的那两条）。
+        el.scrollIntoView({ block: 'center' });
         const range = document.createRange();
         range.selectNodeContents(el);
         const tr = range.getBoundingClientRect();
@@ -1673,6 +1749,57 @@ const TRAP_SCAN = () => {
     const dotAfterNone = await dotColor();
     const coreAfterNone = await coreColor();
     check('"不用颜色"点得掉：那颗点消失且核心那一列回到空', dotAfterNone === null && coreAfterNone === null, JSON.stringify({ dot: dotAfterNone, core: coreAfterNone }));
+  }
+
+  /**
+   * 内置那一本（`systemKind` 非空）能不能打色标 —— 用户 2026-10-09 拍的是"允许"，
+   * 而这一格的判据形状必须是**差分**的：那颗按钮在、点得开、点了真落进核心那一列，
+   * 但同一本的改名那颗按钮依旧不在（例外只开到颜色为止）。
+   */
+  const sys = flattenFolders(await cmd('list_folders', {})).find((f) => f.systemKind);
+  check('现场有一本内置文件夹（否则下面全是空判据）', Boolean(sys), JSON.stringify(sys && sys.name));
+  if (sys) {
+    const sysRowSel = `[data-testid="folder-row"]:has([data-testid="folder-${sys.id}"])`;
+    const sysToggle = `${sysRowSel} [data-testid="folder-color-toggle"]`;
+    const sysDot = `[data-testid="folder-dot-${sys.id}"]`;
+    const sysRead = () => op.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      return el ? getComputedStyle(el).backgroundColor : null;
+    }, sysDot);
+    // 起点回到"没颜色"，与上一段同一个理由：现场库跨轮次留存。
+    await cmd('set_folder_color', { color: null, id: sys.id });
+    await op.reload({ waitUntil: 'networkidle' });
+    await op.waitForSelector('[data-testid="folder-row"]', { timeout: 15000 });
+    await op.waitForTimeout(900);
+    check('内置那一本没有改名那颗按钮（核心的可写判据没跟着颜色一起放开）',
+      (await op.$$eval(`${sysRowSel} [data-testid="folder-rename"]`, (e) => e.length)) === 0,
+      String(await op.$$eval(`${sysRowSel} button`, (e) => e.map((b) => b.getAttribute('data-testid')))));
+    check('但内置那一本有色点那颗按钮（拍下来的例外要真在屏幕上够得着）',
+      (await op.$$eval(sysToggle, (e) => e.length)) === 1,
+      String(await op.$$eval(sysToggle, (e) => e.length)));
+    await op.hover(sysRowSel);
+    await op.waitForTimeout(300);
+    await op.click(sysToggle);
+    await op.waitForTimeout(500);
+    check('那颗按钮真开得出色板（不是画了一颗死的点）',
+      (await op.$$eval('[data-testid^="folder-swatch-"]', (e) => e.length)) === 8,
+      String(await op.$$eval('[data-testid^="folder-swatch-"]', (e) => e.length)));
+    await op.click('[data-testid="folder-swatch-#1e40af"]');
+    await op.waitForTimeout(900);
+    const sysDotGot = await sysRead();
+    const sysCore = flattenFolders(await cmd('list_folders', {})).find((f) => f.id === sys.id)?.color ?? null;
+    check('给内置那一本上色：那颗点画出来就是选的那一支', sysDotGot === 'rgb(30, 64, 175)', String(sysDotGot));
+    check('核心那一列存的也是这一支（内置本不是只在本机画个假点）', sysCore === '#1e40af', String(sysCore));
+    await op.hover(sysRowSel);
+    await op.waitForTimeout(300);
+    await op.click(sysToggle);
+    await op.waitForTimeout(500);
+    await op.click('[data-testid="folder-color-none"]');
+    await op.waitForTimeout(900);
+    const sysCleared = await sysRead();
+    const sysCoreCleared = flattenFolders(await cmd('list_folders', {})).find((f) => f.id === sys.id)?.color ?? null;
+    check('内置那一本也清得掉（那颗点没了、那一列回到空）',
+      sysCleared === null && sysCoreCleared === null, JSON.stringify({ dot: sysCleared, core: sysCoreCleared }));
   }
 
   /**
@@ -3766,8 +3893,19 @@ function contrastRatio(fg, bg) {
     rows: document.querySelectorAll('[data-testid^="backup-row-"]').length,
     text: document.querySelector('[data-testid="backup-empty"]')?.textContent?.trim() ?? '',
   }));
-  check('㊳ 没有备份时那一格说的是"还没有备份过"，且不画任何一行（空态不是空表）',
-    empty.shown === true && empty.failed === false && empty.rows === 0 && empty.text.includes('还没有备份'),
+  /**
+   * 这一格原来断的是"**此刻库里没有备份** ⇒ 要说空态"。那个前提不是界面造的，是文件系统造的：
+   * 它按 `NOTERA_DEV_DATA`（默认 `.notera-dev`）去清盘，而桥可以跑在任何别的目录上 ——
+   * 2026-10-09 实测两遍：第一遍（空目录）绿，第二遍同一个目录里上一遍真按过一次备份，于是读回 `rows:1` 红，
+   * 而**紧着下一条"点备份之后立刻出现在清单里"反倒绿**。两条互斥，谁先跑谁把对方的现场弄坏（缺口 G107）。
+   *
+   * 现在断的是**一致式**：份数为 0 才许出现空态；有 n 份就画 n 行且空态收掉。
+   * 这在任何目录上都成立，并且原来那两个形状照样抓得住（空表冒充空态 / 有备份还说"还没有备份过"）。
+   */
+  check('㊳ 那一格说的与核心报的份数一致（0 份才许说"还没有备份过"；有 n 份就画 n 行、空态收掉）',
+    empty.rows === 0
+      ? (empty.shown === true && empty.failed === false && empty.text.includes('还没有备份'))
+      : (empty.shown === false && empty.rows > 0),
     JSON.stringify(empty));
 
   /**
@@ -3813,9 +3951,12 @@ function contrastRatio(fg, bg) {
       emptyGone: document.querySelector('[data-testid="backup-empty"]') === null,
     };
   });
+  // `rows === 1` 是个目录依赖：上一遍在这一库里真按过一次备份，这里读回的就是 2（而它的"空态"那条
+  // 反倒绿了 —— 一对互斥的判据谁先跑谁把对方的现场弄坏，缺口 G107）。判据要断的是**这一次点出来的一份**：
+  // 点之前几行、点之后必须恰好多一行，与库里原来有没有备份无关。
   check('㊳ 点「备份本地库」做完之后那一份立刻出现在清单里，空态同时收掉（做完就能选）',
-    tappedBackup === true && rowAppeared === true && row.rows === 1 && row.emptyGone === true,
-    JSON.stringify({ tappedBackup, rowAppeared, ...row }));
+    tappedBackup === true && rowAppeared === true && row.rows === empty.rows + 1 && row.emptyGone === true,
+    JSON.stringify({ tappedBackup, rowAppeared, ...row, rowsBefore: empty.rows }));
   check('㊳ 行上三个事实都读得懂：时间不是紧凑 UTC 生串、有体积、有库版本',
     row.rawStamp === false && row.hasSize === true && row.hasVersion === true, JSON.stringify(row));
   check('㊳ 「恢复这版」是 ≥44 的触摸目标，中心命中它自己', row.h >= 44 && row.selfHit === true, JSON.stringify(row));
@@ -4305,7 +4446,12 @@ function contrastRatio(fg, bg) {
     JSON.stringify({ footTop: [foot.top, footScrolled.top], rowTop: [foot.rowTop, footScrolled.rowTop], inVp: footScrolled.inVp }));
 
   // 搜索那一格不许并存（两个数各说一件事）。
-  await p47.fill('[data-testid="search-input"]', '布局门禁夹具');
+  // 搜索词**不能写死**：'布局门禁夹具' 是别的腿造的现场，换个干净目录这一搜就是 0 命中，
+  // 于是这一格读回 `foot:null,tier:null` —— 看着像"两格都消失了"的产品缺陷，其实是夹具不自足
+  // （缺口 G107）。这里改成本轮真在列表里的那一篇的标题前 4 个字（不足 4 个就用全部，
+  // 至少 2 个字才走得到核心那条"中文两个字也要能搜到"的路径）。
+  const searchTerm = (rows[0]?.title ?? '').trim().slice(0, 4) || '布局门禁夹具';
+  await p47.fill('[data-testid="search-input"]', searchTerm);
   await p47.waitForSelector('[data-testid="search-summary"]', { timeout: 9000 }).catch(() => undefined);
   await p47.waitForTimeout(300);
   const whileSearching = await p47.evaluate(() => ({
