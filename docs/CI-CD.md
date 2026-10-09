@@ -102,11 +102,11 @@
 | 1 | `actions/checkout` + GNU 工具链 + pnpm/node 准备 + `pnpm install --frozen-lockfile` | — |
 | 2 | `pnpm build`（**必须排在所有 Rust 步骤之前**：桌面壳的 `build.rs` 要嵌前端产物） | 有产物 |
 | 3 | `node scripts/check-versions.mjs` | 一致 |
-| 4 | `node scripts/arch-check.mjs` | **32/32** |
+| 4 | `node scripts/arch-check.mjs` | **32/32**（2026-10-09 已到 **34/34**，这一格是 09-30 那次快照） |
 | 5 | `cargo fmt --all --check` | 退出码 0 |
 | 6 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning |
 | 7 | `cargo test --workspace -- --test-threads=1`（串行是判据，不是习惯：墙钟类注入并发会假红） | **640 / 0 失败 / 6 ignored**（85 个 result 行） |
-| 8 | `pnpm test` + `pnpm typecheck` | 222 通过（23 文件）+ 0 错 |
+| 8 | `pnpm test` + `pnpm typecheck` | 222 通过（23 文件）+ 0 错（2026-10-09 实测已到 **559 通过 / 67 文件**，`vue-tsc --noEmit` 与 `eslint . --max-warnings 0` 都干净） |
 | 9 | `pnpm audit --audit-level=high --registry=https://registry.npmjs.org` | 0 条（275 个依赖）。**2026-10-09 这条第一次真的红**：`source-map-js >=1.0.0 <1.2.2` 一条 high（62 条路径全挂在 `vue → @vue/compiler-sfc →（postcss / @vue/compiler-core）` 那条链上），`pnpm update source-map-js` 把锁从 1.2.1 推到 1.2.2 之后 **0 条（锁里 278 个包）**；把锁退回 1.2.1 再跑同一条命令仍报 1 条 high、退出码 1 —— 判据有牙，两头都实测过 |
 | 10 | `node scripts/audit-rust-deps.mjs --self-test` | 6 个脏样本报 18 条、2 个净样本 0 条（**2026-09-30 补**：此前脚本注释写着"CI 里也是这条"而 CI 里从来没这一步，那条门只在本机跑过 —— 缺口 G36） |
 | 11 | `node scripts/audit-rust-deps.mjs` | **PASS · 624 个依赖 0 条未豁免**（外加 2063 条依赖边的覆盖对账（第 2063 条正是 0.0.47 新加的 `notera-net → rustls-native-certs` —— 对账当场把它认下来了）） |

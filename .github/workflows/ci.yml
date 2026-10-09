@@ -76,7 +76,7 @@ jobs:
       - name: 版本单源（CI-CD §版本与单一版本源）
         run: node scripts/check-versions.mjs
 
-      - name: 架构适应度 + §26 无障碍 + 扫描台账 + CI 门禁对账（本机基线 32/32）
+      - name: 架构适应度 + §26 无障碍 + 扫描台账 + CI 门禁对账（本机基线 34/34，2026-10-09 实测）
         run: node scripts/arch-check.mjs
 
       # 图标这条必须阻断：0.0.63 之前那批是纯色方块（1 种颜色、ico 单帧、压根没有 .icns），
@@ -104,7 +104,7 @@ jobs:
         # 比 CI 多花两分钟贵。
         run: cargo test --workspace -- --test-threads=1
 
-      - name: 前端单测（本机基线 224 通过 / 23 文件）
+      - name: 前端单测（本机基线 559 通过 / 67 文件，2026-10-09 实测）
         working-directory: apps/desktop
         run: pnpm test
 
