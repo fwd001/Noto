@@ -41,6 +41,7 @@ import {
 } from '../editor/model';
 import { useEditorStore } from '../stores/editor';
 import { formatModified } from '../util/format';
+import { attachmentCleanName, attachmentNameKey } from '../util/attachmentRows';
 import VersionHistory from './VersionHistory.vue';
 import { useSettingsStore } from '../stores/settings';
 import { useShellStore } from '../stores/shell';
@@ -223,8 +224,14 @@ function reuploadAttachment(block: EditorBlock): void {
   void store.reuploadAttachment(stringAttr(block, 'sha256') ?? stringAttr(block, 'ref'));
 }
 
+/**
+ * 这颗芯片的名字（缺口 G103 收口）：**不许**再拿 sha 的前 12 位当名字。
+ * 块上没有名字时说的是"这张图 / 这份文件" —— 与设置页逐份清单同一对词（一个出处）。
+ * 图片还是文件看块自己的 `shape`，不去猜。
+ */
 function attachmentName(block: EditorBlock): string {
-  return stringAttr(block, 'name') ?? stringAttr(block, 'fileName') ?? stringAttr(block, 'sha256')?.slice(0, 12) ?? '';
+  const named = attachmentCleanName(stringAttr(block, 'name') ?? stringAttr(block, 'fileName'));
+  return named ?? t(attachmentNameKey(block.shape === 'image'));
 }
 
 /**

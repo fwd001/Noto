@@ -94,8 +94,25 @@ export function remoteStateKey(row: AttachmentInventoryRow): string {
 
 /** 那一行的名字：账上有名字就返回 `null`（调用方直接用那个名字），没有才需要一个兜底的词。 */
 export function rowNameKey(row: AttachmentInventoryRow): string | null {
-  if (row.name) return null;
-  return row.isImage ? 'settings.attNameImage' : 'settings.attNameFile';
+  if (attachmentCleanName(row.name)) return null;
+  return attachmentNameKey(row.isImage);
+}
+
+/**
+ * "这张图 / 这份文件"那一对词的唯一出处（§6-9 那一列与正文那颗附件芯片共用）。
+ *
+ * 为什么要抽出来：正文的芯片以前在块上没有名字时拿 **sha 的前 12 位**当名字
+ * （`RichEditor.attachmentName`，缺口 G103）。§4.5 那句「绝不能用一串哈希代替内容」
+ * 管的就是这一族 —— 而这一族最容易在两个地方各写一遍：一处修好了，另一处继续念哈希。
+ */
+export function attachmentNameKey(isImage: boolean): string {
+  return isImage ? 'settings.attNameImage' : 'settings.attNameFile';
+}
+
+/** 名字那一列的真值判断：空白不算名字（与核心把空白折成 `null` 同一口径）。 */
+export function attachmentCleanName(value: string | null | undefined): string | null {
+  const clean = value?.trim();
+  return clean ? clean : null;
 }
 
 /**

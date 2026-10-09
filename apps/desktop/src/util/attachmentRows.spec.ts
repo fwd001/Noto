@@ -10,6 +10,8 @@ import { describe, expect, it } from 'vitest';
 import type { AttachmentInventoryRow } from '../api/types';
 import {
   ROW_LIMIT,
+  attachmentCleanName,
+  attachmentNameKey,
   ledgerView,
   localStateKey,
   remoteStateKey,
@@ -212,6 +214,29 @@ describe('那一行该不该给两颗自救动作（§4.4）', () => {
       retry: true,
       reupload: false,
     });
+  });
+});
+
+describe('「这张图 / 这份文件」这一对词只有一个出处（G103）', () => {
+  it('图片与非图片各一个词，两个都是给人看的话', () => {
+    expect(attachmentNameKey(true)).toBe('settings.attNameImage');
+    expect(attachmentNameKey(false)).toBe('settings.attNameFile');
+    expect(attachmentNameKey(true)).not.toBe(attachmentNameKey(false));
+  });
+
+  it('空白与缺失都算"没有名字"，有名字才用名字', () => {
+    expect(attachmentCleanName('报告.pdf')).toBe('报告.pdf');
+    expect(attachmentCleanName('  两侧有空白.png  ')).toBe('两侧有空白.png');
+    expect(attachmentCleanName('   ')).toBeNull();
+    expect(attachmentCleanName('')).toBeNull();
+    expect(attachmentCleanName(null)).toBeNull();
+    expect(attachmentCleanName(undefined)).toBeNull();
+  });
+
+  it('那一行的名字与芯片的名字走同一套判断：空白名不再被当成名字画上屏', () => {
+    // 第一版 `if (row.name)` 把 "   " 当成有名字 ⇒ 屏幕上是一个空白加一个分隔符。
+    expect(rowNameKey(row({ sha256: 'a', name: '   ', isImage: true }))).toBe('settings.attNameImage');
+    expect(rowNameKey(row({ sha256: 'a', name: ' 真有名字.png ', isImage: false }))).toBeNull();
   });
 });
 
