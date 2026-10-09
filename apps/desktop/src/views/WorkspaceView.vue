@@ -75,7 +75,7 @@ const folderChoices = computed(() =>
     <NoteList v-if="shell.listVisible" @open="shell.openEditor()" />
 
     <section v-if="shell.editorVisible" class="pane pane--editor" :aria-label="t('editor.pane')" data-testid="editor-pane">
-      <div class="pane-header editor-head">
+      <div class="pane-header editor-head" :class="{ 'editor-head--stacked': shell.isCompact }">
         <button v-if="shell.isCompact" type="button" class="btn btn--quiet btn--icon" :aria-label="t('mobile.back')" data-testid="back-to-list" @click="shell.backToList()">
           <AppIcon :size="18" name="arrow-back" />
         </button>
@@ -196,6 +196,39 @@ const folderChoices = computed(() =>
 .editor-head {
   gap: var(--sp-2);
   flex-wrap: nowrap;
+}
+
+/* 窄屏（`shell.isCompact`）把顶栏拆成两行：第一行只有「返回 + 标题」，第二行是「归属 + 动作」。
+   为什么不是"给标题加个折行"就完事：探针实测这一栏里 返回 44 + 归属 ~136 + 「固定」「删除」两颗
+   带文字的按钮 ~180，380 px 的容器算下来**标题只剩 20 px 可用宽度** —— 它不是"没肯折行"，
+   是根本没有宽度可折（我只加 `white-space:normal` 时，它折成了 1591 px 高的一竖条，顶栏 1608 px）。
+   同类软件在这种情况下的形状是一样的：标题独占一行，元信息与动作落到下面一行
+   （iOS 备忘录的笔记本名就在标题下面那行）。
+   断点数字**不在这里再写一遍**：`shell.isCompact` 是唯一真相，CSS 里再钉一个 820 就是第二套，
+   两边不同步时"量出来的窄屏"和"画出来的窄屏"就不是同一档（第 16 刀钉的正是断点本身）。 */
+.editor-head--stacked {
+  flex-wrap: wrap;
+  row-gap: var(--sp-1);
+}
+
+/* 标题：允许折两行，两行读不完才截断。
+   **这一条不分窄屏** —— 探针实测同一篇长标题在 900 与 1440 也分别横向溢出 644 / 368 px：
+   挤不下的不是"窄屏"，是"单行 + ellipsis"这个形状本身（§5 禁的就是这种没有交代的截断）。
+   窄屏那一档额外把整行让给标题（见上面 `--stacked`），宽屏则标题与归属、动作同排，
+   放不下时自己折到第二行去。 */
+.editor-head .pane-title {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+/* 标题在第一行里只给"自己 + 返回键 + 一个间距"留位置，归属与动作因此落到第二行。 */
+.editor-head--stacked .pane-title {
+  flex: 0 0 calc(100% - var(--touch) - var(--sp-2));
 }
 
 /* 顶栏右侧动作区：与左侧标题之间留出明确的分界。 */
