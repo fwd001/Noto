@@ -640,7 +640,7 @@ impl Store {
         self.write_tx(|tx, now| {
             let cur = rows::read_folder(tx, &id)?
                 .ok_or_else(|| StoreError::not_found(EntityKind::Folder, id.clone()))?;
-            Self::assert_folder_writable(&cur)?;
+            Self::assert_folder_colorable(&cur)?;
             if cur.color == color {
                 return Ok(cur); // 幂等：改成同一个颜色不许抬 rev、也不许多排一条待办
             }
@@ -1131,10 +1131,26 @@ impl Store {
     fn assert_folder_writable(f: &Folder) -> Result<(), StoreError> {
         if f.system_kind.is_some() {
             return Err(StoreError::Constraint(format!(
-                "内置文件夹 {} 不可改名/移动/删除/改色",
+                "内置文件夹 {} 不可改名/移动/删除",
                 f.id
             )));
         }
+        if f.deleted_at.is_some() {
+            return Err(StoreError::Constraint(format!(
+                "文件夹 {} 已在回收站",
+                f.id
+            )));
+        }
+        Ok(())
+    }
+
+    /// 颜色的判据与可写的判据**不是同一件事**（2026-10-09 用户拍的：内置那两本也能打色标）。
+    ///
+    /// 改名/移动/删除会改变这本文件夹的身份与里面笔记的归属，所以内置那一律拒；
+    /// 而色标只是给眼睛的一层记号，它进 `folder_hash` ⇒ 跟着同步走，别的设备看到的也是同一层记号，
+    /// 不改任何归属语义。**在回收站里那一侧仍然拒** —— 那时候这本整棵都不该被写，
+    /// 而且恢复出来的东西不该带着一轮没人确认过的改动。
+    fn assert_folder_colorable(f: &Folder) -> Result<(), StoreError> {
         if f.deleted_at.is_some() {
             return Err(StoreError::Constraint(format!(
                 "文件夹 {} 已在回收站",

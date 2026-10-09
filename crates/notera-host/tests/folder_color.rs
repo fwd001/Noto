@@ -165,3 +165,76 @@ fn garbage_color_is_refused_and_leaves_the_column_untouched() {
     call(&app, "set_folder_color", json!({ "id": fid, "color": "" }))
         .unwrap_or_else(|e| panic!("空串该被当成清掉，却被拒了：{e}"));
 }
+
+/// 2026-10-09 用户拍的第二问：内置那两本（默认本 / 回收站）**也允许打色标**。
+///
+/// 开的例外**只有颜色这一条**，所以同一本改名的判据必须照样是拒的 ——
+/// 那才是"例外管到哪一级"的差分；只测"上色能成"的话，把整本放开也照样绿。
+/// 反过来在回收站里那一本仍然拒：那棵整都不该被写，恢复出来的东西不该带着一轮没人确认过的改动。
+#[test]
+fn system_folders_are_colorable_while_renaming_them_still_is_not() {
+    let dir = Tmp::new("sys");
+    let app = App::boot(dir.path()).expect("核心启动");
+    let rows = dispatch(&app, "list_folders", json!({})).expect("list_folders 不该失败");
+    let list = rows.as_array().expect("list_folders 要的是数组");
+    let default_id = list
+        .iter()
+        .find(|f| f["systemKind"] != Value::Null)
+        .expect("默认本要在清单里")["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+    let name0 = row(&app, &default_id)["name"].clone();
+
+    let (rev0, hash0, _) = stored(&app, &default_id);
+    call(
+        &app,
+        "set_folder_color",
+        json!({ "id": default_id, "color": "#1e40af" }),
+    )
+    .unwrap_or_else(|e| panic!("内置那一本上色被拒：{e}"));
+    let (rev1, hash1, color1) = stored(&app, &default_id);
+    assert_eq!(color1.as_deref(), Some("#1e40af"), "颜色没落库");
+    assert_ne!(
+        hash0, hash1,
+        "颜色变了而 content_hash 没变 ⇒ 这条改动永远不会传到别的设备"
+    );
+    assert_eq!(rev1, rev0 + 1, "改色要抬一格 rev（它是一次真改动）");
+
+    // 同一本：改名仍然一律拒，而且库里那个名字没被动过。
+    let renamed = call(
+        &app,
+        "rename_folder",
+        json!({ "id": default_id, "name": "改了名" }),
+    );
+    assert!(
+        renamed.is_err(),
+        "颜色开了例外不等于整本可写：内置本改名必须照样被拒"
+    );
+    assert_eq!(
+        row(&app, &default_id)["name"],
+        name0,
+        "被拒的那次改名把名字留在库里了吗"
+    );
+
+    // 回收站里的那一本：拒，且颜色一位都没动。
+    let fid = new_folder(&app, "进回收站");
+    call(
+        &app,
+        "set_folder_color",
+        json!({ "id": fid, "color": "#3f6212" }),
+    )
+    .expect("先给它一个颜色");
+    let (_, hash_before, color_before) = stored(&app, &fid);
+    call(&app, "delete_folder", json!({ "id": fid })).expect("删除该成");
+    let trashed = call(
+        &app,
+        "set_folder_color",
+        json!({ "id": fid, "color": "#9d174d" }),
+    );
+    assert!(trashed.is_err(), "在回收站里的文件夹不该被上色");
+    let (rev_t, hash_after, color_after) = stored(&app, &fid);
+    assert_eq!(color_after, color_before, "被拒了却还是写进去了");
+    assert_eq!(hash_after, hash_before, "被拒了却还是换了哈希");
+    let _ = rev_t;
+}
