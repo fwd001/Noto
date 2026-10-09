@@ -461,6 +461,8 @@ const MESSAGES: Record<MessageKey, string> = {
     '这条口令太长了：这台设备一条凭据最多存 256 个 UTF-16 单元（普通字符大约 256 个，emoji 这类会占两个）。请换一条短一些的口令。',
   'error.credential_store_failed':
     '写进系统凭据库时失败了，口令没有保存、账户也没有生效。可以再试一次；若反复失败，请把这条提示与下方详情一起给我。',
+  'error.folder_nested':
+    '这里只能建最外层的文件夹 —— 产品只支持一层，所以不能把新文件夹放进另一个文件夹里。',
   'sync.root_mismatch': '这个服务器上已经是另一个 Noto 库了，已停止同步以免把两个库混在一起。请改用该库原本的路径。',
   'sync.foreign_root': '这个目录里已有别的数据，但不是本库的目录，已停止同步。请换一个根路径。',
   'sync.protocol_unreadable': '暂时读不到服务器上的协议信息，这一轮不写入。请稍后重试。',

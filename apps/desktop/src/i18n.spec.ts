@@ -43,6 +43,9 @@ const COMMAND_CODES = [
   // 就是留一段永远不会被看到的文案。
   'credential_too_long',
   'credential_store_failed',
+  // §7 裁定"只允许一层"之后核心会拒的码（用户动作那一条边）。漏登记的后果不是报错，
+  // 是那类拒绝全体退化成"操作没有成功，可以稍后再试" —— 用户不知道自己该换个做法。
+  'folder_nested',
   'serialize',
   'handler_panic',
   // 下面这批是新增门禁（arch-check `hygiene:rust-error-codes-registered`）从 Rust 侧

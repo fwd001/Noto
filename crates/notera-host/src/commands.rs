@@ -738,6 +738,14 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
         "create_folder" => {
             let c: CreateFolderCmd =
                 serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            // 口径落定（2026-10-09 拍板）：文件夹**只允许一层**，而且要在核心强制 ——
+            // 以前"只有一层"只是文档里的一句话，底层照收嵌套，于是侧栏 IA 与 §6-10 那颗
+            // 「移动到文件夹」按钮都没法画（画了就等于替产品默认了另一套结构）。
+            // 只拒**用户这一侧的动作**：对面同步回来的嵌套走 `apply_remote`，不在这里，
+            // 因为把远程那侧一起收紧等于偷偷改同步协议能接受的输入（那是另一件事、另一次决定）。
+            if c.parent_id.is_some() {
+                return Err(CmdError::of("folder_nested", false));
+            }
             j(app.to_folder_dto(app.store().create_folder(
                 c.parent_id.as_deref().map(id).transpose()?.as_ref(),
                 &c.name,
@@ -751,6 +759,11 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
         "move_folder" => {
             let c: MoveFolderCmd =
                 serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            // 同一个口径的第二道门：移动到**别的文件夹里**就是造出第二层，一并拒。
+            // `parent_id: null`（搬到最外层）仍然允许 —— 那是收拢，不是加深。
+            if c.parent_id.is_some() {
+                return Err(CmdError::of("folder_nested", false));
+            }
             j(app.to_folder_dto(app.store().move_folder(
                 &id(&c.id)?,
                 c.parent_id.as_deref().map(id).transpose()?.as_ref(),
