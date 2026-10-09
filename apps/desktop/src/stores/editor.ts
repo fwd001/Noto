@@ -9,6 +9,7 @@ import { callCommand } from '../api/bridge';
 import { Commands, type Attachment, type AttachmentLedgerState, type Note, type NoteDoc } from '../api/types';
 import { messageFor, t } from '../i18n';
 import { asBridgeError } from '../util/errors';
+import { retryOutcomeKey } from '../util/attachmentRows';
 import { AUTOSAVE_DEBOUNCE_MS, createDebounced } from '../util/timing';
 import {
   attachmentAttrs,
@@ -530,7 +531,9 @@ export const useEditorStore = defineStore('editor', () => {
       const st = await callCommand<AttachmentLedgerState>(Commands.attachmentRetry, { sha256 });
       // 核心刚把否定结论撤掉 ⇒ 那本账必须跟着改口，否则占位会继续说"缺"到下次打开为止。
       rememberLedger(st);
-      toasts.pushText(t('editor.attachmentRetryDone'), 'info');
+      // 那句话由**核心回了什么**决定，不是由按钮叫什么决定：隔离区本地命中那一发没排队、
+      // 也没发一次请求，说"已排进下载队列"就是让用户空等一次不会来的下载（缺口 G104）。
+      toasts.pushText(t(retryOutcomeKey(st?.localState)), 'info');
       // 这一次意图会落成一条待办，徽标该立刻反映"还有事在做"
       void sync.syncNow();
       return st;

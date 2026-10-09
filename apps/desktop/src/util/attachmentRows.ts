@@ -97,3 +97,33 @@ export function rowNameKey(row: AttachmentInventoryRow): string | null {
   if (row.name) return null;
   return row.isImage ? 'settings.attNameImage' : 'settings.attNameFile';
 }
+
+/**
+ * 这一行该不该给§4.4 那两颗自救动作。条件照 §4.4 的口径逐条对：
+ *
+ * · **重试取回**：本机没有字节（缺 / 半 / 坏），**或**这一份躺在隔离区里 ——
+ *   核心那条路径先查隔离区，命中就本地补回且**一次网络都不打**（`App::retry_attachment`）。
+ *   零引用又没进隔离区的行不给：那没人在等它，画一颗按钮只会让人以为点了有什么用。
+ * · **重新上传本机这份**：本机有好字节、**仍有笔记在引用**，而服务器那一侧被证明坏了或压根没有。
+ *   `remoteState === 'unknown'`（还没查过）**不给** —— 那条的语义是"覆盖服务器那一份"，
+ *   在不知道对面是什么的时候就给不可逆的入口，是这一格最不该有的那种大方。
+ */
+export function rowActions(row: AttachmentInventoryRow): { retry: boolean; reupload: boolean } {
+  const localAbsent = row.localState !== 'available';
+  const retry = (localAbsent && row.refs > 0) || row.quarantinedUntil !== null;
+  const reupload = row.localState === 'available' && row.refs > 0
+    && (row.remoteState === 'absent' || row.remoteState === 'error');
+  return { retry, reupload };
+}
+
+/**
+ * 「重试取回」点成之后要说的那一句，**由核心回包里的 localState 决定**（缺口 G104）。
+ *
+ * 为什么不让调用方自己说：核心有两条都算成功的路径 —— 排队等下载（本机还是没字节），
+ * 以及**在隔离区本地命中**（字节立刻回来了，`未发一次请求`）。以前这里恒说
+ * 「已重新排进下载队列，下一次同步会再去问服务器一次」，于是本地命中那一发说的是一句
+ * 没发生过的话：用户会一直等一次根本不会来的下载。
+ */
+export function retryOutcomeKey(localState: string | undefined): string {
+  return localState === 'available' ? 'settings.attRetryLocal' : 'editor.attachmentRetryDone';
+}

@@ -18,7 +18,7 @@ import { useShellStore } from '../stores/shell';
 import { shortcutsFor, type PlatformCaps } from '../platform/caps';
 import { t, messageFor } from '../i18n';
 import { formatBytes, formatNumber, formatWhen, daysUntil, stampToIso } from '../util/format';
-import { ledgerView, localStateKey, remoteStateKey, rowNameKey } from '../util/attachmentRows';
+import { ledgerView, localStateKey, remoteStateKey, rowActions, rowNameKey } from '../util/attachmentRows';
 import { FONT_SCALE_MAX, FONT_SCALE_MIN, type ImportFilesReport, type ThemeMode } from '../stores/settings';
 import { capChips, capsState } from '../sync/serverCaps';
 import AppIcon from '../components/ui/AppIcon.vue';
@@ -270,6 +270,28 @@ function attachmentRowMeta(row: AttachmentInventoryRow): string {
   ]
     .filter((part) => part !== '')
     .join(' · ');
+}
+
+/**
+ * 那一行上的两颗自救动作（§4.4「终态失败必须给可点的动作」）。
+ *
+ * 复用编辑器 store 那两条而不是在这儿另写一遍命令：两处走的是**同一颗核心命令**
+ * （`retry_attachment(sha)` / `reupload_attachment(sha)` 本来就是按对象的），
+ * 文案、待办、徽标那套后果也只有一份实现。
+ * 点成之后**要重读这一格的账** —— 那一行说的话必须跟着改口，不然屏幕上留着的
+ * 是一句已经过期的"本机没有这份"。一次只允许一发（在飞时全列的按钮都disable），
+ * 免得用户连点把同一个意图排两次。
+ */
+const attBusy = ref<string | null>(null);
+async function attachmentAction(row: AttachmentInventoryRow, kind: 'retry' | 'reupload'): Promise<void> {
+  if (attBusy.value !== null) return;
+  attBusy.value = `${row.sha256}:${kind}`;
+  const editor = useEditorStore();
+  const got = kind === 'retry'
+    ? await editor.retryAttachmentFetch(row.sha256)
+    : await editor.reuploadAttachment(row.sha256);
+  attBusy.value = null;
+  if (got) await settings.loadAttachmentInventory();
 }
 
 async function confirmRestore(): Promise<void> {
@@ -789,6 +811,27 @@ function jumpTo(id: string): void {
                 >
                   <span class="attachment-row__name">{{ attachmentRowName(att) }}</span>
                   <span class="attachment-row__meta">{{ attachmentRowMeta(att) }}</span>
+                  <!-- §4.4：终态的坏要给**能点下去的动作**，而不是一个"它坏了"。
+                       该不该出现由 rowActions 判（缺字节且在用 / 在隔离区 → 重试取回；
+                       本机有好字节而服务器那侧被证明坏了或没有 → 重新上传本机这份）。 -->
+                  <span v-if="rowActions(att).retry || rowActions(att).reupload" class="attachment-row__actions">
+                    <button
+                      v-if="rowActions(att).retry"
+                      type="button"
+                      class="btn btn--quiet"
+                      :disabled="attBusy !== null"
+                      :data-testid="`attachment-retry-${i}`"
+                      @click="attachmentAction(att, 'retry')"
+                    >{{ t('editor.attachmentRetry') }}</button>
+                    <button
+                      v-if="rowActions(att).reupload"
+                      type="button"
+                      class="btn btn--quiet"
+                      :disabled="attBusy !== null"
+                      :data-testid="`attachment-reupload-${i}`"
+                      @click="attachmentAction(att, 'reupload')"
+                    >{{ t('editor.attachmentReupload') }}</button>
+                  </span>
                 </li>
               </ul>
               <!-- 越过上界的那几份要**说有多少没列**：只画前 20 行而不说剩下的，
@@ -938,6 +981,12 @@ function jumpTo(id: string): void {
   font-size: var(--text-sm);
   color: var(--mute);
   overflow-wrap: anywhere;
+}
+
+.attachment-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
 }
 
 .folder-pick {

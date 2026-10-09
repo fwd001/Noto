@@ -13,6 +13,8 @@ import {
   ledgerView,
   localStateKey,
   remoteStateKey,
+  retryOutcomeKey,
+  rowActions,
   rowBand,
   rowNameKey,
   sortLedgerRows,
@@ -156,5 +158,70 @@ describe('附件那一行的措辞来源', () => {
     expect(rowNameKey({ ...row({ sha256: 'a' }), name: undefined } as unknown as AttachmentInventoryRow)).toBe(
       'settings.attNameImage',
     );
+  });
+});
+
+describe('那一行该不该给两颗自救动作（§4.4）', () => {
+  it('缺字节**且仍有人在等**才给重试取回；零引用又没进隔离区的不给', () => {
+    expect(rowActions(row({ sha256: 'a', localState: 'missing', refs: 2 }))).toEqual({ retry: true, reupload: false });
+    expect(rowActions(row({ sha256: 'a', localState: 'partial', refs: 1 }))).toEqual({ retry: true, reupload: false });
+    expect(rowActions(row({ sha256: 'a', localState: 'error', refs: 1 }))).toEqual({ retry: true, reupload: false });
+    // 没人引用、也没进隔离区 ⇒ 没有"看不见的图"在等，画一颗按钮只会让人以为点了有什么用。
+    expect(rowActions(row({ sha256: 'a', localState: 'missing', refs: 0 }))).toEqual({ retry: false, reupload: false });
+  });
+
+  it('隔离区里的那一份给重试取回 —— 核心那条路径先查本地隔离区，点下去是撤销隔离', () => {
+    expect(rowActions(row({ sha256: 'a', refs: 0, quarantinedUntil: '2026-11-01T00:00:00Z' }))).toEqual({
+      retry: true,
+      reupload: false,
+    });
+    // 本机有字节 + 在隔离区：仍然给（这一发点的是"把这份拿回来"，不是"再去下载一次"）。
+    expect(rowActions(row({ sha256: 'a', refs: 0, localState: 'available', quarantinedUntil: '2026-11-01T00:00:00Z' }))).toEqual({
+      retry: true,
+      reupload: false,
+    });
+  });
+
+  it('重新上传本机这份只在"本机是好的、服务器那侧被证明坏了或没有"时给', () => {
+    expect(rowActions(row({ sha256: 'a', localState: 'available', refs: 1, remoteState: 'absent' }))).toEqual({
+      retry: false,
+      reupload: true,
+    });
+    expect(rowActions(row({ sha256: 'a', localState: 'available', refs: 1, remoteState: 'error' }))).toEqual({
+      retry: false,
+      reupload: true,
+    });
+    // 「还没查过」不给覆盖入口：不知道对面是什么就递一颗"把服务器那份换掉"，是这一格最不该有的大方。
+    expect(rowActions(row({ sha256: 'a', localState: 'available', refs: 1, remoteState: 'unknown' }))).toEqual({
+      retry: false,
+      reupload: false,
+    });
+    expect(rowActions(row({ sha256: 'a', localState: 'available', refs: 1, remoteState: 'present' }))).toEqual({
+      retry: false,
+      reupload: false,
+    });
+    // 本机有、服务器没有、但**没人在引用** ⇒ 传上去也没人用：不给（零引用的那档归隔离区那条路径）。
+    expect(rowActions(row({ sha256: 'a', localState: 'available', refs: 0, remoteState: 'absent' }))).toEqual({
+      retry: false,
+      reupload: false,
+    });
+  });
+
+  it('两列都不好的那一行只给重试取回（本机坏的时候"上传本机这份"是不可用的动作）', () => {
+    expect(rowActions(row({ sha256: 'a', localState: 'error', refs: 1, remoteState: 'error' }))).toEqual({
+      retry: true,
+      reupload: false,
+    });
+  });
+});
+
+describe('「重试取回」的文案由核心回了什么决定（G104）', () => {
+  it('本机立刻有字节 ⇒ 说的是本地补回来了；还在等 ⇒ 才说排进下载队列', () => {
+    expect(retryOutcomeKey('available')).toBe('settings.attRetryLocal');
+    expect(retryOutcomeKey('missing')).toBe('editor.attachmentRetryDone');
+    expect(retryOutcomeKey('partial')).toBe('editor.attachmentRetryDone');
+    expect(retryOutcomeKey('error')).toBe('editor.attachmentRetryDone');
+    // 读不到那一格也不许说成本地命中（说反的那一句是"没有打网络"，最容易被信以为真）。
+    expect(retryOutcomeKey(undefined)).toBe('editor.attachmentRetryDone');
   });
 });

@@ -4891,7 +4891,7 @@ function contrastRatio(fg, bg) {
  * 多少份的字节不在本机、多少份压在隔离区里"，而界面一句都没说过 —— 用户唯一能看到的
  * 是一个总数（`stats`），于是"少了 800 MB"与"隔离区里压着 800 MB 等着释放"在界面上是同一句话。
  *
- * 判据问的六件事，各自防一种坏实现：
+ * 判据问的八件事，各自防一种坏实现：
  *  · **真账一致**：屏幕上那两个数是从真核心的 `attachment_inventory` 来的，不是写死的样例。
  *    这一条同时反着问 —— 核心说 `unavailableCount=0` 时界面**不许**凭空造一句"另有 N 份"。
  *  · **三句话各读各的列**（差分正对照）：注入一份三个数刻意互不相同的载荷（3 / 1 / 2 份，
@@ -4905,6 +4905,11 @@ function contrastRatio(fg, bg) {
  *    把两列折成一句、行里跟着全局取最早的那一份。
  *  · **上界要说得出漏了几份**：23 份时屏上 20 行 + 那句"还有 3 份"，
  *    没列的那三份一个都不许画上（静默截断与"就这些"长一个样）。
+ *  · **两颗自救动作的调用边**（§4.4 接到这一列，第 36 刀）：发出去的是**哪条命令**、
+ *    是不是**这一行自己那个 sha**、只发一次（在飞时整列按住）、点完要**重读这一格的账**；
+ *    以及 G104 那两句反着问 —— 核心在隔离区本地命中那一发**没排队也没发请求**，
+ *    说"已排进下载队列"就是让用户空等一次不会来的下载。
+ *    两行反面对照（缺字节但零引用 / 服务器还没查过）守的是"这两种入口不许给"。
  *
  * 真账那一份字节是**内容固定**的：blob 按 sha256 寻址，反复跑只落同一个对象，开发库不涨
  * （这一条是第 29 刀那条纪律的自觉应用 —— 工装自己也是污染源）。
@@ -5209,6 +5214,167 @@ function contrastRatio(fg, bg) {
     await c.close();
   }
 
+  // ── H：两颗自救动作的**调用边**（§4.4 接到逐份清单，第 36 刀 / 缺口 G104）────
+  // 以前这里只有一句话（"另有 N 份不在本机 —— 在笔记里点开那张图可以重试取回"），
+  // 而管理器这一列把坏的那几份列出来了却没有手可点 —— §8 第二问说的就是这一格。
+  // 判据不许只量"按钮画出来了"：那正是 §2.4「移到」当年的空档（几何对了，调用边没人问过）。
+  // 所以每一条都问"发出去的是哪一发"：命令名、**这一行自己的 sha**、只发一次、
+  // 回包之后那一行的话说没改口，以及 toast 说的是核心真做了的那件事。
+  {
+    const attRow = (sha, over) => ({
+      sha256: sha.repeat(64), name: `${sha}-file.png`, isImage: true, bytes: 100,
+      localState: 'available', remoteState: 'present', refs: 1, quarantinedUntil: null, ...over,
+    });
+    const before = {
+      rows: [
+        attRow('b', { name: '缺的那张.png', bytes: 800, localState: 'missing', refs: 2 }),
+        attRow('e', { name: '服务器坏了.pdf', isImage: false, bytes: 500, remoteState: 'absent' }),
+        attRow('g', { name: '都好的.png', bytes: 100 }),
+        // 这两行是**反面对照**：缺字节但没人在等（零引用、也没进隔离区），以及本机好而服务器
+        // "还没查过"。少了 `refs > 0` 那一半条件、或把"没查过"当成"没有"，按钮就会多画在这两行上 ——
+        // 而那正是 §4.4 不让给的两种入口（没人等它却让你点；不知道对面是什么就递覆盖）。
+        attRow('z', { name: '没人要的那张.png', bytes: 20, localState: 'missing', refs: 0 }),
+        attRow('y', { name: '还没查过的那张.png', bytes: 10, remoteState: 'unknown' }),
+      ],
+      totals: { count: 5, bytes: 1430, unavailableCount: 2, unavailableBytes: 820, quarantinedCount: 0, quarantinedBytes: 0 },
+    };
+
+    /** @param localReply 重试取回的回包里本机那一格是什么（G104 的两条分支） */
+    const openActions = async (localReply) => {
+      const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+      const p = await c.newPage();
+      const errs = [];
+      p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+      const sent = { retry: [], reupload: [], inventories: 0 };
+      /**
+       * 重读到的账**按动作折**：点过覆盖才修服务器那一侧，点过重试才动本机那一侧。
+       * 写死成"第几发是哪份"会串 —— H1 先点重试再点覆盖时，第二发读到的必须同时带上两件事，
+       * 而 H2（核心说本机还没回来）那一发读到的还是"本机没有"。
+       */
+      const ledgerNow = () => {
+        const rows = before.rows.map((r) => ({ ...r }));
+        if (sent.reupload.length) rows[1] = { ...rows[1], remoteState: 'present' };
+        if (sent.retry.length) rows[0] = { ...rows[0], localState: localReply };
+        const absent = rows.filter((r) => r.localState !== 'available');
+        return {
+          rows,
+          totals: {
+            count: rows.length, bytes: rows.reduce((a, r) => a + r.bytes, 0),
+            unavailableCount: absent.length, unavailableBytes: absent.reduce((a, r) => a + r.bytes, 0),
+            quarantinedCount: 0, quarantinedBytes: 0,
+          },
+        };
+      };
+      await p.route('**/cmd/attachment_inventory', (route) => {
+        sent.inventories += 1;
+        return route.fulfill({
+          status: 200, contentType: 'application/json',
+          // 重读到的账**按动作折**：点过覆盖才修服务器那一侧，点过重试才动本机那一侧。
+          // 写死成"第 N 发是哪份"会串 —— 两个动作各自的重读必须只反映自己那一发做过的事。
+          body: JSON.stringify(ledgerNow()),
+        });
+      });
+      await p.route('**/cmd/attachment_retry', (route) => {
+        sent.retry.push(JSON.parse(route.request().postData() ?? '{}'));
+        // 回包故意**压 500ms**：不压的话"在飞时不许连点"这一条根本量不到（按钮早就复原了）。
+        return setTimeout(() => route.fulfill({
+          status: 200, contentType: 'application/json',
+          body: JSON.stringify({ sha256: 'b'.repeat(64), localState: localReply, remoteState: 'present' }),
+        }), 500);
+      });
+      await p.route('**/cmd/attachment_reupload', (route) => {
+        sent.reupload.push(JSON.parse(route.request().postData() ?? '{}'));
+        return route.fulfill({
+          status: 200, contentType: 'application/json',
+          body: JSON.stringify({ sha256: 'e'.repeat(64), localState: 'available', remoteState: 'present' }),
+        });
+      });
+      // 两颗动作都会踢一轮同步以把意图落地；这一格量的是调用边，不打真桥那一轮。
+      await p.route('**/cmd/sync_now', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: 'null' }));
+      await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+      await p.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+      await p.evaluate(() => document.querySelector('[data-testid="nav-settings"]')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+      await p.waitForTimeout(1400);
+      return { c, p, errs, sent, got: await readLedger(p), body: () => p.evaluate(() => document.body.innerText),
+        // 屏幕上最新那一句：两条动作各有自己的话，而 toast 会叠着 —— 问整个 body 等于
+        // 拿上一条动作的话问这一条（H1 的覆盖那一条第一次就是这么红的）。
+        lastToast: () => p.evaluate(() => {
+          const all = document.querySelectorAll('[data-testid="toast-host"] .toast');
+          return all.length ? (all[all.length - 1].textContent ?? '').trim() : '';
+        }) };
+    };
+
+    // ── H1：核心回"本机已经有字节"（隔离区本地命中那条路径）
+    {
+      const { c, p, errs, sent, got, lastToast } = await openActions('available');
+      allErrs.push(...errs);
+      const btn = (id) => p.locator(`[data-testid="${id}"]`);
+      check('㊿ 仪器自检：按钮只画在**有动作可做**的那两行上（缺字节 2 篇在用、本机好而服务器没有），都好的那行一颗都不画',
+        (await btn('attachment-retry-0').count()) === 1 && (await btn('attachment-reupload-1').count()) === 1
+          && (await p.locator('#sec-attachments [data-testid^="attachment-retry-"]').count()) === 1
+          && (await p.locator('#sec-attachments [data-testid^="attachment-reupload-"]').count()) === 1,
+        JSON.stringify({ rows: got.rows.map((r) => r.name) }));
+      check('㊿ 加了按钮，那一行的账还是完整的（体积 / 本机 / 服务器 / 引用数一个不许被挤掉）',
+        got.rows.length === 5 && got.rows[0].meta.includes('800 B') && /本机没有这份/.test(got.rows[0].meta)
+          && /服务器有一份/.test(got.rows[0].meta) && /被 2 篇引用/.test(got.rows[0].meta),
+        JSON.stringify({ meta: got.rows[0].meta }));
+      const metaBefore = got.rows[0].meta;
+      await btn('attachment-retry-0').click();
+      // 在飞时整列的动作都要按住 —— 一颗按钮连点两下会把同一个意图排两次。
+      const inFlight = await p.evaluate(() => Array.from(
+        document.querySelectorAll('#sec-attachments .attachment-row__actions button'),
+      ).map((el) => el.disabled === true));
+      check('㊿ 在飞时这一列的两颗动作都按住（还能点 = 同一个意图排两次）',
+        inFlight.length === 2 && inFlight.every(Boolean), JSON.stringify({ inFlight, sent: sent.retry.length }));
+      check('㊿ 点「重试取回」发的正是**这一行自己那个对象**的重试命令（不是别的行、不是别的命令）',
+        sent.retry.length === 1 && sent.retry[0]?.sha256 === 'b'.repeat(64),
+        JSON.stringify({ sent: sent.retry }));
+      await p.waitForTimeout(900);
+      const said = await lastToast();
+      check('㊿ 核心说本机已经有字节 ⇒ 屏幕上那句必须说"没有打网络"，不许说成排进下载队列（G104 的正面）',
+        /没有打网络/.test(said) && !/下载队列/.test(said), JSON.stringify(said.slice(0, 200)));
+      const nowAfter = await readLedger(p);
+      check('㊿ 点完要**重读这一格的账**：那一行改口说本机有这份，屏幕上还留着旧话就是没重读',
+        sent.inventories >= 2 && nowAfter.rows[0].meta !== metaBefore && /本机有这份/.test(nowAfter.rows[0].meta),
+        JSON.stringify({ before: metaBefore, after: nowAfter.rows[0].meta, reads: sent.inventories }));
+      await btn('attachment-reupload-1').click();
+      await p.waitForTimeout(700);
+      const said2 = await lastToast();
+      const afterUpload = await readLedger(p);
+      check('㊿ 点「重新上传本机这份」发的是那一行的 sha 与这条命令自己（不借用旁边那颗）',
+        sent.reupload.length === 1 && sent.reupload[0]?.sha256 === 'e'.repeat(64),
+        JSON.stringify({ sent: sent.reupload }));
+      check('㊿ 覆盖那一发点成之后：那一行改口说服务器有一份，那颗覆盖按钮也跟着收回去',
+        /服务器有一份/.test(afterUpload.rows[1].meta)
+          && (await p.locator('#sec-attachments [data-testid="attachment-reupload-1"]').count()) === 0,
+        JSON.stringify({ row1: afterUpload.rows[1] }));
+      check('㊿ 覆盖那一条说的话是"排上去覆盖"，不许借 G104 那句话说成"没有打网络"',
+        /覆盖上去/.test(said2) && !/没有打网络/.test(said2),
+        JSON.stringify(said2.slice(-240)));
+      check('㊿ 动作这一发 console error 为零', errs.length === 0, errs.slice(0, 3).join(' | '));
+      await p.close();
+      await c.close();
+    }
+
+    // ── H2：核心回"本机还是没有字节"（排队等下载那条路径）—— 同一颗按钮的第二条分支
+    {
+      const { c, p, errs, sent, lastToast } = await openActions('missing');
+      allErrs.push(...errs);
+      await p.locator('[data-testid="attachment-retry-0"]').click();
+      await p.waitForTimeout(1300);
+      const said = await lastToast();
+      const nowRow = (await readLedger(p)).rows[0].meta;
+      check('㊿ 本机还没字节时说的是"排进下载队列"，不许假称本地已经有了（G104 的反面）',
+        /下载队列/.test(said) && !/没有打网络/.test(said), JSON.stringify({ said, nowRow }));
+      check('㊿ 这一支也重读了账，而账说本机还没回来 ⇒ 那一行不许改口成"本机有这份"',
+        sent.inventories >= 2 && /本机没有这份/.test(nowRow), JSON.stringify({ nowRow, reads: sent.inventories }));
+      check('㊿ 第二条分支 console error 为零', errs.length === 0, errs.slice(0, 3).join(' | '));
+      await p.close();
+      await c.close();
+    }
+  }
+
   // ── G：注入没弄脏真账（这一格是只读的，读了也别写回去）────────────────────
   {
     const after = await cmd('attachment_inventory', {});
@@ -5240,7 +5406,7 @@ function contrastRatio(fg, bg) {
 
   check('㊿ 这一腿所有上下文 console error 为零', allErrs.length === 0, allErrs.slice(0, 3).join(' | '));
   await purgeByTitle(FIX);
-  notes.push(`     附件账本实测：真核心 ${rtot?.count ?? '?'} 份 · ${rtot?.bytes ?? '?'} B（不在本机 ${rtot?.unavailableCount ?? '?'} 份、隔离 ${rtot?.quarantinedCount ?? '?'} 份）⇒ 注入 3/1/2 份三句各读各列 ⇒ 空态与故障态分得开 ⇒ 认不出的到期时刻不说天数 ⇒ 逐份清单七行按"有问题→体积→内容号"排、每行两列各说一句、倒计时读自己那一行 ⇒ 23 份时屏上 20 行 + 那句"还有 3 份"`);
+  notes.push(`     附件账本实测：真核心 ${rtot?.count ?? '?'} 份 · ${rtot?.bytes ?? '?'} B（不在本机 ${rtot?.unavailableCount ?? '?'} 份、隔离 ${rtot?.quarantinedCount ?? '?'} 份）⇒ 注入 3/1/2 份三句各读各列 ⇒ 空态与故障态分得开 ⇒ 认不出的到期时刻不说天数 ⇒ 逐份清单七行按"有问题→体积→内容号"排、每行两列各说一句、倒计时读自己那一行 ⇒ 23 份时屏上 20 行 + 那句"还有 3 份" ⇒ 两颗动作各发自己那一行的 sha、在飞时整列按住、点完重读那一行改口`);
 }
 
 /**

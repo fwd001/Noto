@@ -339,6 +339,8 @@ const MESSAGES: Record<MessageKey, string> = {
   'settings.attNameImage': '这张图',
   'settings.attNameFile': '这份文件',
   'settings.attMoreRows': '还有 {count} 份没在这里列出',
+  // 「重试取回」在核心有两条都算成功的路径，说的话不一样（缺口 G104）：排队等下载 vs 隔离区本地命中。
+  'settings.attRetryLocal': '本机已经有这一份了（从隔离区取的），这一次没有打网络。',
   'settings.notesCount': '{count} 条笔记 · {folders} 个文件夹',
   'settings.trashCount': '最近删除 {count} 条',
   'settings.attachments': '{count} 个附件',
