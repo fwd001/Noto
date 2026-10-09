@@ -315,6 +315,18 @@ const MESSAGES: Record<MessageKey, string> = {
   // §6「设备身份」那一格的入口：这一串就是记录信封上的 device（不是昵称，也不许每次现取一个）。
   'settings.device': '这台设备：{id}',
   // §6「附件管理器」：三个数各说各的事，谁也不覆盖谁（缺字节 ≠ 在隔离区，两本账来源不同列）。
+  // §6「颜色」：侧栏那一颗小色点与它的八支色板（2026-10-09 拍板：只做侧栏小色点）。
+  // 名字要念得出来是因为那颗点是用户自己打的标记 —— 读屏里说"红"比说 #c2410c 有用。
+  'sidebar.colorTitle': '标记颜色',
+  'sidebar.colorNone': '不用颜色',
+  'sidebar.colorRed': '红色',
+  'sidebar.colorAmber': '琥珀色',
+  'sidebar.colorYellow': '黄色',
+  'sidebar.colorGreen': '绿色',
+  'sidebar.colorCyan': '青色',
+  'sidebar.colorBlue': '蓝色',
+  'sidebar.colorPurple': '紫色',
+  'sidebar.colorPink': '粉色',
   'settings.attachmentLedger': '附件',
   'settings.attachmentSummary': '这台设备上有 {count} 份附件 · 共 {size}',
   'settings.attachmentAbsent': '另有 {count} 份（{size}）的字节不在这台设备上 —— 在笔记里点开那张图可以重试取回',

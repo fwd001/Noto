@@ -145,5 +145,13 @@ export const useFolderStore = defineStore('folders', () => {
     return byId.value.get(id)?.node.name ?? '';
   }
 
-  return { nodes, flat, byId, defaultNode, loading, errorKey, load, create, rename, remove, nameOf };
+  async function setColor(id: string, color: string | null): Promise<void> {
+    try {
+      replaceNode((await callCommand<Folder>(Commands.setFolderColor, { id, color })) as unknown as FolderNode);
+    } catch (error) {
+      errorKey.value = asBridgeError(error).messageKey;
+    }
+  }
+
+  return { nodes, flat, byId, defaultNode, loading, errorKey, load, create, rename, setColor, remove, nameOf };
 });

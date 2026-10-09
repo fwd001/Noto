@@ -477,6 +477,8 @@ export const Commands = {
   dailyNote: 'daily_note',
   editNote: 'edit_note',
   setNoteFolder: 'set_note_folder',
+  /** §6「颜色」：文件夹的标记色（只做侧栏小色点）。`color: null` = 清掉。 */
+  setFolderColor: 'set_folder_color',
   setNotePinned: 'set_note_pinned',
   deleteNote: 'delete_note',
   restoreNote: 'restore_note',

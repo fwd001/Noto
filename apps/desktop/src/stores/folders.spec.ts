@@ -5,7 +5,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
-import { stubLocalService } from '../testing/http';
+import { stubLocalService, stubServiceDown } from '../testing/http';
 import { buildTree, useFolderStore } from './folders';
 
 /** 形状与键名照抄 dev 桥响应，含 null 的 color / systemKind。 */
@@ -60,5 +60,52 @@ describe('后端给的嵌套树', () => {
     expect(folders.flat.map((entry) => `${entry.depth}:${entry.node.name}`).sort()).toEqual(
       ['0:无父的子层', '0:默认本'].sort(),
     );
+  });
+});
+
+/**
+ * §6-11「颜色」的调用边（第 39 刀）。
+ *
+ * 这里钉的是**这次调用发没发、发的形状对不对**，不是核心那一位列存没存下（后者由
+ * `crates/notera-host/tests/folder_color.rs` 拿真序列化输出验）。绿单测掩盖坏调用边是
+ * 本仓库反复栽过的一族：色点画得出来，前提是界面把 `set_folder_color` 按这个名字、
+ * 这两个键发出去。
+ */
+describe('给文件夹上色', () => {
+  it('按命令名与两个键发出去，且树上那一行立刻跟着变', async () => {
+    const svc = stubLocalService({
+      list_folders: () => [treeNode('root', null, '默认本', [treeNode('a', 'root', '项目')])],
+      set_folder_color: () => ({ ...treeNode('a', 'root', '项目'), color: '#c2410c' }),
+    });
+    const folders = useFolderStore();
+    await folders.load();
+    await folders.setColor('a', '#c2410c');
+    expect(svc.callsOf('set_folder_color').length, '一次都没发命令：色点是画上去的假象').toBe(1);
+    expect(svc.lastArgsOf('set_folder_color')).toEqual({ color: '#c2410c', id: 'a' });
+    expect(folders.byId.get('a')?.node.color).toBe('#c2410c');
+  });
+
+  it('清掉颜色发的是 null，不是空串', async () => {
+    const svc = stubLocalService({
+      list_folders: () => [treeNode('a', null, '项目')],
+      set_folder_color: () => treeNode('a', null, '项目'),
+    });
+    const folders = useFolderStore();
+    await folders.load();
+    await folders.setColor('a', null);
+    expect(svc.lastArgsOf('set_folder_color')).toEqual({ color: null, id: 'a' });
+    expect(folders.byId.get('a')?.node.color ?? null).toBe(null);
+  });
+
+  /** 失败时不许先把点抹掉再报错：那会让用户以为是自己点错了，而且下一次同步会拿这个假状态去比。 */
+  it('命令没成（本地服务不在）时那一行保持原色，并把错留给界面说', async () => {
+    stubLocalService({ list_folders: () => [{ ...treeNode('a', null, '项目'), color: '#1e40af' }] });
+    const folders = useFolderStore();
+    await folders.load();
+    expect(folders.byId.get('a')?.node.color).toBe('#1e40af');
+    stubServiceDown();
+    await folders.setColor('a', '#c2410c');
+    expect(folders.byId.get('a')?.node.color, '发失败了却已经把颜色改掉 —— 屏幕说的是假话').toBe('#1e40af');
+    expect(typeof folders.errorKey === 'string' && folders.errorKey.length > 0, '失败没留下任何可显示的错误键').toBe(true);
   });
 });

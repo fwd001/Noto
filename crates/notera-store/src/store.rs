@@ -622,7 +622,29 @@ impl Store {
             if cur.name == name {
                 return Ok(cur);
             }
-            self.commit_folder_edit(tx, &cur, Some(name), None, now)
+            self.commit_folder_edit(tx, &cur, Some(name), None, None, now)
+        })
+    }
+
+    /// 给文件夹设标记色（§6「颜色」那一格，2026-10-09 拍板：只做侧栏小色点）。
+    ///
+    /// 校验**不在这里**（"用户只能从调色板里挑"是产品口径，在 host 那侧）：对面同步来的颜色
+    /// 不该因为不在我这板的色上就被判坏。`color` 传 `None` 是"清掉颜色"，
+    /// 与 `commit_folder_edit` 里那个"这次没改颜色"的 `None` 在类型上就分开了。
+    pub fn set_folder_color(
+        &self,
+        id: &EntityId,
+        color: Option<String>,
+    ) -> Result<Folder, StoreError> {
+        let id = id.clone();
+        self.write_tx(|tx, now| {
+            let cur = rows::read_folder(tx, &id)?
+                .ok_or_else(|| StoreError::not_found(EntityKind::Folder, id.clone()))?;
+            Self::assert_folder_writable(&cur)?;
+            if cur.color == color {
+                return Ok(cur); // 幂等：改成同一个颜色不许抬 rev、也不许多排一条待办
+            }
+            self.commit_folder_edit(tx, &cur, None, None, Some(color), now)
         })
     }
 
@@ -661,7 +683,7 @@ impl Store {
                     )));
                 }
             }
-            self.commit_folder_edit(tx, &cur, None, Some(new_parent), now)
+            self.commit_folder_edit(tx, &cur, None, Some(new_parent), None, now)
         })
     }
 
@@ -689,7 +711,7 @@ impl Store {
             for cid in Self::child_folder_ids(tx, id)? {
                 let child = rows::read_folder(tx, &cid)?
                     .ok_or_else(|| StoreError::not_found(EntityKind::Folder, cid.clone()))?;
-                self.commit_folder_edit(tx, &child, None, Some(cur.parent_id.clone()), now)?;
+                self.commit_folder_edit(tx, &child, None, Some(cur.parent_id.clone()), None, now)?;
             }
             // 3) 文件夹自身：软删 + 仅一条墓碑
             let rev = next_rev(cur.rev, cur.remote_rev);
@@ -1109,7 +1131,7 @@ impl Store {
     fn assert_folder_writable(f: &Folder) -> Result<(), StoreError> {
         if f.system_kind.is_some() {
             return Err(StoreError::Constraint(format!(
-                "内置文件夹 {} 不可改名/移动/删除",
+                "内置文件夹 {} 不可改名/移动/删除/改色",
                 f.id
             )));
         }
@@ -1287,24 +1309,28 @@ impl Store {
         cur: &Folder,
         name: Option<String>,
         parent: Option<Option<EntityId>>,
+        color: Option<Option<String>>,
         now: &str,
     ) -> Result<Folder, StoreError> {
         let new_name = name.unwrap_or_else(|| cur.name.clone());
         let new_parent = parent.unwrap_or_else(|| cur.parent_id.clone());
+        // `color` 与 `name`/`parent_id` 一样进 `content_hash`（同步靠它判等），所以改颜色**必须**
+        // 换哈希：沿用旧哈希会出现"库里颜色变了、对面却认为没变"⇒ 那次改动永不传播。
+        let new_color = color.unwrap_or_else(|| cur.color.clone());
         let rev = next_rev(cur.rev, cur.remote_rev);
         let hash = folder_hash(
             &new_name,
             &new_parent,
-            &cur.color,
+            &new_color,
             cur.sort_order,
             &cur.system_kind,
         );
         tx.execute(
-            "UPDATE folders SET name = ?2, parent_id = ?3, rev = ?4, content_hash = ?5, updated_at = ?6, updated_device = ?7
+            "UPDATE folders SET name = ?2, parent_id = ?3, color = ?8, rev = ?4, content_hash = ?5, updated_at = ?6, updated_device = ?7
               WHERE id = ?1",
             params![
                 cur.id.as_str(), new_name, new_parent.as_ref().map(|p| p.as_str().to_string()),
-                rev.get() as i64, hash, now, self.device.to_string()
+                rev.get() as i64, hash, now, self.device.to_string(), new_color
             ],
         )?;
         rows::enqueue(

@@ -22,6 +22,24 @@ import { useShellStore } from '../stores/shell';
 import { t } from '../i18n';
 import type { FolderNode } from '../api/types';
 import AppIcon from './ui/AppIcon.vue';
+import { FOLDER_SWATCHES, dotStyle } from '../util/folderColors';
+
+/** 色点的那些尺寸/描边写在内联而不是 <style> 里：颜色本身来自数据，形状是同一套。
+ *  描边是必须的 —— 没有它，低饱和那几支在浅色主题上会直接融进背景。 */
+const DOT_SHAPE = {
+  width: '10px',
+  height: '10px',
+  'border-radius': '50%',
+  border: '1px solid var(--line-strong)',
+  display: 'inline-block',
+  'flex': '0 0 auto',
+} as const;
+
+/** 挑一支（或清掉）：先收色板再发命令 —— 命令要等一会儿才回，面板留在屏幕上会显得没反应。 */
+async function pickColor(id: string, color: string | null, close: () => void): Promise<void> {
+  close();
+  await folders.setColor(id, color);
+}
 
 const folders = useFolderStore();
 const notes = useNoteStore();
@@ -91,6 +109,15 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
     <li v-for="row in rows" :key="row.node.id" class="tree__item">
       <div class="tree__row" :data-active="isActive(row.node.id) ? 'true' : 'false'" :data-depth="String(row.node.parentId ? 1 : 0)" data-testid="folder-row">
         <button type="button" class="tree__name" :data-testid="`folder-${row.node.id}`" @click="openFolder(row.node.id)">
+          <!-- §6「颜色」：用户打过标记的那一本，名字前面一颗小色点（只在有颜色时出现）。
+               `aria-hidden`：颜色是给眼睛的辅助，导航靠的是名字本身，读屏念名字就够。 -->
+          <span
+            v-if="row.node.color"
+            class="tree__dot"
+            :data-testid="`folder-dot-${row.node.id}`"
+            :style="{ ...DOT_SHAPE, ...dotStyle(row.node.color) }"
+            aria-hidden="true"
+          />
           <span class="tree__label" :title="row.label">{{ row.label }}</span>
           <!-- 空文件夹不显示计数：0 传达不了"这里有没有东西"，只多一个噪点。 -->
           <span v-if="typeof row.node.noteCount === 'number' && row.node.noteCount > 0" class="tree__count">{{ row.node.noteCount }}</span>
@@ -100,6 +127,48 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
           <button v-if="!isSystem(row.node)" type="button" class="btn btn--quiet btn--icon" data-testid="folder-rename" :title="t('sidebar.rename')" :aria-label="t('sidebar.rename')" @click="beginRename(row.node.id, row.node.name)">
             <AppIcon :size="16" name="pencil" />
           </button>
+          <!-- 色板的入口用一颗"当前色的点"当图标：§2.4 那份图标清单里没有"调色板"这一枚，
+               我不会为了让按钮存在而先画一颗没规格的书挡图标（那是 §8 第三问禁的那件事）。
+               面板走 AppPopover：一打开就把下面每一排顶走的色板，等于让用户的手指落到别的行为上
+               —— 这一条改名框已经栽过（间距 44,44 → 96,44），不该在同一列里再犯一次。 -->
+          <AppPopover
+            v-if="!isSystem(row.node)"
+            testid="folder-color-toggle"
+            align="end"
+            :label="t('sidebar.colorTitle')"
+          >
+            <template #glyph>
+              <span class="tree__dot" :style="{ ...DOT_SHAPE, ...dotStyle(row.node.color) }" />
+            </template>
+            <template #default="{ close }">
+              <!-- 色板：八支 + "不用颜色"。按钮自己是触摸目标（内联那颗圆点只是样本），
+                   `aria-pressed` 说当前选中哪一支 —— 颜色不能是"只有眼睛看得见的选择"。 -->
+              <div class="tree__swatches" data-testid="folder-color-panel">
+                <span class="tree__swatch-row">
+                  <button
+                    v-for="s in FOLDER_SWATCHES"
+                    :key="s.hex"
+                    type="button"
+                    class="btn btn--quiet btn--icon tree__swatch"
+                    :data-testid="`folder-swatch-${s.hex}`"
+                    :aria-label="t(s.labelKey)"
+                    :title="t(s.labelKey)"
+                    :aria-pressed="row.node.color === s.hex ? 'true' : 'false'"
+                    @click="pickColor(row.node.id, s.hex, close)"
+                  >
+                    <span class="tree__dot" :style="{ ...DOT_SHAPE, ...dotStyle(s.hex) }" />
+                  </button>
+                </span>
+                <button
+                  type="button"
+                  class="btn btn--quiet btn--block"
+                  data-testid="folder-color-none"
+                  :aria-pressed="row.node.color ? 'false' : 'true'"
+                  @click="pickColor(row.node.id, null, close)"
+                >{{ t('sidebar.colorNone') }}</button>
+              </div>
+            </template>
+          </AppPopover>
           <AppPopover
             v-if="!isSystem(row.node)"
             icon="trash"
@@ -251,6 +320,15 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
   position: relative;
 }
 
+/* 每一排都是定位元素，于是 DOM 里在后的那几排会画在前面那排的面板之上 ——
+   色板 140 px 高，中心那一点落到别的行上（`elementFromPoint` 读到的是别行）。
+   用 `:focus-within`（Headless UI 打开面板会把焦点移进去）而不是 `:hover`：
+   鼠标移开后面板还开着，那时它一样得在最上面。 */
+.tree__item:hover,
+.tree__item:focus-within {
+  z-index: 3;
+}
+
 .tree__input {
   position: absolute;
   top: 50%;
@@ -264,5 +342,25 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
 
 .tree__empty {
   padding: var(--sp-2) var(--sp-3);
+}
+
+/* 色板住在 AppPopover 的面板里（绝对定位，不占版面），这里只管排布。
+   八支一行摆不下就换行，但每支仍是 `.btn` 的那颗 44pt 触摸目标 —— 不靠缩小色点来省宽度，
+   色点是样本、按钮才是目标。 */
+.tree__swatches {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.tree__swatch-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.tree__swatch {
+  padding: var(--sp-2);
 }
 </style>

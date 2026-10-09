@@ -54,4 +54,42 @@ describe('AppPopover', () => {
     await flushPromises();
     expect(spy, '点面板里的按钮冒泡到了宿主行').not.toHaveBeenCalled();
   });
+
+  it('给了 #glyph 就画我那枚字形，且不再画图标（两颗同框会互相挤掉）', async () => {
+    const wrapper = mount(
+      {
+        components: { AppPopover },
+        template:
+          '<AppPopover label="颜色" testid="t"><template #glyph><span data-testid="my-glyph" /></template></AppPopover>',
+      },
+      { attachTo: document.body },
+    );
+    const trigger = wrapper.get('[data-testid="t"]');
+    expect(trigger.find('[data-testid="my-glyph"]').exists(), '插槽给的 glyph 没画出来').toBe(true);
+    expect(trigger.find('svg').exists(), '用了 #glyph 还画一份图标，按钮上会多出第二枚字形').toBe(false);
+  });
+
+  it('不给 #glyph 时 icon 照旧（老调用点不许因为这次改动退化）', async () => {
+    const wrapper = mount(
+      {
+        components: { AppPopover },
+        template: '<AppPopover icon="trash" label="删除" testid="t"><template #default><p>x</p></template></AppPopover>',
+      },
+      { attachTo: document.body },
+    );
+    const trigger = wrapper.get('[data-testid="t"]');
+    expect(trigger.find('svg').exists(), 'icon 那一支退化了：按钮里连字形都没有').toBe(true);
+    expect(trigger.find('[data-testid="my-glyph"]').exists()).toBe(false);
+  });
+
+  it('换成自绘 glyph 后按钮仍有可读名字（颜色不能是一颗只有眼睛看得见的按钮）', async () => {
+    const wrapper = mount(
+      {
+        components: { AppPopover },
+        template: '<AppPopover label="为这个文件夹选颜色" testid="t"><template #glyph><span /></template></AppPopover>',
+      },
+      { attachTo: document.body },
+    );
+    expect(wrapper.get('[data-testid="t"]').attributes('aria-label')).toBe('为这个文件夹选颜色');
+  });
 });

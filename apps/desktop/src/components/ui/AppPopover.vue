@@ -22,7 +22,8 @@ const props = withDefaults(
   defineProps<{
     /** 触发按钮的可读名字（读屏与 title 都用它）。 */
     label: string;
-    icon: IconName;
+    /** 触发按钮里的字形图标；用了 `#glyph` 插槽时可以不传。 */
+    icon?: IconName;
     testid: string;
     align?: 'start' | 'end';
     disabled?: boolean;
@@ -89,7 +90,9 @@ function mountPanel(raw: unknown): void {
         :aria-expanded="open ? 'true' : 'false'"
         :disabled="props.disabled"
       >
-        <AppIcon :size="18" :name="props.icon" />
+        <slot name="glyph">
+          <AppIcon v-if="props.icon" :size="18" :name="props.icon" />
+        </slot>
       </PopoverButton>
 
       <!-- @click.stop：面板长在列表行里面，不挡住冒泡的话点面板会顺手把那一行打开。 -->

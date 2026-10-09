@@ -1591,6 +1591,126 @@ const TRAP_SCAN = () => {
   await op.keyboard.press('Escape');
   await op.waitForTimeout(400);
 
+  /**
+   * §6-11「颜色」的侧栏那一格（第 39 刀，用户口径："只做侧栏小色点"）。
+   *
+   * 这一腿把三样分开钉，因为它们会互相冒充：
+   *  ① 色板**不许顶行** —— 第一版我把色板写成 `<li>` 里的流内 div，一打开就把下面每一排顶下去，
+   *     正是上面改名框已经栽过的同一形状（间距 44,44 → 96,44）；
+   *  ② 点下去那颗点要**跟着我点的那一支**，并且**刷新后还在** —— 只查界面里的乐观写会绿，
+   *     而核心那一位没落盘时用户下次打开就看不见它了；
+   *  ③ 八支按钮自己得是 §5 那 44pt 的目标（这一档 ㉔ 的全身扫描够不着：面板没打开时它们不在屏上）。
+   */
+  const target = await op.evaluate(() => {
+    const toggle = document.querySelector('[data-testid="folder-color-toggle"]');
+    const row = toggle?.closest('[data-testid="folder-row"]');
+    if (!(toggle && row)) return null;
+    const tid = Array.from(row.querySelectorAll('button'))
+      .map((b) => b.getAttribute('data-testid') ?? '')
+      .find((x) => x.startsWith('folder-') && !['folder-color-toggle', 'folder-rename', 'folder-delete', 'folder-row'].includes(x)
+        && !x.startsWith('folder-color') && !x.startsWith('folder-dot') && !x.startsWith('folder-swatch'));
+    return tid && tid.length > 'folder-'.length ? { id: tid.slice('folder-'.length) } : null;
+  });
+  check('⑳ 样本量：侧栏有一本可上色的文件夹（否则下面全是空判据）', target !== null, JSON.stringify(target));
+
+  if (target) {
+    // 起点必须是"没颜色"，否则第 ② 步的对照就没了 —— 现场库是跨轮次留存的，不能假设它是空的。
+    await cmd('set_folder_color', { color: null, id: target.id });
+    await op.reload({ waitUntil: 'networkidle' });
+    await op.waitForSelector('[data-testid="folder-row"]', { timeout: 15000 });
+    await op.waitForTimeout(900);
+
+    // 目标那一行的那颗"当前色点"按钮：按行收口，不靠"DOM 里第一个"这种排序假设。
+    const toggleSel = `[data-testid="folder-row"]:has([data-testid="folder-${target.id}"]) [data-testid="folder-color-toggle"]`;
+    const dotSel = `[data-testid="folder-dot-${target.id}"]`;
+    const dotColor = () => op.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      return el ? getComputedStyle(el).backgroundColor : null;
+    }, dotSel);
+    const hexToRgb = (hex) => `rgb(${parseInt(hex.slice(1, 3), 16)}, ${parseInt(hex.slice(3, 5), 16)}, ${parseInt(hex.slice(5, 7), 16)})`;
+    const coreColor = async () => flattenFolders(await cmd('list_folders', {})).find((f) => f.id === target.id)?.color ?? null;
+
+    check('没上色时那一行不该有色点（"点了会变"要有对照）', await dotColor() === null, String(await dotColor()));
+
+    const rowsBeforeColor = await tops('[data-testid="folder-row"]');
+    await op.hover(`[data-testid="folder-row"]:has([data-testid="folder-${target.id}"])`);
+    await op.waitForTimeout(300);
+    await op.click(toggleSel);
+    await op.waitForTimeout(500);
+    const colorPanel = await overlay('[data-testid="folder-color-panel"]');
+    const rowsAfterColor = await tops('[data-testid="folder-row"]');
+    check('色板是悬浮层：打开它不许把下面任何一排顶走（与改名框同一口径）', same(rowsBeforeColor, rowsAfterColor), JSON.stringify({ before: rowsBeforeColor, after: rowsAfterColor }));
+    check('色板看得见、点得着（不是藏在 DOM 里的一张空壳）', !colorPanel.missing && colorPanel.h > 24 && colorPanel.w > 24 && colorPanel.hit === true, JSON.stringify(colorPanel));
+
+    const swatches = await op.$$eval('[data-testid^="folder-swatch-"]', (els) => els.map((el) => {
+      const r = el.getBoundingClientRect();
+      return { id: el.getAttribute('data-testid') ?? '', w: Math.round(r.width), h: Math.round(r.height) };
+    }));
+    check('色板里摆的就是那八支（不是更多也不是更少）', swatches.length === 8, JSON.stringify(swatches.map((s) => s.id)));
+    check('每支色点按钮自己是 44pt 的触摸目标（§5；点的是按钮不是那颗 10 px 样本）',
+      swatches.every((s) => s.w >= 44 && s.h >= 44), JSON.stringify(swatches));
+
+    const picked = swatches[0].id.replace('folder-swatch-', '');
+    await op.click(`[data-testid="${swatches[0].id}"]`);
+    await op.waitForTimeout(900);
+    const afterPick = await dotColor();
+    const coreAfterPick = await coreColor();
+    check('点一支之后那一行出现色点，且颜色就是我点的那一支', afterPick === hexToRgb(picked), JSON.stringify({ expected: hexToRgb(picked), got: afterPick }));
+    check('核心那一列存下的就是我点的那一支（界面没在自说自话）', coreAfterPick === picked, JSON.stringify({ picked, core: coreAfterPick }));
+
+    await op.reload({ waitUntil: 'networkidle' });
+    await op.waitForSelector('[data-testid="folder-row"]', { timeout: 15000 });
+    await op.waitForTimeout(900);
+    const afterReload = await dotColor();
+    check('刷新后那颗点还在、还是那个颜色（不是只活在本次会话的乐观状态）', afterReload === hexToRgb(picked), String(afterReload));
+
+    await op.hover(`[data-testid="folder-row"]:has([data-testid="folder-${target.id}"])`);
+    await op.waitForTimeout(300);
+    await op.click(toggleSel);
+    await op.waitForTimeout(500);
+    await op.click('[data-testid="folder-color-none"]');
+    await op.waitForTimeout(900);
+    const dotAfterNone = await dotColor();
+    const coreAfterNone = await coreColor();
+    check('"不用颜色"点得掉：那颗点消失且核心那一列回到空', dotAfterNone === null && coreAfterNone === null, JSON.stringify({ dot: dotAfterNone, core: coreAfterNone }));
+  }
+
+  /**
+   * 同一块色板在 390 那一档：抽屉只有 260 宽，而面板 190 宽 —— 朝右开就会被侧栏那层
+   * `overflow: hidden` 裁掉（桌面第一版正是这样：面板中心读出来的是 `DIV.app-body`）。
+   * 缺口 G101 记录的就是"一味朝下/朝右开"这一族，所以这里不许只靠算术放行。
+   */
+  const mctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
+  const mp = await mctx.newPage();
+  await mp.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await mp.waitForTimeout(900);
+  await mp.tap('[data-testid="mobile-sidebar"]');
+  await mp.waitForTimeout(700);
+  await mp.tap('[data-testid="folder-color-toggle"] >> nth=0');
+  await mp.waitForTimeout(600);
+  const mPanel = await mp.evaluate(() => {
+    const panel = document.querySelector('.app-popover__panel');
+    const aside = document.querySelector('.pane--sidebar');
+    if (!panel || !aside) return { missing: true };
+    const r = panel.getBoundingClientRect();
+    const a = aside.getBoundingClientRect();
+    return {
+      inside: r.left >= a.left - 1 && r.right <= a.right + 1,
+      rect: [Math.round(r.left), Math.round(r.right)],
+      aside: [Math.round(a.left), Math.round(a.right)],
+      swatches: Array.from(document.querySelectorAll('[data-testid^="folder-swatch-"]')).map((el) => {
+        const s = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(s.left + s.width / 2, s.top + s.height / 2);
+        return { t: Math.round(s.width), h: Math.round(s.height), ok: hit ? el.contains(hit) : false };
+      }),
+    };
+  });
+  check('390 那一档色板整个在抽屉里（没被侧栏的 overflow 裁掉）', mPanel.missing !== true && mPanel.inside === true, JSON.stringify(mPanel));
+  check('390 那一档八支都点得着、且每支自己就是 44pt 的触摸目标',
+    mPanel.missing !== true && mPanel.swatches.length === 8 && mPanel.swatches.every((s) => s.ok === true && s.t >= 44 && s.h >= 44),
+    JSON.stringify(mPanel.swatches));
+  await mctx.close();
+
   await op.click('[data-testid="nav-trash"]');
   await op.waitForTimeout(900);
   const trashTops = await tops('[data-testid^="note-row-"]');

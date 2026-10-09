@@ -756,6 +756,31 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
                 serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.to_folder_dto(app.store().rename_folder(&id(&c.id)?, &c.name)?)?)
         }
+        "set_folder_color" => {
+            // §6「颜色」的写入口（2026-10-09 拍板：只做侧栏小色点）。这里只挡"别把垃圾写进库"：
+            // 收 `#rrggbb` 或空（清掉）。**哪个算"这一版提供的颜色"是前端那份色板的事**，
+            // 对面同步来的值不经过这条命令，不该因为我这板没有它就整条判坏。
+            let cid = args
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| CmdError::of("bad_args", false))?;
+            let raw = args
+                .get("color")
+                .and_then(serde_json::Value::as_str)
+                .map(|s| s.trim().to_lowercase());
+            let color = match raw.as_deref() {
+                None => None,
+                Some("") => None,
+                Some(v) => {
+                    let hex = v.strip_prefix('#').unwrap_or_default();
+                    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        return Err(CmdError::of("bad_args", false));
+                    }
+                    Some(v.to_string())
+                }
+            };
+            j(app.to_folder_dto(app.store().set_folder_color(&id(cid)?, color)?)?)
+        }
         "move_folder" => {
             let c: MoveFolderCmd =
                 serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
