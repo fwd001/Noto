@@ -64,3 +64,7 @@ apps/mobile/src-tauri/gen/
 
 # 纯浏览器 dev 桥的默认数据目录（notera-cli serve 不带 --data-dir 时落在仓库里）
 .notera-dev/
+
+# AOCI agent host integration (machine-bound; do not commit)
+.mcp.json
+.mcp.json.backup.*
