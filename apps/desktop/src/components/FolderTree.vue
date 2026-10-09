@@ -247,9 +247,22 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
 }
 
 .tree__label {
+  /**
+   * 名字**折两行，两行读不完才截断** —— 与列表标题同一形状（§5「不许被静默裁掉」，2026-10-09）。
+   * 以前是 `nowrap + ellipsis`：长一点的文件夹名在 1440 也吃掉 186 px 的尾巴，而 ㊻ 看不见它
+   * （它祖先那一格 `overflow` 的**声明**说"可滚"，实测推 `scrollLeft` 一动不动）。
+   * 这一格本来就带 `:title`（整条路径），但"有出口"不是不改形状的理由 —— 出口管的是极长那一段，
+   * 形状管的是绝大多数名字一眼看完。行高跟着内容走：`.tree__item` 是 `min-height: var(--touch)`，
+   * 不是固定高度，所以长名字只是把那一排撑到两行，不会压到邻居。
+   */
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 .tree__count {

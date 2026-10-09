@@ -54,22 +54,57 @@ describe('列表行高与溢出（用户截图：内容被下一行压住）', (
     const m = src.match(/const ROW_HEIGHT = (\d+)/);
     expect(m, '必须显式声明 ROW_HEIGHT —— 虚拟滚动按它算偏移').not.toBeNull();
     const rowHeight = Number(m![1]);
-    // 三行的实际高度：标题 text-base×1.35 + 摘要 text-sm×1.4 + 时间 text-xs×1.4
+    // 一行的实际高度：标题（折两行，text-base×1.35×2）+ 摘要（text-sm×1.4）+ 时间那一块（触摸下限 44）
     // + gap(var(--sp-1)=4px，两处) + 上下 padding(var(--sp-2)=8px，两处)。
-    // 实测装不下 76px（那正是被截图拍到的值），92px 有余量。
-    // 若以后调了字号/间距，这条会先红 —— 那正是要人重新算一遍的时机。
-    expect(rowHeight).toBeGreaterThanOrEqual(92);
+    // 92 是"标题只给一行"时代测出来的；第 42 刀把标题改成折两行之后，探针实测
+    // （`.logs/probe-rowheight.mjs`，长标题 / 短标题两档视口）最坏一行要 **124**，短标题 85。
+    // 固定行高的虚拟列表按最坏那一行给，所以下限就是 124 —— 谁再把它调小，
+    // 内容就会从上下两侧溢出行盒、压到相邻行上（正是这份 spec 第一条要拦的那件事）。
+    expect(rowHeight).toBeGreaterThanOrEqual(124);
   });
 
-  it('标题与摘要都要有行高封顶，否则溢出压到相邻行', () => {
+  /**
+   * 取某个选择器**自己那条 CSS 规则**的花括号内文。
+   *
+   * 为什么不用 `src.indexOf('.row-item__title')`：这个名字在文件里先出现在模板的 `class="…"`、
+   * 甚至注释里（这一刀就往 `ROW_HEIGHT` 的注释里写了一次），`indexOf` 会命中那一处，
+   * 然后截到下一个 `}` 为止 —— 那既不是这条规则，也就能让断言在**空气**上成立。
+   * 锚点因此要带上"行首 + 选择器 + 空格 + {"这三样。
+   */
+  function cssBlock(src: string, sel: string): string {
+    // 这里用到的选择器只有字母、`-`、`_`，都不是正则元字符；哪天要传带 `.` 的选择器，先转义。
+    // 允许后面跟 `,`：摘要与搜索片段合写一条规则（`.row-item__summary,\n.row-item__snippet { … }`），
+    // 只认 `{` 会让这条辅助在**分组选择器**上找不到，而它其实就在那儿。
+    const start = src.search(new RegExp(`^\\.${sel}\\s*[,{]`, 'm'));
+    expect(start, `源码里找不到 .${sel} 这条规则`).toBeGreaterThan(-1);
+    const body = src.slice(start);
+    // **先把注释剔掉**：这一格的注释里就写着 `-webkit-line-clamp` 与 `max-height` 两个词（那段话在解释
+    // 为什么选前者），不剔注释的话，把声明整条删掉断言照绿 —— 变异实测过一次，所以才有的这一行。
+    return body.slice(0, body.indexOf('\n}')).replace(/\/\*[\s\S]*?\*\//g, '');
+  }
+
+  it('标题与摘要都要有高度封顶，否则溢出压到相邻行', () => {
     const src = read('components/NoteList.vue');
     // `text-overflow: ellipsis` 只管"单行太长"，父级固定高度时内容仍会从上下溢出。
-    // 必须同时有 `max-height`（或 `line-height` 封顶）才关得住。
-    for (const sel of ['.row-item__title', '.row-item__summary']) {
-      const block = src.slice(src.indexOf(sel));
-      const body = block.slice(0, block.indexOf('}'));
-      expect(body, `${sel} 缺 max-height`).toMatch(/max-height/);
+    // 封顶有两种写法：`max-height`（按像素/字高封）或 `-webkit-line-clamp`（按**行**封，
+    // 字号缩放时不用回来改数字）。第 42 刀把标题从"一行 + 省略号"改成"折两行"，用的就是后者；
+    // 摘要仍是一行封顶。两种都算有顶，**都没有**才是这一条要拦的。
+    for (const sel of ['row-item__title', 'row-item__summary']) {
+      const body = cssBlock(src, sel);
+      const capped = /max-height/.test(body) || /-webkit-line-clamp:\s*\d/.test(body);
+      expect(capped, `.${sel} 既没有 max-height 也没有 -webkit-line-clamp —— 它会溢出到相邻行`).toBe(true);
     }
+  });
+
+  it('标题折两行不许被改回"单行 + 省略号"（§5 不许硬截，2026-10-09 用户拍的形状）', () => {
+    const src = read('components/NoteList.vue');
+    const body = cssBlock(src, 'row-item__title');
+    expect(body).toMatch(/-webkit-line-clamp:\s*2\b/);
+    expect(body, 'white-space:nowrap 会把折行关掉，标题就退化成硬截').not.toMatch(/white-space:\s*nowrap/);
+    // 两行读不完的极长标题，全文必须由 `title` 属性给回来 —— ㊻ 那条判据放行的就是这个属性。
+    expect(src, '标题那一格要把全文带在 title 上').toMatch(/:title="entry\.title"/);
+    expect(src, '预览那一格（摘要 / 搜索片段）也要把全文带在 title 上')
+      .toMatch(/:title="entry\.previewText"/);
   });
 
   it('行高是唯一的：虚拟滚动的偏移与渲染必须用同一个数', () => {

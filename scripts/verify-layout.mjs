@@ -253,6 +253,28 @@ function check(name, ok, detail) {
 }
 
 /**
+ * **崩在中间也要把已经量到的读数打出来。**
+ *
+ * 这条不是装饰。门禁的价值是"坏的时候说清是哪一格坏"，而以前任何一步抛异常
+ * （Playwright 的 30 秒超时最常见 —— 2026-10-09 那次就是腿 ⑬ 的三击被「更多 ›」面板拦住），
+ * node 只把栈吐在 stderr 上，**一条 PASS/FAIL 都不打印**：看的人分不清"产品坏了"与"工装断了"，
+ * 而崩的那一轮既不收尾也不清盘，残骸越攒越多。现在：先把已有的全量读数打出来，再打一条"崩在这里"，
+ * 退出码仍然是 1（**判据一个字不放宽**，只是让下一次少猜十分钟）。
+ */
+let readingsDumped = false;
+const dumpReadings = (why) => {
+  if (readingsDumped) return;
+  readingsDumped = true;
+  if (notes.length) console.log(notes.join('\n'));
+  if (failures.length) console.log(`\n${failures.join('\n')}`);
+  console.log(`\n!!! 布局门禁没跑完：崩之前量到 ${notes.length} 条 PASS / ${failures.length} 条 FAIL，上面就是全部`);
+  console.log(why);
+};
+const firstLines = (e) => String(e?.stack ?? e).split('\n').slice(0, 5).join('\n');
+process.on('uncaughtException', (error) => { dumpReadings(firstLines(error)); process.exit(1); });
+process.on('unhandledRejection', (reason) => { dumpReadings(firstLines(reason)); process.exit(1); });
+
+/**
  * ④′ 的探针。四件事一次量完，全部打在渲染后的几何上：
  *  · **根那一格能不能被滚**（`scrollTop = 99999` 再读回来）—— 不许只比 scrollHeight/clientHeight：
  *    上一版就是这么算出"外层 0px"却量不到 body 被焦点滚走的 167px（`overflow:hidden` 的格子
@@ -876,16 +898,47 @@ for (const width of WIDTHS) {
   kb.on('pageerror', (e) => kbErrors.push(String(e).slice(0, 160)));
   kb.on('console', (m) => { if (m.type() === 'error') kbErrors.push(m.text().slice(0, 160)); });
   await kb.goto(URL_BASE, { waitUntil: 'networkidle' });
-  await kb.waitForSelector('[data-testid^="note-row-"]', { timeout: 15000 });
-  await kb.click('[data-testid^="note-row-"]');
+  /**
+   * 这一腿**自己造那一篇文章**，而且**两档各占一块**（块 1 只归字号管、块 2 只归颜色管），
+   * 选区用原生**三击**（contenteditable 里三击 = 选整块）。两件事都是被实测逼出来的：
+   *
+   * ① 原来点的是"列表里的第一行"。干净库上第一行是刚建好的夹具，而**跑过一遍的库**上它可能是
+   *    一篇空白笔记（实测 `title:"无标题"`、`summary:""`）—— 空白块上双击选不出字，整条腿的前提没了。
+   *    2026-10-09 同一份代码在两档库各跑一遍，一遍绿一遍红，红的是**现场不自足**（G107 同一族），不是字号。
+   * ② 原来"双击选一个词"，两档标记又刷在**同一块**上：实测第一趟之后那一格被拆成
+   *    `fontSize 12 + fontSize 2 + color 2 + fontSize 26` 四段 run，于是"标准"作用在哪一段
+   *    取决于重渲染后的选区形状，而判据问的是"整篇还有没有 fontSize 标记"—— 读数 `stillMarked:true`。
+   *    分块 + 三击之后同一趟的实测读数：特大 → 一段 28 字、28.9px；红 → 另一块一段、17px 且是 --ink-red；
+   *    标准 → **fontSize 剩 0 段、color 仍 1 段**（没顺手把颜色也清掉）。
+   *    顺带排除掉的一条假修法：用程序化 `Range` 铺满那一格再点"标准"，标记**根本不动** ——
+   *    产品跟踪选区走的是 focus + selectionchange 那一路，没聚焦的可编辑区里塞 Range 它读不到。
+   */
+  const ownStamp = Date.now();
+  const ownNote = await cmd('create_note', {
+    folderId: null,
+    doc: {
+      v: 1,
+      content: [
+        { id: `ka${ownStamp}`, type: 'paragraph', content: [{ text: '第一块只归字号管：三击选这一整块，量「特大」与「标准」。' }] },
+        { id: `kb${ownStamp}`, type: 'paragraph', content: [{ text: '第二块只归颜色管：三击选这一整块，量「红」画不画得出来。' }] },
+      ],
+    },
+  });
+  await kb.waitForSelector(`[data-testid="note-row-${ownNote.id}"]`, { timeout: 15000 });
+  await kb.click(`[data-testid="note-row-${ownNote.id}"]`);
   await kb.waitForSelector('.nb-block .nb-content', { timeout: 15000 });
   await kb.waitForTimeout(800);
 
   const baseFont = await kb.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.nb-block .nb-content')).fontSize));
-
-  // 双击选一个词（不靠程序化 Range：那会绕过浏览器自己的选区，量的就不是同一条路了）
-  await kb.dblclick('.nb-block .nb-content', { position: { x: 14, y: 8 } });
-  await kb.waitForTimeout(250);
+  /** 原生三击选中第 i 块整块（走浏览器自己的选区，不是往 DOM 塞 Range）。
+   *  取点仍在**块内左上角**（原来双击就是点那儿）：按元素中心点会被"「更多 ›」面板 / 菜单浮层"
+   *  盖住 —— 390 那一档实测中心点被 `tb-more-menu` 拦住，Playwright 重试 57 次之后超时，
+   *  整条门禁一行读数都不打印（同一族坑第 N 次：抛异常 ≠ 红，红要能被读出来）。 */
+  const selectBlock = async (i) => {
+    await kb.locator('.nb-block .nb-content').nth(i).click({ clickCount: 3, position: { x: 14, y: 8 } });
+    await kb.waitForTimeout(300);
+  };
+  await selectBlock(0);
   await kb.click('[data-testid="tb-size"]');
   await kb.waitForTimeout(250);
   const sizeMenu = await kb.evaluate(() => {
@@ -913,8 +966,9 @@ for (const width of WIDTHS) {
     JSON.stringify(sized),
   );
 
-  await kb.dblclick('.nb-block .nb-content', { position: { x: 14, y: 8 } });
-  await kb.waitForTimeout(250);
+  // 颜色刷在**另一块**上：同一块里两档混着刷会把 run 拆散（见上面那段实测），
+  // 拆散之后"标准"作用在哪一段就不由判据说了。
+  await selectBlock(1);
   await kb.click('[data-testid="tb-color"]');
   await kb.waitForTimeout(250);
   await kb.click('[data-testid="tb-color-red"]');
@@ -931,9 +985,10 @@ for (const width of WIDTHS) {
   );
   await kb.screenshot({ path: `${OUT}/23-size-color-1440.png` });
 
-  // 正对照：菜单里"标准"发的是**移除**，画面上必须回到基准字号
-  await kb.dblclick('.nb-block .nb-content', { position: { x: 14, y: 8 } });
-  await kb.waitForTimeout(250);
+  // 正对照：菜单里"标准"发的是**移除**，画面上必须回到基准字号。
+  // 选区回到**块 1**（字号那一档只长在它身上）：三击选整块 ⇒ 摘的就是那一整段，
+  // 不会像"在带标记的那一格上再双击一次"那样只选到一个词、剩下半截仍带标记。
+  await selectBlock(0);
   await kb.click('[data-testid="tb-size"]');
   await kb.waitForTimeout(250);
   await kb.click('[data-testid="tb-size-m"]');
@@ -941,16 +996,25 @@ for (const width of WIDTHS) {
   const cleared = await kb.evaluate((base) => {
     const marked = document.querySelector('.nb-content span[data-mark="fontSize"]');
     const el = document.querySelector('.nb-block .nb-content');
-    return { stillMarked: Boolean(marked), rendered: parseFloat(getComputedStyle(el).fontSize), base };
+    return {
+      stillMarked: Boolean(marked),
+      rendered: parseFloat(getComputedStyle(el).fontSize),
+      // 反向的一半：摘字号不许把颜色那一档也一起清掉（"全都清"那种偷懒实现要能被抓到）
+      colorRunsLeft: document.querySelectorAll('.nb-content span[data-mark="color"]').length,
+      base,
+    };
   }, baseFont);
   check(
-    '选「标准」是摘掉这一档、字号回到基准（不许留一个没有视觉效果的标记）',
-    !cleared.stillMarked && Math.abs(cleared.rendered - baseFont) < 0.6,
+    '选「标准」是摘掉这一档、字号回到基准（不许留一个没有视觉效果的标记），且不许顺手把颜色那一档也清掉',
+    !cleared.stillMarked && Math.abs(cleared.rendered - baseFont) < 0.6 && cleared.colorRunsLeft === 1,
     JSON.stringify(cleared),
   );
   check('⑫ 这一腿 console error 为零', kbErrors.length === 0, kbErrors.slice(0, 3).join(' | '));
   notes.push(`     字号/颜色实测：基准 ${baseFont}px → 特大 ${sized.rendered}px；红 = ${colored.color}；摘掉后回到 ${cleared.rendered}px`);
   await kb.close();
+  // 这一腿自己造的那一篇，自己收掉 —— 不留给下一遍当"库里恰好有的东西"（G107 那一族的另一面）。
+  await cmd('delete_note', { id: ownNote.id }).catch(() => {});
+  await cmd('purge_note', { id: ownNote.id }).catch(() => {});
 }
 
 /**
@@ -964,8 +1028,21 @@ for (const width of WIDTHS) {
   narrow.on('pageerror', (e) => nErrors.push(String(e).slice(0, 160)));
   narrow.on('console', (m) => { if (m.type() === 'error') nErrors.push(m.text().slice(0, 160)); });
   await narrow.goto(URL_BASE, { waitUntil: 'networkidle' });
-  await narrow.waitForSelector('[data-testid^="note-row-"]', { timeout: 15000 });
-  await narrow.click('[data-testid^="note-row-"]');
+  /**
+   * 与 ⑫ 同一件事：**自己造那一篇文章**。这一腿以前点"列表第一行"，
+   * 而在跑过一遍的库上那一行可能是一篇空白笔记 —— 空白块上选不出字，
+   * `painted.size` 就是 null，红的不是 390 的菜单而是现场。
+   */
+  const narrowStamp = Date.now();
+  const narrowNote = await cmd('create_note', {
+    folderId: null,
+    doc: {
+      v: 1,
+      content: [{ id: `mn${narrowStamp}`, type: 'paragraph', content: [{ text: '手机宽这一腿自己的那一段：三击选整块，量菜单落点与两档画没画出来。' }] }],
+    },
+  });
+  await narrow.waitForSelector(`[data-testid="note-row-${narrowNote.id}"]`, { timeout: 15000 });
+  await narrow.click(`[data-testid="note-row-${narrowNote.id}"]`);
   await narrow.waitForSelector('.nb-block .nb-content', { timeout: 15000 });
   await narrow.waitForTimeout(900);
   const nBase = await narrow.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.nb-block .nb-content')).fontSize));
@@ -1025,8 +1102,8 @@ for (const width of WIDTHS) {
     }
   }
 
-  await narrow.dblclick('.nb-block .nb-content', { position: { x: 12, y: 8 } });
-  await narrow.waitForTimeout(250);
+  await narrow.locator('.nb-block .nb-content').first().click({ clickCount: 3, position: { x: 12, y: 8 } });
+  await narrow.waitForTimeout(300);
   // 选完一档，「更多 ›」会收起来（动作做完留着面板是让人以为还要再点一下）。
   // 所以后面每颗都要"找不到就先开面板"—— 这本身就是 §3.4 收纳之后的正常使用路径。
   const openTool = async (id) => {
@@ -1040,8 +1117,8 @@ for (const width of WIDTHS) {
   await openTool('tb-size');
   await narrow.click('[data-testid="tb-size-xl"]');
   await narrow.waitForTimeout(500);
-  await narrow.dblclick('.nb-block .nb-content', { position: { x: 12, y: 8 } });
-  await narrow.waitForTimeout(250);
+  await narrow.locator('.nb-block .nb-content').first().click({ clickCount: 3, position: { x: 12, y: 8 } });
+  await narrow.waitForTimeout(300);
   await openTool('tb-color');
   await narrow.click('[data-testid="tb-color-red"]');
   await narrow.waitForTimeout(600);
@@ -1060,6 +1137,8 @@ for (const width of WIDTHS) {
   check('⑬ 这一腿 console error 为零', nErrors.length === 0, nErrors.slice(0, 3).join(' | '));
   notes.push(`     手机宽（390×844）字号/颜色实测 ${JSON.stringify(painted)}`);
   await narrow.close();
+  await cmd('delete_note', { id: narrowNote.id }).catch(() => {});
+  await cmd('purge_note', { id: narrowNote.id }).catch(() => {});
 }
 
 /**
@@ -4774,20 +4853,32 @@ function contrastRatio(fg, bg) {
  *
  * 定义要说清，否则要么冤枉要么漏：
  *  · 只看**自己带文字**的那一格（容器的溢出由它的文字子节点各自回答），量 `scrollWidth - clientWidth`；
- *  · 溢出 > 1px 还不算违规 —— 往上到根只要有一格**能横向滚**（`overflowX: auto|scroll|overlay`）
- *    就是"有办法看到全部文字"，那正是 §3.4 要的工具条横滚与虚拟列表；
- *    真正的违规是"所有祖先都把这条路堵死"（`overflow: hidden` 不算能滚）；
+ *  · 溢出 > 1px 还不算违规，但**出口必须量出来**，两条之一：
+ *    ① 它自己或某个祖先**真的**能横向滚起来 —— 判据是"CSS 说可滚 **且** 推 `scrollLeft` 真的动了"。
+ *      **这一条以前只读声明，于是整条判据在列表那一栏是瞎的**：`.pane-body` 写的是 `overflow-y:auto`，
+ *      按 CSS 规则 `overflow-x` 的计算值也跟着变成 auto，声明命中 ⇒ 放行，而实测推它**一动不动**
+ *      （长标题溢出 175–301 px、摘要溢出 892–934 px，门禁 630 项全绿）。反过来只推不看声明也不行：
+ *      `overflow:hidden` 那一格程序推得动、用户滚不动（G62 那一族的反面）。
+ *    ② 被裁的那一段一字不差写在这颗 `title` 属性里 —— §5 禁的是"静默"，不是"这一屏放不下"。
+ *      比对用**整段相等**，不用"包含末尾若干字"：属性里只放个前缀，正是最容易糊过去的形状。
  *  · `text-overflow: ellipsis` 只是形状，不是判据；判据问的是"这段字在界面上还能不能读全"。
  *  · **排除**只给读屏器的那一格（`.visually-hidden` 的 `clip-path: inset(50%)` 形状）：
  *    它按定义就是不给视觉用户看的，而 §4.3/㉗ 那两条另外在管"该看得见的原因有没有只挂在 aria-live 上"。
  *
- * 四条判据互相咬着：
+ * 五条判据互相咬着：
  *  · **到了哪个面读界面自己声明的状态**（`data-active` / 那一面的根节点），不读"我点成功了" ——
  *    390 那一档侧栏是抽屉，`nav-*` 得先开抽屉才点得动，而"点成功"根本不证明落到了那个面；
  *  · 零违规（产品侧的那一句）；
- *  · **每个组合各自一枚正对照**：在这个面上现场塞一枚已知被裁的假元素，扫描器必须点名它。
- *    为什么是每个面各一枚、而不是全局一枚：那才是"这一格的零违规是真扫出来的"的凭据 ——
+ *  · **每个组合五枚对照、两两反向**：没出口的一枚、"title 只给前缀"的一枚、以及"祖先写着可滚却推不动"的一枚
+ *    必须被点名；"title 给全文"的一枚与"自己真能横滚"的一枚必须被放行。为什么五枚而不是原来那一枚：
+ *    只留"必须点名"那三枚，把扫描器改成"溢出即违规"也照样全绿 —— 那等于用一条 §5 的洞换另一条；
+ *    而 `zz-clip-fake-scroll` 那一枚专门守着**这一刀存在的原因**（老判据只读声明，那枚会被放过去）。
+ *    为什么每个面各塞一组、而不是全局一组：那才是"这一格的零违规是真扫出来的"的凭据 ——
  *    `390/conflicts` 整个面只有 9 个文字块，任何"样本量下限"都守不住它，这一条守得住；
+ *  · 固定行高的那一列（虚拟列表）**内容不许越出自己的行盒**：`ROW_HEIGHT` 是 JS 里的常量，
+ *    而"折两行"把最坏一行抬到 124 —— 常量没跟着改时内容会从上下两侧溢出、压到相邻行上，
+ *    而这一条在横向判据里是隐形的（它溢出的是竖向）。这一句配的是"样本量 ≥12 排"的下限，
+ *    免得它在没有列表的面上恒真；
  *  · 这一腿 console error 为零。
  */
 {
@@ -4806,10 +4897,30 @@ function contrastRatio(fg, bg) {
       sampled += 1;
       const over = Math.round(el.scrollWidth - el.clientWidth);
       if (over <= 1) continue;
+      /**
+       * 两条出口，都要**量**出来，不读声明：
+       *  ① 这一格自己或某个祖先**真的**能横向滚起来 —— 判据是"CSS 说可滚 **且** 推一下 `scrollLeft`
+       *    真的动了"。两半缺一不可：只读声明会放过 `overflow-y:auto` 那一大片（按 CSS 规则它会把
+       *    `overflow-x` 的**计算值**一起带成 auto，而实测推它一动不动 —— 列表那一栏就是这么绿掉的，
+       *    长标题溢出 175–301 px）；只推不看声明会放过 `overflow:hidden` 那一格（程序推得动，用户滚不动）。
+       *  ② 被裁的那一段一字不差地写在这颗 `title` 里 —— §5 禁的是"静默"，不是"这一屏放不下"。
+       *    比对的是**整段相等**而不是"包含末尾若干字"：属性里只放个前缀，正是这种形状最容易糊过去的地方。
+       */
       let reachable = false;
       for (let a = el; a && a !== document.documentElement; a = a.parentElement) {
         const acs = getComputedStyle(a);
-        if (SCROLLABLE.test(acs.overflowX) || SCROLLABLE.test(acs.overflow)) { reachable = true; break; }
+        if (!SCROLLABLE.test(acs.overflowX) && !SCROLLABLE.test(acs.overflow)) continue;
+        const before = a.scrollLeft;
+        a.scrollLeft = 999999;
+        const moved = Math.abs(a.scrollLeft - before);
+        a.scrollLeft = before;
+        if (moved > 1) { reachable = true; break; }
+      }
+      if (!reachable) {
+        const norm = (s) => s.replace(/\s+/g, ' ').trim();
+        const full = norm(el.getAttribute('title') ?? '');
+        const own = norm(el.textContent ?? '');
+        reachable = full.length > 0 && own.length > 0 && full === own;
       }
       if (reachable) continue;
       out.push({
@@ -4854,18 +4965,62 @@ function contrastRatio(fg, bg) {
     return tap(page, '[data-testid^="note-row-"]', 2500);
   };
 
-  // 每个组合自己的正对照（仪器的牙齿，不是产品断言）：产品里没有一个"长文本 + 祖先全是 hidden"的
-  // 现成形状可借 —— 列表那一栏的祖先 `overflow-y:auto` 会把 `overflow-x` 的计算值也带成 auto（那是
-  // CSS 规则），于是"能横滚"就等于"读得到"。所以现场造一枚**已知的假裁切**挂到 body 上：
-  // 报不出来就是扫描器在这一格瞎了，上面那句"零违规"也就什么都没说。
+  // 每个组合自己的对照（仪器的牙齿，不是产品断言）。**五枚，两两反向**：
+  //  · `zz-clip-bare` 被裁且没出口 ⇒ 必须点名（这一枚原来就有）；
+  //  · `zz-clip-wrongtitle` 被裁、`title` 里只放了个前缀 ⇒ 必须点名 —— 没有这一枚，
+  //    "带 title 就放行"那半条会退化成"随便写个 title 就放行"；
+  //  · `zz-clip-titled` 被裁但 `title` 一字不差给了全文 ⇒ 必须**放行**；
+  //  · `zz-clip-scroller` 被裁但自己真能横向滚起来 ⇒ 必须**放行**；
+  //  · `zz-clip-fake-scroll` 是**这一刀存在的原因**：里面那格被裁，祖先写着 `overflow-x:auto`
+  //    却因为溢出被内层自己吃光而**推不动** ⇒ 必须点名。老判据只读声明，这一枚会被放过去 ——
+  //    列表那一栏的长标题就是这么绿着进仓库的。
+  // 后两枚是"改严之后别变成一律红"的证据：只留前三枚，把扫描器改成"溢出即违规"也照样全绿。
   const PROBE_ON = () => {
-    const el = document.createElement('p');
-    el.className = 'zz-clip-probe';
-    el.style.cssText = 'white-space:nowrap;overflow:hidden;width:80px';
-    el.textContent = '探针专用的一段很长很长的中文文字用来测扫描器';
-    document.body.appendChild(el);
+    const T = '探针专用的一段很长很长的中文文字用来测扫描器';
+    const add = (cls, css, title, parentCss) => {
+      const el = document.createElement('p');
+      el.className = `zz-clip-probe ${cls}`;
+      el.style.cssText = css;
+      el.textContent = T;
+      if (title !== null) el.setAttribute('title', title);
+      if (parentCss) {
+        const wrap = document.createElement('div');
+        wrap.className = 'zz-clip-probe zz-clip-probe-wrap';
+        wrap.style.cssText = parentCss;
+        wrap.appendChild(el);
+        document.body.appendChild(wrap);
+      } else {
+        document.body.appendChild(el);
+      }
+    };
+    add('zz-clip-bare', 'white-space:nowrap;overflow:hidden;width:80px', null);
+    add('zz-clip-titled', 'white-space:nowrap;overflow:hidden;width:80px', T);
+    add('zz-clip-wrongtitle', 'white-space:nowrap;overflow:hidden;width:80px', '探针专用');
+    add('zz-clip-scroller', 'white-space:nowrap;overflow-x:auto;width:80px', null);
+    add('zz-clip-fake-scroll', 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:80px',
+      null, 'overflow-x:auto;width:80px');
   };
   const PROBE_OFF = () => document.querySelectorAll('.zz-clip-probe').forEach((n) => n.remove());
+
+  /** 固定行高的虚拟列表：内容越出自己的行盒就会压到相邻行上（这一族以前栽过两次）。 */
+  const ROWFIT = () => {
+    const bad = [];
+    let rows = 0;
+    for (const row of Array.from(document.querySelectorAll('.row-item'))) {
+      rows += 1;
+      const rb = row.getBoundingClientRect();
+      for (const kid of row.querySelectorAll('.row-item__main, .row-item__side')) {
+        const kb = kid.getBoundingClientRect();
+        if (kb.height < 1) continue;
+        const overBottom = Math.round(kb.bottom - rb.bottom);
+        const overTop = Math.round(rb.top - kb.top);
+        if (overBottom > 1 || overTop > 1) {
+          bad.push({ cls: kid.className.slice(0, 22), overBottom, overTop });
+        }
+      }
+    }
+    return { rows, bad };
+  };
 
   const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const p = await c.newPage();
@@ -4882,29 +5037,45 @@ function contrastRatio(fg, bg) {
       await p.waitForTimeout(800);
       const onFace = await p.evaluate(`(${ONSITE[view].toString()})()`);
       const scan = await p.evaluate(SCAN); // 真读数：产品判据只看这一份
+      const fit = await p.evaluate(ROWFIT);
       await p.evaluate(PROBE_ON);
       const withProbe = await p.evaluate(SCAN);
       await p.evaluate(PROBE_OFF);
+      const named = (cls) => withProbe.out.some((h) => h.cls.includes(cls));
       report.push({
         width, view, onFace, sampled: scan.sampled, hits: scan.out,
-        control: withProbe.out.some((h) => h.cls.includes('zz-clip-probe')),
+        bare: named('zz-clip-bare'),
+        wrongTitle: named('zz-clip-wrongtitle'),
+        fakeScroll: named('zz-clip-fake-scroll'),
+        titledExempt: !named('zz-clip-titled'),
+        scrollerExempt: !named('zz-clip-scroller'),
+        rows: fit.rows, rowBad: fit.bad,
       });
     }
   }
   const missed = report.filter((r) => r.onFace !== true);
   check('㊻ 仪器自检：12 个组合（两个视口 × 六个面）每一个都读得出"确实落在这个面上"',
     missed.length === 0 && report.length === 12, JSON.stringify({ missed, n: report.length }));
-  const blind = report.filter((r) => r.control !== true);
-  check('㊻ 每个面各自一枚正对照：塞进去的假裁切必须被点名 —— 点不出名的那一格，"零违规"就什么都没说',
-    blind.length === 0, JSON.stringify({ blind, counts: report.map((r) => `${r.width}/${r.view}:${r.sampled}`) }));
+  const blind = report.filter((r) => r.bare !== true || r.wrongTitle !== true || r.fakeScroll !== true
+    || r.titledExempt !== true || r.scrollerExempt !== true);
+  check('㊻ 每个组合五枚对照两两反向：没出口的那枚、title 只给前缀的那枚、祖先写着可滚却推不动的那枚必须被点名；'
+    + 'title 一字不差给回全文的那枚、以及自己真能横滚的那枚必须被放行',
+    blind.length === 0,
+    JSON.stringify(blind.map((r) => ({ at: `${r.width}/${r.view}`, bare: r.bare, wrongTitle: r.wrongTitle, fakeScroll: r.fakeScroll, titled: r.titledExempt, scroller: r.scrollerExempt }))));
   const dirty = report.filter((r) => r.hits.length > 0);
-  check('㊻ §5 那句"文本不许静默裁掉"：12 个组合里没有任何一段字被祖先链彻底堵死读不全',
+  check('㊻ §5 那句"文本不许静默裁掉"：12 个组合里没有任何一段字既滚不动、又没在 title 里把全文给回来',
     dirty.length === 0, JSON.stringify(dirty.slice(0, 4)));
+  const rowBad = report.filter((r) => r.rowBad.length > 0);
+  const rowCount = report.reduce((a, r) => a + r.rows, 0);
+  check('㊻ 固定行高不许把行内容裁掉：每一行的标题块与侧块都留在自己的行盒里（越出去就是压到相邻行上）',
+    rowBad.length === 0 && rowCount >= 12, JSON.stringify({ rowBad: rowBad.slice(0, 3), rowCount }));
   check('㊻ 这一腿 console error 为零', gErrors.length === 0, gErrors.slice(0, 3).join(' | '));
 
   await p.close();
   await c.close();
-  notes.push(`     文本裁切通扫：${report.length} 个组合（两个视口 × 六个面）、共扫到 ${report.reduce((a, r) => a + r.sampled, 0)} 个文字块、0 处读不全；每个组合各塞一枚假裁切，${report.filter((r) => r.control).length}/${report.length} 个都被点名`);
+  notes.push(`     文本裁切通扫：${report.length} 个组合（两个视口 × 六个面）、共扫到 ${report.reduce((a, r) => a + r.sampled, 0)} 个文字块、0 处读不全；`
+    + `每个组合五枚对照（三枚必须点名、两枚必须放行）全部符合 ${report.filter((r) => r.bare && r.wrongTitle && r.fakeScroll && r.titledExempt && r.scrollerExempt).length}/${report.length}；`
+    + `列表行 ${rowCount} 排，内容越出行盒 0 处`);
 }
 
 /**
@@ -6041,6 +6212,7 @@ async function purgeByTitle(prefix) {
 await browser.close();
 // 夹具清干净：这条门禁反复跑，不许每次往开发库里多堆 31 篇。
 for (const id of [...fx.ids, fx.longId]) await cmd('purge_note', { id });
+readingsDumped = true; // 正常收尾：下面这两行就是全部读数，别让异常处理器再打一遍
 console.log(notes.join('\n'));
 console.log(failures.length ? `\n${failures.join('\n')}\n>>> 布局门禁 FAIL` : '\n>>> 布局门禁 PASS');
 process.exit(failures.length ? 1 : 0);

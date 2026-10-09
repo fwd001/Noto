@@ -14,6 +14,7 @@ import { useShellStore } from '../stores/shell';
 import { useConflictStore } from '../stores/conflicts';
 import { t, messageFor } from '../i18n';
 import { formatWhen } from '../util/format';
+import { plainText } from '../util/plainText';
 import type { NoteListRow, SearchHit } from '../api/types';
 
 /**
@@ -25,8 +26,14 @@ import type { NoteListRow, SearchHit } from '../api/types';
  *
  * 关键约束：虚拟滚动的 `startIndex / endIndex / padTop / padBottom` 全都按这个常量算，
  * 所以它必须同时是"渲染高度"和"计算高度"。改这里等于改整个滚动模型。
+ *
+ * 92 → **124**（2026-10-09，第 42 刀）：标题从"一行 + 省略号"改成"折两行"之后，
+ * 探针实测一行的自然高度是 `长标题 124 / 短标题 85`（1440 与 390 两档读数一样 —— 列表栏在这两档都这么宽），
+ * 固定行高要按**最坏那一行**给，否则内容会从上下两侧溢出、压到相邻行上（就是下面 `.row-item__title`
+ * 那条注释记着的老毛病，只是这次是竖向）。正文字号那颗 `--editor-font-scale` 只作用在编辑器正文，
+ * 列表这一列不跟着长，所以这个常量不需要跟着缩放走。
  */
-const ROW_HEIGHT = 92;
+const ROW_HEIGHT = 124;
 const OVERSCAN = 4;
 
 /** 正卡在未裁决冲突里的那些笔记（§5.1 第 4 步：用户没选之前，列表上就该看得出来）。 */
@@ -37,6 +44,12 @@ interface Entry {
   title: string;
   summary: string;
   snippetHtml: string | null;
+  /**
+   * 那一行**预览**的完整文字（搜索结果取片段去掉 `<mark>`，普通行取摘要）。
+   * 预览这一格按 §5 允许截成一行，代价是它必须"不静默"：被裁的那一段原样放在 `title` 属性里，
+   * 而 ㊻ 那条判据就是照这个属性放行的 —— 属性里没有尾段，判据照样点名。
+   */
+  previewText: string;
   updatedAt: string;
   pinned: boolean;
   hasAttachment: boolean;
@@ -63,11 +76,13 @@ const entries = computed<Entry[]>(() => {
 });
 
 function fromRow(row: NoteListRow): Entry {
+  const summary = row.summary ?? '';
   return {
     id: row.id,
     title: row.title || t('editor.untitled'),
-    summary: row.summary ?? '',
+    summary,
     snippetHtml: null,
+    previewText: summary,
     updatedAt: row.updatedAt,
     pinned: row.pinned === true,
     hasAttachment: row.hasAttachment === true,
@@ -82,6 +97,7 @@ function fromHit(hit: SearchHit): Entry {
     title: notes.titles[hit.noteId] || t('editor.untitled'),
     summary: '',
     snippetHtml: hit.snippetHtml,
+    previewText: plainText(hit.snippetHtml),
     updatedAt: '',
     pinned: false,
     hasAttachment: false,
@@ -242,11 +258,16 @@ function createFrom(tpl: NoteTemplate): void {
           @keydown.space.prevent="open(entry)"
         >
           <div class="row-item__main">
-            <p class="row-item__title">
+            <!-- 标题折两行：§5 那句"不许被静默裁掉"里，标题是**认身份**的那一格，不许硬截
+                 （2026-10-09 用户拍的形状）。两行还读不完的极长标题，全文在这颗 `title` 里 ——
+                 ㊻ 那条判据放行的就是这个属性本身，不是"看着像省略号就算数"。 -->
+            <p class="row-item__title" :title="entry.title">
               {{ entry.title }}
             </p>
-            <p v-if="entry.snippetHtml" class="row-item__snippet" v-html="entry.snippetHtml" />
-            <p v-else class="row-item__summary">{{ entry.summary }}</p>
+            <!-- 预览这一格按形状只给一行（一屏要扫得了十几条），代价是它必须把全文带在身上：
+                 搜索结果取的是去掉 `<mark>` 的那段**纯文字**，不是原始 HTML。 -->
+            <p v-if="entry.snippetHtml" class="row-item__snippet" :title="entry.previewText" v-html="entry.snippetHtml" />
+            <p v-else class="row-item__summary" :title="entry.previewText">{{ entry.summary }}</p>
           </div>
           <div class="row-item__side">
             <span class="row-item__meta">
@@ -354,15 +375,21 @@ function createFrom(tpl: NoteTemplate): void {
 .row-item__title {
   font-weight: 650;
   font-size: var(--text-base);
-  /* 标题/摘要各自单行省略。它们本来就有 ellipsis，但**没有行高上限**：
-     父级`.row-item` 是固定高度 + `justify-content: center`，
-     所以内容一旦超出版心就��从上下两侧溢出，压到相邻行上 ——
-     ellipsis 救不了溢出，只救"单行太长"。 */
+  /* 标题：**折两行，两行读不完才截断**（§5「文本不许被静默裁掉」，2026-10-09 拍的形状）。
+     以前这一格是 `nowrap + ellipsis + max-height:1.35em` —— 一行装不下就吃掉尾巴，而 ㊻ 看不见它：
+     列表容器写的是 `overflow-y:auto`，按 CSS 规则这会把 `overflow-x` 的**计算值**也带成 auto，
+     于是"声明可滚"被当成"读得到"（实测推它的 `scrollLeft` 一动不动，长标题溢出 175–301 px 而门禁全绿）。
+     判据换成"真去滚它一下"之后，这一格必须自己把话讲完。
+     用 `-webkit-line-clamp` 而不是 `max-height: 2.7em`：clamp 自己数行，§4.7 那颗 fontScale 变了
+     不用回来改这个数字。极长标题的全文在 `title` 属性里 —— 判据认的就是那颗属性。 */
   line-height: 1.35;
-  max-height: 1.35em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: break-word;
   color: var(--ink);
 }
 
