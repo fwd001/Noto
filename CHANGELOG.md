@@ -3692,6 +3692,31 @@ G106 到这里收掉，G107 的三条也各自有了自己的现场："至少三
 **一般形式（已写进协作记忆）**：把一条口径变成核心的门时，要顺手扫一遍"有没有夹具在依赖被这道门封掉的旧行为造现场"。
 这类依赖只在换库/换机器那天爆，而爆相是"整条门禁红在开局"，看起来完全像环境坏了。
 
+### CI 修复（2026-10-09 第二处）：前端依赖审计红在 `source-map-js`，**没改产品代码 ⇒ 版本号不升**
+
+`@vue/compiler-sfc` 那条修好之后 CI 的构建步绿了，紧接着红在审计步：
+`source-map-js` 一条 **high**（GHSA-68fv-2mgg-jv7q，`>=1.0.0 <1.2.2`，事件循环 DoS），
+62 条路径全都挂在 `@headlessui/vue → vue → @vue/compiler-sfc →（postcss / @vue/compiler-core）→ source-map-js` 这一条链上，
+锁里钉的是 1.2.1。
+
+**处置是 `pnpm update source-map-js`，不是 override**：父约束本来就是 `^1.2.1`，1.2.2 在它允许的范围内 ——
+锁只需要从 1.2.1 推到 1.2.2（diff 只有那 6 行 + 新的 integrity），不需要额外加一条全局强制规则。
+**我第一版写的恰恰是多余的那一种**：往 `apps/desktop/package.json` 加 `pnpm.overrides`，
+而 **pnpm 12 已经不再读 package.json 里的 `pnpm` 字段**（`pnpm install` 当场 WARN 并忽略它，
+提示"`pnpm.overrides` 被忽略，见 pnpm.io/settings"）—— 那条改动等于没改，写在那里只是让下一个人以为它生效了。
+真要 override，新家是 `pnpm-workspace.yaml`（这个仓库的 workspace 根就是 `apps/desktop`）。
+
+**差分验证**（同一台机器、同一条命令）：把锁退回 1.2.1 ⇒ `1 vulnerabilities found / 1 high`、退出码 **1**；
+换回 1.2.2 ⇒ `No known vulnerabilities found`、退出码 **0**。之后 `pnpm install --frozen-lockfile`（CI 用的就是这条）、
+`pnpm build`、`npx vitest run`（66 文件 / **550** 条）都在 1.2.2 这把锁上重跑过，全绿。
+
+**顺带更正两处已经不实的话**：`ci.yml` 与 `docs/CI-CD.md` 都写着这条审计"**本机 BLOCKED**……从来没在这台机器上验过"。
+那是 registry 指向 npmmirror 时的情形 —— 命令里既然已经显式带了 `--registry=https://registry.npmjs.org`，
+本机就能跑，**这次那条 high 就是本机先跑出来的**，CI 只是同一个结果。两处文字按实测改掉了，"0 条（275 个依赖）"
+那条旧读数也换成了带日期与依赖数的新读数。
+
+
+
 ### 界面重构 v2 · 第 33 刀【已回退，G101 重开】：浮层量一次并朝上开 —— 几何修好了，却弄坏一条更早的腿
 
 **结局先说**：这一版把浮层量回了视口（390 与 1440 实测 `inside=true`、腿 52 单跑 5/5），

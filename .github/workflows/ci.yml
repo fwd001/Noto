@@ -112,11 +112,13 @@ jobs:
         working-directory: apps/desktop
         run: pnpm typecheck
 
-      # 依赖漏洞审计。本机跑不通是因为 registry 是 npmmirror（它没有 audit 端点），
-      # 所以这一步显式指向公共 registry —— 这也是台账里 G12 那条的解除条件。
-      # 本机 2026-09-28 实测：我们的 lockfile 275 个依赖 0 条已知漏洞；
-      # 判据不是空转 —— 同一命令拿 axios@0.21.0 + minimist@1.2.5 的临时工程跑，
-      # 报 26 条并以退出码 1 结束（`--audit-level=high` 那档也一样红）。
+      # 依赖漏洞审计。这一步显式指向公共 registry：本机全局 registry 是 npmmirror，它没有 audit 端点。
+      # **更正（2026-10-09）**：这里原先写着"本机 BLOCKED、从来没在这台机器上验过"—— 那是不实的话：
+      # 带上 `--registry=https://registry.npmjs.org` 本机就能跑，而 `source-map-js` 那条 high 正是本机先报出来的。
+      # 这也是台账里 G12 那条的解除条件，已经解除。
+      # 本机 2026-10-09 实测：锁里 278 个包 **0 条**（`pnpm update source-map-js` 把 1.2.1 推到 1.2.2 之后）；
+      # 退回 1.2.1 那把锁跑同一条命令 ⇒ 1 条 high、退出码 1，判据不是空转。
+      # 更早的一次空转自检（axios@0.21.0 + minimist@1.2.5 的临时工程报 26 条、退出码 1）仍然有效。
       - name: 前端依赖漏洞审计（high 及以上阻断）
         working-directory: apps/desktop
         run: pnpm audit --audit-level=high --registry=https://registry.npmjs.org
