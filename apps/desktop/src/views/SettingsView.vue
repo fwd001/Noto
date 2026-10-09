@@ -7,7 +7,7 @@ import AppCheckbox from '../components/ui/AppCheckbox.vue';
 import AppDialog from '../components/ui/AppDialog.vue';
 import AppRange from '../components/ui/AppRange.vue';
 import { currentTransport } from '../api/bridge';
-import type { BackupInfo, ProxyMode, TlsPolicyKind } from '../api/types';
+import type { AttachmentInventoryRow, BackupInfo, ProxyMode, TlsPolicyKind } from '../api/types';
 import { useSettingsStore } from '../stores/settings';
 import { useSyncStore } from '../stores/sync';
 import { useNoteStore } from '../stores/notes';
@@ -17,7 +17,8 @@ import { useFolderStore } from '../stores/folders';
 import { useShellStore } from '../stores/shell';
 import { shortcutsFor, type PlatformCaps } from '../platform/caps';
 import { t, messageFor } from '../i18n';
-import { formatBytes, formatNumber, formatWhen, stampToIso } from '../util/format';
+import { formatBytes, formatNumber, formatWhen, daysUntil, stampToIso } from '../util/format';
+import { ledgerView, localStateKey, remoteStateKey, rowNameKey } from '../util/attachmentRows';
 import { FONT_SCALE_MAX, FONT_SCALE_MIN, type ImportFilesReport, type ThemeMode } from '../stores/settings';
 import { capChips, capsState } from '../sync/serverCaps';
 import AppIcon from '../components/ui/AppIcon.vue';
@@ -237,6 +238,39 @@ const attachmentQuarantineLine = computed(() => {
     when: t('settings.attachmentDays', { n: days }),
   });
 });
+
+/**
+ * §6「附件管理器」的后一半：**逐份**的账。上面那三句说的是总数，而用户在这一格真正要问的是
+ * "哪一份缺、哪一份占着磁盘" —— 那只能一行一份地答。排序与上界都在 `util/attachmentRows`，
+ * 这里只把它折成给人看的一句话。
+ */
+const attachmentLedger = computed(() => ledgerView(settings.attachmentInventory?.rows));
+
+/** 那一行的名字：账上有文件名就用它，没有才用"这张图 / 这份文件"。绝不拿 sha 的前几位当名字。 */
+function attachmentRowName(row: AttachmentInventoryRow): string {
+  const key = rowNameKey(row);
+  return key === null ? String(row.name) : t(key);
+}
+
+/**
+ * 那一行的账：体积 → 本机那一侧 → 服务器那一侧 → 几篇在引用 → 隔离倒计时。
+ *
+ * 两句话是刻意分开的（§4.4「必须表达此刻在哪一侧缺」）：合成一句"这份缺了"就分不出
+ * 是本机没下载还是服务器压根没有，而用户下一步该做的事完全不同（等同步 / 重新上传）。
+ * 引用数只读 `refs`，**不由名字的个数反推** —— 那两个来源在核心各是一列。
+ */
+function attachmentRowMeta(row: AttachmentInventoryRow): string {
+  const days = daysUntil(row.quarantinedUntil);
+  return [
+    formatBytes(row.bytes),
+    t(localStateKey(row)),
+    t(remoteStateKey(row)),
+    row.refs > 0 ? t('settings.attUsedBy', { count: row.refs }) : t('settings.attNoRefs'),
+    days === null ? '' : t('settings.attRowQuarantine', { when: t('settings.attachmentDays', { n: days }) }),
+  ]
+    .filter((part) => part !== '')
+    .join(' · ');
+}
 
 async function confirmRestore(): Promise<void> {
   const picked = restorePick.value;
@@ -742,6 +776,27 @@ function jumpTo(id: string): void {
             <p v-if="attachmentQuarantineLine" class="text-sm text-muted" data-testid="attachment-quarantine">
               {{ attachmentQuarantineLine }}
             </p>
+            <!-- §6 后一半：逐份的账。上面三句是总数，这一列才是"哪一份"。
+                 一份一行、一行说完它的体积 / 本机那一侧 / 服务器那一侧 / 几篇在引用 / 隔离倒计时。 -->
+            <template v-if="attachmentLedger.shown.length > 0">
+              <h3 class="attachment-rows__title">{{ t('settings.attachmentRowsTitle') }}</h3>
+              <ul class="attachment-rows">
+                <li
+                  v-for="(att, i) in attachmentLedger.shown"
+                  :key="att.sha256"
+                  class="attachment-row"
+                  :data-testid="`attachment-row-${i}`"
+                >
+                  <span class="attachment-row__name">{{ attachmentRowName(att) }}</span>
+                  <span class="attachment-row__meta">{{ attachmentRowMeta(att) }}</span>
+                </li>
+              </ul>
+              <!-- 越过上界的那几份要**说有多少没列**：只画前 20 行而不说剩下的，
+                   屏幕上这句就等于"这台设备的附件就这些"。 -->
+              <p v-if="attachmentLedger.hidden > 0" class="text-sm text-muted" data-testid="attachment-more">
+                {{ t('settings.attMoreRows', { count: attachmentLedger.hidden }) }}
+              </p>
+            </template>
             <p v-if="settings.attachmentInventory.totals.count === 0" class="text-sm text-muted" data-testid="attachment-empty">
               {{ t('settings.attachmentEmpty') }}
             </p>
@@ -842,6 +897,46 @@ function jumpTo(id: string): void {
 .backup-row__meta {
   font-size: var(--text-sm);
   color: var(--body);
+  overflow-wrap: anywhere;
+}
+
+/* 逐份的账：一行一份，名字在上、账在下。
+   两行而不是一行 —— 那一句话里有五个数（体积 / 本机 / 服务器 / 引用 / 倒计时），
+   挤成一行会在窄栏里被裁掉，而 §5 那条"不许静默裁掉"量的就是渲染后的几何。
+   `overflow-wrap: anywhere` 是给长文件名与中文标题留的：不换行的话它就是横向溢出。 */
+.attachment-rows__title {
+  margin: var(--sp-3) 0 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--mute);
+}
+
+.attachment-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.attachment-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-1) 0;
+  border-top: 1px solid var(--line);
+}
+
+.attachment-row__name {
+  font-size: var(--text-sm);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.attachment-row__meta {
+  font-size: var(--text-sm);
+  color: var(--mute);
   overflow-wrap: anywhere;
 }
 

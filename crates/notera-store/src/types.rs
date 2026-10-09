@@ -539,9 +539,9 @@ pub struct AttachmentJob {
 
 /// 设置页「附件管理器」那一格的一行：这台设备上**一份对象**的账（全表，一次读）。
 ///
-/// 为什么是命名字段而不是元组：这六个数各自来自一列，界面上三句话分别读其中三个
+/// 为什么是命名字段而不是元组：这些数各自来自一列，界面上三句话分别读其中三个
 /// （"不在这台设备上"看 `local_state`、"在隔离区"看 `quarantined_at`、"几篇在用"看 `refs`）。
-/// 写成 `(String, i64, String, String, Option<String>, i64)` 之后，哪一位是哪个意思
+/// 写成七个位置的元组之后，哪一位是哪个意思
 /// 只能靠数位置 —— 数错一位就是一句语法正确、数字错误的实话。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttachmentInventoryRow {
@@ -556,4 +556,11 @@ pub struct AttachmentInventoryRow {
     pub quarantined_at: Option<String>,
     /// `COUNT(DISTINCT note_id)`，且**含回收站里的笔记**（笔记行没真删，它的链接就还在）。
     pub refs: i64,
+    /// 账上那个名字（`filename` 列）。可能是 `None`：从剪贴板粘进来的一张图本来就没名字。
+    /// 界面上这一行要有可读的名字，没名字时要按"这张图 / 这份文件"说 ——
+    /// 拿 sha 的前几位当名字就是把内容寻址的键露给用户（§5：可读名字）。
+    pub filename: Option<String>,
+    /// MIME 类型，存储层原样给（`media_type` 列，NOT NULL）。界面只用它分辨"图"还是"文件"
+    /// 这一个词，**不许**把它本身画上屏（host 侧折成 `isImage`）。
+    pub media_type: String,
 }

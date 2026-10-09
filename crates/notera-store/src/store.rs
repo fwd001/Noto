@@ -970,12 +970,16 @@ impl Store {
     /// 还在，它的链接也还在，那份字节就还不能算"没人要"（`syncml.rs` 的 GC 判据同一口径）。
     /// `attachments.deleted_at` 原样放进 `quarantined_at`：宽限期怎么算、还剩几天是 host 的策略
     /// （`Timestamp` 在那儿），存储层不自己复制一份 30 天。
+    ///
+    /// `filename` / `media_type` 是这一行的**名字从哪来**：界面上那一行不能写 sha（§5 要可读名字），
+    /// 而这两个列本来就是账上的东西 —— 存储层只原样搬，"算不算有名字"是 host 与界面的口径。
     pub fn attachment_inventory(&self) -> Result<Vec<AttachmentInventoryRow>, StoreError> {
         self.with_read(|c| {
             let mut stmt = c.prepare(
                 "SELECT a.sha256, a.size, a.local_state, a.remote_state, a.deleted_at,
                         (SELECT COUNT(DISTINCT na.note_id) FROM note_attachments na
-                          WHERE na.sha256 = a.sha256)
+                          WHERE na.sha256 = a.sha256),
+                        a.filename, a.media_type
                    FROM attachments a ORDER BY a.sha256",
             )?;
             let rows = stmt.query_map([], |r| {
@@ -986,6 +990,8 @@ impl Store {
                     remote_state: r.get(3)?,
                     quarantined_at: r.get(4)?,
                     refs: r.get(5)?,
+                    filename: r.get(6)?,
+                    media_type: r.get(7)?,
                 })
             })?;
             rows.collect::<Result<_, _>>().map_err(StoreError::from)

@@ -11,6 +11,11 @@
 //! 还有一条容易写错的：`refs` 是 `COUNT(DISTINCT note_id)` 且**含回收站里的笔记** ——
 //! 同一段字节被两篇笔记用到 = 两篇引用而**一份**对象；被同一篇的两个块用到 = **一篇**。
 //!
+//! 第 35 刀（逐份清单）在这一格上新增两列，两列都各有口径，所以各有断言：
+//!  · **`name`**：账上 `filename` 空白折成"没有名字"（`null`），界面才不许画出一个空白名字；
+//!  · **`isImage`** 而不是 `mediaType`：`image/png` 是协议词汇，过桥只是把它递到屏幕上的一条路
+//!    （§8 第一问）。真值只由"是不是 `image/` 开头"这一个事实决定。
+//!
 //! 跑法：`cargo test -p notera-host --test attachment_inventory`
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -109,12 +114,14 @@ fn inventory_reports_three_situations_two_counters_and_a_countdown() {
     // 第四份：**同一篇**的两个块用同一段字节 ⇒ 两份链接、一篇引用。
     // 没有这一份，`COUNT(DISTINCT note_id)` 和 `COUNT(*)` 在这张表上根本分不出来
     // （前三份都是"一篇一块"，两种写法算出同一个数）—— 而它正是"能不能释放"的判据来源。
+    // 这一份同时是"有名字的**非图片**"：界面上那一行的名字与"这张图 / 这份文件"那个词
+    // 各自来自两列，绑在一起写死就会有一种永远没被量过。
     app.store()
         .attach_blob(
             &a,
             b"two-blocks",
-            "image/png",
-            Some("four.png"),
+            "application/pdf",
+            Some("报告.pdf"),
             "blk000005",
         )
         .unwrap();
@@ -123,34 +130,70 @@ fn inventory_reports_three_situations_two_counters_and_a_countdown() {
         .attach_blob(
             &a,
             b"two-blocks",
-            "image/png",
-            Some("four.png"),
+            "application/pdf",
+            Some("报告.pdf"),
             "blk000006",
         )
         .unwrap()
         .sha256;
 
+    // 第五份：账上的名字是**三个空格**。空名字不算名字 —— 界面上「· 40.0 MB」前面挂一个空白
+    // 比挂"这个文件"难懂得多，所以"空白要折成没有名字"是核心的口径，得钉在这里。
+    let sha_blank = app
+        .store()
+        .attach_blob(&b, b"blank-name", "video/mp4", Some("   "), "blk000007")
+        .unwrap()
+        .sha256;
+
     let got = call(&app, "attachment_inventory", json!({}));
     let rows = got["rows"].as_array().expect("rows 要的是数组");
-    assert_eq!(rows.len(), 4, "四份对象，返回 {rows:?}");
-    let twice = rows
-        .iter()
-        .find(|r| r["sha256"] == json!(sha_twice))
-        .expect("同一篇用两次的那份也要在");
+    assert_eq!(rows.len(), 5, "五份对象，返回 {rows:?}");
+    let find = |sha: &str| {
+        rows.iter()
+            .find(|r| r["sha256"] == json!(sha))
+            .cloned()
+            .unwrap_or_else(|| panic!("{sha} 这一行不在：{rows:?}"))
+    };
+    // 名字与"是不是图片"：四格组合各来一次（有名字×图、有名字×非图、没名字×图、空白名×非图）。
+    for (sha, want_name, want_image, why) in [
+        (
+            sha_shared.clone(),
+            json!("one.png"),
+            json!(true),
+            "图片且有名字",
+        ),
+        (
+            sha_twice.clone(),
+            json!("报告.pdf"),
+            json!(false),
+            "非图片且有名字",
+        ),
+        (
+            sha_absent.clone(),
+            Value::Null,
+            json!(true),
+            "只有账、没名字",
+        ),
+        (
+            sha_blank.clone(),
+            Value::Null,
+            json!(false),
+            "名字是空白 ⇒ 折成没名字",
+        ),
+    ] {
+        let row = find(&sha);
+        assert_eq!(row["name"], want_name, "{why}：{row}");
+        assert_eq!(row["isImage"], want_image, "{why}：{row}");
+    }
+    let twice = find(&sha_twice);
     assert_eq!(
         twice["refs"],
         json!(1),
         "两段链接、一篇笔记 ⇒ refs 是 1（`COUNT(*)` 会算成 2）：{twice}"
     );
     assert_eq!(twice["localState"], json!("available"), "{twice}");
-    let shared = rows
-        .iter()
-        .find(|r| r["sha256"] == json!(sha_shared))
-        .expect("共享那份要在");
-    let absent = rows
-        .iter()
-        .find(|r| r["sha256"] == json!(sha_absent))
-        .expect("只有账那份也要在");
+    let shared = find(&sha_shared);
+    let absent = find(&sha_absent);
     assert_eq!(
         shared["refs"],
         json!(2),
@@ -168,8 +211,8 @@ fn inventory_reports_three_situations_two_counters_and_a_countdown() {
     assert_eq!(shared["quarantinedUntil"], Value::Null, "{shared}");
 
     let totals = &got["totals"];
-    assert_eq!(totals["count"], json!(4), "{totals}");
-    assert_eq!(totals["bytes"], json!(12 + 4096 + 17 + 10), "{totals}");
+    assert_eq!(totals["count"], json!(5), "{totals}");
+    assert_eq!(totals["bytes"], json!(12 + 4096 + 17 + 10 + 10), "{totals}");
     assert_eq!(totals["unavailableCount"], json!(1), "{totals}");
     assert_eq!(totals["unavailableBytes"], json!(4096), "{totals}");
     assert_eq!(totals["quarantinedCount"], json!(0), "{totals}");
@@ -182,7 +225,9 @@ fn inventory_reports_three_situations_two_counters_and_a_countdown() {
         names,
         vec![
             "bytes".to_string(),
+            "isImage".to_string(),
             "localState".to_string(),
+            "name".to_string(),
             "quarantinedUntil".to_string(),
             "refs".to_string(),
             "remoteState".to_string(),

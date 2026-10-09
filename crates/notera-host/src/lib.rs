@@ -953,6 +953,8 @@ impl App {
                 remote_state,
                 quarantined_at: deleted_at,
                 refs,
+                filename,
+                media_type,
             } = row;
             let quarantined_until = match (deleted_at.as_deref(), now_ms) {
                 (Some(deleted), Some(_)) => Timestamp::parse(deleted)
@@ -980,6 +982,12 @@ impl App {
                 remote_state,
                 refs,
                 quarantined_until,
+                // 空串与全空格都不算"有名字"：账上 `filename` 允许空，而界面那句
+                // 「· 40.0 MB」前面挂一个空名字比挂"这张图"更难懂。
+                name: filename
+                    .map(|f| f.trim().to_string())
+                    .filter(|f| !f.is_empty()),
+                is_image: media_type.starts_with("image/"),
             });
         }
         Ok(AttachmentInventoryDto { rows, totals })

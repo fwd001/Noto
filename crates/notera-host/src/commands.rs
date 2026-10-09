@@ -206,6 +206,12 @@ pub struct AttachmentRowDto {
     pub refs: i64,
     /// 在隔离区里的那一份什么时候到期可释放；不在隔离区、或时间源读不出来时是 `null`。
     pub quarantined_until: Option<String>,
+    /// 这一行的可读名字（账上的 `filename`）。没名字 ⇒ `null`，界面按"这张图 / 这份文件"说，
+    /// **不许**拿 sha 的前几位顶上（§5：可读名字；§4.5：不许用哈希代替内容）。
+    pub name: Option<String>,
+    /// 是不是图片。这里替界面把它折成一个 bool 而不是把 `media_type` 发过去：
+    /// 后者是 `image/png` 这种协议词汇，一旦过桥就迟早会有人把它直接画上屏（§8 第一问）。
+    pub is_image: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]

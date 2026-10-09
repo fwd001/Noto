@@ -161,6 +161,11 @@ export interface AttachmentInventoryRow {
   /** 隔离区里那份从什么时候起**有资格**被回收；不在隔离区、或时间源读不出来 ⇒ `null`。
    *  到期不等于已经离开磁盘：不可逆那一步还要等一轮同步并对远端确认一次。 */
   quarantinedUntil: string | null;
+  /** 账上那个文件名；没名字（或名字只是空白）⇒ `null`，界面按"这张图 / 这份文件"说。
+   *  这一位存在的理由：屏幕上那一行不能写 sha（§5 要可读名字）。 */
+  name: string | null;
+  /** 是不是图片。核心只发这一个 bool 而不发 `mediaType` —— `image/png` 是协议词汇（§8 第一问）。 */
+  isImage: boolean;
 }
 
 export interface AttachmentInventoryTotals {

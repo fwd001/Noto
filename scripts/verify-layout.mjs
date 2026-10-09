@@ -4891,7 +4891,7 @@ function contrastRatio(fg, bg) {
  * 多少份的字节不在本机、多少份压在隔离区里"，而界面一句都没说过 —— 用户唯一能看到的
  * 是一个总数（`stats`），于是"少了 800 MB"与"隔离区里压着 800 MB 等着释放"在界面上是同一句话。
  *
- * 判据问的四件事，各自防一种坏实现：
+ * 判据问的六件事，各自防一种坏实现：
  *  · **真账一致**：屏幕上那两个数是从真核心的 `attachment_inventory` 来的，不是写死的样例。
  *    这一条同时反着问 —— 核心说 `unavailableCount=0` 时界面**不许**凭空造一句"另有 N 份"。
  *  · **三句话各读各的列**（差分正对照）：注入一份三个数刻意互不相同的载荷（3 / 1 / 2 份，
@@ -4900,6 +4900,11 @@ function contrastRatio(fg, bg) {
  *    合成一句就是拿"没有"骗人（备份那一格的口径同一套）。
  *  · **说不出天数就不许说天数**：隔离区有货但到期时刻认不出来 ⇒ 整句倒计时不出现，
  *    且界面上不许出现 `NaN`。
+ *  · **逐份的账**（§6-9 的后一半，第 35 刀）：一行的顺序、名字、两列各自一句、
+ *    以及"每行说自己那一份的倒计时"。这四件各防一种坏实现：按载荷顺序抄、
+ *    把两列折成一句、行里跟着全局取最早的那一份。
+ *  · **上界要说得出漏了几份**：23 份时屏上 20 行 + 那句"还有 3 份"，
+ *    没列的那三份一个都不许画上（静默截断与"就这些"长一个样）。
  *
  * 真账那一份字节是**内容固定**的：blob 按 sha256 寻址，反复跑只落同一个对象，开发库不涨
  * （这一条是第 29 刀那条纪律的自觉应用 —— 工装自己也是污染源）。
@@ -4907,6 +4912,9 @@ function contrastRatio(fg, bg) {
 {
   const FIX = '附件夹具';
   const DAY = 86_400_000;
+  // 注入载荷里的到期时刻用这一条造：秒级 UTC（与核心 `Timestamp` 同形），
+  // 天数由界面自己算 —— 判据要量的是"算得对不对"，不是我塞进去的字符串。
+  const iso = (ms) => new Date(Date.now() + ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
   await purgeByTitle(FIX);
 
   // 真核心落一份字节：走的是界面在用的同一条命令（attach_file），不是绕过桥直接写库。
@@ -4936,6 +4944,14 @@ function contrastRatio(fg, bg) {
       quarantine: text('attachment-quarantine'),
       empty: text('attachment-empty'),
       failed: text('attachment-failed'),
+      // §6 后一半：逐份的账。读**渲染出来的那一行的文本**并按屏幕上的顺序排 ——
+      // 排序与上界都是要对用户说的话，读载荷的顺序就等于什么都没量。
+      // 名字与账分两个节点读：Vue 会 condense 掉两个 span 之间的空白，拼成一坨就没法分开问。
+      rows: Array.from(document.querySelectorAll('#sec-attachments [data-testid^="attachment-row-"]')).map((x) => ({
+        name: x.querySelector('.attachment-row__name')?.textContent?.trim() ?? '',
+        meta: x.querySelector('.attachment-row__meta')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+      })),
+      more: text('attachment-more'),
       all: card ? `${card.textContent}` : '',
     };
   });
@@ -4993,7 +5009,6 @@ function contrastRatio(fg, bg) {
 
   // ── B：三句话各读各的列（三个份数、三个体积全都取互不相同的数）────────────
   {
-    const iso = (ms) => new Date(Date.now() + ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
     const three = {
       rows: [
         { sha256: 'a'.repeat(64), bytes: 100, localState: 'available', remoteState: 'present', refs: 1, quarantinedUntil: null },
@@ -5085,6 +5100,115 @@ function contrastRatio(fg, bg) {
     await c.close();
   }
 
+  // ── F：逐份的账（§6-9 的后一半）────────────────────────────────────────────
+  // 输入顺序**故意**与期望顺序不同：三档（缺字节 / 隔离 / 完好）各放两份，
+  // 完好那一档里两份体积相同、sha 在输入里排在后面 —— 删掉排序的任一步，
+  // 屏幕上那一列的名字顺序就会变，这条才分得出"按规则排"与"按载荷顺序抄"。
+  {
+    const rowOf = (c, over) => ({
+      sha256: c.repeat(64),
+      name: `${c}-file.png`,
+      isImage: true,
+      bytes: 100,
+      localState: 'available',
+      remoteState: 'present',
+      refs: 1,
+      quarantinedUntil: null,
+      ...over,
+    });
+    const six = [
+      rowOf('a', { bytes: 700, remoteState: 'unknown', name: '完好那张.png' }),
+      rowOf('b', { bytes: 200, localState: 'missing', refs: 3, name: null }),
+      rowOf('c', { bytes: 9999, localState: 'missing', refs: 0, name: '旧的录像.mp4', isImage: false, quarantinedUntil: iso(12 * DAY) }),
+      rowOf('d', { bytes: 800, localState: 'partial', remoteState: 'absent', name: '下到一半.pdf', isImage: false }),
+      rowOf('e', { bytes: 300, name: '同体积那份.png' }),
+      rowOf('9', { bytes: 300, refs: 0, name: '同体积在前.png' }),
+      rowOf('f', { bytes: 50, localState: 'missing', refs: 0, remoteState: 'absent', name: '早过期的.png', quarantinedUntil: iso(3 * DAY) }),
+    ];
+    const seven = {
+      rows: six,
+      totals: {
+        count: 7, bytes: 12_349, unavailableCount: 4, unavailableBytes: 11_049,
+        quarantinedCount: 2, quarantinedBytes: 10_049,
+      },
+    };
+    const { c, p, errs, got } = await openLedger((route) => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify(seven),
+    }));
+    allErrs.push(...errs);
+    const names = got.rows.map((r) => r.name);
+    const metaOf = (name) => got.rows.find((r) => r.name === name)?.meta ?? '';
+    check('㊿ 仪器自检：逐份清单真的画出了行（读不到行时下面全是空判据）',
+      got.rows.length === 7, JSON.stringify({ rows: got.rows.length, names }));
+    check('㊿ 那一列的顺序 = 有问题的在前 → 体积从大到小 → 同体积按内容号收口（输入顺序与它不同，抄载荷必红）',
+      JSON.stringify(names) === JSON.stringify([
+        '下到一半.pdf', '这张图', '旧的录像.mp4', '早过期的.png',
+        '完好那张.png', '同体积在前.png', '同体积那份.png',
+      ]),
+      JSON.stringify({ names }));
+    check('㊿ 没名字的图说"这张图"，不许画空白、也不许把 undefined/null 印上屏',
+      names.includes('这张图') && !names.some((n) => n === '' || /^(undefined|null|NaN)$/.test(n)),
+      JSON.stringify({ names }));
+    // §4.4 那句"必须表达此刻在哪一侧缺"：两列各自一句，谁也不覆盖谁。
+    const rowD = metaOf('下到一半.pdf');
+    const rowA = metaOf('完好那张.png');
+    const rowE = metaOf('同体积那份.png');
+    check('㊿ 同一行里本机与服务器各说一句（缺一半 + 服务器没有，两列独立）',
+      rowD.includes('本机只存了一半') && rowD.includes('服务器上没有') && !rowD.includes('服务器有一份'),
+      JSON.stringify({ rowD }));
+    check('㊿ 服务器那一侧的"还没查过"与"有一份"分得开（合成一句就是不知道的时候装作知道）',
+      rowA.includes('本机有这份') && rowA.includes('服务器上还没查过')
+        && rowE.includes('本机有这份') && rowE.includes('服务器有一份'),
+      JSON.stringify({ rowA, rowE }));
+    check('㊿ 引用数只从 refs 来：三篇那一行说三篇，零篇那一行说"没有笔记引用它"',
+      metaOf('这张图').includes('被 3 篇引用') && metaOf('同体积在前.png').includes('没有笔记引用它'),
+      JSON.stringify({ b: metaOf('这张图'), nine: metaOf('同体积在前.png') }));
+    // 这一条是这一档最容易写错的地方：全局那句倒计时取**最早**的一份（3 天），
+    // 而每一行要说**自己**那一份（12 天的那行不许跟着说 3 天）。
+    const rowC = metaOf('旧的录像.mp4');
+    const rowF = metaOf('早过期的.png');
+    check('㊿ 每行的倒计时读自己那一行（全局那句说最早的一份，两处共用一个数就会有一行说谎）',
+      rowC.includes('隔离中') && rowC.includes('12 天') && rowF.includes('3 天')
+        && /最早 3 天/.test(got.quarantine ?? ''),
+      JSON.stringify({ rowC, rowF, quarantine: got.quarantine }));
+    check('㊿ 那一列里不许出现内容号（sha 是寻址的键，不是给人看的名字）',
+      !six.some((r) => got.all.includes(r.sha256)) && !/[0-9a-f]{16}/i.test(got.all)
+        && !got.rows.some((r) => /quarantine|available|missing|partial|sha256/i.test(`${r.name}${r.meta}`)),
+      got.all.slice(0, 160));
+    check('㊿ 七行都在上界之内 ⇒ 那句"还有 N 份"不许出现（说了就是凭空多一笔欠账）',
+      got.more === null, JSON.stringify({ more: got.more }));
+    check('㊿ 逐份这一发 console error 为零', errs.length === 0, errs.slice(0, 3).join(' | '));
+    await p.close();
+    await c.close();
+  }
+  {
+    // 越过上界那一发：23 份 ⇒ 屏幕 20 行 + 一句"还有 3 份"，且没列的那三份**不许在屏上**。
+    const many = {
+      rows: Array.from({ length: 23 }, (_, i) => ({
+        sha256: String(i).padStart(64, '0'),
+        name: `第${String(i).padStart(2, '0')}份.png`,
+        isImage: true, bytes: 10, localState: 'available', remoteState: 'present',
+        refs: 1, quarantinedUntil: null,
+      })),
+      totals: { count: 23, bytes: 230, unavailableCount: 0, unavailableBytes: 0, quarantinedCount: 0, quarantinedBytes: 0 },
+    };
+    const { c, p, errs, got } = await openLedger((route) => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify(many),
+    }));
+    allErrs.push(...errs);
+    check('㊿ 越过上界：屏幕 20 行、话说"还有 3 份"，漏掉的那三份一个都没画上',
+      got.rows.length === 20 && /还有 3 份/.test(got.more ?? '')
+        && !got.all.includes('第20份') && !got.all.includes('第22份')
+        && got.all.includes('第19份'),
+      JSON.stringify({ rows: got.rows.length, more: got.more }));
+    check('㊿ 这一发没把上面那三句总数抢掉（逐份与总数同屏时各说各的）',
+      got.summary?.includes('23') === true && got.absent === null && got.quarantine === null,
+      JSON.stringify({ summary: got.summary, absent: got.absent, quarantine: got.quarantine }));
+    check('㊿ 上界那一发 console error 为零', errs.length === 0, errs.slice(0, 3).join(' | '));
+    await p.close();
+    await c.close();
+  }
+
   // ── G：注入没弄脏真账（这一格是只读的，读了也别写回去）────────────────────
   {
     const after = await cmd('attachment_inventory', {});
@@ -5096,6 +5220,16 @@ function contrastRatio(fg, bg) {
     check('㊿ 关掉注入重开，屏幕上说的还是真账那一个份数',
       got.summary !== null && digits(got.summary).includes(rtot?.count ?? -1),
       JSON.stringify({ core: rtot?.count, summary: got.summary }));
+    // 只有夹具能画出来的清单不算接上：这一发量的是**真账**那一行，名字取自真核心那个文件名。
+    const rcount = rtot?.count ?? 0;
+    check('㊿ 真账也在逐份清单里，且行数 == 核心的份数（上界内一份都不许多也不许少）',
+      got.rows.length === Math.min(rcount, 20), JSON.stringify({ core: rcount, rows: got.rows.length }));
+    check('㊿ 真账那一行的名字就是核心记的文件名，账上说"本机有这份"',
+      got.rows.some((r) => r.name === 'ledger.png' && r.meta.includes('本机有这份')),
+      JSON.stringify(got.rows.slice(0, 3)));
+    check('㊿ 真账那一句"还有 N 份"跟着真份数走（上界之内不许说，越界了必须说）',
+      rcount > 20 ? /还有 \d+ 份/.test(got.more ?? '') : got.more === null,
+      JSON.stringify({ core: rcount, rows: got.rows.length, more: got.more }));
     // 留一份看得见的现场（这一格在设置页很下面，不滚进去截到的就是上面那几格）。
     await p.evaluate(() => document.querySelector('#sec-attachments')?.scrollIntoView({ block: 'center' }));
     await p.waitForTimeout(500);
@@ -5106,7 +5240,7 @@ function contrastRatio(fg, bg) {
 
   check('㊿ 这一腿所有上下文 console error 为零', allErrs.length === 0, allErrs.slice(0, 3).join(' | '));
   await purgeByTitle(FIX);
-  notes.push(`     附件账本实测：真核心 ${rtot?.count ?? '?'} 份 · ${rtot?.bytes ?? '?'} B（不在本机 ${rtot?.unavailableCount ?? '?'} 份、隔离 ${rtot?.quarantinedCount ?? '?'} 份）⇒ 注入 3/1/2 份三句各读各列 ⇒ 空态与故障态分得开 ⇒ 认不出的到期时刻不说天数`);
+  notes.push(`     附件账本实测：真核心 ${rtot?.count ?? '?'} 份 · ${rtot?.bytes ?? '?'} B（不在本机 ${rtot?.unavailableCount ?? '?'} 份、隔离 ${rtot?.quarantinedCount ?? '?'} 份）⇒ 注入 3/1/2 份三句各读各列 ⇒ 空态与故障态分得开 ⇒ 认不出的到期时刻不说天数 ⇒ 逐份清单七行按"有问题→体积→内容号"排、每行两列各说一句、倒计时读自己那一行 ⇒ 23 份时屏上 20 行 + 那句"还有 3 份"`);
 }
 
 /**
