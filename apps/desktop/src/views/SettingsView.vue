@@ -6,7 +6,7 @@ import AppSelect from '../components/ui/AppSelect.vue';
 import AppCheckbox from '../components/ui/AppCheckbox.vue';
 import AppDialog from '../components/ui/AppDialog.vue';
 import AppRange from '../components/ui/AppRange.vue';
-import { currentTransport } from '../api/bridge';
+import { currentTransport, inTauri, pickOpenPath, pickSavePath } from '../api/bridge';
 import type { AttachmentInventoryRow, BackupInfo, ProxyMode, TlsPolicyKind } from '../api/types';
 import { useSettingsStore } from '../stores/settings';
 import { useSyncStore } from '../stores/sync';
@@ -36,6 +36,11 @@ const savedAt = ref<number | null>(null);
 const dataPath = ref('');
 const outPath = ref('');
 const restoreHint = ref('');
+// 「浏览…」只在壳里画（G75）：dev/浏览器通道没有插件 IPC，画了就是一颗点了没反应的按钮。
+// 不可用时提示一句人话、把原文留在 title；取消（用户自己的决定）什么都不说。
+const shellMode = inTauri();
+const exportBrowseWhy = ref('');
+const importBrowseWhy = ref('');
 const importMode = ref<'intoEmpty' | 'merge'>('merge');
 // 「清除一切」的确认闸门：默认 false（确认区不展开），点过确认后立刻复位。
 const eraseArmed = ref(false);
@@ -165,6 +170,26 @@ async function doExport(): Promise<void> {
     ...(outPath.value.trim() ? { path: outPath.value.trim() } : {}),
   });
   await settings.loadStats();
+}
+
+/**
+ * 「浏览…」两颗（G75）：把系统文件对话框选到的路径**回填进输入框**，
+ * 后面点「导出 / 导入」的那一步一个字不改 —— 选择器只负责选，动作用的还是原来那条路。
+ * 不可用时说一句人话并把原因放进 title（原文不进正文：§8 不许把协议词汇上屏）。
+ */
+async function browseSavePath(): Promise<void> {
+  const r = await pickSavePath(outPath.value, [{ name: t('settings.exportFilterName'), extensions: ['zip'] }]);
+  if (r.kind === 'picked') outPath.value = r.path;
+  exportBrowseWhy.value = r.kind === 'unavailable' ? r.why : '';
+}
+
+async function browseOpenPath(): Promise<void> {
+  const r = await pickOpenPath([
+    { name: t('settings.importFilterZip'), extensions: ['zip'] },
+    { name: t('settings.importFilterNotes'), extensions: ['enex', 'md', 'markdown', 'txt'] },
+  ]);
+  if (r.kind === 'picked') dataPath.value = r.path;
+  importBrowseWhy.value = r.kind === 'unavailable' ? r.why : '';
 }
 
 /** 导入散文件（Evernote 的 `.enex`、Markdown、纯文本）。与上面那个"整库还原"是两条路。 */
@@ -687,8 +712,12 @@ function jumpTo(id: string): void {
           <h2 class="card__title">{{ t('settings.data') }}</h2>
           <label class="field">
             <span>{{ t('settings.exportPathLabel') }}</span>
-            <input v-model="outPath" class="input" type="text" spellcheck="false" data-testid="export-path" :placeholder="t('settings.exportPathHint')" />
+            <span class="path-row">
+              <input v-model="outPath" class="input" type="text" spellcheck="false" data-testid="export-path" :placeholder="t('settings.exportPathHint')" />
+              <button v-if="shellMode" type="button" class="btn btn--quiet" data-testid="export-browse" @click="browseSavePath">{{ t('settings.browse') }}</button>
+            </span>
           </label>
+          <p v-if="exportBrowseWhy" class="field-hint" data-testid="export-browse-hint" :title="exportBrowseWhy">{{ t('settings.browseUnavailable') }}</p>
           <div class="field">
             <AppCheckbox
               :model-value="exportScoped"
@@ -710,8 +739,12 @@ function jumpTo(id: string): void {
           </div>
           <label class="field">
             <span>{{ t('settings.inputPathLabel') }}</span>
-            <input v-model="dataPath" class="input" type="text" spellcheck="false" data-testid="data-path" :placeholder="t('settings.inputPathHint')" />
+            <span class="path-row">
+              <input v-model="dataPath" class="input" type="text" spellcheck="false" data-testid="data-path" :placeholder="t('settings.inputPathHint')" />
+              <button v-if="shellMode" type="button" class="btn btn--quiet" data-testid="import-browse" @click="browseOpenPath">{{ t('settings.browse') }}</button>
+            </span>
           </label>
+          <p v-if="importBrowseWhy" class="field-hint" data-testid="import-browse-hint" :title="importBrowseWhy">{{ t('settings.browseUnavailable') }}</p>
           <div class="row">
             <button type="button" class="btn" :disabled="settings.dataBusy" data-testid="export-data" @click="doExport">{{ t('settings.export') }}</button>
             <button type="button" class="btn" :disabled="settings.dataBusy" data-testid="import-data" @click="doImport">{{ t('settings.import') }}</button>
@@ -934,6 +967,17 @@ function jumpTo(id: string): void {
   min-height: 44px;
   align-items: center;
   gap: 0.5rem;
+}
+
+/* 路径输入 + 「浏览…」同一行：按钮出现时不推走输入框（flex 1 1 auto + min-width 0 是这一族的固定写法）。 */
+.path-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.path-row .input {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .backup-rows {

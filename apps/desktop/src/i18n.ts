@@ -262,6 +262,12 @@ const MESSAGES: Record<MessageKey, string> = {
   'settings.exportScoped': '只导出指定文件夹（子树）',
   'settings.exportScopedHint': '子树包只含勾选文件夹及其子层、祖先链，不含库内其它内容，也不含无法归属到文件夹的永久删除公告 —— 因此不能用于「仅在空库时导入」的整库还原。',
   'settings.exportPathHint': '留空则由本地核心决定文件名；已存在的文件一律不覆盖',
+  // G75：系统文件对话框的两颗「浏览…」只在壳里画；不可用时说人话、原文不进正文（§8）。
+  'settings.browse': '浏览…',
+  'settings.exportFilterName': 'Noto 备份包（.zip）',
+  'settings.importFilterZip': 'Noto 备份包（.zip）',
+  'settings.importFilterNotes': '笔记文件（.enex / Markdown / 文本）',
+  'settings.browseUnavailable': '系统文件对话框没有打开 —— 可以直接把路径填进来',
   'settings.inputPathLabel': '输入路径（导入 / 恢复）',
   'settings.inputPathHint': '要导入或恢复的文件完整路径',
   'settings.restoreNeedsRestart': '恢复会排到下次启动时执行：替换前会先留一份当前库。',
@@ -360,8 +366,7 @@ const MESSAGES: Record<MessageKey, string> = {
   'settings.attMoreRows': '还有 {count} 份没在这里列出',
   // 「重试取回」在核心有两条都算成功的路径，说的话不一样（缺口 G104）：排队等下载 vs 隔离区本地命中。
   'settings.attRetryLocal': '本机已经有这一份了（从隔离区取的），这一次没有打网络。',
-  'settings.notesCount': '{count} 条笔记 · {folders} 个文件夹',
-  'settings.trashCount': '最近删除 {count} 条',
+  'settings.notesCount': '{count} 条笔记 · {folders} 个文件夹',  'settings.trashCount': '最近删除 {count} 条',
   'settings.attachments': '{count} 个附件',
   'settings.inflight': '待处理任务 {count}',
   'settings.shortcuts': '键盘快捷键',

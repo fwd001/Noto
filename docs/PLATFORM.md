@@ -156,7 +156,7 @@ trait SystemTheme    { fn current(&self) -> Theme; fn changes(&self) -> Stream<T
   用 `Windows NT 10` 判，而 Win10 与 Win11 的 UA 都是 `Windows NT 10.0`，那条判据本身分不出两代 —— 随特效一起做。
 * **托盘**：最小化到托盘可选，默认关闭（笔记软件常驻托盘对多数用户是噪音）；关闭按钮行为可选"最小化/退出"。
   *as-built（2026-09-27）*：托盘图标在桌面三端启动时挂上（左键 = 显示/隐藏窗口，右键 = 托盘菜单：显示/隐藏、新建笔记、立即同步、退出）；**关窗是否收进托盘由设置页那个开关决定，默认关**（开关 = `UiPrefs.trayHint`，判据是 `platform/caps.ts::shouldHideOnClose`，要"开关为真 **且** 托盘真的挂上"两个条件同时成立 —— 只判断前者会得到一个关不掉也找不回的进程）。托盘菜单里的"新建笔记/立即同步"与原生菜单、快捷键共用同一批 id，经 `notera://menu` 一条路进前端。
-* **全局快捷键**：*as-built（2026-09-27）* 两条，`Ctrl+Alt+N`（任何应用里新建笔记）与 `Ctrl+Alt+I`（显示/隐藏窗口），mac 为 `⌘⌥N` / `⌘⌥I`；定义在 `notera_host::platform::global_shortcut_plan()`（唯一来源）。**刻意不复用应用菜单上的 accel**（`Ctrl+S`、`Ctrl+F` 那批）：把它们注册成系统级快捷键就是劫持别的应用的按键。注册只发生在 Rust 侧，前端不碰这个插件的 IPC，因此不需要给前端开 capability；成没成经 `report_native_cap` 写回能力声明，设置页里那两行快捷键（`requires: 'globalShortcuts'`）随之出现或消失，实际注册的组合键与界面上显示的字面由 `the_settings_page_shows_exactly_the_registered_global_shortcuts` 对账。**P6（托盘/后台常驻的默认取向）仍未拍板**，所以"常驻"这条路按默认关实现。
+* **全局快捷键**：*as-built（2026-09-27）* 两条，`Ctrl+Alt+N`（任何应用里新建笔记）与 `Ctrl+Alt+I`（显示/隐藏窗口），mac 为 `⌘⌥N` / `⌘⌥I`；定义在 `notera_host::platform::global_shortcut_plan()`（唯一来源）。**刻意不复用应用菜单上的 accel**（`Ctrl+S`、`Ctrl+F` 那批）：把它们注册成系统级快捷键就是劫持别的应用的按键。注册只发生在 Rust 侧，前端不碰这个插件的 IPC，因此不需要给前端开 capability；成没成经 `report_native_cap` 写回能力声明，设置页里那两行快捷键（`requires: 'globalShortcuts'`）随之出现或消失，实际注册的组合键与界面上显示的字面由 `the_settings_page_shows_exactly_the_registered_global_shortcuts` 对账。**对话框、事件回流与窗口按钮是另一类：前端真的要用它们的 IPC** ⇒ 2026-10-10 起有一份 `apps/desktop/src-tauri/capabilities/default.json`（仓库第一份），逐条按调用点给（`core:event` 的 listen/unlisten、`core:window` 的 minimize/toggle-maximize/hide/close/start-dragging、`dialog` 的 open/save），别的插件照旧零权限 —— 起因是 G75：零 capability 下这些命令全被 ACL 拒、而错误被 catch 吞掉，壳里三条"点了没反应"活到那天才被发现（见 CHANGELOG 第 47 刀）。**P6（托盘/后台常驻的默认取向）仍未拍板**，所以"常驻"这条路按默认关实现。
 * **WebView2**：Tauri 在 Windows 的硬依赖。开发机实测**WebView2 运行时已装（150.0.4078.105）**（无 `Edge\Application` 也无 `EdgeCore`）→ 安装包必须内置离线安装器引导，且启动时检测缺失要给出可操作提示，而不是白屏。
 * **凭据**：*as-built（0.0.29；0.0.52 更正这一句的依赖写法）* Windows 凭据管理器的 generic credential，走 `windows-sys` 的 `CredWriteW` / `CredReadW` / `CredDeleteW`（此前这里写的是 `keyring` crate —— 那个依赖全仓没有，是按 §45 扫出来的文档错话）；blob 上限 512 字节 = **256 个 UTF-16 单元**，超限**具名报错、绝不截断**。
 * **文件**：`IFileOpenDialog`（经 Tauri dialog 插件），拖拽入窗支持图片/文件。
@@ -289,7 +289,7 @@ trait SystemTheme    { fn current(&self) -> Theme; fn changes(&self) -> Stream<T
 |---|---|---|---|
 | Rust 无 GUI crate 测试 | ✅（GNU host） | ✅ | Phase 1–3 可在本机完整推进 |
 | Windows 桌面出包 | ❌ 无 MSVC 链接器 | ✅ `windows-2022` | 安装包只能在 CI 验证 |
-| 桌面窗口运行 | ❌ WebView2 运行时已装（150.0.4078.105） | ✅ | UAT（L5）本机不可跑 |
+| 桌面窗口运行（真壳 + CDP） | ✅ WebView2 运行时已装（150.0.4078.105）；`scripts/verify-tauri-window.mjs` 2026-10-10 本机 **13/13**（GNU debug 壳，真 invoke + 真 SQLite；2026-10-10 起含事件回流与系统文件对话框） | ✅ | 无 —— 这条 lane 本机可跑。**此前这一格写的"UAT（L5）本机不可跑"是过期的**：本机从 0.0.21 起跑过它很多轮（0.0.58 那次还是 release 10/10），2026-10-10 复核时按实改回来。 |
 | macOS 出包 | ❌ 物理不可能 | ✅ `macos-14` | 只能 CI |
 | Android 出包 | ❌ 无 JDK/SDK/NDK | ✅ | 只能 CI |
 | iOS 出包 | ❌ | ✅（需证书） | 证书待决策 |

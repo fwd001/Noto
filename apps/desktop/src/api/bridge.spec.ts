@@ -6,7 +6,7 @@
  * 字面量漂了不会编译错、也不会有类型错，只会在真窗口里表现为"每个按钮都没反应"。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BridgeError, callCommand, currentTransport, inTauri, onUiEvent } from './bridge';
+import { BridgeError, callCommand, currentTransport, inTauri, onUiEvent, pickOpenPath, pickSavePath } from './bridge';
 
 const invoke = vi.fn();
 const listened: Array<{ name: string; handler: (e: { payload: unknown }) => void }> = [];
@@ -93,5 +93,56 @@ describe('Tauri 通道契约', () => {
     asBrowser();
     expect(inTauri()).toBe(false);
     expect(currentTransport()).toBe('http');
+  });
+});
+
+describe('系统文件对话框（G75）', () => {
+  it('浏览器通道：unavailable 且一个 invoke 都不发（插件 IPC 只在壳里）', async () => {
+    asBrowser();
+    const r = await pickSavePath('', [{ name: 'z', extensions: ['zip'] }]);
+    expect(r).toEqual({ kind: 'unavailable', why: 'not-in-tauri' });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('壳内 save：命令名与选项逐字对齐（少一个依赖，命令名就写在调用点上）', async () => {
+    asTauri();
+    invoke.mockResolvedValue('D:/x/备份.zip');
+    const r = await pickSavePath('D:/seed.zip', [{ name: 'Noto 备份包（.zip）', extensions: ['zip'] }]);
+    expect(r).toEqual({ kind: 'picked', path: 'D:/x/备份.zip' });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const [cmd, payload] = invoke.mock.calls[0];
+    expect(cmd).toBe('plugin:dialog|save');
+    expect(payload).toEqual({
+      options: { defaultPath: 'D:/seed.zip', filters: [{ name: 'Noto 备份包（.zip）', extensions: ['zip'] }] },
+    });
+  });
+
+  it('壳内 open：单文件、非目录（这两个参数错了会在真壳里变成"选目录时也当文件"）', async () => {
+    asTauri();
+    invoke.mockResolvedValue('C:/a.enex');
+    await expect(pickOpenPath([{ name: 'n', extensions: ['enex'] }])).resolves.toEqual({ kind: 'picked', path: 'C:/a.enex' });
+    const [cmd, payload] = invoke.mock.calls[0];
+    expect(cmd).toBe('plugin:dialog|open');
+    expect(payload).toEqual({
+      options: { multiple: false, directory: false, filters: [{ name: 'n', extensions: ['enex'] }] },
+    });
+  });
+
+  it('取消（null）与空串都算 cancelled —— 那是用户的决定，不是错误', async () => {
+    asTauri();
+    invoke.mockResolvedValueOnce(null);
+    await expect(pickOpenPath([{ name: 'n', extensions: ['zip'] }])).resolves.toEqual({ kind: 'cancelled' });
+    invoke.mockResolvedValueOnce('   ');
+    await expect(pickOpenPath([{ name: 'n', extensions: ['zip'] }])).resolves.toEqual({ kind: 'cancelled' });
+  });
+
+  it('被 ACL 拒（G75 的 before 原文）⇒ unavailable 且带着原文，绝不静默', async () => {
+    asTauri();
+    invoke.mockRejectedValue(
+      new Error('dialog.save not allowed. Permissions associated with this command: dialog:allow-save, dialog:default'),
+    );
+    const r = await pickSavePath('', [{ name: 'n', extensions: ['zip'] }]);
+    expect(r.kind).toBe('unavailable');
+    expect((r as { why: string }).why).toContain('not allowed');
   });
 });

@@ -172,6 +172,71 @@ export async function callCommand<T>(name: string, args: Record<string, unknown>
   return inTauri() ? invokeTauri<T>(name, args) : invokeHttp<T>(name, args);
 }
 
+/**
+ * 系统文件对话框（**只在壳里存在** —— dev/浏览器通道没有插件 IPC）。
+ *
+ * 与插件官方的 JS 包装同一形状（`invoke('plugin:dialog|save' | 'open', { options })`）：
+ * 少一个依赖，命令名与参数就写在调用点上，缺哪条权限一眼能对到
+ * `src-tauri/capabilities/default.json`（2026-10-10 G75 实测：没有 capability 时这些命令
+ * 会被 ACL 拒，而错误以前被 catch 吞掉 ⇒ "点了没反应"）。
+ *
+ * 三种结果**分开说**：picked / cancelled / unavailable（带原文）——
+ * 调用方不许把后两种揉成同一件事（取消是用户的决定，不可用是环境的事）。
+ */
+export type PathPick =
+  | { kind: 'picked'; path: string }
+  | { kind: 'cancelled' }
+  | { kind: 'unavailable'; why: string };
+
+/**
+ * 门禁探针钩子（真壳 lane 专用）：`window.__NOTERA_DEBUG_EVENTS__` 存在时，把桥上的关键动作报给它。
+ *
+ * 为什么要有这个钩子：Tauri 把 `window.__TAURI_INTERNALS__` 锁成**不可写、不可配置**
+ * （2026-10-10 实测 `writable:false / configurable:false`，Proxy 套不上）—— 门外挂 invoke spy
+ * 是挂不上的（早先那条"点了没反应"的假读数就是这么来的：spy 静默没装上，而真想弹的
+ * 原生对话框已经弹出来了）。所以改成**由桥自己报**。不设钩子时这是一个 `typeof` 判断，
+ * 产品路径一个字不变。
+ */
+function debugEvent(kind: string, detail: Record<string, unknown>): void {
+  const hook = (window as unknown as { __NOTERA_DEBUG_EVENTS__?: (k: string, d: unknown) => void })
+    .__NOTERA_DEBUG_EVENTS__;
+  if (typeof hook === 'function') hook(kind, detail);
+}
+
+async function invokeDialog(
+  command: 'plugin:dialog|save' | 'plugin:dialog|open',
+  options: Record<string, unknown>,
+): Promise<PathPick> {
+  if (!inTauri()) return { kind: 'unavailable', why: 'not-in-tauri' };
+  debugEvent('dialog-pick', { command, options });
+  try {
+    const core = await import('@tauri-apps/api/core');
+    const pending = core.invoke<string | string[] | null>(command, { options });
+    void pending.then(
+      () => debugEvent('dialog-settled', { command, outcome: 'done' }),
+      (e: unknown) => debugEvent('dialog-settled', { command, outcome: `rejected: ${e instanceof Error ? e.message : String(e)}` }),
+    );
+    const picked = await pending;
+    const path = Array.isArray(picked) ? picked[0] : picked;
+    return typeof path === 'string' && path.trim() !== '' ? { kind: 'picked', path } : { kind: 'cancelled' };
+  } catch (error) {
+    return { kind: 'unavailable', why: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** 选一个「保存到」的路径（导出/备份）。过滤器文案由调用点给（那是界面层的事）。 */
+export function pickSavePath(suggested: string, filters: Array<{ name: string; extensions: string[] }>): Promise<PathPick> {
+  return invokeDialog('plugin:dialog|save', {
+    ...(suggested.trim() !== '' ? { defaultPath: suggested.trim() } : {}),
+    filters,
+  });
+}
+
+/** 选一个要**打开**的文件（导入用；单文件，不选目录）。 */
+export function pickOpenPath(filters: Array<{ name: string; extensions: string[] }>): Promise<PathPick> {
+  return invokeDialog('plugin:dialog|open', { multiple: false, directory: false, filters });
+}
+
 type EventHandler = (event: UiEvent) => void;
 
 function looksLikeUiEvent(value: unknown): value is UiEvent {

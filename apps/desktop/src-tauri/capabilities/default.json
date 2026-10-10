@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "前端要用的插件命令，逐条有理由（2026-10-10 G75 实测：零 capability 下这些命令全被拒 —— 壳里的事件回流、窗口按钮、拖拽、系统文件对话框全是死的，且错误被 catch 吞掉）。不用的一律不开：notification / shell / global-shortcut 前端不碰它们的 IPC（PLATFORM.md 那条口径），照旧零权限。每加一条之前先问：界面里哪个调用点在用它？没有就不加。",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-hide",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "dialog:allow-open",
+    "dialog:allow-save"
+  ]
+}
