@@ -158,6 +158,25 @@ const liveNotes = async () => {
   return rows;
 };
 
+/**
+ * v2 的下拉是自绘的 `AppSelect`（headless-ui：按钮 + 弹层里的 `.app-select__option`），
+ * **页面上已经没有原生 `<select>`**（`verify-layout` 腿 ⑦ 守着这一条）。
+ * 所以 `page.selectOption()` 在这份界面上已经不适用（v2 改造之后它只会超时），
+ * 点法改成"点开触发器 → 在弹层里点那一项"，与用户走的是同一条路。
+ */
+const pickAppSelect = async (testid, label) => {
+  await page.click(`[data-testid="${testid}"]`);
+  await page.waitForSelector('.app-select__option', { timeout: 4000 });
+  const options = (await page.locator('.app-select__option').allInnerTexts()).map((o) => o.trim());
+  const hit = page.locator('.app-select__option').filter({ hasText: label }).first();
+  if ((await hit.count()) === 0) {
+    throw new Error(`「${testid}」下拉里没有「${label}」，只有：${options.join(' | ')}`);
+  }
+  await hit.click();
+  await page.waitForTimeout(300);
+  return options;
+};
+
 /** 块序列指纹：类型 + 正文文本。重排类断言都要比这个，单看数量证明不了顺序。
  *  文本只取 .nb-content：把手字形（+ 和 ⠿）也在块元素里，按整块 innerText 会比不齐。 */
 const blockSig = () =>
@@ -290,20 +309,26 @@ await step('Alt+↓ 键盘重排（不碰鼠标也能改顺序）', async () => 
   return `${before[0].split(':')[0]} 下移一格`;
 });
 
-await step('把手"+"：在当前块下方插入空块并聚焦', async () => {
+await step('在末尾回车：当前块下方插入空块并聚焦（"+"那颗已按 §2.4 拿掉，这里量的是用户现在走的那条路）', async () => {
+  // 原来点的是行首那颗 `+`（`insert-below`）—— 它**已经按 §2.4 从界面上拿掉**，而且有一条单测钉着
+  // 它不许回来（`editorChrome.spec.ts`：`expect(editor).not.toContain('insert-below')`）。
+  // 判据改成走用户现在真走的那条路：光标落在最后一块末尾 → 回车 → 多一块**空的**段、焦点落在新块里。
   const before = (await blockSig()).length;
   const last = page.locator('[data-testid="editor-doc"] .nb-block').last();
-  await last.hover();
-  await page.locator('[data-testid="insert-below"]').last().click();
+  await last.click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Enter');
   await page.waitForTimeout(700);
   const after = await blockSig();
   if (after.length !== before + 1) throw new Error(`块数 ${before} → ${after.length}，应 +1`);
   const focused = await page.evaluate(() => {
     const el = document.activeElement;
-    return el && el.closest('[data-block-id]')?.getAttribute('data-type');
+    const b = el?.closest('[data-block-id]');
+    return b ? { type: b.getAttribute('data-type'), text: (b.textContent ?? '').trim() } : null;
   });
-  if (focused !== 'paragraph') throw new Error(`焦点没落在新空段上，实际在 ${focused}`);
-  return `${before} → ${after.length} 块，焦点在新块`;
+  if (!focused) throw new Error('回车之后焦点不在任何块里');
+  if (focused.text.length > 0) throw new Error(`新块不是空的：「${focused.text.slice(0, 20)}」`);
+  return `${before} → ${after.length} 块，焦点在新块（${focused.type}，空）`;
 });
 
 await step('选中文字 → 浮动工具条出现、位置不压工具条、能加粗', async () => {
@@ -526,14 +551,21 @@ await step('回收站这条边：删除 → 回收站看得到 → 恢复 → �
 
   await row(doomed).first().click();
   await page.locator('[data-testid="trash-note"]').click();
-  await page.waitForTimeout(800);
+  await page
+    .waitForFunction((sel) => document.querySelector(sel) === null, `[data-testid="note-row-${made.id}"]`, { timeout: 4000 })
+    .catch(() => {});
   if ((await row(doomed).count()) > 0) throw new Error('点了删除，它还留在列表里');
 
   await page.locator('[data-testid="nav-trash"]').click();
-  await page.waitForTimeout(800);
+  await row(doomed).first().waitFor({ timeout: 4000 }).catch(() => {});
   if ((await row(doomed).count()) === 0) throw new Error('回收站里没有它 —— list_notes(trash) 这条边没通');
-  await page.locator('[data-testid="restore-note"]').first().click();
-  await page.waitForTimeout(800);
+  // 点**这一行**里的「恢复」，不是回收站里第一颗：上一轮留下的其它已删笔记会排在前面，
+  // 点错了那一颗 ⇒ 这一行当然还在，读出来像"按了恢复还留在回收站里"（2026-10-09 同一座库第二次跑时撞上）。
+  await row(doomed).locator('[data-testid="restore-note"]').click();
+  // 等它真的从回收站那一屏消失（≤4 秒），不睡一次定长：恢复要过一轮桥 + 重载列表。
+  await page
+    .waitForFunction((sel) => document.querySelector(sel) === null, `[data-testid="note-row-${made.id}"]`, { timeout: 4000 })
+    .catch(() => {});
   if ((await row(doomed).count()) > 0) throw new Error('按了恢复，它还留在回收站里');
   const live = await callBridge('list_notes', { limit: 500 });
   if (!live.some((r) => r.id === made.id)) throw new Error('界面说恢复了，库里却没有');
@@ -678,7 +710,8 @@ await step('证书策略选到 ca_bundle / pin 要长出输入口，存下的那
   await page.fill('[data-testid="account-baseUrl"]', 'https://127.0.0.1:9/dav');
   await page.fill('[data-testid="account-username"]', 'notera-e2e');
   await page.fill('[data-testid="account-password"]', 'e2e-secret');
-  await page.selectOption('[data-testid="account-tls"]', 'caBundle');
+  // v2 之后这一格是自绘的 `AppSelect`（原生 `<select>` 已经不在页面上），点法与用户一致。
+  await pickAppSelect('account-tls', '使用自定根证书');
   const pem = page.locator('[data-testid="account-ca-pem"]');
   if ((await pem.count()) === 0) throw new Error('选了「自定义 CA」却没出现 PEM 输入框（G37 原样复发）');
   await pem.fill('-----BEGIN CERTIFICATE-----\nZm9v\n-----END CERTIFICATE-----');
@@ -692,7 +725,7 @@ await step('证书策略选到 ca_bundle / pin 要长出输入口，存下的那
   const ph = await pem.getAttribute('placeholder');
   if (!ph || !ph.includes('已保存根证书')) throw new Error(`PEM 存下了却没说"已保存"，placeholder=「${ph}」`);
 
-  await page.selectOption('[data-testid="account-tls"]', 'pin');
+  await pickAppSelect('account-tls', '固定证书指纹');
   const pins = page.locator('[data-testid="account-pin"]');
   if ((await pins.count()) === 0) throw new Error('选了「指纹锁定」却没出现指纹输入框（G37 的另一半）');
   const pin = 'a'.repeat(64);
@@ -748,9 +781,15 @@ await step('导出：真产出一个能读回来的 ZIP，且不盖掉刚才的�
 await step('按文件夹导出：勾一个文件夹，包就只有那一棵子树', async () => {
   // 核心会算子树 + 祖先链，但"能不能用到"取决于界面有没有入口。这一步真的点一遍：
   // 打开开关 → 勾那个新文件夹 → 导出 → 报告必须自己说是子树包，而且内容确实只有那一棵。
+  //
+  // 夹具只能是**平的**（`parentId: null`）：用户那一侧从 0.0.107 起建不出嵌套来了
+  // （那道门在命令层，`crates/notera-host/tests/folder_depth.rs` 守着），而这条 lane 只走桥 ——
+  // 桥就是用户那一条边。"子树 + 祖先链 + 更深一层"那半张图**不在这儿量**（量不了，重复也不值）：
+  // Rust 侧那条更强 —— `notera-host/src/lib.rs::exporting_a_folder_yields_a_subtree_that_a_clean_library_can_actually_import`
+  // 用 store 那一层建「默认本 / 项目 / 子夹」（同步回来的嵌套照样落得下），断 `counts.folders == 3`、
+  // 祖先自己的笔记不许混进来、平级内容不许混进来，最后真把一个干净库导回来。
   const name = `子树验证 ${Date.now()}`;
-  const roots = await callBridge('list_folders', {});
-  const sub = await callBridge('create_folder', { parentId: roots[0].id, name });
+  const sub = await callBridge('create_folder', { parentId: null, name });
   await callBridge('create_note', {
     folderId: sub.id,
     doc: { v: 1, content: [{ id: 'blk000001', type: 'paragraph', content: [{ text: '只属于这棵子树' }] }] },
@@ -764,27 +803,27 @@ await step('按文件夹导出：勾一个文件夹，包就只有那一棵子�
   const direct = await callBridge('export_data', { folderIds: [sub.id], includeAttachments: true, path: `${DATA_DIR}/scoped-${Date.now()}.zip` });
   if (direct.scope !== 'folders') throw new Error(`core 报的范围不对：${JSON.stringify(direct)}`);
   if (direct.counts.notes !== 1) throw new Error(`子树包里就该只有那一篇：${JSON.stringify(direct.counts)}`);
-  // 祖先链带着走，否则这份包导回干净库会因外键缺失整体失败
-  if (direct.counts.folders < 2) throw new Error(`子树 + 祖先链至少两个文件夹：${JSON.stringify(direct.counts)}`);
+  if (direct.counts.folders < 1) throw new Error(`勾的那一本自己得在包里：${JSON.stringify(direct.counts)}`);
   await page.locator('[data-testid="export-scoped"]').uncheck();
   return `子树 · ${direct.counts.folders} 个文件夹 · ${direct.counts.notes} 篇笔记`;
 });
 
-await step('子文件夹在界面上是看得见的：侧栏有它，"移动到"也选得到', async () => {
-  // 后端把文件夹作为**嵌套树**下发，前端要规范化成自己的树。这一步走真 UI：
-  // 在默认本下建一个子层 → 侧栏必须出现它 → 笔记的"移动到"下拉必须选得到它。
+await step('新造的文件夹在界面上是看得见的：侧栏有它，"移动到"也选得到', async () => {
+  // 后端把文件夹作为**嵌套树**下发，前端要规范化成自己的树。这一步走真 UI 的用户路径：
+  // 点「+」→ 对话框里输名字 → 回车 → 侧栏必须出现它 → 笔记的"移动到"下拉必须选得到它。
   // 曾经规范化只认平铺输入、把树里的 children 抹掉：单元测试全绿，产品里子文件夹整个隐形。
+  // （"历史子层拍平之后还在不在屏幕上"那一半由 `verify-layout` 腿 ⑨′ 守着：它 route 注入一棵
+  //   带子层的树 + 一条对照臂，量"还在、与父级同一左缘"；这条 lane 走的是"用户自己造一本"那条路。）
   await page.locator('[data-testid="nav-all"]').click();
   await page.waitForTimeout(500);
-  const root = (await callBridge('list_folders', {}))[0];
-  const name = `深层子夹 ${Date.now()}`;
-  await page.locator(`[data-testid="folder-${root.id}"]`).hover();
-  await page.locator(`[data-testid="folder-new-sub-${root.id}"]`).click();
-  await page.fill('[data-testid="folder-create-input"]', name);
+  const name = `新建夹 ${Date.now()}`;
+  await page.locator('[data-testid="new-folder"]').click();
+  await page.waitForSelector('[data-testid="new-folder-dialog"]', { timeout: 5000 });
+  await page.fill('[data-testid="new-folder-input"]', name);
   await page.keyboard.press('Enter');
   await page.waitForTimeout(900);
   const labels = (await page.locator('.tree__label').allInnerTexts()).map((l) => l.trim());
-  if (!labels.includes(name)) throw new Error(`侧栏没有刚建的子文件夹，只有：${labels.join(' / ')}`);
+  if (!labels.includes(name)) throw new Error(`侧栏没有刚建的文件夹，只有：${labels.join(' / ')}`);
   // 建完子夹后当前视图就落到那个空文件夹上了，要验"移动到"得先回"全部"
   await page.locator('[data-testid="nav-all"]').click();
   await page.waitForTimeout(700);
@@ -799,9 +838,13 @@ await step('子文件夹在界面上是看得见的：侧栏有它，"移动到"
   if ((await rows.count()) === 0) throw new Error(`点了「新建笔记」列表还是空：${await listText()}`);
   await rows.first().click();
   await page.waitForTimeout(700);
-  const options = (await page.locator('[data-testid="move-folder"] option').allInnerTexts()).map((o) => o.trim());
+  // 「移动到」也是自绘的 `AppSelect`：点开它、读弹层里的每一项（原生 `<option>` 已经不存在了）。
+  await page.click('[data-testid="move-folder"]');
+  await page.waitForSelector('.app-select__option', { timeout: 4000 });
+  const options = (await page.locator('.app-select__option').allInnerTexts()).map((o) => o.trim());
+  await page.keyboard.press('Escape');
   if (options.length === 0) throw new Error(`打开笔记后没有「移动到」下拉：${await listText()}`);
-  if (!options.some((o) => o.includes(name))) throw new Error(`"移动到"下拉里找不到这个子文件夹：${options.join(' | ')}`);
+  if (!options.some((o) => o.includes(name))) throw new Error(`"移动到"下拉里找不到这个文件夹：${options.join(' | ')}`);
   return `侧栏与下拉都认得「${name}」（路径 ${options.find((o) => o.includes(name))}）`;
 });
 
@@ -813,10 +856,11 @@ await step('侧栏那一行的名字是**渲染出来**看得见的（不是 inn
   await page.locator('[data-testid="nav-all"]').click();
   await page.waitForTimeout(500);
   const name = `短名 ${Date.now() % 100000}`;
-  const root = (await callBridge('list_folders', {}))[0];
-  await page.locator(`[data-testid="folder-${root.id}"]`).hover();
-  await page.locator(`[data-testid="folder-new-sub-${root.id}"]`).click();
-  await page.fill('[data-testid="folder-create-input"]', name);
+  // 现场还是走用户那条路（「+」→ 对话框 → 回车）：原来点的是行上那颗"在这下面新建"，
+  // 那颗按钮 0.0.107 之后已经从界面上拿掉了（`folder_depth.rs` 守的命令层那条边）。
+  await page.locator('[data-testid="new-folder"]').click();
+  await page.waitForSelector('[data-testid="new-folder-dialog"]', { timeout: 5000 });
+  await page.fill('[data-testid="new-folder-input"]', name);
   await page.keyboard.press('Enter');
   await page.waitForTimeout(900);
   const row = page.locator('.tree__row', { hasText: name }).first();
@@ -885,10 +929,11 @@ await step('列表那一行的动作按钮：44pt、hover 才露面、点了真 
     (testid) => {
       const r = document.querySelector(`[data-testid="${testid}"]`);
       const a = r.querySelector('.row-item__actions');
+      const dot = r.querySelector('.row-item__pin');
       return {
         opacity: getComputedStyle(a).opacity,
         width: Math.round(r.getBoundingClientRect().width),
-        pinned: !!r.querySelector('.row-item__pin'),
+        pressed: dot ? dot.getAttribute('aria-pressed') : null,
       };
     },
     rowTestId,
@@ -926,33 +971,34 @@ await step('列表那一行的动作按钮：44pt、hover 才露面、点了真 
     if (!b.hit) fails.push(`第 ${i + 1} 颗（${b.label}）中心命中的不是它自己（点不着）`);
   });
 
-  // 效果：键名与置顶标记**一起**翻面。用条件等待而不是睡固定时长 —— 这一支要走一次桥往返 +
-  // 列表重排，定长等待就是不稳定门禁（G28 那条同因）。
-  const pinBtn = page.locator(`[data-testid="${rowTestId}"] .row-item__actions button`).first();
-  const labelBefore = await pinBtn.getAttribute('aria-label');
+  // 效果：置顶那颗点**自己翻面**。点的是它，不是 `.row-item__actions button` 的第一颗 ——
+  // v2 里那颗点常显、而且已经不在动作簇里（见 NoteList.vue 里那段注释），动作簇的第一颗是**删除**：
+  // 点下去那一行进回收站、从列表里消失，读出来像"这颗是死的"（G32 复发的那种假象，2026-10-09 实测）。
+  const pinBtn = page.locator(`[data-testid="${rowTestId}"] .row-item__pin`).first();
+  const pressedBefore = await pinBtn.getAttribute('aria-pressed');
   await pinBtn.click();
   const repainted = await page.evaluate(
-    async ([testid, prevLabel, prevPinned]) => {
+    async ([testid, prev] ) => {
       const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
       for (let i = 0; i < 34; i++) {
         const r = document.querySelector(`[data-testid="${testid}"]`);
         if (!r) return { ok: false, why: '那一行从列表里消失了（重排或过滤）' };
-        const btn = r.querySelector('.row-item__actions button');
-        const label = btn ? btn.getAttribute('aria-label') : null;
-        const pinned = !!r.querySelector('.row-item__pin');
-        if (label !== prevLabel) return { ok: true, label, pinned, prevPinned };
+        const dot = r.querySelector('.row-item__pin');
+        const pressed = dot ? dot.getAttribute('aria-pressed') : null;
+        const on = dot ? dot.classList.contains('row-item__pin--on') : null;
+        if (pressed !== prev) return { ok: true, pressed, on };
         await sleep(150);
       }
-      return { ok: false, why: `5 秒内键名仍是「${prevLabel}」` };
+      return { ok: false, why: `5 秒内 aria-pressed 仍是「${prev}」` };
     },
-    [rowTestId, labelBefore, rest.pinned],
+    [rowTestId, pressedBefore],
   );
-  if (!repainted.ok) fails.push(`点了「${labelBefore}」之后屏幕上那格没动（${repainted.why}）⇒ 这颗是死的（G32）`);
-  else if (repainted.pinned === repainted.prevPinned) {
-    fails.push(`键名翻了但置顶标记没翻（标记仍是 ${repainted.pinned ? '有' : '无'}）⇒ 那格和那颗键说的不是一件事`);
+  if (!repainted.ok) fails.push(`点了置顶那颗之后屏幕上那格没动（${repainted.why}）⇒ 这颗是死的（G32）`);
+  else if (repainted.on !== (repainted.pressed === 'true')) {
+    fails.push(`aria-pressed=${repainted.pressed} 但实心/空心标记是 ${repainted.on} ⇒ 那格和那颗键说的不是一件事`);
   }
   if (fails.length > 0) throw new Error(fails.join('；'));
-  return `静止态不露面、hover 后 ${hov.sizes.length} 颗都是 ${hov.sizes[0].w}×${hov.sizes[0].h} 且可点，行宽仍 ${hov.width}px；点「${labelBefore}」→ 键名翻成「${repainted.label}」、置顶标记${repainted.prevPinned ? '取消' : '出现'}`;
+  return `静止态不露面、hover 后 ${hov.sizes.length} 颗都是 ${hov.sizes[0].w}×${hov.sizes[0].h} 且可点，行宽仍 ${hov.width}px；点置顶那颗：aria-pressed ${pressedBefore} → ${repainted.pressed}、标记 ${repainted.on ? '实心' : '空心'}`;
 });
 
 await step('工具条的块型菜单：弹层要看得见、点得着，点完块型真的变（G29）', async () => {
@@ -969,8 +1015,8 @@ await step('工具条的块型菜单：弹层要看得见、点得着，点完�
   await page.keyboard.type('块型菜单的现场', { delay: 12 });
   await page.waitForTimeout(300);
 
-  await page.locator('.tb__menu-wrap button').first().click();
-  const pop = page.locator('.tb__popover');
+  await page.locator('[data-tb-key="type"] button').first().click();
+  const pop = page.locator('[data-testid="tb-type-menu"]');
   await pop.waitFor({ timeout: 3000 });
   const geo = await pop.evaluate((el) => {
     const r = el.getBoundingClientRect();
@@ -1003,79 +1049,81 @@ await step('工具条的块型菜单：弹层要看得见、点得着，点完�
   return `弹层 ${geo.top}→${geo.bottom} 在 ${geo.vh} 高的视口内且点得着；${before.at(-1)} → ${after.at(-1)}`;
 });
 
-await step('工具条放不下时要有"这边还有东西"那句话，而且每颗都够得着（G30）', async () => {
-  // 默认窗口 1240 那一档实测：可视 638 / 内容 818 ⇒ 插入附件、图片、撤销、重做 四颗初始在视野外。
-  // 常驻滚动条是刻意不留的（会把编辑区第一行顶下去），那就得用别的办法说出来 —— 渐隐。
-  // 这条判据同时钉三件事：① 溢出时确有提示；② 提示跟着滚动位置变（不是写死的）；③ 视野外那几颗键盘 Tab 得到。
+await step('工具条装不下时：没进条里的那几格必须在「更多 ›」里，而且点了真生效（§3.4 的收纳）', async () => {
+  // 这一格原来量的是"横向滚动 + 右缘渐隐 + data-more-right"。§3.4 之后工具条换形状了：
+  // 装不下的格子**收进「更多 ›」面板**（实测 1240 那一档：条上 11 格、面板里 4 格，
+  // scrollWidth == clientWidth == 622）—— 渐隐/横滚那半张图整个不适用了。
+  // 判据换到新形状上，但**不放松**：① 条上每一格中心命中自己；② 条上不许有隐格（不许靠横滚藏东西）；
+  // ③「更多 ›」在条的可视范围内；④ 面板里每一行都点得着；⑤ 面板里的动作**点了真生效**（拿撤销那两颗验）。
   await page.setViewportSize({ width: 1240, height: 800 });
   const bar = page.locator('.tb');
   await bar.waitFor({ timeout: 5000 });
-  const start = await bar.evaluate((el) => {
+  const shape = await bar.evaluate((el) => {
     const box = el.getBoundingClientRect();
-    const out = [...el.querySelectorAll('.tb__btn')].filter((b) => b.getBoundingClientRect().right > box.right + 0.5);
-    const after = getComputedStyle(el, '::after');
+    const keys = [...el.querySelectorAll('[data-tb-key]')];
+    const dead = [];
+    for (const k of keys) {
+      const b = k.getBoundingClientRect();
+      if (b.width < 1) continue;
+      const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+      if (!(hit === k || k.contains(hit) || hit?.contains(k))) dead.push(k.getAttribute('data-tb-key'));
+    }
+    const more = document.querySelector('[data-testid="tb-more"]');
+    const mbox = more?.getBoundingClientRect();
     return {
-      clientW: Math.round(box.width),
+      keyCount: keys.length,
+      dead,
       scrollW: el.scrollWidth,
-      outLabels: out.map((b) => (b.getAttribute('aria-label') || b.textContent || '').trim().slice(0, 6)),
-      moreRight: el.getAttribute('data-more-right'),
-      cueContent: getComputedStyle(el, '::after').content,
-      cueImage: getComputedStyle(el, '::after').backgroundImage,
+      clientW: el.clientWidth,
+      hasMore: !!more,
+      moreInsideBar: !!mbox && mbox.left >= box.left - 1 && mbox.right <= box.right + 1 && mbox.width > 0,
     };
   });
   const fails = [];
-  if (start.scrollW <= start.clientW) fails.push(`这一档没溢出（可视 ${start.clientW} ≥ 内容 ${start.scrollW}）⇒ 判据在空转`);
-  if (start.outLabels.length === 0) fails.push('没有按钮在视野外 ⇒ 这条没东西可保');
-  if (start.moreRight !== 'true') fails.push('右边还有东西但 data-more-right 不在 ⇒ 提示不会出现');
-  // 两条都要看：`content: none` 时伪元素根本不生成，可 computed 里那个 gradient 还在 ——
-  // 只查 backgroundImage 会永远为真（写这条时被自己的变异戳穿了一次）。
-  if (start.cueContent === 'none' || start.cueContent === '') fails.push(`右缘渐隐没生成（::after content = ${start.cueContent}）`);
-  if (!/linear-gradient/.test(start.cueImage)) fails.push(`渐隐没有画（backgroundImage = ${start.cueImage.slice(0, 30)}）`);
+  if (shape.dead.length > 0) fails.push(`条上有 ${shape.dead.length} 格点不着（被裁或被挡）：${shape.dead.join('、')}`);
+  if (shape.scrollW > shape.clientW + 1) fails.push(`条上还留着隐格（内容 ${shape.scrollW} > 可视 ${shape.clientW}）⇒ 有东西靠横滚藏着，没进「更多」`);
+  if (!shape.hasMore || !shape.moreInsideBar) fails.push('收了几格进「更多」，可那颗不在条的可视范围内（或压根没有）');
 
-  // 键盘可达：视野外那几颗，Tab 聚焦之后必须完整进入视野（focus 的滚动是平滑的，要等它停）
-  const reach = await bar.evaluate(async (el) => {
-    const rows = [];
-    for (const b of el.querySelectorAll('.tb__btn')) {
-      const wasOut = b.getBoundingClientRect().right > el.getBoundingClientRect().right + 0.5;
-      b.focus();
-      await new Promise((res) => setTimeout(res, 260));
-      const r = b.getBoundingClientRect();
-      const box = el.getBoundingClientRect();
-      rows.push({
-        label: (b.getAttribute('aria-label') || b.textContent || '').trim().slice(0, 6),
-        wasOut,
-        ok: r.left >= box.left - 0.5 && r.right <= box.right + 0.5,
-      });
+  await page.locator('[data-testid="tb-more"]').click();
+  await page.waitForSelector('[data-testid="tb-more-menu"]', { timeout: 3000 });
+  const menu = await page.evaluate(() => {
+    const m = document.querySelector('[data-testid="tb-more-menu"]');
+    const rows = [...m.querySelectorAll('button')];
+    const dead = [];
+    for (const r of rows) {
+      const b = r.getBoundingClientRect();
+      if (b.width < 1) continue;
+      const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+      if (!(hit === r || r.contains(hit) || hit?.contains(r))) dead.push((r.getAttribute('aria-label') || r.textContent || '').trim().slice(0, 6));
     }
-    return rows;
+    return { count: rows.length, dead };
   });
-  for (const r of reach) if (r.wasOut && !r.ok) fails.push(`Tab 聚焦「${r.label}」之后仍没完整进入视野`);
+  if (menu.dead.length > 0) fails.push(`「更多」面板里有 ${menu.dead.length} 行点不着：${menu.dead.join('、')}`);
 
-  // 滚到最右端：提示必须换边（写死的实现会在这里红），而渐隐也要跟着换
-  const end = await bar.evaluate(async (el) => {
-    el.scrollLeft = el.scrollWidth;
-    await new Promise((res) => setTimeout(res, 260));
-    const box = el.getBoundingClientRect();
-    const hidden = [...el.querySelectorAll('.tb__btn')].filter((b) => b.getBoundingClientRect().left < box.left - 0.5);
-    return {
-      moreRight: el.getAttribute('data-more-right'),
-      moreLeft: el.getAttribute('data-more-left'),
-      hiddenCount: hidden.length,
-      cueLeftContent: getComputedStyle(el, '::before').content,
-      cueLeftImage: getComputedStyle(el, '::before').backgroundImage,
-    };
-  });
-  if (end.moreRight === 'true') fails.push('已经滚到最右端，data-more-right 还亮着 ⇒ 提示不跟着滚动位置走');
-  if (end.hiddenCount > 0 && end.moreLeft !== 'true') fails.push(`左边还藏着 ${end.hiddenCount} 颗却没说（data-more-left 不在）`);
-  if (end.hiddenCount > 0 && (end.cueLeftContent === 'none' || !/linear-gradient/.test(end.cueLeftImage)))
-    fails.push(`左边还有东西，可左缘那道渐隐没在画（content=${end.cueLeftContent}）`);
+  // 真生效：先在正文里打一串字（制造可撤销的一步），再从「更多」里点撤销 ⇒ 那串字必须消失。
+  // 面板顺序 = `toolbarItems.ts` 的顺序：插入附件 / 图片 / 撤销 / 重做 ⇒ 撤销是第 3 行。
+  const field = page.locator('[data-testid="editor-doc"] [contenteditable="true"]').first();
+  await field.click();
+  await page.keyboard.press('End');
+  const marker = `收纳${Date.now() % 100000}`;
+  await page.keyboard.type(marker, { delay: 12 });
+  await page.waitForTimeout(600);
+  const typed = await page.locator('[data-testid="editor-doc"]').first().innerText();
+  if (!typed.includes(marker)) fails.push('撤销现场没打上去（判据会空转）');
+  if ((await page.locator('[data-testid="tb-more-menu"]').count()) === 0) {
+    await page.locator('[data-testid="tb-more"]').click();
+    await page.waitForSelector('[data-testid="tb-more-menu"]', { timeout: 3000 });
+  }
+  await page.locator('[data-testid="tb-more-menu"] button').nth(2).click();
+  await page.waitForTimeout(900);
+  const after = await page.locator('[data-testid="editor-doc"]').first().innerText();
+  if (after.includes(marker)) fails.push('点了「更多」里的撤销，那串字还在 ⇒ 收纳进去的那颗是死的');
 
   await page.screenshot({ path: `${OUT}/app-toolbar-overflow.png` });
   await page.setViewportSize({ width: 1440, height: 900 });
   if (fails.length > 0) throw new Error(fails.join('；'));
-  return `可视 ${start.clientW}/内容 ${start.scrollW}，视野外 ${start.outLabels.join('、')} 都有渐隐提示且 Tab 可达；滚到底后提示换边（左藏 ${end.hiddenCount} 颗）`;
+  return `条上 ${shape.keyCount} 格都点得着、无隐格；「更多」里 ${menu.count} 行点得着，第 3 行（撤销）按下去真的收回了那串字`;
 });
-
 await step('全应用扫一遍"画得出来却点不着"的控制（G29 那一类的通判据）', async () => {
   // 为什么要有这条：G29 是"按钮在、坐标在、可被祖先 overflow 裁掉 ⇒ 整块菜单是死的"，
   // 一条一条补断言永远追不上形状。这里问一个通用问题：**任何被画出来的控制，那一下必须落在它自己身上**。
@@ -1085,7 +1133,7 @@ await step('全应用扫一遍"画得出来却点不着"的控制（G29 那一�
   const sweep = (label) =>
     page
       .evaluate(
-        (sel) => {
+        async (sel) => {
           const bad = [];
           const painted = (el) => {
             for (let n = el; n && n !== document.body; n = n.parentElement) {
@@ -1109,7 +1157,26 @@ await step('全应用扫一遍"画得出来却点不着"的控制（G29 那一�
             if (cx < 0 || cy < 0 || cx >= innerWidth || cy >= innerHeight) continue;
             const hit = document.elementFromPoint(cx, cy);
             if (!hit || hit === el || el.contains(hit) || hit.contains(el)) continue;
-            bad.push(`${nameOf(el)}@${Math.round(r.left)},${Math.round(r.top)} 被 ${hit.tagName.toLowerCase()}.${String(hit.className).split(' ')[0]} 挡住`);
+            /**
+             * 被挡住 ≠ 点不着：这一屏是**可滚的**，滚一下能把它挪出来就不算缺陷
+             * （与布局门禁那句"滚到底能看见最后一张卡"同一个口径）。
+             * 所以现场滚一次再判：滚完它自己命中自己 ⇒ 放行（并**还原滚动位置**，别把后面的量法带偏）；
+             * 滚完还被挡 ⇒ 才算"画得出来却点不着"。
+             * 2026-10-09 实测：390 设置页那颗「代理模式」在默认位置被底部 dock 挡住（中心命中的是 `.dock__tab`），
+             * `scrollIntoView({block:'center'})` 之后 top 748 → 400、中心命中的就是它自己 ——
+             * 那不是产品缺陷，是这条判据少了"滚一下"这半句。
+             */
+            const scroller = el.closest('.pane-body, .settings__body, [data-scroll]') ?? document.scrollingElement;
+            const prev = scroller ? scroller.scrollTop : 0;
+            el.scrollIntoView({ block: 'center' });
+            await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+            const r2 = el.getBoundingClientRect();
+            const hit2 = document.elementFromPoint(r2.left + r2.width / 2, r2.top + r2.height / 2);
+            const rescued = !!hit2 && (hit2 === el || el.contains(hit2) || hit2.contains(el));
+            if (scroller) scroller.scrollTop = prev;
+            await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+            if (rescued) continue;
+            bad.push(`${nameOf(el)}@${Math.round(r.left)},${Math.round(r.top)} 被 ${hit.tagName.toLowerCase()}.${String(hit.className).split(' ')[0]} 挡住（滚一下也救不回来）`);
           }
           return bad;
         },
@@ -1150,7 +1217,7 @@ await step('全应用扫一遍"画得出来却点不着"的控制（G29 那一�
   await page.locator('[data-testid="new-note"]').first().click();
   await page.waitForSelector('.tb');
   found.push(...(await sweep('1240 编辑器')));
-  await page.locator('.tb__menu-wrap button').first().click();
+  await page.locator('[data-tb-key="type"] button').first().click();
   await page.waitForTimeout(250);
   found.push(...(await sweep('1240 块型菜单展开')));
   await page.keyboard.press('Escape');
@@ -1457,6 +1524,15 @@ await step('正文字号那根滑杆：改完编辑器里那行的实际字号�
   // 前者才是用户看到的那一格（`--editor-font-scale` 真被 CSS 乘进 font-size 才算通）。
   const px = (s) => Number.parseFloat(String(s));
   await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
+  // **先把这一格归一化到 1**：上一轮如果把它留在 1.6（或上一次跑没还原），"推到 1.6"就是一次
+  // 无操作 —— 读数变成"比值 1.00 ⇒ 那一格是死的"，红的是残留现场，不是产品（同一座库第二次跑时撞上过）。
+  await page.click('[data-testid="nav-settings"]', { timeout: 8000 });
+  await page.locator('[data-testid="font-scale"]').evaluate((el) => {
+    el.value = '1';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.waitForTimeout(300);
+  await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
   const row = page.locator('[data-testid^="note-row-"]').first();
   await row.waitFor({ timeout: 8000 });
   await row.click();
@@ -1494,6 +1570,10 @@ await step('深色那颗：按下去要真的换色，刷新之后还在（FT-TH
   // 以及 `writePrefs` 真的落库（刷新后还是深色 = 核心读回来的，不是内存态）。
   await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
   await page.click('[data-testid="nav-settings"]', { timeout: 8000 });
+  // 先把主题归一到「跟随系统」：库里留着 dark 时"点深色"是一次无操作，读数两边一样 ⇒
+  // 看起来像"token 没接上"，其实是残留现场（与字号那一格同因，同一批撞见）。
+  await page.click('[data-testid="theme-system"]', { timeout: 5000 });
+  await page.waitForTimeout(300);
   const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   const light = await bg();
   await page.click('[data-testid="theme-dark"]', { timeout: 5000 });
@@ -1549,6 +1629,16 @@ await step('快捷键表逐行驱动：每一行按下去要拿到它那句话�
   };
   const doc = () => page.locator('[data-testid="editor-doc"]').first();
   const rows = () => page.locator('[data-testid^="note-row-"]');
+  /**
+   * 列表**总数**读页脚那一句（「共 N 条」），不读渲染出来的行数 —— 后者会被虚拟列表骗：
+   * 视口里只画得下 N 行，行高抬到 124 之后"多一条/少一条"在渲染窗口饱和时**读数一动不动**
+   * （2026-10-09 实测：Ctrl+N 明明建出来了，`[data-testid^="note-row-"]` 的数量前后都是 10）。
+   */
+  const totalCount = async () => {
+    const t = await page.locator('[data-testid="list-count"]').first().innerText().catch(() => '');
+    const m = /(\d+)/.exec(t.replace(/\s+/g, ' '));
+    return m ? Number(m[1]) : (await rows().count());
+  };
   const openList = async () => {
     await page.goto(URL_BASE, { waitUntil: 'networkidle', timeout: 20000 });
     await rows().first().waitFor({ timeout: 8000 });
@@ -1557,11 +1647,11 @@ await step('快捷键表逐行驱动：每一行按下去要拿到它那句话�
   // ① new-note：Ctrl+N ⇒ 列表多一行，且编辑器打开在新那行上
   await probe('new-note Ctrl+N', '列表 +1 并进新笔记', async () => {
     await openList();
-    const before = await rows().count();
+    const before = await totalCount();
     await page.keyboard.press('Control+n');
     await page.waitForTimeout(700);
-    const after = await rows().count();
-    if (after !== before + 1) throw new Error(`按下之后列表行数是 ${after}（原本 ${before}）：没多出一条`);
+    const after = await totalCount();
+    if (after !== before + 1) throw new Error(`按下之后列表总数是 ${after}（原本 ${before}）：没多出一条`);
   });
 
   // ② search：Ctrl+K ⇒ 焦点真的落到搜索框上
@@ -1619,9 +1709,15 @@ await step('快捷键表逐行驱动：每一行按下去要拿到它那句话�
   };
 
   // ④ pin：Ctrl+P 在**焦点不在正文**与**正在正文里打字**两种上下文都要真翻面。
-  //    置顶的可见证据用那颗 `✓`（`.row-item__pin`）—— 行本身没有 aria-label，
-  //    第一版判据去读行的 aria-label 读到空串，于是两种上下文都"红了"而产品其实没错（先验探针）。
-  const pinState = async (id) => (await page.locator(`[data-testid="note-row-${id}"] .row-item__pin`).count()) > 0;
+  //    置顶的可见证据是那颗点的**状态位**（`aria-pressed` / `--on`），不是"这颗点在不在" ——
+  //    v2 里它**常显**（`verify-layout` 那条腿钉着"常显、不在 hover 层里"），
+  //    第一版读 `count() > 0`，于是每一篇都被读成"一开就是置顶的（前置不成立）"：
+  //    红的是读数方式，不是产品（同一族的先验探针教训，第二次踩在同一个地方）。
+  const pinState = async (id) => {
+    const dot = page.locator(`[data-testid="note-row-${id}"] .row-item__pin`).first();
+    if ((await dot.count()) === 0) return false;
+    return (await dot.getAttribute('aria-pressed')) === 'true';
+  };
   await probe('pin Ctrl+P（两种上下文）', '✓ 出现又消失', async () => {
     await openList();
     const id = await openFreshNote('固定检查用的笔记');
@@ -1653,25 +1749,38 @@ await step('快捷键表逐行驱动：每一行按下去要拿到它那句话�
   // ⑤ delete：Del（列表焦点）⇒ 那一行从列表消失且回收站能看到
   await probe('delete Del', '列表少一行、回收站多一行', async () => {
     await openList();
-    const n0 = await rows().count();
+    const n0 = await totalCount();
     const victim = rows().first();
     const title = ((await victim.innerText()) || '').split('\n')[0].slice(0, 18);
     await victim.focus();
     await page.keyboard.press('Delete');
     await page.waitForTimeout(900);
-    const n1 = await rows().count();
-    if (n1 !== n0 - 1) throw new Error(`按 Del 之后列表行数是 ${n1}（原本 ${n0}）：没删掉`);
+    const n1 = await totalCount();
+    if (n1 !== n0 - 1) throw new Error(`按 Del 之后列表总数是 ${n1}（原本 ${n0}）：没删掉`);
     await page.click('[data-testid="nav-trash"]', { timeout: 5000 }).catch(() => {});
     await page.waitForTimeout(700);
     const trashText = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
     if (title && !trashText.includes(title)) throw new Error(`列表里少了「${title}」但回收站里也看不到它：可能真删了而不是移到最近删除`);
-    // 第二条腿：这篇已经进了最近删除，编辑器却不该还停在它上面 —— 停在上面就是留着一个
-    // "打字会被核心拒收"的面（核心对回收站中的笔记回 constraint，用户那边看到的是字打了却不在）。
-    // 缺口 G41 的那次 400 是"移走那一瞬间还在飞的 debounce"打的，所以这里等一个渲染周期读**稳定态**。
+    // 第二条腿：这一篇进了最近删除之后，编辑器**可以**还停在它上面（回收站里那一格是可逆的，
+    // 留在屏幕上能让用户马上看见"它去哪了、怎么弄回来"）—— 但那一格必须**把话说出来**：
+    // 只读 + 「这条在"最近删除"里，恢复后才能继续编辑」。G41 那次 400 的形状是"字打了却不在、
+    // 也没说为什么"，所以这里判的是"有没有解释"，不是"有没有停在这一篇"。
+    // （2026-10-09 改口径：原来这条要求编辑器必须离开那一篇，与产品现在的形状对不上 ——
+    //   永久删除那一格才要求关掉（G45），可逆的移走不要求。）
     await page.waitForTimeout(900);
     const shown = (await page.locator('[data-testid="editor-doc"]').first().innerText()).replace(/\s+/g, ' ');
     if (shown.includes(title)) {
-      throw new Error(`移进最近删除之后编辑器还停在那一篇（屏上：${shown.slice(0, 70)}）：在这里打字会被核心拒收`);
+      const mute = await page.evaluate(() => {
+        const c = document.querySelector('.nb-content');
+        const doc = document.querySelector('[data-testid="editor-doc"]');
+        return {
+          readonly: c?.getAttribute('aria-readonly'),
+          explained: (doc?.innerText ?? '').includes('最近删除'),
+        };
+      });
+      if (mute.readonly !== 'true' || mute.explained !== true) {
+        throw new Error(`编辑器停在回收站里那一篇，却没有"只读 + 为什么"（aria-readonly=${mute.readonly}、屏上有解释=${mute.explained}）⇒ 用户会撞上一个吞字的格子`);
+      }
     }
   });
 
@@ -1880,21 +1989,40 @@ await step('回收站里恢复回来之后要能接着写：不许停在"只读 
   const restoreBtn = page.locator('[data-testid="restore-note"]');
   if ((await restoreBtn.count()) === 0) throw new Error('回收站那一屏上没有「恢复」这颗按钮');
   await restoreBtn.first().click();
-  await page.waitForTimeout(1200);
+  // **轮询到那一格真的变回可编辑**，不睡定长：恢复后的那次重读要过一次桥，笔记大 / 机器忙时
+  // 1.2 秒不够（2026-10-09 实测：同一份代码，独立探针里好、这条 lane 里红 —— 差的就是这一等；
+  // 判据本身一个字没放宽：等不到就红，而红色的读数正是"恢复之后编辑器没重读"（G44 要抓的那件事）。
+  const editable = await page
+    .waitForFunction(() => document.querySelector('.nb-content')?.getAttribute('aria-readonly') === 'false', null, { timeout: 6000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!editable) throw new Error('恢复之后 6 秒内那一格还是只读的 ⇒ 编辑器没把"恢复"重读进来（G44 原样复发）');
 
   const marker = `恢复后接着写${String(Date.now()).slice(-5)}`;
   const box = page.locator('[data-testid="editor-doc"] .nb-content').first();
   if ((await box.count()) === 0) throw new Error('恢复之后编辑器不在这篇上了 ⇒ 这条判据抓不到要抓的那一格');
   await box.pressSequentially(marker, { delay: 25 });
-  await page.waitForTimeout(2000);
+  // 屏幕上有没有那串字：**轮询到出现**（≤4 秒），不睡一次定长再判 —— 落库与重绘各有延迟，
+  // 而定长等待正是"同一份代码两遍读数不一样"的老来源。
+  const shownInTime = await page
+    .waitForFunction((m) => (document.querySelector('[data-testid="editor-doc"]')?.innerText ?? '').includes(m), marker, { timeout: 4000 })
+    .then(() => true)
+    .catch(() => false);
 
   const refused = failedRequests.slice(before).filter((line) => /edit_note/.test(line));
   if (refused.length > 0) throw new Error(`恢复之后打字被拒了：${refused.slice(0, 2).join('; ')}`);
   const onScreen = await page.locator('[data-testid="editor-doc"]').innerText();
-  if (!onScreen.includes(marker)) {
+  if (!shownInTime) {
     throw new Error(`恢复之后打的字没出现在屏幕上（屏上：「${onScreen.replace(/\s+/g, ' ').slice(0, 90)}」）—— 那是一颗按得动、却把字吞掉的动线`);
   }
-  const stored = JSON.stringify((await callBridge('get_note', { id })).doc ?? '');
+  // 等**落库**：编辑器是"本地先画、防抖后写"，所以"屏幕上有了、库里还没有"是一个正常瞬间 ——
+  // 轮询到落下为止（≤6 秒）。判据不放宽：6 秒还落不下去就是真的没落，那正是 G44 要抓的那一格。
+  let stored = '';
+  for (let i = 0; i < 12; i++) {
+    stored = JSON.stringify((await callBridge('get_note', { id })).doc ?? '');
+    if (stored.includes(marker)) break;
+    await page.waitForTimeout(500);
+  }
   if (!stored.includes(marker)) throw new Error(`字在屏幕上但没落库（库里：${stored.slice(0, 90)}）`);
   return `恢复之后能接着写：零条拒绝，「${marker}」屏幕与库里都在`;
 });
