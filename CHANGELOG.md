@@ -4025,6 +4025,53 @@ G106 到这里收掉，G107 的三条也各自有了自己的现场："至少三
 **读数**：整条 `verify-layout` 干净库 **645 项 PASS / 0 FAIL**（`LAYOUT_EXIT=0`，`.logs/layout79.txt`；
 环境噪声按名单放行 1 条，已计数打印）。这一批**只动 `scripts/verify-layout.mjs`** ⇒ 按口径不升版本。
 
+### 门禁补强（2026-10-10 第四批）：G109 关闭 —— audit 那一行里"没在跑"的三件工具真的在跑了
+
+**G109 是什么**：CI-CD §流水线分层 的 `audit` 行写着 `cargo-audit` / `cargo-deny` / `gitleaks` 三步，
+而 `.github/workflows/ci.yml` 里 grep 不到任何一步 —— 真在跑的只有 `pnpm audit` 与走 OSV 的
+`audit-rust-deps.mjs`。其中最刺的一格：**没有任何门禁在扫提交里的口令/私钥**（§10 只有约定与 `.gitignore`）。
+
+**修法**：新增 `.github/workflows/audit.yml`，把四件事真的跑起来，工具钉版本 + 校验和：
+`cargo-audit audit --deny warnings`（RustSec 原生库）、`cargo-deny check`（licenses 白名单 / advisories /
+bans / sources）、`gitleaks detect --redact`（**全历史**密钥扫描；`--redact` 因为本仓库是公开仓库）、
+`pnpm audit`，外加与 gates 同一对 OSV 命令（gates 不在 schedule 上，那两条得有人跑）。入口取
+PR + **push main** + tag + 每日 + 手动 —— push main 这条是本仓库加的：日常推送直接落 main、没有 PR 分支流，
+只挂 PR 等于平时不跑。
+
+**证据（全部本机跑过；每条判据都做过变异 —— "扫到 0 项"不算检查过）**：
+- **cargo-deny** 三臂变异：拿掉 `licenses.allow` 里的 `"MIT"` ⇒ `licenses FAILED`（退出 4）；
+  拿掉 `advisories.ignore` 里的 RUSTSEC-2024-0370 ⇒ `advisories FAILED`（退出 1）；
+  `multiple-versions` 从 warn 改 deny ⇒ `bans FAILED`（退出 2）；还原后四查全绿（退出 0，配置逐字节对回）。
+  白名单（14 条）从实跑列出的许可证表达式里收，`OR` 表达式不会把 LGPL 放进来。
+- **cargo-audit**：`--deny warnings` 比裸跑严 —— unmaintained / unsound / yanked 未经豁免也红；
+  两条豁免写进 `.cargo/audit.toml`（与 OSV 脚本 WAIVERS、deny.toml 同一格），拿掉一条 ⇒
+  `1 denied warning found!`（退出 1）。配置的落点必须是 `.cargo/audit.toml` —— 根目录放 `audit.toml`
+  **不生效**（本机实测），这条只有真跑过才知道。
+- **gitleaks**：本仓库全历史 454 个提交 / 8.36 MB ⇒ 0 命中（退出 0）；**变异**：临时仓库里塞假 AWS key +
+  假 GitHub PAT ⇒ 两条都点名（退出 1）。第一次变异用的 `AKIAIOSFODNN7EXAMPLE` **没被点名** ——
+  它在上游规则的白名单里；这正说明"扫描器没报"必须先用一条会被报的现场验过才算数。
+- **pnpm audit**：本机在"只有 package.json + pnpm-lock.yaml、没装依赖"的空目录里验过（退出 0）
+  ⇒ audit 作业不付安装的代价。
+- **预演抓到的一个真 bug**：gitleaks 校验和文件引用的是资产原名，下载存成别的名字时 `sha256sum -c`
+  报 "FAILED open or read" —— 步骤改成原名保存（修正后三份校验和全 OK、三个二进制各自 --version 跑通）。
+- **工具链披露**：gitleaks / cargo-deny 的校验和取自上游官方文件并逐字节对过；cargo-audit 上游**没有**
+  发校验和资产，钉的是本机下载后计算的 SHA-256 —— 保证"每次取到同一份产物"，但不构成对上游的独立验证。
+
+**这套新工具第一次实跑就量出一条新账**：`yoke-derive@0.8.3` 被上游 yank —— 已 `cargo update -p yoke-derive`
+抬到 0.8.4。锁里因此动了两处（都要写清，不能只说"随手抬了一个版本"）：① yoke-derive 0.8.3 → 0.8.4；
+② `cssparser-macros` 的 `syn` 引用随这次重解析从 `syn 3.0.6` 折回 `syn 2.0.119` —— 它的要求是
+`syn >=2, <4`（不是 caret），两个都在范围内、`syn 3.0.6` 仍留在图里给别的包用，折回只是把同一条约束
+落到已有的 2.0.119 上；折完 cargo-audit 的 yanked 清零、cargo-deny 四查仍全绿。
+**锁变更的证据**：抬完版本整条 `cargo test --workspace -- --test-threads=1` 跑过 ——
+**710 通过 / 0 失败 / 6 ignored，97 个 result 行，退出码 0**（不是"锁对上了就算"）。
+
+**文档同步**：CI-CD §流水线分层 `audit` 行重写（G109 关闭）；"实际落地"那段从"只有一个 `gates` job"
+改成"`gates` + `audit` 两个 workflow"；§密钥入仓 那格写明 gitleaks 真的在跑；PRODUCTION-READINESS §7
+的豁免表加了一段增补（同两条豁免现在被三处消费）。
+
+**这一批只动 `.github/workflows/audit.yml`、`deny.toml`、`.cargo/audit.toml`、`Cargo.lock`
+（yoke-derive 0.8.3 → 0.8.4，清 yank）与文档 —— 没有产品行为变更，按口径**不升版本号**。**
+
 ### 界面重构 v2 · 第 33 刀【已回退，G101 重开】：浮层量一次并朝上开 —— 几何修好了，却弄坏一条更早的腿
 
 **结局先说**：这一版把浮层量回了视口（390 与 1440 实测 `inside=true`、腿 52 单跑 5/5），
@@ -4457,11 +4504,12 @@ COUNT(DISTINCT note_id)`），host 侧 `attachment_inventory` 折成 `rows` + `t
   包里有那一棵 + 祖先链"，"子层可见"那句按 §7 关掉之后的新口径重写（只承诺"拍平还在、同一左缘"）。
   **为什么现在才暴露**：这条 lane 自第 36 刀之后没再跑过，第 38、39 刀的整跑只跑了 `verify-layout` —— 两道 UAT 互补，
   但"互补"只有在两道都跑的时候才成立。
-- **G109 CI-CD §作业矩阵里 `audit` 那一行写着三条实际没有的步骤**（2026-10-09 顺手对文档时量出；状态 = **未修，登记**）：
-  `cargo-audit`、`cargo-deny`、`gitleaks detect` 在 `.github/workflows/ci.yml` 里 **grep 零命中**，
-  真在跑的只有 `pnpm audit`（指向公共 registry）与 `scripts/audit-rust-deps.mjs`（走 OSV，覆盖 RustSec 的 advisory-db）。
-  已在该行原处标注。secret 扫描这一格尤其要说清：**目前没有任何一道门禁在扫提交里的口令/私钥**，
-  §10 那条"禁止把密钥写进仓库"只有约定与 `.gitignore`，没有机器判据。
+- **G109 CI-CD §作业矩阵里 `audit` 那一行写着三条实际没有的步骤**（2026-10-09 量出；状态 = **2026-10-10 已关闭**）：
+  原先 `cargo-audit`、`cargo-deny`、`gitleaks detect` 在 CI 里 **grep 零命中** —— 最刺的一格是
+  "没有任何门禁在扫提交里的口令/私钥"。现在 `.github/workflows/audit.yml` 把四件事真的跑起来
+  （三件工具钉版本 + 校验和；每条判据都做过变异），CI-CD 的 `audit` 行与 §密钥入仓 已按实况重写；
+  经过与证据见"门禁补强（2026-10-10 第四批）"那一节。新工具第一次实跑还量出一条新账：
+  `yoke-derive@0.8.3` 被 yank，已抬到 0.8.4。
 - `ARCHITECTURE-REVIEW.md` §14 的 D1–D10 仍待人工决定
 
 

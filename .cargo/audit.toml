@@ -1,0 +1,14 @@
+# cargo-audit 的配置。CI 与本机跑的是同一条命令：
+#     cargo-audit audit --deny warnings
+# `--deny warnings` 比裸 `audit` 严：裸跑只对**漏洞**退出非零，unmaintained / unsound / yanked 只打印；
+# 这里要求任何一条未经豁免的通报都直接红。下面两条豁免与 scripts/audit-rust-deps.mjs 的 WAIVERS、
+# deny.toml 的 ignore 是同一格，理由与回看时机统一写在那张表里（docs/PRODUCTION-READINESS.md §7）。
+
+[advisories]
+ignore = [
+    # proc-macro-error：unmaintained 通告（无"修于哪个版本"、无可利用缺陷），构建期宏带进来、不进产物。
+    "RUSTSEC-2024-0370",
+    # glib 0.18.5：unsound（VariantStrIter 的 Iterator impl），来自 Linux/gtk 那半张图，修在 0.20.0，
+    # 要上游抬版本才动得了；本轮不产出 Linux 产物。
+    "RUSTSEC-2024-0429",
+]

@@ -78,7 +78,7 @@
 | `integration` | 依赖 `pr` 成功（`needs: pr`） | **L1** 组件（core↔store↔richtext 组装）；**L2** 契约回归；**L3** 多客户端 E2E：起 `notera-test-webdav`，≥2 个 `notera-host` 实例经 127.0.0.1 真实 HTTP 收敛 | ≤ 12 min | 是 |
 | `crash` | `needs: pr`，且在 `crates/notera-{store,sync,crypto}/**`、`migrations/**` 有变更时必跑（其余 PR 也跑，但允许 `continue-on-error: false`） | **L4** 写入中途 `kill -9` / `taskkill /F` / `abort()`，重启后校验 WAL 恢复、FTS 索引与 `user_version` 一致 | ≤ 10 min | 是 |
 | `e2e-desktop` | 仅 `windows-2022`（预装 WebView2 `[上游/假设]`）+ `pull_request`，`workflow_dispatch` 可手动 | **L5** 黑盒 UAT：Playwright 驱动 Tauri WebView（经 `devtools`/远程调试端口，接线方式 Phase 1 spike）。**本地等价已落地**：`node scripts/verify-app.mjs` 驱动同一份前端 + 同一份 Rust 核心（`notera-cli serve` 的 dev 桥，真实 SQLite，非 mock），14 步含"刷新后仍在"与"控制台零 error" | ≤ 15 min | 是（release 必过；PR 若 runner 无 WebView2 必须显式 fail，不允许 skip） |
-| `audit` | `pull_request` + `schedule` 每日 + tag | `cargo-audit`（RustSEC）、`cargo-deny`（licenses/advisories/bans/duplicates）、`pnpm audit --audit-level=high --registry=https://registry.npmjs.org`（**2026-10-09 更正**：这一条在本机**能跑** —— 全局 registry 是 registry.npmmirror.com，它没有 `/bulk` advisories 端点、不带参数时 pnpm 直接报错，但命令里显式指向公共 registry 就通了，台账 G12 的解除条件本来就是这个。原文那句"从来没在这台机器上验过"是不实的话：`source-map-js` 那条 high 就是本机先报出来的，见 §实测步骤表第 9 行）、`gitleaks detect`。**这三条里目前真在 CI 里跑的只有 `pnpm audit` 与 `audit-rust-deps.mjs`（OSV 代替 RustSEC）—— `cargo-audit`、`cargo-deny`、`gitleaks` 在 `ci.yml` 里 grep 不到任何步骤（登记 G109）** | ≤ 5 min | 是（高危项；`audit` 的 advisory 允许带到期日的 `waiver` 列表，见 §10） |
+| `audit` | `pull_request` + `push` main + `schedule` 每日 + tag + 手动 | **2026-10-10 起真的在跑**（`.github/workflows/audit.yml`）：`cargo-audit audit --deny warnings`（RustSec 原生库；两条豁免在 `.cargo/audit.toml`，与 `audit-rust-deps.mjs` 的 WAIVERS 同格）、`cargo-deny check`（licenses 白名单 / advisories / bans / sources，配置在 `deny.toml`）、`pnpm audit --audit-level=high --registry=https://registry.npmjs.org`（**2026-10-09 更正**：这一条在本机**能跑** —— 全局 registry 是 registry.npmmirror.com，它没有 `/bulk` advisories 端点、不带参数时 pnpm 直接报错，但命令里显式指向公共 registry 就通了，台账 G12 的解除条件本来就是这个。原文那句"从来没在这台机器上验过"是不实的话：`source-map-js` 那条 high 就是本机先报出来的，见 §实测步骤表第 9 行）、`gitleaks detect --redact`（全历史密钥扫描，本机 454 提交 0 命中、假密钥变异被点名；`--redact` 因为本仓库是公开仓库）、以及 OSV 那对 `audit-rust-deps.mjs` 命令（与 gates 同一对，schedule 上只有这里会跑它们）。`push` main 是本仓库给它加的入口：日常推送直接落 main、没有 PR 分支流，只挂 PR 等于平时不跑。三件工具钉版本 + 校验和（cargo-audit 上游没发校验和资产，钉的是本机计算的 SHA-256 —— 如实披露） | ≤ 15 min | 是（高危项；advisory 豁免要求带理由与回看时机，见 §10） |
 | `build-windows` | `pull_request`（标签 `build:win` 或改 `apps/desktop/**`）+ tag | `cargo build --release --target x86_64-pc-windows-msvc` + `pnpm tauri build --bundles msi`（`nsis` 是否同时出：待决策 §13） | ≤ 25 min | 是（release 前置） |
 | `build-macos-android` | 同上（矩阵两个 job） | macOS：`macos-14` + `tauri build --target aarch64-apple-darwin` → `.dmg` + `.app.zip`；Android：`ubuntu-22.04` + JDK17 + SDK/NDK → `arm64-v8a` APK | ≤ 30 min | 是（release 前置） |
 | `release` | **仅** `push` tag `v*` | `needs: [pr, integration, crash, e2e-desktop, audit, build-windows, build-macos-android]` → 汇总产物、生成 `checksums.txt` 与 CHANGELOG、`gh release create` | ≤ 10 min | 自身即终态 |
@@ -87,7 +87,7 @@
 
 ### 实际落地的 PR 门禁（`.github/workflows/ci.yml`，名字是「PR 门禁（G1 的第一层）」）
 
-上面那张分层表是 Phase 0 的**设计**（7 个 job）。今天真的在跑的只有**一个** `gates` job
+上面那张分层表是 Phase 0 的**设计**（7 个 job）。今天真的在跑的是**两个** workflow：`gates` job 与 `audit`（2026-10-10 落地，见上表那一行；在那之前它那三件工具一条都没真跑过，登记 G109）。下面的步骤清单说的是 `gates`
 （`windows-latest` + GNU 工具链），步骤顺序就是下面这份；`concurrency.cancel-in-progress: true`
 意味着同一批连着 push 只会留下最后一个 run（这条踩过，见 CHANGELOG 里 G28 那段）。
 **clean checkout 的真读数**：run **#130**（`841ed21`，0.0.47 那批）= `completed / success` —— 也就是第 10、11 步
@@ -297,7 +297,7 @@ jobs:
 | Release keystore | `Notera-release.keystore` 以 **base64 存 secrets**（`ANDROID_KEYSTORE_B64`），配 `KEYSTORE_PASSWORD` / `KEY_ALIAS` / `KEY_PASSWORD`（变量名 Phase 1 固化）；secrets 缺失 → 该 job 产 **debug** 包并 `SKIPPED-BY-MISSING-SECRETS`，**不得**命名为 release |
 | keystore 保管 | 谁生成、备份在哪、丢失后能否升级已装用户（签名密钥不可换 → 已装用户无法覆盖升级）= **人工决策 §13**，本设计只留槽位 |
 | Debug/未签名产物 | 文件名必须含 `-debug` 或 `-unsigned`，release job 断言 `if [[ $file == *debug* || $file == *unsigned* ]]; then exit 1; fi`，**永不** 作为 release 资产发布 |
-| 密钥入仓 | `.gitignore` 已排除 `*.keystore`/`*.jks`/`*.p12`/`*.key`/`*.pem`/`.env*`；`gitleaks` 为 PR 门禁（§10） |
+| 密钥入仓 | `.gitignore` 已排除 `*.keystore`/`*.jks`/`*.p12`/`*.key`/`*.pem`/`.env*`；`gitleaks detect --redact` 为门禁（§10；2026-10-10 起真的在跑 —— `audit.yml` 全历史扫，公开仓库所以必须 `--redact`） |
 | CI 日志 | 严禁回显任何凭据（构建命令前 `set +x`，密码通过文件写入而非命令行参数，避免泄漏到 process list） |
 
 ## macOS 构建

@@ -1,0 +1,104 @@
+name: 依赖与密钥审计（audit 作业）
+
+# 这文件是 G109 的修法：CI-CD §流水线分层 的 `audit` 行原先写着 cargo-audit / cargo-deny /
+# gitleaks 三步，而 ci.yml 里 grep 不到任何一步 —— 三件工具从未真的跑过。2026-10-10 起它们
+# 真的在跑。纪律照旧：**只放本机逐条跑过的命令**，而且每条都做过变异自检（工具能被弄红）：
+#   · cargo-deny —— 拿掉 licenses.allow 里的 "MIT" ⇒ licenses FAILED（退出 4）；
+#     拿掉 advisories.ignore 里的 RUSTSEC-2024-0370 ⇒ advisories FAILED（退出 1）；
+#     把 multiple-versions 从 warn 改成 deny ⇒ bans FAILED（退出 2）；还原后全绿（退出 0）。
+#   · cargo-audit --deny warnings —— 拿掉 .cargo/audit.toml 里一条豁免 ⇒ "1 denied warning"（退出 1）；
+#     带豁免跑 ⇒ 退出 0。
+#   · gitleaks —— 往一个临时仓库塞假 AWS key 与假 GitHub PAT ⇒ 两条都点名、退出 1；
+#     对本仓库全历史（454 个提交）⇒ 干净、退出 0。
+# 与 gates 的分工：gates 每次 push/PR 跑轻量那两个（pnpm audit + 走 OSV 的
+# audit-rust-deps.mjs）；这里跑重的四件套（RustSec 原生库、licenses/bans/sources、全历史密钥、
+# 以及再跑一遍 pnpm audit），入口是 PR / tag / 每日 —— 见 CI-CD §流水线分层的 `audit` 行。
+
+on:
+  pull_request:
+    branches: [main]
+  # 本仓库的日常推送直接落 main（没有经 PR 的分支流），只挂 PR 的话这套工具平时根本跑不起来 ——
+  # push main 是这里唯一能把"今天真的在跑"落到日常的那条入口。
+  push:
+    branches: [main]
+    tags: ['v*']
+  schedule:
+    - cron: '0 3 * * *' # UTC 03:00 ≈ 北京 11:00，与 PR 高峰错开
+  workflow_dispatch:
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: 四件套（RustSec / licenses / secrets / npm）
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks 扫的是**全历史**；浅克隆会让它只看到最后一个提交还照样报绿（G1 意义上的假绿）。
+          fetch-depth: 0
+
+      - name: 准备 pnpm（版本取自 apps/desktop/package.json 的 packageManager）
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/desktop/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # `pnpm audit` 只需要锁文件（本机 2026-10-10 在只有 package.json + pnpm-lock.yaml 的空目录里验过，
+      # 不装 node_modules），所以这一步不付安装的代价。
+      - name: 前端依赖漏洞审计（high 及以上阻断）
+        working-directory: apps/desktop
+        run: pnpm audit --audit-level=high --registry=https://registry.npmjs.org
+
+      # 与 gates 里同一对命令：OSV 那半边在 schedule 上也必须被覆盖（gates 不在 schedule 上）。
+      - name: Rust 依赖漏洞审计 · 判据自测（OSV 路径，阻断）
+        run: node scripts/audit-rust-deps.mjs --self-test
+
+      - name: Rust 依赖漏洞审计 · 全量（OSV 路径，阻断）
+        run: node scripts/audit-rust-deps.mjs
+
+      # 三个工具都钉版本 + 校验和。gitleaks 与 cargo-deny 的校验和取自上游 release 的官方文件
+      # （本机下载的副本逐字节对过）；cargo-audit 上游**没有**发布校验和资产，这里钉的是本机
+      # 2026-10-10 下载后计算的 SHA-256 —— 它保证"CI 每次取到的就是同一份产物"，但不构成对
+      # 上游的独立验证（上游若重传同版本资产，这里会红，那正是需要人看一眼的时候）。
+      - name: 取三个审计工具（钉版本 + 校验和）
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tools-bin
+          cd tools-bin
+          # 存成资产的原名：校验和文件里写的就是这个名字，改名保存会让 `sha256sum -c` 找不到文件
+          # （本机预演抓到过，落成"FAILED open or read"）。
+          curl -sSLo gitleaks_8.30.1_windows_x64.zip https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_windows_x64.zip
+          curl -sSLo gitleaks_checksums.txt https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt
+          grep 'gitleaks_8.30.1_windows_x64.zip' gitleaks_checksums.txt | sha256sum -c -
+          unzip -qo gitleaks_8.30.1_windows_x64.zip
+          curl -sSLo cargo-deny.tar.gz https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-pc-windows-msvc.tar.gz
+          echo "975a22143262fd27476d19ee00c7af67978426e40e1dee94eed6bbade1cf87dc  cargo-deny.tar.gz" | sha256sum -c -
+          tar xzf cargo-deny.tar.gz
+          curl -sSLo cargo-audit.zip "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv0.22.2/cargo-audit-x86_64-pc-windows-msvc-v0.22.2.zip"
+          echo "0a7316540862c13d954f648917ceacca593747baed6eec180fafa590be2710ab  cargo-audit.zip" | sha256sum -c -
+          unzip -qo cargo-audit.zip
+
+      # `--deny warnings` 比裸 `audit` 严：漏洞 / unmaintained / unsound / yanked 任何一条未经豁免
+      # 都直接红。豁免只有两条，逐条写了理由，见 .cargo/audit.toml（与 OSV 脚本的 WAIVERS 同一格）。
+      - name: RustSec 依赖审计（cargo-audit --deny warnings）
+        run: ./tools-bin/cargo-audit-x86_64-pc-windows-msvc-v0.22.2/cargo-audit.exe audit --deny warnings
+
+      # licenses（白名单制）/ advisories（带理由的 ignore）/ bans（多版本只警告）/ sources（只许 crates.io）。
+      # 配置与理由都在 deny.toml。
+      - name: 依赖审计四查（cargo-deny check）
+        run: ./tools-bin/cargo-deny-0.20.2-x86_64-pc-windows-msvc/cargo-deny.exe check
+
+      # `--redact` 不是装饰：本仓库是公开仓库，真扫出东西时日志里不能出现原值。
+      - name: 密钥扫描（gitleaks，全历史）
+        run: ./tools-bin/gitleaks.exe detect --source . --redact --no-banner

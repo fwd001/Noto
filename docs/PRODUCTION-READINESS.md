@@ -291,6 +291,11 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
      回看时机 = 真要出 Linux 产物之前。
   3. `proc-macro-error@1.0.4` → `RUSTSEC-2024-0370`（unmaintained，**无修复版本**）：**豁免**。
      它是构建期宏，不进产物；回看时机 = 上游给出修复版本或它的引用方升走它。
+  **2026-10-10 增补**：上面还在用的两条豁免（glib、proc-macro-error）现在同时被两个原生工具消费 ——
+  `cargo-audit audit --deny warnings`（`.cargo/audit.toml` 的 `ignore`）与 `cargo-deny check`（`deny.toml` 的
+  `advisories.ignore`），三处（含本文件）写的是同一格豁免（G109 关闭，见 CHANGELOG 2026-10-10 第四批）。
+  这套工具第一次实跑就量出一条新账：`yoke-derive@0.8.3` 被上游 yank —— 已抬到 `0.8.4`
+  （`cargo update -p yoke-derive`，锁里只动这一个包）。
   当前实跑结论（0.0.32 的树）：**PASS · 620 个依赖里 OSV 没有报出未被豁免的已知漏洞（豁免 3 条，
   逐条有理由）**。这一条仍然**不覆盖**：我们的代码本身、构建工具链（rustc/cargo/node 本体的 CVE），
   以及 OSV 尚未发布的通告。

@@ -1,0 +1,42 @@
+# 依赖审计配置（cargo-deny）。CI 的 audit 作业与本机跑的是同一份文件、同一条命令：
+#     cargo deny check
+# 本机 2026-10-10 实测（cargo-deny 0.20.2，仓库树）：licenses / bans / sources 全绿；
+# advisories 只余一条 unmaintained 通告，已在下面 `ignore` 里逐条写明理由 ——
+# 与 scripts/audit-rust-deps.mjs 的 WAIVERS、docs/PRODUCTION-READINESS.md §7 是同一格。
+
+[licenses]
+# 白名单制：不在名单里的许可证直接红。名单来自 2026-10-10 本机实跑列出的全部许可证表达式
+# （MIT / Apache-2.0 / Unicode-3.0 / Zlib / MPL-2.0 / Unlicense / ISC / BSD-2 与 3-Clause /
+# CDLA-Permissive-2.0 / CC0-1.0 / MIT-0 / 0BSD）。`OR` 表达式只要有一条分支在名单里即过，
+# 所以 `MIT OR Apache-2.0 OR LGPL-2.1-or-later` 这类不会把 LGPL 放进来。
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+# 许可证表达式是从包元数据猜出来的时候会打折；低于这个置信度要求报出来而不是默默算过。
+confidence-threshold = 0.9
+
+[bans]
+# 多版本共存只警告不阻断：gtk/webkit2gtk 那半张图天然多版本，阻断只会逼出一堆无意义的豁免。
+multiple-versions = "warn"
+
+[advisories]
+ignore = [
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error 是 unmaintained 通告（没有'修于哪个版本'，也没有可利用的缺陷），由构建期宏（glib-macros，tauri 的 Linux 那半张图）带进来、不进产物。与 scripts/audit-rust-deps.mjs 的 WAIVERS['proc-macro-error@1.0.4'] 同一格；回看时机同它：等那条父依赖链不再要它。" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
