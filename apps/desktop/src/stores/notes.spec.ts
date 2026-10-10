@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
-import { noteFixture, stubLocalService } from '../testing/http';
+import { noteFixture, stubLocalService, stubServiceDown } from '../testing/http';
 import { useNoteStore } from './notes';
 import { useFolderStore } from './folders';
 
@@ -250,5 +250,51 @@ describe('「今天」这一格（日记）', () => {
     expect(got).toBeNull();
     expect(notes.selectedId).toBeNull();
     expect(service.callsOf('get_note')).toHaveLength(0);
+  });
+});
+
+/**
+ * §6「颜色」的笔记那一半（当「标签」用）。三条都打在**调用边**上：
+ * 「屏幕上多了一颗点」可以是画上去的假象，真凭据是"命令发没发、那一行收成了什么"。
+ */
+describe('标记色：笔记那颗点是真去核心写过一笔的', () => {
+  it('挑一支 → 命令里带的就是那一支，行上的颜色跟着落下来', async () => {
+    const service = stubLocalService({
+      list_notes: () => [row('note-1', '甲')],
+      set_note_color: () => noteFixture({ id: 'note-1', color: '#c2410c' }),
+    });
+    const notes = useNoteStore();
+    await notes.load();
+    expect(notes.rows[0]?.color ?? null, '前置：一开始不该有颜色').toBe(null);
+
+    await notes.setColor('note-1', '#c2410c');
+    expect(service.callsOf('set_note_color').length, '一次都没发命令：那颗点是画上去的假象').toBe(1);
+    expect(service.lastArgsOf('set_note_color')).toEqual({ id: 'note-1', color: '#c2410c' });
+    expect(notes.rows[0]?.color).toBe('#c2410c');
+  });
+
+  it('清掉发的是空串（核心那边空串 = 清掉），行上的颜色回到 null', async () => {
+    const service = stubLocalService({
+      list_notes: () => [{ ...row('note-1', '甲'), color: '#c2410c' }],
+      set_note_color: () => noteFixture({ id: 'note-1', color: null }),
+    });
+    const notes = useNoteStore();
+    await notes.load();
+    expect(notes.rows[0]?.color).toBe('#c2410c');
+
+    await notes.setColor('note-1', '');
+    expect(service.lastArgsOf('set_note_color')).toEqual({ id: 'note-1', color: '' });
+    expect(notes.rows[0]?.color ?? null).toBe(null);
+  });
+
+  /** 失败时不许先把点抹掉再报错：那会让用户以为是自己点错了，而且下一次同步会拿这个假状态去比。 */
+  it('命令没成（本地服务不在）时那一行保持原色，并把错留给界面说', async () => {
+    stubLocalService({ list_notes: () => [{ ...row('note-1', '甲'), color: '#1e40af' }] });
+    const notes = useNoteStore();
+    await notes.load();
+    stubServiceDown();
+    await notes.setColor('note-1', '#c2410c');
+    expect(notes.rows[0]?.color, '发失败了却已经把颜色改掉 —— 屏幕说的是假话').toBe('#1e40af');
+    expect(typeof notes.errorKey === 'string' && notes.errorKey.length > 0, '失败没留下任何可显示的错误键').toBe(true);
   });
 });

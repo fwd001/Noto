@@ -283,6 +283,23 @@ export const useNoteStore = defineStore('notes', () => {
     }
   }
 
+  /**
+   * §6「颜色」的笔记那一半（2026-10-09 拍板：笔记级颜色**当标签用**）。
+   *
+   * 与置顶/移到同一条路：它也是一次**元数据写**（占一格 rev），所以必须
+   * `handRevToEditor` —— 不交接就是 G43 那个形状：编辑器还按旧的 `expectedRev` 出门，
+   * 下一支自动保存被核心按 `stale_edit` 拒，用户刚打的字哪儿也没落。
+   */
+  async function setColor(id: string, color: string): Promise<void> {
+    try {
+      const note = await callCommand<Note>(Commands.setNoteColor, { id, color });
+      applyNoteUpdate(note);
+      handRevToEditor(note);
+    } catch (error) {
+      errorKey.value = asBridgeError(error).messageKey;
+    }
+  }
+
   async function moveTo(id: string, folderId: string): Promise<void> {
     try {
       const note = await callCommand<Note>(Commands.setNoteFolder, { id, folderId });
@@ -413,6 +430,7 @@ export const useNoteStore = defineStore('notes', () => {
     create,
     openToday,
     setPinned,
+    setColor,
     moveTo,
     moveToTrash,
     restore,

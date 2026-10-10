@@ -15,6 +15,7 @@ import { useConflictStore } from '../stores/conflicts';
 import { t, messageFor } from '../i18n';
 import { formatWhen } from '../util/format';
 import { plainText } from '../util/plainText';
+import { MARK_SWATCHES, MARK_DOT_SHAPE as DOT_SHAPE, dotStyle } from '../util/markColors';
 import type { NoteListRow, SearchHit } from '../api/types';
 
 /**
@@ -50,6 +51,8 @@ interface Entry {
    * 而 ㊻ 那条判据就是照这个属性放行的 —— 属性里没有尾段，判据照样点名。
    */
   previewText: string;
+  /** §6「颜色」：这一篇的标记色（`null` = 没打标记）。列表行标题前那颗小点读它。 */
+  color: string | null;
   updatedAt: string;
   pinned: boolean;
   hasAttachment: boolean;
@@ -83,6 +86,7 @@ function fromRow(row: NoteListRow): Entry {
     summary,
     snippetHtml: null,
     previewText: summary,
+    color: row.color ?? null,
     updatedAt: row.updatedAt,
     pinned: row.pinned === true,
     hasAttachment: row.hasAttachment === true,
@@ -98,6 +102,9 @@ function fromHit(hit: SearchHit): Entry {
     summary: '',
     snippetHtml: hit.snippetHtml,
     previewText: plainText(hit.snippetHtml),
+    // 搜索结果这一支不读颜色：`search` 的命中里没有 color 这一格（要显示本该回查列表那一份），
+    // 而"标记色"是列表的记号，搜索屏上不画 —— 这里写 null 是为了形状完整，不是在偷懒。
+    color: null,
     updatedAt: '',
     pinned: false,
     hasAttachment: false,
@@ -168,6 +175,13 @@ function currentFolderId(): string | null {
 
 function createBlank(): void {
   void notes.create(currentFolderId());
+}
+
+/** 挑一支（或清掉，空串 = 清）：先收色板再发命令 —— 命令要等一会儿才回，
+ *  面板留在屏幕上会显得没反应（文件夹那颗同一个理由）。 */
+async function pickColor(id: string, color: string, close: () => void): Promise<void> {
+  close();
+  await notes.setColor(id, color);
 }
 
 function createFrom(tpl: NoteTemplate): void {
@@ -260,8 +274,17 @@ function createFrom(tpl: NoteTemplate): void {
           <div class="row-item__main">
             <!-- 标题折两行：§5 那句"不许被静默裁掉"里，标题是**认身份**的那一格，不许硬截
                  （2026-10-09 用户拍的形状）。两行还读不完的极长标题，全文在这颗 `title` 里 ——
-                 ㊻ 那条判据放行的就是这个属性本身，不是"看着像省略号就算数"。 -->
+                 ㊻ 那条判据放行的就是这个属性本身，不是"看着像省略号就算数"。
+                 标题前那颗小点是**标记色**（§6 第 11 格，笔记级颜色当「标签」用，2026-10-09 拍板）：
+                 `aria-hidden` —— 颜色是给眼睛的辅助，认哪一篇靠标题本身，读屏念标题就够。 -->
             <p class="row-item__title" :title="entry.title">
+              <span
+                v-if="entry.color"
+                class="row-item__dot"
+                :data-testid="`note-dot-${entry.id}`"
+                :style="{ ...DOT_SHAPE, ...dotStyle(entry.color) }"
+                aria-hidden="true"
+              />
               {{ entry.title }}
             </p>
             <!-- 预览这一格按形状只给一行（一屏要扫得了十几条），代价是它必须把全文带在身上：
@@ -289,6 +312,46 @@ function createFrom(tpl: NoteTemplate): void {
               <AppIcon :name="entry.pinned ? 'pin-on' : 'pin-off'" :size="18" :testid="`pin-glyph-${entry.id}`" />
             </button>
             <span class="row-item__actions">
+              <!-- §6「颜色」：笔记的标记色（当「标签」用）。入口与文件夹那颗同一形状：
+                   面板走 AppPopover（一打开就把下面每一排顶走的色板等于让手指落到别的行为上），
+                   触发字形用"当前色的点"（§2.4 那份图标清单里没有"调色板"这一枚，
+                   不为了一颗按钮发明没规格的图标）。回收站里那一档不摆（核心同样只在那一侧拒）。 -->
+              <AppPopover
+                v-if="!notes.inTrash"
+                testid="note-color-toggle"
+                align="end"
+                :label="t('sidebar.colorTitle')"
+              >
+                <template #glyph>
+                  <span class="row-item__dot" :style="{ ...DOT_SHAPE, ...dotStyle(entry.color) }" />
+                </template>
+                <template #default="{ close }">
+                  <div class="row-item__swatches" data-testid="note-color-panel">
+                    <span class="row-item__swatch-row">
+                      <button
+                        v-for="s in MARK_SWATCHES"
+                        :key="s.hex"
+                        type="button"
+                        class="btn btn--quiet btn--icon row-item__swatch"
+                        :data-testid="`note-swatch-${s.hex}`"
+                        :aria-label="t(s.labelKey)"
+                        :title="t(s.labelKey)"
+                        :aria-pressed="entry.color === s.hex ? 'true' : 'false'"
+                        @click="pickColor(entry.id, s.hex, close)"
+                      >
+                        <span class="row-item__dot" :style="{ ...DOT_SHAPE, ...dotStyle(s.hex) }" />
+                      </button>
+                    </span>
+                    <button
+                      type="button"
+                      class="btn btn--quiet btn--block"
+                      data-testid="note-color-none"
+                      :aria-pressed="entry.color ? 'false' : 'true'"
+                      @click="pickColor(entry.id, '', close)"
+                    >{{ t('sidebar.colorNone') }}</button>
+                  </div>
+                </template>
+              </AppPopover>
               <button
                 v-if="!notes.inTrash"
                 type="button"
@@ -553,5 +616,30 @@ function createFrom(tpl: NoteTemplate): void {
   border-radius: var(--r-chip);
   font-size: var(--text-xs);
   color: var(--body);
+}
+
+/* §6「颜色」：标题前那一颗标记色点（笔记级颜色当「标签」用，2026-10-09 拍板）。
+   形状走共享的 `MARK_DOT_SHAPE`（与侧栏文件夹那颗**同一套**，两边长得一样才叫同一套标记），
+   这里只管它在标题行里的站位：与首行字面中线对齐，右边留一口气。 */
+.row-item__dot {
+  margin-right: var(--sp-2);
+  vertical-align: -1px;
+}
+
+.row-item__swatches {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.row-item__swatch-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.row-item__swatch {
+  padding: var(--sp-2);
 }
 </style>

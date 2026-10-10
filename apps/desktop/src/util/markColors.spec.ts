@@ -9,23 +9,23 @@
  *  · **两张表不相交**（同色重复 = 用户点了两颗却得到同一个标记，界面上没有任何东西解释）。
  */
 import { describe, expect, it } from 'vitest';
-import { FOLDER_SWATCHES, dotStyle } from './folderColors';
+import { MARK_SWATCHES, dotStyle } from './markColors';
 import { t } from '../i18n';
 
 describe('侧栏文件夹色板', () => {
   it('八支，每支都是小写 #rrggbb', () => {
-    expect(FOLDER_SWATCHES.length).toBe(8);
-    for (const s of FOLDER_SWATCHES) {
+    expect(MARK_SWATCHES.length).toBe(8);
+    for (const s of MARK_SWATCHES) {
       expect(s.hex, `色值形状不对：${s.hex}`).toMatch(/^#[0-9a-f]{6}$/);
     }
   });
 
   it('八支互相不重复（同色等于给用户两颗点了同一件事）', () => {
-    expect(new Set(FOLDER_SWATCHES.map((s) => s.hex)).size).toBe(FOLDER_SWATCHES.length);
+    expect(new Set(MARK_SWATCHES.map((s) => s.hex)).size).toBe(MARK_SWATCHES.length);
   });
 
   it('每一支的读屏名字都登记了，屏幕上不会印出键名', () => {
-    for (const s of FOLDER_SWATCHES) {
+    for (const s of MARK_SWATCHES) {
       const text = t(s.labelKey);
       expect(text, `这一支没登记文案：${s.labelKey}`).not.toBe(s.labelKey);
       expect(text.length, `这一支的名字太空：${s.labelKey}`).toBeGreaterThan(1);

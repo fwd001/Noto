@@ -507,6 +507,32 @@ impl Store {
         })
     }
 
+    /// 给笔记设标记色（§6「颜色」那一格，2026-10-09 用户拍板：笔记级颜色**当标签用**）。
+    ///
+    /// 与文件夹那颗同一条口径：校验"是不是 #rrggbb"在 host 那侧（UI 只从色板里挑），
+    /// 对面同步来的值不该因为不在我这板色上被判坏。`None` = 清掉。
+    ///
+    /// **幂等**：设成同一个颜色不抬 `rev`、不多排一条待办 —— 否则每次点同一颗色都白传一轮。
+    /// 在回收站里的笔记走 `assert_editable` 那条门（与改名/改正文同一条，颜色不是例外）。
+    pub fn set_note_color(
+        &self,
+        id: &EntityId,
+        color: Option<String>,
+    ) -> Result<Note, StoreError> {
+        self.write_tx(|tx, now| {
+            let cur = Self::load_cur(tx, id)?;
+            Self::assert_editable(&cur.note)?;
+            if cur.note.color == color {
+                return Ok(cur.note);
+            }
+            let edit = Edit {
+                color: Some(color),
+                ..Default::default()
+            };
+            self.commit_edit(tx, &cur, &edit, now)
+        })
+    }
+
     /// 软删 = "最近删除"。删除是**记录内容**（ADR-0006），传播形态是带 `deleted_at` 的 upsert。
     pub fn delete_note(&self, id: &EntityId) -> Result<(), StoreError> {
         self.write_tx(|tx, now| {

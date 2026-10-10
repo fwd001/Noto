@@ -6183,6 +6183,106 @@ function contrastRatio(fg, bg) {
 }
 
 /**
+ * 53 §6 第 11 格「颜色」的**笔记那一半**（2026-10-09 拍板：笔记级颜色当「标签」用）。
+ *
+ * 四件事，一件都不许省：
+ *  · 没打标记时**不画**那颗点（画个透明占位等于每行多一个噪点）；
+ *  · 从行内那颗色板挑一支 ⇒ 核心那一列真有它（**库里没有 = 那就只是屏幕上的一层皮**）；
+ *  · 清掉 ⇒ 点消失、库里回 null；
+ *  · **动线**：改完颜色之后编辑器还能接着打字、零条 `stale_edit` —— 改色占一格 rev
+ *    （与置顶/移到同一条 `commit_edit`），不交接给编辑器就是 G43 那个形状：
+ *    下一支自动保存被核心拒，用户刚打的字哪儿也没落。
+ */
+{
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: { v: 1, content: [{ id: `nc${Date.now()}`, type: 'paragraph', content: [{ text: '标记色腿的现场：这一篇要被打上一颗点。' }] }] },
+  });
+  const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await c.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 140)); });
+  const staleRejections = [];
+  p.on('response', async (res) => {
+    if (!res.url().includes('/cmd/edit_note')) return;
+    const body = await res.text().catch(() => '');
+    if (body.includes('stale_edit')) staleRejections.push(res.url());
+  });
+  await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p.waitForSelector(`[data-testid="note-row-${made.id}"]`, { timeout: 15000 });
+  const row = p.locator(`[data-testid="note-row-${made.id}"]`);
+  const toggle = row.locator('[data-testid="note-color-toggle"]');
+
+  // ① 没打标记 ⇒ 不画那颗点
+  check('53 没打标记的笔记不画那颗点（空占位等于每行多一个噪点）',
+    (await p.locator(`[data-testid="note-dot-${made.id}"]`).count()) === 0, '有东西被画出来了');
+
+  // ② 色板八支 + 挑一支 ⇒ 点出现，颜色与库里那一列都跟着
+  await row.hover();
+  await toggle.click();
+  await p.waitForSelector('[data-testid="note-color-panel"]', { timeout: 4000 });
+  const swatchCount = await p.locator('[data-testid^="note-swatch-"]').count();
+  const hasNone = await p.locator('[data-testid="note-color-none"]').count();
+  check('53 色板是八支、外加一颗「不用颜色」—— 少一支就是色板自己坏了',
+    swatchCount === 8 && hasNone === 1, JSON.stringify({ swatchCount, hasNone }));
+  await p.click('[data-testid="note-swatch-#1e40af"]');
+  await p.waitForTimeout(700);
+  const dot = await p.evaluate((id) => {
+    const el = document.querySelector(`[data-testid="note-dot-${id}"]`);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { bg: getComputedStyle(el).backgroundColor, w: Math.round(r.width), h: Math.round(r.height) };
+  }, made.id);
+  check('53 挑完那一支：行上那颗点在、底色就是那一支、尺寸与侧栏那颗同一套',
+    !!dot && dot.bg === 'rgb(30, 64, 175)' && dot.w === 10 && dot.h === 10, JSON.stringify(dot));
+  const rowsNow = await cmd('list_notes', { limit: 500 });
+  const storedRow = (Array.isArray(rowsNow) ? rowsNow : []).find((r) => r.id === made.id);
+  check('53 库里那一列真有它（画得出来 ≠ 写进去了）',
+    storedRow?.color === '#1e40af', JSON.stringify(storedRow?.color ?? null));
+
+  // ③ 动线：打开这一篇打字 → 从列表改色 → 回来接着打字 ⇒ 零条 stale_edit（G43 那一族）
+  await row.click();
+  await p.waitForSelector('[data-testid="editor-doc"] .nb-content', { timeout: 8000 });
+  await p.locator('[data-testid="editor-doc"] .nb-content').first().click();
+  await p.keyboard.press('End');
+  await p.keyboard.type('改色之前', { delay: 12 });
+  await p.waitForTimeout(900);
+  await row.hover();
+  await toggle.click();
+  await p.waitForSelector('[data-testid="note-color-panel"]', { timeout: 4000 });
+  await p.click('[data-testid="note-swatch-#3f6212"]');
+  await p.waitForTimeout(800);
+  await p.locator('[data-testid="editor-doc"] .nb-content').first().click();
+  await p.keyboard.press('End');
+  await p.keyboard.type('改色之后', { delay: 12 });
+  await p.waitForTimeout(1600);
+  const liveNow = await cmd('get_note', { id: made.id });
+  const liveText = JSON.stringify(liveNow.doc ?? '');
+  check('53 改完色接着打字：字要落到库里，且全程零条 stale_edit（rev 交接那一格）',
+    liveText.includes('改色之后') && staleRejections.length === 0,
+    JSON.stringify({ 在库里: liveText.includes('改色之后'), stale: staleRejections.length }));
+
+  // ④ 清掉：点消失、库里回 null
+  await row.hover();
+  await toggle.click();
+  await p.waitForSelector('[data-testid="note-color-panel"]', { timeout: 4000 });
+  await p.click('[data-testid="note-color-none"]');
+  await p.waitForTimeout(700);
+  check('53 「不用颜色」之后那颗点消失了',
+    (await p.locator(`[data-testid="note-dot-${made.id}"]`).count()) === 0, '点还在');
+  const clearedRows = await cmd('list_notes', { limit: 500 });
+  const cleared = (Array.isArray(clearedRows) ? clearedRows : []).find((r) => r.id === made.id);
+  check('53 清掉也落库了（空串 = 清掉）', (cleared?.color ?? null) === null, JSON.stringify(cleared?.color ?? null));
+
+  check('53 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
+  await p.close();
+  await c.close();
+  await cmd('delete_note', { id: made.id }).catch(() => {});
+  await cmd('purge_note', { id: made.id }).catch(() => {});
+  notes.push('     标记色实测：八支色板 → #1e40af 落库 → 改色后接着打字零 stale_edit → 清掉回 null');
+}
+
+/**
  * ㊾ 收尾不变量：**可见偏好要回到基准**。
  *
  * 第 30 刀之后主题/字号进了本地库，于是它们从"每条腿各自的临时现场"变成

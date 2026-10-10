@@ -22,18 +22,7 @@ import { useShellStore } from '../stores/shell';
 import { t } from '../i18n';
 import type { FolderNode } from '../api/types';
 import AppIcon from './ui/AppIcon.vue';
-import { FOLDER_SWATCHES, dotStyle } from '../util/folderColors';
-
-/** 色点的那些尺寸/描边写在内联而不是 <style> 里：颜色本身来自数据，形状是同一套。
- *  描边是必须的 —— 没有它，低饱和那几支在浅色主题上会直接融进背景。 */
-const DOT_SHAPE = {
-  width: '10px',
-  height: '10px',
-  'border-radius': '50%',
-  border: '1px solid var(--line-strong)',
-  display: 'inline-block',
-  'flex': '0 0 auto',
-} as const;
+import { MARK_SWATCHES, MARK_DOT_SHAPE as DOT_SHAPE, dotStyle } from '../util/markColors';
 
 /** 挑一支（或清掉）：先收色板再发命令 —— 命令要等一会儿才回，面板留在屏幕上会显得没反应。 */
 async function pickColor(id: string, color: string | null, close: () => void): Promise<void> {
@@ -148,7 +137,7 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
               <div class="tree__swatches" data-testid="folder-color-panel">
                 <span class="tree__swatch-row">
                   <button
-                    v-for="s in FOLDER_SWATCHES"
+                    v-for="s in MARK_SWATCHES"
                     :key="s.hex"
                     type="button"
                     class="btn btn--quiet btn--icon tree__swatch"

@@ -615,6 +615,7 @@ impl App {
             char_count: r.char_count,
             has_attachment: r.has_attachment,
             pinned: r.pinned,
+            color: r.color.clone(),
             updated_at: r.updated_at.clone(),
             deleted_at: r.deleted_at.clone(),
             dirty: r.dirty,

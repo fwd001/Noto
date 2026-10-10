@@ -479,6 +479,8 @@ export const Commands = {
   setNoteFolder: 'set_note_folder',
   /** §6「颜色」：文件夹的标记色（只做侧栏小色点）。`color: null` = 清掉。 */
   setFolderColor: 'set_folder_color',
+  /** §6「颜色」：笔记的标记色（当「标签」用：列表行标题前那一颗小点）。空串 = 清掉。 */
+  setNoteColor: 'set_note_color',
   setNotePinned: 'set_note_pinned',
   deleteNote: 'delete_note',
   restoreNote: 'restore_note',

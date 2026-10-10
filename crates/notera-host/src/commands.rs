@@ -57,6 +57,9 @@ pub struct NoteListDto {
     pub char_count: u32,
     pub has_attachment: bool,
     pub pinned: bool,
+    /// §6「颜色」的**列表**那一半：列表行前那颗小色点要它。以前只有详情 DTO 带 color，
+    /// 而列表走的是这条投影 —— 于是"库里设了颜色、列表上看不见"（2026-10-10 第 43 刀补上）。
+    pub color: Option<String>,
     pub updated_at: String,
     pub deleted_at: Option<String>,
     pub dirty: bool,
@@ -734,6 +737,31 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
             let c: PinCmd =
                 serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.to_dto(app.store().set_note_pinned(&id(&c.id)?, c.pinned)?)?)
+        }
+        "set_note_color" => {
+            // §6「颜色」的笔记那一半（2026-10-09 拍板：笔记级颜色当标签用）。
+            // 与 `set_folder_color` 同一道门：只挡"别把垃圾写进库" —— 收 `#rrggbb` 或空（清掉）；
+            // 哪个算"这一版提供的颜色"是前端那份色板的事，同步回来的值不该被我这一板判坏。
+            let cid = args
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| CmdError::of("bad_args", false))?;
+            let raw = args
+                .get("color")
+                .and_then(serde_json::Value::as_str)
+                .map(|s| s.trim().to_lowercase());
+            let color = match raw.as_deref() {
+                None => None,
+                Some("") => None,
+                Some(v) => {
+                    let hex = v.strip_prefix('#').unwrap_or_default();
+                    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        return Err(CmdError::of("bad_args", false));
+                    }
+                    Some(v.to_string())
+                }
+            };
+            j(app.to_dto(app.store().set_note_color(&id(cid)?, color)?)?)
         }
         "create_folder" => {
             let c: CreateFolderCmd =
