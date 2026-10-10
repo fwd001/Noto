@@ -336,6 +336,8 @@ const MESSAGES: Record<MessageKey, string> = {
   'settings.attachmentSummary': '这台设备上有 {count} 份附件 · 共 {size}',
   'settings.attachmentAbsent': '另有 {count} 份（{size}）的字节不在这台设备上 —— 在笔记里点开那张图可以重试取回',
   'settings.attachmentQuarantine': '{count} 份已不再被任何笔记引用，正放在隔离区（{size}）；最早 {when}之后可以回收',
+  // §6-9 第 4 项数据的另一半：销毁那一步落了账才说得出来的数（缺口 G102）。
+  'settings.attachmentReclaimed': '已回收 {size}（{count} 份）',
   'settings.attachmentDays': '{n} 天',
   'settings.attachmentEmpty': '这台设备还没有附件',
   'settings.attachmentFailed': '这份清单没能取到',

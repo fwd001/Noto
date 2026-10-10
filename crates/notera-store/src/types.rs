@@ -569,3 +569,17 @@ pub struct AttachmentInventoryRow {
     /// 这一个词，**不许**把它本身画上屏（host 侧折成 `isImage`）。
     pub media_type: String,
 }
+
+/// 附件「已回收」账的合计（`attachment_reclaims` 全表的两个 `SUM`）。
+///
+/// 与 [`AttachmentInventoryRow`] **不是一族**：那些行是"还活着的对象"，这本账记的是
+/// 已经销毁的 —— 它数不进 `attachment_inventory` 的行里，界面也不能把它与
+/// "这台设备上有几份"合成一句（一本是资产、一本是流水，合成就会出现总份数比实际大）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReclaimedTotals {
+    /// 已销毁的份数（每一份按销毁那一刻账上的行数一份）。
+    pub files: i64,
+    /// 已销毁的字节数（按销毁那一刻 `attachments.size` 落账；不是磁盘上文件的实际大小 ——
+    /// 账与字节从来是两本，与 `unavailableBytes` 同一口径）。
+    pub bytes: i64,
+}

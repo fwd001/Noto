@@ -217,6 +217,10 @@ fn inventory_reports_three_situations_two_counters_and_a_countdown() {
     assert_eq!(totals["unavailableBytes"], json!(4096), "{totals}");
     assert_eq!(totals["quarantinedCount"], json!(0), "{totals}");
     assert_eq!(totals["quarantinedBytes"], json!(0), "{totals}");
+    // 「已回收」在全新库上是 0（缺口 G102）：这本流水与上面四个数**不同源** ——
+    // 界面靠 0 决定整句不画，第一条账落下来之前这里不许是别的数。
+    assert_eq!(totals["reclaimedCount"], json!(0), "{totals}");
+    assert_eq!(totals["reclaimedBytes"], json!(0), "{totals}");
 
     // 键名就是契约：整排钉一次，漂一个字母就红。
     let mut names: Vec<String> = shared.as_object().unwrap().keys().cloned().collect();
@@ -244,6 +248,8 @@ fn inventory_reports_three_situations_two_counters_and_a_countdown() {
             "count".to_string(),
             "quarantinedBytes".to_string(),
             "quarantinedCount".to_string(),
+            "reclaimedBytes".to_string(),
+            "reclaimedCount".to_string(),
             "unavailableBytes".to_string(),
             "unavailableCount".to_string()
         ],
@@ -324,6 +330,37 @@ fn inventory_reports_three_situations_two_counters_and_a_countdown() {
         .map(|r| r["bytes"].as_i64().unwrap())
         .sum();
     assert_eq!(t2["bytes"], json!(sum), "totals.bytes 与逐行之和不等：{t2}");
+
+    // 销毁那一份（缺口 G102）：行从清单里消失、隔离那本账归零，
+    // 而「已回收」这本流水的第一条账要落下来：1 份 / 17 字节（`quarantined-bytes` 的长度）。
+    assert_eq!(
+        app.purge_verified_blobs(std::slice::from_ref(&sha_gc)),
+        1,
+        "隔离那一份该被销毁（前置：它已零引用）"
+    );
+    let done = call(&app, "attachment_inventory", json!({}));
+    let t3 = &done["totals"];
+    assert_eq!(t3["reclaimedCount"], json!(1), "{t3}");
+    assert_eq!(t3["reclaimedBytes"], json!(17), "{t3}");
+    assert_eq!(t3["count"], json!(4), "销毁之后清单只剩四份：{t3}");
+    assert_eq!(
+        t3["quarantinedCount"],
+        json!(0),
+        "那一份已经不存在了，隔离区那本账不能再把它算进去：{t3}"
+    );
+    let rows3 = done["rows"].as_array().unwrap();
+    assert!(
+        !rows3.iter().any(|r| r["sha256"] == json!(sha_gc)),
+        "销毁之后那一行不该还在清单里：{rows3:?}"
+    );
+    // 逐行之和那条口径在销毁之后同样成立（它只数**还活着**的行 ——
+    // 已回收的数在另一本账里，界面各说各的句子）。
+    let sum3: i64 = rows3.iter().map(|r| r["bytes"].as_i64().unwrap()).sum();
+    assert_eq!(
+        t3["bytes"],
+        json!(sum3),
+        "销毁之后 totals.bytes 与逐行之和不等：{t3}"
+    );
 }
 
 #[test]

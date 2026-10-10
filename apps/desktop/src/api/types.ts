@@ -177,6 +177,11 @@ export interface AttachmentInventoryTotals {
   /** 在隔离区里的份数与字节：过了宽限期之后**可以**释放多少（没说已经释放）。 */
   quarantinedCount: number;
   quarantinedBytes: number;
+  /** 已经回收（真的销毁）的份数与字节。与上面两组数**不同源**：那两组读的是还在账上的行，
+   *  这两个读的是销毁那一步落的账（`attachment_reclaims`）—— 那是已经不存在的行，
+   *  混进去算就会出现"总份数比实际大"的那种对不上。 */
+  reclaimedCount: number;
+  reclaimedBytes: number;
 }
 
 export interface AttachmentInventory {

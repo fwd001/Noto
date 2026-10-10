@@ -533,6 +533,12 @@ async fn a_quarantined_blob_is_destroyed_only_after_the_grace_period_and_never_w
             .contains(&sha),
         "未到期的行不该进销毁清单"
     );
+    // 「已回收」账（缺口 G102）：隔离不是回收 —— 字节只是挪进了隔离区，账上必须还是空的。
+    assert_eq!(
+        a.store().reclaimed_totals().unwrap(),
+        notera_store::ReclaimedTotals { files: 0, bytes: 0 },
+        "进隔离区就记成已回收 = 把「还没发生」说成「已经发生」"
+    );
 
     // ② 到期：行与隔离区那份字节一起消失，正式位置本来就空着。
     assert_eq!(
@@ -549,6 +555,13 @@ async fn a_quarantined_blob_is_destroyed_only_after_the_grace_period_and_never_w
         a.store().attachment_for_state(&sha),
         ("absent".to_string(), "absent".to_string()),
         "字节都销毁了，账上却还留着这一行 = 下一台设备会等一份并不存在的东西"
+    );
+    // 销毁这一批要落进「已回收」账：1 份、字节数按账上的 `size`（= blob 长度）。
+    let landed = a.store().reclaimed_totals().unwrap();
+    assert_eq!(
+        (landed.files, landed.bytes),
+        (1, blob.len() as i64),
+        "销毁了却没落账 = 界面上那句「已回收」永远说不出来"
     );
 
     // ③ 还有引用的行，即使带着 `deleted_at` 也销毁不了 —— 判据先问引用，FK 是机器兜底。
@@ -580,6 +593,68 @@ async fn a_quarantined_blob_is_destroyed_only_after_the_grace_period_and_never_w
             .unwrap()
             .contains(&live),
         "有引用的行进销毁清单 = 判据根本没问引用计数"
+    );
+    // 「已回收」账要跟着**真删**走，不跟着"想删"走：被拒的批次不许在本账上留痕，
+    // 已销毁的那一份再跑一遍也不许重复记账。
+    assert_eq!(
+        a.store().reclaimed_totals().unwrap(),
+        landed,
+        "没删成的批次落账 = 账比硬盘多"
+    );
+    assert_eq!(
+        a.purge_verified_blobs(std::slice::from_ref(&sha)),
+        0,
+        "同一份再销毁一次删不到东西"
+    );
+    assert_eq!(
+        a.store().reclaimed_totals().unwrap(),
+        landed,
+        "重跑重复记账 = 把一份 8000 字节说成两份"
+    );
+}
+
+// —————————————（2026-10-10 增补，缺口 G102）：销毁落的那本账，「已回收」看得见
+
+/// §6-9 第 4 项数据「回收字节数」读作"已经回收了多少"时的那本账（缺口 G102 的修法）：
+/// 账要跟着**真删**走 —— **撤销隔离**（宽限期里把那一份取回来）不是回收，一个数都不许动。
+///
+/// FT-ATT-31 已经把"被拒的批次不许落账 / 重跑不许重复记账"钉住；这一条补的是负向的
+/// 另一个入口：`release_attachment_quarantine`（用户点"取回来"那条路）。两个入口都不是销毁，
+/// 两个都不许把"还没发生"写成"已经发生"。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn releasing_a_quarantine_never_lands_in_the_reclaim_ledger() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    let blob: Vec<u8> = (0..2_100).map(|i| (i % 37) as u8).collect();
+    let a_dir = Tmp::new("g102-a");
+    let (a, sha) = seed_uploaded(a_dir.path(), &url, &blob).await;
+    let nid = a
+        .store()
+        .list_notes(&notera_store::NoteQuery {
+            folder: None,
+            trash: false,
+            limit: 50,
+            offset: 0,
+        })
+        .unwrap()
+        .into_iter()
+        .find(|n| n.title.contains("GC 目标笔记"))
+        .map(|n| n.id.clone())
+        .expect("前置：那条带图笔记还在列表里");
+    a.store().purge_note(&nid).expect("永久删除");
+    assert_eq!(a.reclaim_unreferenced_blobs(50), 1, "前置：先隔离");
+
+    // 撤回来：字节还在隔离区里等着（或被下载那一轮挪回来），一个字节都没被回收。
+    a.store().release_attachment_quarantine(&sha).unwrap();
+    assert_eq!(
+        a.store().reclaimed_totals().unwrap(),
+        notera_store::ReclaimedTotals { files: 0, bytes: 0 },
+        "撤销隔离进了这本账 = 用户明明把那份取回来了，界面却说已经回收了它"
+    );
+    assert_eq!(
+        quarantine_bytes(&a, &sha),
+        blob,
+        "撤销之后字节必须还在（那份还要能再取回来）"
     );
 }
 

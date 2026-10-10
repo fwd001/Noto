@@ -576,6 +576,29 @@ fn a_purge_refuses_rows_that_are_still_referenced_or_absent() {
         ("absent".into(), "absent".into()),
         "销毁后账上要彻底没有这一行"
     );
+
+    // 「已回收」账（缺口 G102）：只有**真删掉的**才落账。
+    // 上面那次 `purge_attachment_rows(&[live, ghost])` 一份都没删（有引用 / 库里没有）
+    // ⇒ 账上只该有这一次的 `gone`：1 份 / 6 字节（`b"orphan"`）。
+    let ledger = store.reclaimed_totals().unwrap();
+    assert_eq!(
+        (ledger.files, ledger.bytes),
+        (1, 6),
+        "账要把真删掉的记下来：被拒的与库里没有的都不许落账（落进去就是把没发生的事写成发生过）"
+    );
+    // 幂等重跑：同一份再销毁一次既删不动、也不许重复记账。
+    assert!(
+        store
+            .purge_attachment_rows(std::slice::from_ref(&gone))
+            .unwrap()
+            .is_empty(),
+        "第二次销毁同一份应该是空手而归"
+    );
+    assert_eq!(
+        store.reclaimed_totals().unwrap(),
+        ledger,
+        "同一份销毁两次 = 账上多记一笔，那是把 6 字节说成 12 字节"
+    );
 }
 
 /// 一支 `failed` 的上传待办，在**后来这一份真的传上去了**之后必须被结掉。

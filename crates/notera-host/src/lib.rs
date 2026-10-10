@@ -952,6 +952,9 @@ impl App {
     pub fn attachment_inventory(&self) -> Result<AttachmentInventoryDto, CmdError> {
         let now_ms = Timestamp::parse(&self.inner.store.now()).and_then(|t| t.as_millis());
         let grace_ms = Self::QUARANTINE_GRACE_DAYS * 86_400_000;
+        // 「已回收」单独一条读：它数的是**已经不存在的行**那本流水，
+        // 跟下面那个逐行循环不同源（合成一本就会出现"总份数比实际大"）。
+        let reclaimed = self.inner.store.reclaimed_totals()?;
         let mut totals = AttachmentTotalsDto {
             count: 0,
             bytes: 0,
@@ -959,6 +962,8 @@ impl App {
             unavailable_bytes: 0,
             quarantined_count: 0,
             quarantined_bytes: 0,
+            reclaimed_count: reclaimed.files,
+            reclaimed_bytes: reclaimed.bytes,
         };
         let mut rows = Vec::new();
         for row in self.inner.store.attachment_inventory()? {

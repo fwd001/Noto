@@ -240,6 +240,21 @@ const attachmentQuarantineLine = computed(() => {
 });
 
 /**
+ * 「已经回收了多少」—— §6-9 第 4 项数据的另一半（缺口 G102 的修法）。
+ * 与上面三句**不同源**：那三句读的是还在账上的行，这一句读的是销毁那一步落的账
+ * （`attachment_reclaims`，与删行同一笔事务）。0 份时整句不画 —— 与本卡片其余几句
+ * 同一口径：没有这件事就不说这句话（"已回收 0 B"只会让人怀疑是不是坏了）。
+ */
+const attachmentReclaimedLine = computed(() => {
+  const totals = settings.attachmentInventory?.totals;
+  if (!totals || totals.reclaimedCount <= 0) return '';
+  return t('settings.attachmentReclaimed', {
+    count: totals.reclaimedCount,
+    size: formatBytes(totals.reclaimedBytes),
+  });
+});
+
+/**
  * §6「附件管理器」的后一半：**逐份**的账。上面那三句说的是总数，而用户在这一格真正要问的是
  * "哪一份缺、哪一份占着磁盘" —— 那只能一行一份地答。排序与上界都在 `util/attachmentRows`，
  * 这里只把它折成给人看的一句话。
@@ -797,6 +812,11 @@ function jumpTo(id: string): void {
             </p>
             <p v-if="attachmentQuarantineLine" class="text-sm text-muted" data-testid="attachment-quarantine">
               {{ attachmentQuarantineLine }}
+            </p>
+            <!-- §6-9 第 4 项数据的另一半：销毁那一步落的账（缺口 G102）——
+                 上面那三句说的是"账上还剩什么"，这一句说的是"已经消失的有多少"。 -->
+            <p v-if="attachmentReclaimedLine" class="text-sm text-muted" data-testid="attachment-reclaimed">
+              {{ attachmentReclaimedLine }}
             </p>
             <!-- §6 后一半：逐份的账。上面三句是总数，这一列才是"哪一份"。
                  一份一行、一行说完它的体积 / 本机那一侧 / 服务器那一侧 / 几篇在引用 / 隔离倒计时。 -->

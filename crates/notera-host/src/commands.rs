@@ -231,6 +231,11 @@ pub struct AttachmentTotalsDto {
     /// 隔离区里的份数与字节：过了宽限期之后**可以**释放多少（没说已释放）。
     pub quarantined_count: i64,
     pub quarantined_bytes: i64,
+    /// **已回收**（销毁）的份数与字节（缺口 G102 的修法）：与上面两组数**不同源** ——
+    /// 上面读的是还在账上的行，这两个读的是 `attachment_reclaims` 那本流水。
+    /// 混进 `count`/`bytes` 算就会出现"总份数比设备上实际有的多"的假账。
+    pub reclaimed_count: i64,
+    pub reclaimed_bytes: i64,
 }
 
 #[derive(Clone, Debug, Serialize)]

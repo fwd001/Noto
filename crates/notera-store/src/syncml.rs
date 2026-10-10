@@ -1035,6 +1035,10 @@ impl Store {
     ///
     /// `WHERE NOT EXISTS` 先自己问一遍引用，`note_attachments.sha256` 上的 `ON DELETE RESTRICT`
     /// 再兜一层：判据哪天写错了，SQLite 会把整笔事务顶回来（错误原样抛给调用方，不吞）。
+    ///
+    /// 同一笔事务里给「已回收」账落一行（缺口 G102）：份数与字节都是**这一批真删掉的**，
+    /// `bytes` 用 `DELETE … RETURNING size` 拿到 —— 先 SELECT 再 DELETE 会在两条语句
+    /// 之间留一个"读到的与删掉的不是同一行"的窗口（哪怕只有理论上的），RETURNING 没有。
     pub fn purge_attachment_rows(&self, shas: &[String]) -> Result<Vec<String>, StoreError> {
         if shas.is_empty() {
             return Ok(Vec::new());
@@ -1043,24 +1047,50 @@ impl Store {
         self.write_tx(|tx, now| {
             let mut del = tx.prepare(
                 "DELETE FROM attachments WHERE sha256 = ?1
-                  AND NOT EXISTS (SELECT 1 FROM note_attachments na WHERE na.sha256 = attachments.sha256)",
+                  AND NOT EXISTS (SELECT 1 FROM note_attachments na WHERE na.sha256 = attachments.sha256)
+                 RETURNING size",
             )?;
             let mut settle = tx.prepare(
                 "UPDATE sync_operations SET state = 'done', updated_at = ?2
                   WHERE entity_type = 'attachment' AND entity_id = ?1
                     AND state IN ('pending','inflight')",
             )?;
+            let mut ledger = tx.prepare(
+                "INSERT INTO attachment_reclaims (at, files, bytes) VALUES (?1, ?2, ?3)",
+            )?;
             let mut purged = Vec::new();
+            let mut bytes = 0i64;
             for sha in &shas {
-                if del.execute(params![sha])? == 1 {
+                let size: Option<i64> =
+                    del.query_row(params![sha], |r| r.get(0)).optional()?;
+                if let Some(size) = size {
                     // 行都没了，挂在它上面的待办永远满足不了 —— 一起结掉（同上一条理由：
                     // "待同步"计数必须诚实）。
                     settle.execute(params![sha, now])?;
                     purged.push(sha.clone());
+                    bytes += size;
                 }
+            }
+            if !purged.is_empty() {
+                ledger.execute(params![now, purged.len() as i64, bytes])?;
             }
             Ok(purged)
         })
+    }
+
+    /// 「已回收」账的合计（缺口 G102）：销毁那本流水全表两个 `SUM`。
+    ///
+    /// 为什么单独一条读而不是并进 `attachment_inventory`：那本账的行是**现存对象**，
+    /// 这本是**已经不存在的** —— 并进去会出现"总份数 = 现存 + 已销毁"这种把两本合一的算法，
+    /// 而 `count`/`bytes` 的口径（这台设备上有几份）不能变。界面各说各的句子。
+    pub fn reclaimed_totals(&self) -> Result<ReclaimedTotals, StoreError> {
+        let conn = self.read()?;
+        let (files, bytes) = conn.query_row(
+            "SELECT COALESCE(SUM(files), 0), COALESCE(SUM(bytes), 0) FROM attachment_reclaims",
+            [],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+        )?;
+        Ok(ReclaimedTotals { files, bytes })
     }
 
     /// 撤销一个隔离标记（只清 `deleted_at`，两个状态位一字不动）。

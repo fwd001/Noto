@@ -235,6 +235,16 @@ CREATE TABLE note_attachments (
   PRIMARY KEY (note_id, block_id)
 ) WITHOUT ROWID;
 
+-- 迁移 0009：附件「已回收」账（§6-9 第 4 项数据；缺口 G102）。一行 = 一批销毁的（份数, 字节数），
+-- 与 `DELETE FROM attachments` **同一笔事务**落账（崩在中间两边同生共死，没有"行没了、账没记"的漂账）；
+-- 只记**销毁** —— 隔离、撤销隔离、重试取回都不落账（那些事发生时字节还在或又回来了）。
+CREATE TABLE attachment_reclaims (
+  id    INTEGER PRIMARY KEY,
+  at    TEXT NOT NULL,
+  files INTEGER NOT NULL CHECK (files > 0),   -- 空批次不落行：0 份的账写不进来
+  bytes INTEGER NOT NULL CHECK (bytes >= 0)
+);
+
 CREATE TABLE tombstones (
   entity_type   TEXT NOT NULL CHECK (entity_type IN ('note','folder','attachment')),
   entity_id     TEXT NOT NULL,
@@ -542,6 +552,11 @@ max ≤ 240 ms。**为什么预算不是越紧越好**：把 `LIMIT` 放大 400 
        问第二遍，`note_attachments.sha256` 上的 `ON DELETE RESTRICT` 是机器兜底），**只有真删掉行的那些
        sha** 才去删隔离区里的文件。顺序反过来一旦断电就留下"账在、字节没了"的死链；按这个顺序，最坏残留
        是"行没了、字节多占一份"，那是可安全重跑的清理，不是数据损坏。
+     * **同一笔事务里给「已回收」账落一行**（迁移 0009 的 `attachment_reclaims`）：份数与字节都是
+       这一批**真删掉的**，`bytes` 用 `DELETE … RETURNING size` 拿到 —— 先 SELECT 再 DELETE 会在两条
+       语句之间留一个"读到的与删掉的不是同一行"的窗口。界面那句「已回收 X（N 份）」读的就是这本账的
+       合计（`Store::reclaimed_totals`），与还活着的行**不同源** —— 混进 `count`/`bytes` 算就会出现
+       "总份数比设备上实际有的多"的假账。
      * **"问"与"动手"分成两个函数**是有意的：生产里唯一的调用方是 `run_attachment_round`，它把前者的
        返回值原样交给后者；而 GC 的规模基准（`attachment_gc_scale.rs`）没有服务器，它量的是本地那两步
        （删行 + 删文件）的代价，**不含** HEAD 那一问 —— 读那个数字的人需要知道它没包含什么。

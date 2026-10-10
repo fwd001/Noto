@@ -61,6 +61,11 @@ pub(crate) static MIGRATIONS: &[Migration] = &[
         name: "0008_conflict_remote_wire",
         sql: include_str!("../../../migrations/0008_conflict_remote_wire.sql"),
     },
+    Migration {
+        ver: 9,
+        name: "0009_attachment_reclaims",
+        sql: include_str!("../../../migrations/0009_attachment_reclaims.sql"),
+    },
 ];
 
 pub(crate) fn supported_version() -> u32 {

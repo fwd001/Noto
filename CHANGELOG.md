@@ -3376,10 +3376,13 @@ Rust 那条测试把语义钉住（`phase == "unconfigured"` 且 `pendingOps == 
    （MS11 把 N 写死成 1 ⇒ 红）；名字那一列只当名字用。
 
 **G99 关闭，但登记两条新的**：
-- **G102（规范写了、代码里没有持久来源）**：§6-9 那句"**回收字节数**"如果读成"已经回收了多少"，
-  今天没有任何地方记得这件事 —— `purge_verified_blobs` 先删 `attachments` 行再删字节，
-  之后只剩一行 `tracing::info!` 的条数（连条数都没有字节数）。界面上因此只说"**隔离区里压着多少
-  字节等着被释放**"（`quarantinedBytes`，第 31 刀起就有）。要画"已经回收了多少"得先决定记账在哪。
+- **G102（规范写了、代码里没有持久来源）** —— **2026-10-10 已关闭（第 46 刀）**：§6-9 第 4 项数据
+  「**回收字节数**」经用户裁定**读作"已经回收了多少"**（另一读法"隔离区待释放"是界面第 31 刀起就有的那句），
+  于是补了一本持久账：迁移 `0009_attachment_reclaims`（一行 = 一批销毁的份数/字节）、
+  `purge_attachment_rows` 与删行**同一笔事务**落账、`attachment_inventory` 的 totals 多
+  `reclaimedCount`/`reclaimedBytes`、附件管理器多一句「已回收 X（N 份）」（0 份整句不画）。
+  原先的现状（销毁那一步只留一行 `tracing::info!` 的条数）见本节上文；证据与变异读数见
+  "界面重构 v2 · 第 46 刀"那一节。
 - **G103（同一族的旧格子）**：编辑器那颗附件芯片在块上没有名字时，兜底是 `sha256.slice(0,12)`
   （`RichEditor.vue:227`）—— 那正是 §4.5 那句"绝不能用一串哈希代替内容"管着的形状。
   本刀的"不许出现内容号"判据只扫设置页那一格，所以它没被量到；留作下一刀，不顺手改。
@@ -4069,8 +4072,55 @@ PR + **push main** + tag + 每日 + 手动 —— push main 这条是本仓库�
 改成"`gates` + `audit` 两个 workflow"；§密钥入仓 那格写明 gitleaks 真的在跑；PRODUCTION-READINESS §7
 的豁免表加了一段增补（同两条豁免现在被三处消费）。
 
+**runner 首次运行的回执**：`audit` 作业在 GitHub 上**第一次真跑**（run 38021208301，commit `e1661b3`）
+= **completed / success**；同一 commit 的 `gates` 那条 run（38021208323）也 = **success** ——
+从"本机逐条跑过"到"CI 里真在跑"这一格到此闭掉（更早那两条 `gates` run 被后续 push 撞成 cancelled
+是已知的 `concurrency` 行为，不算读数）。
+
 **这一批只动 `.github/workflows/audit.yml`、`deny.toml`、`.cargo/audit.toml`、`Cargo.lock`
 （yoke-derive 0.8.3 → 0.8.4，清 yank）与文档 —— 没有产品行为变更，按口径**不升版本号**。**
+
+### 界面重构 v2 · 第 46 刀：§6-9 第 4 项「回收字节数」—— 一本"已回收"的持久账（G102 关闭）
+
+**口径先拍**：规范那句「回收字节数」有两种读法 ——"已经回收了多少"还是"隔离区里待释放多少"。
+后者第 31 刀起就在界面上（`quarantinedBytes` 那句），前者今天没有任何地方记得（销毁那一步
+只留一行 `tracing::info!`，连字节数都没记）。用户 2026-10-10 裁定：**读成"已回收"，做一本持久账**。
+
+**核心**（迁移 + 落账 + 读侧）：
+- 迁移 `0009_attachment_reclaims`：一行 = 一批销毁的（份数, 字节数）。只记**销毁**；
+  隔离、撤销隔离、重试取回都不落账（那些事发生时字节还在或又回来了）。
+- `purge_attachment_rows` 与删行**同一笔 `write_tx`** 落账，`bytes` 用 `DELETE … RETURNING size` 拿 ——
+  先 SELECT 再 DELETE 会在两条语句之间留一个"读到的与删掉的不是同一行"的窗口；同一事务保证
+  "行没了、账没记"这种漂账不存在。`files > 0` 的 CHECK 保证"0 份的账"根本写不进去（空批次不落行）。
+- `Store::reclaimed_totals()`（`COALESCE(SUM(...))`）+ host 的 `attachment_inventory` totals 多
+  `reclaimedCount`/`reclaimedBytes` —— 与现存行那两组数**不同源**，混算就会出现"总份数比实际大"。
+
+**前端**：附件管理器多一句「已回收 {size}（{count} 份）」（`data-testid="attachment-reclaimed"`），
+0 份整句不画（与卡片其余几句同口径）；`AttachmentInventoryTotals` 类型与 i18n 各一格。
+
+**判据与变异**（每条新腿各自一刀）：
+- Rust：`attachment_queue` 在已有的销毁测试里钉"被拒的与不存在的都不许落账 + 幂等重跑不重复记账"；
+  `attachment_inventory` 钉"全新库 0、销毁之后 1 份 / 17 字节、清单只剩四份、隔离那本归零、
+  逐行之和仍成立"与 totals 键名整排；`attachment_gc` 的宽限期测试补"隔离不是回收 / 被拒批次不留痕 /
+  重跑不翻倍"，新加一条"撤销隔离不进账"（负向入口）。
+  变异三刀：INSERT 换成 SELECT（不落账）⇒ 红在 `attachment_queue:571`；`bytes += size` 改 `* 2`
+  ⇒ 红在 `:584`；`if !purged.is_empty()` 改 `if true` ⇒ CHECK 把 0 份的账顶回来、红在 `:526`。
+  提交前 clippy 抓到两处新代码里的 `&[x.clone()]`（同一元素借用）—— 改成 `std::slice::from_ref`，
+  全 workspace `-D warnings` 复跑 0；这一条登记出来是因为"CI 会替我抓"不是本地放过的理由。
+- 前端：`verify-layout` 腿 ㊿ 补两枚 check ——"真账跟核心的数走（0 份整句不出现）"与注入正对照第四句
+  （4 份 / 7.0 KB，与前三句的数互不相同），五处注入载荷各补两个字段（夹具自足）；
+  另留一张证据图 `59b-attachment-reclaimed-1440.png`（**注入态** —— 真实数据在全新库上按口径整句不画，
+  这张证明的是渲染，不冒充库里的读数）。
+  变异两刀（探针 `.logs/probe-g102.mjs`）：改 testid ⇒ 注入正对照红（读的是那一行本身，
+  不是"卡片里出现过这几个字"）；拆 `<= 0` 守卫 ⇒ 0 份那一发把「已回收 0 B（0 份）」画出来、零注入腿红。
+- 读数：cargo（store `migrations_and_pragmas` 11 + `attachment_queue` 5；host `attachment_gc` 14 +
+  `attachment_inventory` 2）、vitest **572/572（68 文件）**、vue-tsc 0 错、eslint 0 警告；
+  整条 verify-layout 干净库 **648 项 PASS / 0 FAIL**（`LAYOUT_EXIT=0`，`.logs/layout-g102b.txt`；
+  同日**两遍** —— 第一遍在干净库、第二遍在**跑过一遍的同一棵库**上，两遍都是 648 / 0，第二遍是
+  加了那张证据图之后跑的）——跟上一遍 645 的差逐项说得清：上一遍那条 ㊺ 走环境噪声豁免的腿这次
+  **真绿 +1**、本刀两条新 check **+2**；本轮环境噪声放行 0 条、收尾丢弃注入 0 次。
+
+**这一刀改的是产品行为（界面多一句真实的数、核心多一本账 + 一次迁移），按口径升 patch。**
 
 ### 界面重构 v2 · 第 33 刀【已回退，G101 重开】：浮层量一次并朝上开 —— 几何修好了，却弄坏一条更早的腿
 

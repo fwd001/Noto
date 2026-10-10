@@ -5407,6 +5407,8 @@ function contrastRatio(fg, bg) {
       summary: text('attachment-summary'),
       absent: text('attachment-absent'),
       quarantine: text('attachment-quarantine'),
+      // §6-9 第 4 项数据的另一半（缺口 G102）：销毁那一步落的账，0 份时整句不画。
+      reclaimed: text('attachment-reclaimed'),
       empty: text('attachment-empty'),
       failed: text('attachment-failed'),
       // §6 后一半：逐份的账。读**渲染出来的那一行的文本**并按屏幕上的顺序排 ——
@@ -5461,6 +5463,12 @@ function contrastRatio(fg, bg) {
     check('㊿ 隔离那句跟着核心的份数走（0 份就整句不出现，不许说"还有 0 天"）',
       qN > 0 ? digits(got.quarantine).includes(qN) : got.quarantine === null,
       JSON.stringify({ core: qN, quarantine: got.quarantine }));
+    // 「已回收」是一句**过去式**，它的数不来自任何一行现存的行（那些行已经没了）——
+    // 只有销毁那一步落的账说得出来。0 份时整句不画（同本卡片其余几句：没有这件事就不说）。
+    const rcN = rtot?.reclaimedCount ?? 0;
+    check('㊿ 「已回收」跟核心那本销毁账走（0 份就整句不出现，不许说"已回收 0 B"）',
+      rcN > 0 ? digits(got.reclaimed).includes(rcN) : got.reclaimed === null,
+      JSON.stringify({ core: rcN, reclaimed: got.reclaimed }));
     if (count === 0) {
       check('㊿ 真账扫过且为空 ⇒ 说"还没有附件"而不是留白', got.empty !== null, JSON.stringify(got));
     }
@@ -5484,6 +5492,8 @@ function contrastRatio(fg, bg) {
         count: 3, bytes: 1.5 * 1024 * 1024,
         unavailableCount: 1, unavailableBytes: 40 * 1024 * 1024,
         quarantinedCount: 2, quarantinedBytes: 2 * 1024 * 1024,
+        // 第四对数的两个都取得与前三对各不相同：串列或拿别的数混算都会露馅。
+        reclaimedCount: 4, reclaimedBytes: 7 * 1024,
       },
     };
     const { c, p, errs, got } = await openLedger((route) => route.fulfill({
@@ -5506,9 +5516,18 @@ function contrastRatio(fg, bg) {
     check('㊿ 倒计时只说"可以回收"，不许把带前置条件的删除说成到点必删',
       !/真正删除|一定会删|届时删除/.test(got.quarantine ?? ''),
       JSON.stringify({ quarantine: got.quarantine }));
+    check('㊿ 注入正对照·第四句读 reclaimedCount/Bytes（4 份 · 7.0 KB）—— 与前三句的数互不相同，串列必红',
+      got.reclaimed?.includes('4 份') === true && got.reclaimed?.includes('7.0 KB') === true
+        && !got.reclaimed.includes('1.5 MB') && !got.reclaimed.includes('2.0 MB') && !got.reclaimed.includes('40.0 MB'),
+      JSON.stringify({ reclaimed: got.reclaimed }));
     check('㊿ 注入形状下不该出现的两句都没出现（空态与失败态不跟真账抢话）',
       got.empty === null && got.failed === null, JSON.stringify({ empty: got.empty, failed: got.failed }));
     check('㊿ 注入这一轮 console error 为零', errs.length === 0, errs.slice(0, 3).join(' | '));
+    // 留一张"有已回收数"的现场图：真实数据在全新库上永远是 0（那行按口径整句不画），
+    // 所以这张明确是**注入态** —— 它证明的是渲染，不冒充库里的读数。
+    await p.evaluate(() => document.querySelector('#sec-attachments')?.scrollIntoView({ block: 'start' }));
+    await p.waitForTimeout(300);
+    await p.screenshot({ path: `${OUT}/59b-attachment-reclaimed-1440.png` });
     await p.close();
     await c.close();
   }
@@ -5517,15 +5536,16 @@ function contrastRatio(fg, bg) {
   {
     const zero = {
       rows: [],
-      totals: { count: 0, bytes: 0, unavailableCount: 0, unavailableBytes: 0, quarantinedCount: 0, quarantinedBytes: 0 },
+      totals: { count: 0, bytes: 0, unavailableCount: 0, unavailableBytes: 0, quarantinedCount: 0, quarantinedBytes: 0, reclaimedCount: 0, reclaimedBytes: 0 },
     };
     const { c, p, errs, got } = await openLedger((route) => route.fulfill({
       status: 200, contentType: 'application/json', body: JSON.stringify(zero),
     }));
     allErrs.push(...errs);
-    check('㊿ 扫过且为空 ⇒ 只说"还没有"那一句，其它三句都不出现',
+    check('㊿ 扫过且为空 ⇒ 只说"还没有"那一句，其它四句都不出现',
       got.empty !== null && /还没有/.test(got.empty) && !/没能|取不到/.test(got.empty)
-        && got.summary === null && got.absent === null && got.quarantine === null && got.failed === null,
+        && got.summary === null && got.absent === null && got.quarantine === null
+        && got.reclaimed === null && got.failed === null,
       JSON.stringify(got));
     await p.close();
     await c.close();
@@ -5551,7 +5571,7 @@ function contrastRatio(fg, bg) {
   {
     const odd = {
       rows: [{ sha256: 'd'.repeat(64), bytes: 7, localState: 'missing', remoteState: 'present', refs: 0, quarantinedUntil: '不是时间' }],
-      totals: { count: 1, bytes: 7, unavailableCount: 1, unavailableBytes: 7, quarantinedCount: 1, quarantinedBytes: 7 },
+      totals: { count: 1, bytes: 7, unavailableCount: 1, unavailableBytes: 7, quarantinedCount: 1, quarantinedBytes: 7, reclaimedCount: 0, reclaimedBytes: 0 },
     };
     const { c, p, errs, got } = await openLedger((route) => route.fulfill({
       status: 200, contentType: 'application/json', body: JSON.stringify(odd),
@@ -5595,6 +5615,7 @@ function contrastRatio(fg, bg) {
       totals: {
         count: 7, bytes: 12_349, unavailableCount: 4, unavailableBytes: 11_049,
         quarantinedCount: 2, quarantinedBytes: 10_049,
+        reclaimedCount: 0, reclaimedBytes: 0,
       },
     };
     const { c, p, errs, got } = await openLedger((route) => route.fulfill({
@@ -5655,7 +5676,7 @@ function contrastRatio(fg, bg) {
         isImage: true, bytes: 10, localState: 'available', remoteState: 'present',
         refs: 1, quarantinedUntil: null,
       })),
-      totals: { count: 23, bytes: 230, unavailableCount: 0, unavailableBytes: 0, quarantinedCount: 0, quarantinedBytes: 0 },
+      totals: { count: 23, bytes: 230, unavailableCount: 0, unavailableBytes: 0, quarantinedCount: 0, quarantinedBytes: 0, reclaimedCount: 0, reclaimedBytes: 0 },
     };
     const { c, p, errs, got } = await openLedger((route) => route.fulfill({
       status: 200, contentType: 'application/json', body: JSON.stringify(many),
@@ -5696,7 +5717,7 @@ function contrastRatio(fg, bg) {
         attRow('z', { name: '没人要的那张.png', bytes: 20, localState: 'missing', refs: 0 }),
         attRow('y', { name: '还没查过的那张.png', bytes: 10, remoteState: 'unknown' }),
       ],
-      totals: { count: 5, bytes: 1430, unavailableCount: 2, unavailableBytes: 820, quarantinedCount: 0, quarantinedBytes: 0 },
+      totals: { count: 5, bytes: 1430, unavailableCount: 2, unavailableBytes: 820, quarantinedCount: 0, quarantinedBytes: 0, reclaimedCount: 0, reclaimedBytes: 0 },
     };
 
     /** @param localReply 重试取回的回包里本机那一格是什么（G104 的两条分支） */
@@ -5721,7 +5742,7 @@ function contrastRatio(fg, bg) {
           totals: {
             count: rows.length, bytes: rows.reduce((a, r) => a + r.bytes, 0),
             unavailableCount: absent.length, unavailableBytes: absent.reduce((a, r) => a + r.bytes, 0),
-            quarantinedCount: 0, quarantinedBytes: 0,
+            quarantinedCount: 0, quarantinedBytes: 0, reclaimedCount: 0, reclaimedBytes: 0,
           },
         };
       };
