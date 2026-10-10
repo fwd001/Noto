@@ -97,6 +97,12 @@
 **这份清单不是抄来的**：`scripts/arch-check.mjs` 第 32 条 `ci:gates-are-actually-blocking` 会逐条去
 `ci.yml` 里查这些命令在不在某个 `run:` 上、那一步有没有被加上 `continue-on-error` —— 少一步或加了容错就红。
 
+**红的时候怎么读到日志（2026-10-10 加）**：未认证读 job 日志是 **403**。`gates` job 里「失败递证据」
+这一步在红的时候把 `cargo test` 输出的尾巴（30000 字符）贴成 **commit 评论**
+（`POST /commits/{sha}/comments`；评论列表未认证可读）—— `9cf7e6f` 那次 gates 红在第 14 步而本机同树
+复现全绿，就是为读那一段输出加的。五条纪律（`if: failure()` 只覆盖它**之前**的步、绝对路径、
+先 `touch` 再读、自己 `continue-on-error` 不把 job 带走、把自己读了几个字符写进正文）逐条写在那一步的注释里。
+
 | # | 步骤（阻断） | 本机基线（2026-09-30） |
 | --- | --- | --- |
 | 1 | `actions/checkout` + GNU 工具链 + pnpm/node 准备 + `pnpm install --frozen-lockfile` | — |

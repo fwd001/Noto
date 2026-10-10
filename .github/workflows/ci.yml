@@ -25,6 +25,11 @@ jobs:
   gates:
     name: 静态 + 单测 + 集成（Windows / GNU）
     runs-on: windows-latest
+    # 「失败递证据」那一步要贴 commit 评论 —— 未认证读不到 job 日志（403）时，
+    # 这是"红在哪儿"的公开读法（形状与五条纪律见那一步自己的注释）。
+    # 这是本 job 里唯一需要写权限的地方，其余步骤都是只读。
+    permissions:
+      contents: write
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -102,7 +107,40 @@ jobs:
         # 同一个二进制里那十几条并发打服务器时，机器一忙就假红 —— 本机 2026-09-28
         # 连红三次、`--test-threads=1` 立刻 16/16。红一次要人重跑并怀疑产品，
         # 比 CI 多花两分钟贵。
-        run: cargo test --workspace -- --test-threads=1
+        # 输出**落盘一份**：下一步失败时贴成 commit 评论（日志端点 403，那条是唯一读法）。
+        shell: bash
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.logs-ci"
+          set -o pipefail
+          cargo test --workspace -- --test-threads=1 2>&1 | tee "$GITHUB_WORKSPACE/.logs-ci/cargo-test.txt"
+
+      # 红的时候把 cargo 输出的尾巴贴成 commit 评论（公开仓库、未认证可读；日志端点 403）。
+      # 五条纪律都落在这一步里（2026-09-29 那次逐条踩过）：① `if: failure()` 只看**它之前**的步，
+      # 所以它必须排在被观察的那一步**之后**；② 不继承别人的 working-directory ⇒ 只走绝对路径；
+      # ③ 先 `touch` 再看（红在更早的步时文件根本没生成，评论仍要建出来并把"读到 0 字符"写在正文里）；
+      # ④ 这步自己不许把 job 带走（`continue-on-error`），否则"构建会红"这件事被它挡没了；
+      # ⑤ 它把自己的读数（日志字符数、评论创建 rc）写进被递出的正文 —— 它显示 success 不代表它做成了事。
+      - name: 失败递证据（cargo test 输出 → commit 评论）
+        if: failure()
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LOG="$GITHUB_WORKSPACE/.logs-ci/cargo-test.txt"
+          mkdir -p "$GITHUB_WORKSPACE/.logs-ci"; touch "$LOG"
+          node -e '
+            const fs = require("fs");
+            const p = process.env.GITHUB_WORKSPACE + "/.logs-ci/cargo-test.txt";
+            let t = "";
+            try { t = fs.readFileSync(p, "utf8"); } catch (e) { t = "(日志文件读不到：" + e.message + ")"; }
+            const head = `CI「Rust 全量」失败递证据（job ${process.env.GITHUB_JOB}，run ${process.env.GITHUB_RUN_ID}）\n`
+              + `日志文件 ${t.length} 字符，尾部 30000 字符如下（redact 无凭据：这一段只有 cargo/测试输出）：\n\n` + "```\n";
+            const body = (head + t.slice(-30000) + "\n```").slice(0, 64000);
+            fs.writeFileSync(process.env.GITHUB_WORKSPACE + "/.logs-ci/comment.json", JSON.stringify({ body }));
+          '
+          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments" --input "$GITHUB_WORKSPACE/.logs-ci/comment.json"
+          echo "comment_rc=$?（这一步显示 success 也不代表评论建成了，以这个 rc 与评论列表为准）"
 
       - name: 前端单测（本机基线 559 通过 / 67 文件，2026-10-09 实测）
         working-directory: apps/desktop
