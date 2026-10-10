@@ -59,6 +59,11 @@ pub(crate) struct Edit {
     pub confirm_sync: bool,
     /// 同步观测到的远端头部（Lamport 的"观测"半边，参与下一次 `next_rev`）。
     pub remote_rev_to: Option<Rev>,
+    /// 这一笔改动的**署名设备**。None = 本地写（用 `self.device`）；
+    /// `Some(remote)` = `apply_remote` 拉回来的那一版 —— 署名必须是**对面那台**，
+    /// 否则「另一台设备改的」在编辑这一路上永远显示成"本机改的"（第 48 刀的两台真设备测试抓到的形状：
+    /// 新建那一路走的是另一条 INSERT、署名是对的，只有走 `commit_edit` 的更新一路丢）。
+    pub device: Option<String>,
 }
 
 impl Default for Edit {
@@ -75,6 +80,7 @@ impl Default for Edit {
             force_rev: None,
             confirm_sync: false,
             remote_rev_to: None,
+            device: None,
         }
     }
 }
@@ -1276,6 +1282,11 @@ impl Store {
             (cur.note.sync_rev, cur.note.sync_hash.clone())
         };
         let remote_rev = edit.remote_rev_to.unwrap_or(cur.note.remote_rev);
+        // 这一笔的署名：本地写 = 本机；`apply_remote` 拉回来的一版 = **对面那台**（`Edit.device`）。
+        let device = edit
+            .device
+            .clone()
+            .unwrap_or_else(|| self.device.to_string());
 
         // FTS：external content 无触发器 → 先按**旧值**删，再按新值插（同事务）。
         let text_changed = title != cur.note.title || plain_text != cur.note.plain_text;
@@ -1308,7 +1319,7 @@ impl Store {
                 sync_hash,
                 content_hash,
                 now,
-                self.device.to_string(),
+                device.clone(),
                 deleted_at,
                 remote_rev.get() as i64
             ],
@@ -1323,7 +1334,7 @@ impl Store {
             &doc_json,
             &content_hash,
             edit.origin,
-            &self.device.to_string(),
+            &device,
             now,
         )?;
         if edit.enqueue {

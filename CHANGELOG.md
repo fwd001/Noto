@@ -3982,6 +3982,10 @@ G106 到这里收掉，G107 的三条也各自有了自己的现场："至少三
 改口成「另一台设备改的（01a12324）」且 `title` 是全文 → **撤掉注入**回到「本机改的」（防"恒真"的对照臂）
 + console 零 error。
 
+**更正（第 48 刀，2026-10-10）**：上面那条 Rust 断言只覆盖"本机写的那一版"；**对面设备编辑、拉回来的那一版，
+署名当时是被盖成本机的**（G111，见第 48 刀）。"值 == `stats.device_id`" 这条钉法本身没问题 —— 它钉的正是
+本机写；缺的是"对面写"那一侧，而那一侧只有**两台真设备**才碰得到，注入的判据看不见两者差别。
+
 **三条工装账**（都是这一轮撞出来并当场修掉的）：
 ① 腿 55 第一版按 `route.fulfill({ response, json })` 写，Playwright 抛 `Route is already handled!`，
    整条门禁崩在 739 条读数处（新加的那条异常处理器把已有读数**全打出来了** —— 它存在的意义就在这）；
@@ -4202,6 +4206,42 @@ arch-check 34/34；verify-layout 整跑 **646 项 PASS / 0 FAIL**（`LAYOUT_EXIT
 与上一遍 648 的差是两条 console-error 一族的**条件腿**（按宽度/按面循环里的分支）这轮没走到，FAIL 仍是 0。
 
 **这一刀改的是产品行为（壳里多两个真选择器 + 三条死键复活），按口径升 patch。**
+
+### 界面重构 v2 · 第 48 刀：设备身份的「两台真设备」那一格 —— 抓到并修掉"远端编辑丢署名"（G111 关闭）
+
+**为什么现在才做这一格**：第 45 刀交付时，判据是 DTO 键名/值（= 本机 device_id）+ 前端单测 + 腿 55 的**注入**；
+唯一没有的是一条**两台真设备**的端到端。补它之前先盘点：`grep updated_device crates/*/tests` **零命中** ——
+"对面那台设备的 id 真的过了线"这件事**从来没被任何测试碰过**。于是照 `conflict_payload_e2e.rs` 的形状
+补了一条新 lane（`crates/notera-host/tests/device_identity_e2e.rs`）：两台**真** App（两个数据目录、
+各自真 SQLite）经**真 HTTP** 对同一台 `notera-test-webdav` 收敛。
+
+**第一次跑就红了，而且红得正是要害**（G111）：
+- ① A 写 → 那一格 = A ✓（正对照过）；② B 拉下来 → 那一格 = A ✓（**新建**那一路的线是通的：走的是
+  `apply_remote` 里的原样 INSERT，署名取信封的 `device`）；③ B 改完推回、A 再拉 → 那一格**还是 A** ✗。
+- 根因：**编辑**那一路走的是 `commit_edit`（update 出口），而它把 `updated_device` 与 revision 的署名
+  **硬编成 `self.device`** —— 信封里对面那台的 id（`env.device`）在 apply 的 update 分支里根本没往下传。
+- 影响面（第 45 刀之后、这一刀之前的**产品里**）：两台设备上，"哪台设备改的"只在**新建**的记录上对；
+  后来在另一台机器上的**编辑**，本机看永远显示「本机改的」。而界面注入的判据注入的是详情整体，
+  两种情形在注入下**长得一样** —— 这就是它活到今天的原因。
+
+**修法**（把"署名"从隐式改成显式；一处装配、一处消费）：
+- `Edit` 多一格 `device: Option<String>`（None = 本地写、用 `self.device`；`Some(remote)` = 拉回来的那一版）——
+  `Edit` 本就有 `Default` 且所有构造点走 `..Default::default()`，所以只有 `apply_remote` 的 update 分支
+  这一处要改；本地写入路径一个字没动。
+- `commit_edit` 里 `let device = edit.device.clone().unwrap_or_else(|| self.device.to_string())`，
+  UPDATE 与 `insert_revision` 都改用它 —— 与 insert 分支（`env.device`）口径一致。
+
+**判据与变异**：新 lane 四步都在**两台真设备**上 —— 正对照（A 自己写 = A）→ B 拉（= A，insert 线）→
+B 改后 A 拉（**必须翻成 B；这一步就是 G111 的现场**）→ A 再自己改（翻回 A）；另加一条 ③′ 钉**版本史**那一格
+（`note_revisions` 行的 `deviceId` 也必须是 B —— G111 的第二个可观察面）。
+变异三刀：① `apply` 不给 `Edit` 署名（`device: None`）⇒ 红在"翻成 B"；② `commit_edit` 不看 `edit.device`
+⇒ 同一条红；③ 只把 `insert_revision` 的署名退回本机 ⇒ ③ 过、**③′ 红**（第三条证明 revision 那条断言
+不是搭前两条的车）；各自还原后字节一致、本树复跑绿。
+
+**读数**：`cargo test -p notera-store -p notera-host -- --test-threads=1` **50 个 result 行全 ok / 0 失败**、
+clippy `-D warnings` 0、fmt 干净（新测试首版有两处 rustfmt 漂移，已 `cargo fmt` 收掉）。
+
+**这一刀改的是产品行为（"哪台设备改的"在编辑那一路从此为真），按口径升 patch。**
 
 ### 界面重构 v2 · 第 33 刀【已回退，G101 重开】：浮层量一次并朝上开 —— 几何修好了，却弄坏一条更早的腿
 
@@ -4646,6 +4686,11 @@ COUNT(DISTINCT note_id)`），host 侧 `attachment_inventory` 折成 `rows` + `t
   （三件工具钉版本 + 校验和；每条判据都做过变异），CI-CD 的 `audit` 行与 §密钥入仓 已按实况重写；
   经过与证据见"门禁补强（2026-10-10 第四批）"那一节。新工具第一次实跑还量出一条新账：
   `yoke-derive@0.8.3` 被 yank，已抬到 0.8.4。
+- **G111 远端编辑的署名被盖成本机**（2026-10-10 补"两台真设备"lane 时抓到；状态 = **同日已关闭**）：
+  `commit_edit`（update 出口）把 `updated_device` 与 revision 的署名硬编成 `self.device`，信封里对面那台的
+  id（`env.device`）在 apply 的 update 分支里没往下传 ⇒ 第 45 刀之后、第 48 刀之前的产品里，
+  "另一台设备改的"**只在新建那一路对**、编辑一路永远显示「本机改的」；而界面注入的判据注入的是详情整体，
+  两种情形在注入下长得一样（这就是它活到今天的原因）。修法与两刀变异见"界面重构 v2 · 第 48 刀"。
 - `ARCHITECTURE-REVIEW.md` §14 的 D1–D10 仍待人工决定
 
 

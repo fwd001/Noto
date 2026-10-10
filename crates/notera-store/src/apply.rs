@@ -348,6 +348,10 @@ impl Store {
                     force_rev: Some(env.rev),
                     confirm_sync: true,
                     remote_rev_to: Some(env.rev),
+                    // **署名是拉回来的那一版的作者（对面那台）**：这一支走 `commit_edit`，
+                    // 不给它 device 的话 `updated_device` 与 revision 都被盖成本机 id
+                    // —— 「另一台设备改的」在编辑这一路上永远显示成"本机改的"（第 48 刀实测抓到的形状）。
+                    device: Some(device.clone()),
                 };
                 self.commit_edit(tx, &cur, &edit, now)?;
                 // 对面那一版一落地，本机那些还没走完的上写待办就**推不出去了**（I2 会拒旧 rev），
