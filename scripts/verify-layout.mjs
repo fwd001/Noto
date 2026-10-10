@@ -126,6 +126,8 @@ const FIXTURE_MARKS = [
   '分档夹具', '改于夹具', '移到夹具', '附件夹具',
   // 第 44/45 刀那两条腿的夹具：崩在半路也不许把残骸留成后面腿的现场（第 54 刀一次造 85 篇）。
   '满页夹具', '设备夹具',
+  // 第 49 刀那条字号腿的夹具。
+  '字号夹具',
 ];
 for (const mark of FIXTURE_MARKS) await purgeByTitle(mark);
 
@@ -6467,6 +6469,80 @@ function contrastRatio(fg, bg) {
   await cmd('delete_note', { id: made.id }).catch(() => {});
   await cmd('purge_note', { id: made.id }).catch(() => {});
   notes.push(`     设备身份实测：本机写 → 「本机改的」；注入另一台 → 短 id + 全文在 title；撤掉 → 回本机（收尾丢弃的注入 ${injectDropped} 次）`);
+}
+
+/**
+ * 56 §1.5 用户正文字号（0.85–1.6）：**必须真作用到渲染字号；放大后不许出现横向滚动**。
+ *
+ * 完成度审计（2026-10-10）发现的判据空档：`--editor-font-scale` 这条链（偏好入本地库 →
+ * `settings` 把变量写到根 → `editor.css` 的 `calc(var(--text-md) * …)`）只被 `tokens.spec`
+ * 钉过"默认值是 1"，**没有任何一条腿量过它真的改字号、也没量过放大后不横滚** —— 而那两句话
+ * 是 §1.5 里明写的。三档都走一遍（1 → 1.6 → 0.85 → 恢复 1，收尾不变量 ㊾ 会复核末档）。
+ */
+{
+  const FIX = '字号夹具';
+  await purgeByTitle(FIX);
+  const doc = {
+    v: 1,
+    content: [{
+      id: 'blk000001',
+      type: 'paragraph',
+      content: [{ text: `${FIX}：这一行段落要能在最大的字号档下读得完，而且不许把编辑器撑出一条横向滚动。` }],
+    }],
+  };
+  const made = await cmd('create_note', { folderId: null, doc });
+
+  /** 打开这一篇并读三个数：正文字号、正文盒子横向溢出、编辑栏横向溢出。 */
+  const measure = async () => {
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const p = await ctx.newPage();
+    const errs = [];
+    p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await p.waitForSelector(`[data-testid="note-row-${made.id}"]`, { timeout: 15000 });
+    await p.click(`[data-testid="note-row-${made.id}"]`);
+    await p.waitForSelector('.editor-doc', { timeout: 8000 });
+    const got = await p.evaluate(() => {
+      const docEl = document.querySelector('.editor-doc');
+      const pane = document.querySelector('[data-testid="editor-pane"]');
+      return {
+        font: Number.parseFloat(getComputedStyle(docEl).fontSize),
+        docOverX: Math.round(docEl.scrollWidth - docEl.clientWidth),
+        paneOverX: pane ? Math.round(pane.scrollWidth - pane.clientWidth) : -1,
+        scaleVar: getComputedStyle(document.documentElement).getPropertyValue('--editor-font-scale').trim(),
+      };
+    });
+    await p.close();
+    await ctx.close();
+    return { ...got, errs };
+  };
+
+  await cmd('set_pref', { key: 'fontScale', value: 1 });
+  const base = await measure();
+  await cmd('set_pref', { key: 'fontScale', value: 1.6 });
+  const big = await measure();
+  await cmd('set_pref', { key: 'fontScale', value: 0.85 });
+  const small = await measure();
+  await cmd('set_pref', { key: 'fontScale', value: 1 }); // 末档归位（㊾ 会复核）
+
+  const ratio = (a, b) => (b > 0 ? a / b : 0);
+  check('56 仪器自检：基准档读到了正文字号（量不到就是选择器过期，后面全是空判据）',
+    base.font > 0 && base.scaleVar === '1', JSON.stringify(base));
+  check('56 1.6 档**真的**改渲染字号（≈基准 × 1.6；"偏好存了但没作用"在这一条红）',
+    Math.abs(ratio(big.font, base.font) - 1.6) < 0.06,
+    JSON.stringify({ base: base.font, big: big.font, scaleVar: big.scaleVar }));
+  check('56 0.85 档同样真作用（≈基准 × 0.85 —— 只看上限会把"缩不到"放过去）',
+    Math.abs(ratio(small.font, base.font) - 0.85) < 0.05,
+    JSON.stringify({ base: base.font, small: small.font }));
+  check('56 放大到 1.6 之后正文盒子与编辑栏都不许出现横向滚动（§1.5 后半句）',
+    big.docOverX <= 1 && (big.paneOverX === -1 || big.paneOverX <= 1),
+    JSON.stringify({ docOverX: big.docOverX, paneOverX: big.paneOverX }));
+  check('56 这一腿 console error 为零',
+    [...base.errs, ...big.errs, ...small.errs].length === 0,
+    [...base.errs, ...big.errs, ...small.errs].slice(0, 2).join(' | '));
+  await cmd('delete_note', { id: made.id }).catch(() => {});
+  await cmd('purge_note', { id: made.id }).catch(() => {});
+  notes.push(`     字号实测：基准 ${base.font}px → 1.6 档 ${big.font}px（×${ratio(big.font, base.font).toFixed(2)}）→ 0.85 档 ${small.font}px（×${ratio(small.font, base.font).toFixed(2)}）；1.6 档正文溢出 ${big.docOverX}px、编辑栏溢出 ${big.paneOverX}px`);
 }
 
 /**
