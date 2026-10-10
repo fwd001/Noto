@@ -34,6 +34,9 @@ pub(crate) const FTS_MIN_CHARS: usize = 3;
 const SNIPPET_LEAD: usize = 40;
 const SNIPPET_TAIL: usize = 120;
 const DEFAULT_LIMIT: u32 = 50;
+/// 「还有 N 条」那一次 count 的上界（见 `run_total`）：到顶了就说"以上"，不假装精确。
+/// 对外可见：host 要用它把"没给 cap"归一成同一个数，别在两处各写一个 400。
+pub const DEFAULT_TOTAL_CAP: u32 = 400;
 
 pub(crate) fn char_len(s: &str) -> usize {
     s.chars().count()
@@ -366,6 +369,31 @@ pub(crate) fn run(
         });
     }
     Ok(out)
+}
+
+/// 匹配**总数**（带上界），给"搜索回满时那句「还有 N 条」"用（2026-10-09 用户拍板）。
+///
+/// 为什么是**带上界**的：真要求精确总数，就得把每一档的 `LIMIT` 拿掉去 count ——
+/// 而 `search_latency.rs` 那条预算守的正是"常用词在 5000 篇上不许扫全表"，
+/// 一个不限量的 count 会把那条预算一口吃光。所以这里复用**同一批带 `LIMIT` 的档**
+/// （`tier`），取到 `cap` 行为止；调用方拿到 `n == cap` 时该说的是"还有 N 条**以上**"，
+/// 而不是假装知道确切数字。成本形状与搜索本身一致（每档 ≤ cap 行），这句话不会让它变慢。
+pub(crate) fn run_total(conn: &Connection, text: &str, cap: u32) -> Result<u32, StoreError> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(0);
+    }
+    let cap = if cap == 0 { DEFAULT_TOTAL_CAP } else { cap } as usize;
+    let segments: Vec<&str> = text.split_whitespace().collect();
+    let exact = tier(conn, &segments, false, &[], cap)?;
+    let n_exact = exact.len();
+    let fuzzy = if n_exact < cap {
+        let exact_ids: Vec<EntityId> = exact.iter().map(|r| r.id.clone()).collect();
+        tier(conn, &segments, true, &exact_ids, cap - n_exact)?
+    } else {
+        Vec::new()
+    };
+    Ok((n_exact + fuzzy.len()) as u32)
 }
 
 /// 高亮用的那一个串：先按整段找（精准），找不到再退回这一段的某个三字串（模糊）。

@@ -140,6 +140,18 @@ const tiers = computed(() => {
   return read.exact + read.fuzzy > 0 ? read : null;
 });
 
+/**
+ * 「还有 N 条」那一句的读数（§3.3 的后一半）：
+ *  · 只在**真的还有**的时候返回（`total <= shown` 时这一句不该出现 —— 那时它就是假话）；
+ *  · `capped` = 核心给的是**上界**（`total == cap`）：到顶了说"以上"，不假装知道确切数字。
+ */
+const moreHits = computed(() => {
+  const total = notes.searchTotal;
+  const shown = notes.hits?.length ?? 0;
+  if (notes.searching || total === null || total.total <= shown) return null;
+  return { remaining: total.total - shown, capped: total.total >= total.cap };
+});
+
 function onScroll(event: Event): void {
   const el = event.target as HTMLElement;
   scrollTop.value = el.scrollTop;
@@ -231,6 +243,12 @@ function createFrom(tpl: NoteTemplate): void {
     <div v-if="tiers !== null" class="search-summary" data-testid="search-summary">
       <p class="search-summary__count" role="status" data-testid="search-found">
         {{ t('list.searchFound', { query: notes.query.trim(), count: notes.hits?.length ?? 0 }) }}
+      </p>
+      <!-- §3.3 的后一半：回满一页时说清"还有多少没列出来"（2026-10-09 用户拍板）。 -->
+      <p v-if="moreHits !== null" class="search-summary__more" role="status" data-testid="search-more">
+        {{ moreHits.capped
+          ? t('list.searchMoreCapped', { n: moreHits.remaining })
+          : t('list.searchMore', { n: moreHits.remaining }) }}
       </p>
       <p class="search-summary__hint" data-testid="search-tier-hint">{{ t('list.searchTierHint') }}</p>
       <p class="search-summary__tiers">
@@ -597,6 +615,13 @@ function createFrom(tpl: NoteTemplate): void {
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--ink);
+}
+
+/* 「还有 N 条」：比"找到"那句弱一档，但它说的事必须看得见（回满时不说话 = 用户以为就这些）。 */
+.search-summary__more {
+  font-size: var(--text-xs);
+  line-height: 17px;
+  color: var(--body);
 }
 
 .search-summary__hint {

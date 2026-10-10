@@ -481,6 +481,8 @@ export const Commands = {
   setFolderColor: 'set_folder_color',
   /** §6「颜色」：笔记的标记色（当「标签」用：列表行标题前那一颗小点）。空串 = 清掉。 */
   setNoteColor: 'set_note_color',
+  /** §3.3 的后一半：搜索回满时那句「还有 N 条」的总数（**带上界**：`total == cap` 时说"以上"）。 */
+  searchTotal: 'search_total',
   setNotePinned: 'set_note_pinned',
   deleteNote: 'delete_note',
   restoreNote: 'restore_note',

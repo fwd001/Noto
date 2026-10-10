@@ -34,6 +34,8 @@ const MESSAGES: Record<MessageKey, string> = {
   'list.searching': '搜索中…',
   // §3.3 搜索结果分档。三句都照设计稿 v2 的搜索态那一栏抄，不自创措辞。
   'list.searchFound': '「{query}」找到 {count} 条',
+  'list.searchMore': '还有 {n} 条没列出来',
+  'list.searchMoreCapped': '还有 {n} 条以上没列出来',
   'list.searchTierHint': '两条字都搜得到 · 搜的是字，不是意思',
   'list.tierExact': '精准 {count}',
   'list.tierFuzzy': '模糊 {count}',

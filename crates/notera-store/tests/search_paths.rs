@@ -428,3 +428,83 @@ fn intersection_is_not_truncated_by_the_per_segment_window() {
     assert_eq!(hits.len(), 1, "两个词都在的那条必须回来：{hits:?}");
     assert_eq!(hits[0].note_id, both.id, "{hits:?}");
 }
+
+/// 「还有 N 条」那一次 count（§3.3 的后一半，2026-10-09 用户拍板）。
+///
+/// 三条差分，缺一条就抓不住对应的坏法：
+///  · 上限**够大**时回的是**真数**（夹具里恰好有两篇含「同步」，写死这条，不由被测方算出来）；
+///  · 上限**小于真数**时回的就是上限 —— 界面据此说"还有 N 条**以上**"，不假装精确；
+///  · 两档**不许重**：既被精准档命中、又在模糊档沾边的那些只算一次（把两档条数直接相加的实现会红）。
+#[test]
+fn search_total_counts_the_union_caps_the_cost_and_never_double_counts() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    seed(&store, &folder);
+    // 夹具里含「同步」的恰好两篇（第五篇标题+正文各一次算同一篇；英文那篇不算）
+    assert_eq!(
+        store.search(&SearchQuery::new("同步")).unwrap().len(),
+        2,
+        "夹具变了：先修这条期望值，别让它跟着被测方算"
+    );
+    assert_eq!(
+        store.search_total("同步", 100).unwrap(),
+        2,
+        "上限够大时必须是真数"
+    );
+    assert_eq!(
+        store.search_total("同步", 1).unwrap(),
+        1,
+        "上限小于真数时就回上限"
+    );
+    assert_eq!(store.search_total("   ", 100).unwrap(), 0, "空查询 0 条");
+    assert_eq!(
+        store.search_total("查无此词呀", 100).unwrap(),
+        0,
+        "没有就是 0"
+    );
+
+    // 两档重叠：这一篇被精准档命中，而模糊档的放宽集里也有它 ⇒ 只能算一次。
+    let careful = store
+        .create_note(&folder, doc_heading("跨档", "数据同步协议的边界条件"))
+        .unwrap();
+    let after_exact = store.search_total("数据同步协议", 100).unwrap();
+    assert!(
+        store
+            .search(&SearchQuery::new("数据同步协议"))
+            .unwrap()
+            .iter()
+            .any(|h| h.note_id == careful.id),
+        "前置：这一篇要被搜到"
+    );
+    // 再造一条**只**进模糊档的（三段三字串都在、但没连着）—— 它也要算进总数，且只算一次
+    let spaced = store
+        .create_note(
+            &folder,
+            doc_heading(
+                "只进模糊",
+                "先做数据同步的预演，同步协调另开一条线，下一步协议的边界还没定",
+            ),
+        )
+        .unwrap();
+    let both = store.search_total("数据同步协议", 100).unwrap();
+    assert_eq!(
+        both,
+        after_exact + 1,
+        "只进模糊档的那一篇没算进来（或算重了）：{both} vs {after_exact}"
+    );
+    assert!(
+        store
+            .search(&SearchQuery::new("数据同步协议"))
+            .unwrap()
+            .iter()
+            .any(|h| h.note_id == spaced.id),
+        "前置：那条隔开的笔记要被模糊档捞到"
+    );
+    // 上限顶住的读数形状：界面上那句"以上"就是从这个关系来的
+    assert_eq!(
+        store.search_total("数据同步协议", 1).unwrap(),
+        1,
+        "上限顶住时回上限"
+    );
+}

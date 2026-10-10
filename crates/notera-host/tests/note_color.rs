@@ -196,5 +196,9 @@ fn a_trashed_note_cannot_be_recolored_and_a_missing_one_is_not_found() {
         "set_note_color",
         json!({ "id": EntityId::new().to_string(), "color": "#c2410c" }),
     );
-    assert_eq!(missing.unwrap_err(), "not_found", "缺的那一篇要给 not_found");
+    assert_eq!(
+        missing.unwrap_err(),
+        "not_found",
+        "缺的那一篇要给 not_found"
+    );
 }

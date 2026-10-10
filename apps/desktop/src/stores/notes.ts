@@ -21,6 +21,11 @@ export type ListMode = { kind: 'all' } | { kind: 'folder'; folderId: string | nu
 
 const PAGE_SIZE = 200;
 
+/** 搜索一页的大小（§3.3）。回满这一页时界面要问一次总数、说「还有 N 条」。 */
+const SEARCH_LIMIT = 80;
+/** 那一次总数的上界（与核心 `DEFAULT_TOTAL_CAP` 同一个意思：到顶了说"以上"）。 */
+const SEARCH_TOTAL_CAP = 200;
+
 function rowFromNote(note: Note): NoteListRow {
   return {
     id: note.id,
@@ -46,6 +51,8 @@ export const useNoteStore = defineStore('notes', () => {
   const selectedId = ref<string | null>(null);
   const query = ref('');
   const hits = ref<SearchHit[] | null>(null);
+  /** §3.3 后一半：回满时那一次 count 的读数（`{ total, cap }`；没回满就是 null）。 */
+  const searchTotal = ref<{ total: number; cap: number } | null>(null);
   const searching = ref(false);
   const searchErrorKey = ref<string | null>(null);
   const titles = ref<Record<string, string>>({});
@@ -165,10 +172,23 @@ export const useNoteStore = defineStore('notes', () => {
     searching.value = true;
     searchErrorKey.value = null;
     try {
-      const result = await callCommand<SearchHit[]>(Commands.search, { text: trimmed.slice(0, 200), limit: 80 });
+      const result = await callCommand<SearchHit[]>(Commands.search, { text: trimmed.slice(0, 200), limit: SEARCH_LIMIT });
       if (mine !== requestId) return;
       const list = Array.isArray(result) ? result : [];
       hits.value = list;
+      /**
+       * §3.3 的后一半：**回满时才去问总数**（2026-10-09 用户拍板："搜索回满 80 就提示还有 N 条"）。
+       * 只在回满时问，是因为这一问要走一次桥；没满时"还有多少"的答案就是 0，
+       * 不必为一句不出现的话付一次往返。`cap` 是上界：到顶了界面说"以上"（见核心 `run_total`）。
+       */
+      searchTotal.value = null;
+      if (list.length >= SEARCH_LIMIT) {
+        const t = await callCommand<{ total: number; cap: number }>(Commands.searchTotal, {
+          text: trimmed.slice(0, 200),
+          cap: SEARCH_TOTAL_CAP,
+        });
+        if (mine === requestId && t && typeof t.total === 'number') searchTotal.value = t;
+      }
       const next: Record<string, string> = { ...titles.value };
       for (const hit of list) {
         // 标题只认核心发的 `title`（缺口 G93）：以前这里拿片段前 40 字猜标题，而那一带
@@ -203,6 +223,7 @@ export const useNoteStore = defineStore('notes', () => {
   function clearSearch(): void {
     query.value = '';
     hits.value = null;
+    searchTotal.value = null;
     searching.value = false;
     searchErrorKey.value = null;
   }
@@ -431,6 +452,7 @@ export const useNoteStore = defineStore('notes', () => {
     openToday,
     setPinned,
     setColor,
+    searchTotal,
     moveTo,
     moveToTrash,
     restore,

@@ -50,6 +50,40 @@ describe('即时搜索', () => {
     expect(notes.searching).toBe(false);
   });
 
+  /**
+   * §3.3 的后一半（2026-10-09 用户拍板："搜索回满 80 就提示还有 N 条"）。
+   * 两条腿一起才成形状：**回满时问一次**、**没回满时不问**（不出现那句 = 它不该出现时才不出现）。
+   */
+  it('回满一页（80 条）时才去问一次总数，读数留给界面说"还有 N 条"', async () => {
+    const eighty = Array.from({ length: 80 }, (_, i) => ({
+      noteId: `n${i}`, score: 1, title: `第 ${i} 篇`, snippetHtml: '片段', exact: true,
+    }));
+    const service = stubLocalService({
+      search: () => eighty,
+      search_total: () => ({ total: 120, cap: 200 }),
+      list_notes: () => [],
+    });
+    const notes = useNoteStore();
+    notes.requestSearch('同步');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(service.callsOf('search_total').length, '回满了就必须问一次总数').toBe(1);
+    expect(service.lastArgsOf('search_total')).toEqual({ text: '同步', cap: 200 });
+    expect(notes.searchTotal).toEqual({ total: 120, cap: 200 });
+  });
+
+  it('没回满时不问总数 —— 界面上那句"还有"也就根本不会出现', async () => {
+    const service = stubLocalService({
+      search: () => [{ noteId: 'n1', score: 1, title: '一篇', snippetHtml: '片段', exact: true }],
+      search_total: () => ({ total: 1, cap: 200 }),
+      list_notes: () => [],
+    });
+    const notes = useNoteStore();
+    notes.requestSearch('同步');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(service.callsOf('search_total').length, '没回满还去问，就是每次搜索都白付一次往返').toBe(0);
+    expect(notes.searchTotal).toBe(null);
+  });
+
   it('一个字、emoji、超长查询都不报错，超长会被裁剪', async () => {
     const service = stubLocalService({ search: () => [], list_notes: () => [] });
     const notes = useNoteStore();

@@ -514,11 +514,7 @@ impl Store {
     ///
     /// **幂等**：设成同一个颜色不抬 `rev`、不多排一条待办 —— 否则每次点同一颗色都白传一轮。
     /// 在回收站里的笔记走 `assert_editable` 那条门（与改名/改正文同一条，颜色不是例外）。
-    pub fn set_note_color(
-        &self,
-        id: &EntityId,
-        color: Option<String>,
-    ) -> Result<Note, StoreError> {
+    pub fn set_note_color(&self, id: &EntityId, color: Option<String>) -> Result<Note, StoreError> {
         self.write_tx(|tx, now| {
             let cur = Self::load_cur(tx, id)?;
             Self::assert_editable(&cur.note)?;
@@ -1642,6 +1638,12 @@ impl Store {
     pub fn search(&self, q: &SearchQuery) -> Result<Vec<SearchHit>, StoreError> {
         let conn = self.read()?;
         search::run(&conn, q)
+    }
+
+    /// 匹配总数（带上界，见 `search::run_total`）：给"搜索回满时那句「还有 N 条」"用。
+    pub fn search_total(&self, text: &str, cap: u32) -> Result<u32, StoreError> {
+        let conn = self.read()?;
+        search::run_total(&conn, text, cap)
     }
 
     /// 三方合并取 base：`note_revisions(note_id, rev = sync_rev)`（DATA-MODEL §4.3）。

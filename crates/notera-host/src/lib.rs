@@ -650,6 +650,20 @@ impl App {
         Ok(out)
     }
 
+    /// 匹配总数（带上界）：给"搜索回满时那句「还有 N 条」"用（§3.3 的后一半，2026-10-09 用户拍板）。
+    ///
+    /// 回 `{ total, cap }`：`total == cap` 时界面说"还有 N 条**以上**" —— 为什么只给带上界的数，
+    /// 写在 `notera-store/src/search.rs::run_total` 上头（不限量的 count 会吃掉延迟预算）。
+    pub fn search_total(&self, c: commands::SearchTotalCmd) -> Result<serde_json::Value, CmdError> {
+        let cap = if c.cap == 0 {
+            notera_store::DEFAULT_TOTAL_CAP
+        } else {
+            c.cap
+        };
+        let total = self.inner.store.search_total(&c.text, cap)?;
+        Ok(serde_json::json!({ "total": total, "cap": cap }))
+    }
+
     /// 挂一个附件。字节可以来自壳里选的文件，也可以来自前端 `<input type=file>` 读到的
     /// base64 —— 但**两条路都只有核心**算 sha256、落盘、写 `attachments`/`note_attachments`
     /// 并入上传队列。前端只负责"把用户选的东西变成字节"，不负责"存到哪、叫什么、有没有存成"。
@@ -4627,6 +4641,10 @@ mod tests {
                     "charCount",
                     "hasAttachment",
                     "pinned",
+                    // §6「颜色」的列表那一半（第 43 刀给 `NoteListDto` 补的）：列表行前那颗小点读它。
+                    // 这一格是**契约**：TS 那边 `NoteListRow.color` 已经在了，而这里少了它，
+                    // 界面上就是"库里设了颜色、列表上看不见"。
+                    "color",
                     "updatedAt",
                     "deletedAt",
                     "dirty"

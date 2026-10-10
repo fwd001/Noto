@@ -29,6 +29,8 @@ pub use crate::backup::{
 };
 pub use crate::error::StoreError;
 pub use crate::migrate::MigrateReport;
+/// 「还有 N 条」那一次 count 的上界：host 用它把"没给 cap"归一成同一个数（别在两处各写一个 400）。
+pub use crate::search::DEFAULT_TOTAL_CAP;
 pub use crate::syncml::SyncStateRow;
 pub use crate::types::{
     ApplyOp, ApplyReport, Attachment, AttachmentInventoryRow, AttachmentJob, ConflictRecord,

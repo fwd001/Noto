@@ -6283,6 +6283,61 @@ function contrastRatio(fg, bg) {
 }
 
 /**
+ * 54 §3.3 的后一半：**回满一页时说清"还有 N 条"**（2026-10-09 用户拍板："搜索回满 80 就提示还有 N 条"）。
+ *
+ * 判据三条：回满时那一句在、数字是**真差**（删掉一条它要跟着变）—— 写死的实现红在第二条；
+ * 而"没回满时不出现"由单测那条腿守（这条 lane 造不出"恰好 70 条"又不与别的腿抢词的局面）。
+ */
+{
+  const stamp = String(Date.now()).slice(-6);
+  const word = `满页词${stamp}`;
+  const ids = [];
+  for (let i = 0; i < 85; i += 1) {
+    const n = await cmd('create_note', {
+      folderId: null,
+      doc: { v: 1, content: [{ id: `pg${stamp}${i}`, type: 'paragraph', content: [{ text: `${word} 第 ${i} 篇：这一篇只为了把搜索那一页填满。` }] }] },
+    });
+    ids.push(n.id);
+  }
+  const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await c.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 140)); });
+  await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p.waitForSelector('[data-testid="search-input"]', { timeout: 15000 });
+
+  const read = async () => {
+    await p.fill('[data-testid="search-input"]', word);
+    await p.waitForSelector('[data-testid="search-summary"]', { timeout: 9000 });
+    await p.waitForTimeout(700);
+    return p.evaluate(() => ({
+      found: document.querySelector('[data-testid="search-found"]')?.textContent?.trim() ?? null,
+      more: document.querySelector('[data-testid="search-more"]')?.textContent?.trim() ?? null,
+    }));
+  };
+
+  const first = await read();
+  check('54 回满一页时那一句「还有 N 条」必须出现，且数字是 85 − 80 = 5',
+    first.found?.includes('找到 80 条') === true && first.more?.includes('还有 5 条') === true,
+    JSON.stringify(first));
+
+  // 删掉一条（进回收站 = 搜不到）⇒ 那一句要跟着变成 4：写死的实现会红在这里
+  await cmd('delete_note', { id: ids[0] });
+  const second = await read();
+  check('54 少一条之后那句话跟着变（不是写死的数字）',
+    second.more?.includes('还有 4 条') === true, JSON.stringify(second));
+
+  check('54 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
+  await p.close();
+  await c.close();
+  for (const id of ids) {
+    await cmd('purge_note', { id }).catch(() => {});
+  }
+  await cmd('purge_note', { id: ids[0] }).catch(() => {});
+  notes.push(`     搜索回满实测：「${word}」找到 80 条 · 还有 5 条 → 删一条 → 还有 4 条`);
+}
+
+/**
  * ㊾ 收尾不变量：**可见偏好要回到基准**。
  *
  * 第 30 刀之后主题/字号进了本地库，于是它们从"每条腿各自的临时现场"变成

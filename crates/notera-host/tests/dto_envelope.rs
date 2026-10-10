@@ -167,6 +167,9 @@ fn success_payload_is_a_bare_dto_not_a_tagged_result() {
         ),
         ("list_folders", json!({})),
         ("search", json!({ "text": "封套", "limit": 10 })),
+        // §3.3 后一半那条命令也扫一遍：它回的是一层对象（`{total, cap}`），
+        // 不是数组 —— 被谁顺手包一层 `{"Ok": …}` 的话，界面拿到的是"这件事没发生"。
+        ("search_total", json!({ "text": "封套", "cap": 10 })),
         ("stats", json!({})),
         ("get_prefs", json!({})),
         ("sync_status", json!({})),
@@ -200,7 +203,9 @@ fn success_payload_is_a_bare_dto_not_a_tagged_result() {
         vec!["account", "list_backups", "open_conflicts"],
         "这一扫读到的载荷名单和台账不一致（要么有条臂退化成了 null，要么夹具变了）"
     );
-    assert_eq!(swept, 11, "这一扫只读到 {swept} 条载荷，门禁在空转");
+    // 11 → **12**：第 44 刀给这一扫加了 `search_total` 那条臂（§3.3 后一半的新命令）。
+    // 这个数是"这一扫真读到了几条"的读数，加臂就要跟着加 —— 它红了正说明门禁在读真东西。
+    assert_eq!(swept, 12, "这一扫只读到 {swept} 条载荷，门禁在空转");
 }
 
 /// 反向哨兵：真 DTO 的键是前端 `types.ts` 那一套 camelCase。空对象、或只含 `Ok` 的对象，

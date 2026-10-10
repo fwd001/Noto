@@ -413,6 +413,18 @@ pub struct SearchCmd {
     pub limit: u32,
 }
 
+/// 「还有 N 条」那一次 count 的入参（§3.3 的后一半，2026-10-09 用户拍板）。
+///
+/// `cap` 是**上界**：到顶了界面要说"还有 N 条以上"，不许假装知道确切数字
+/// （为什么要有上界，见 `notera-store/src/search.rs::run_total` 的注释）。
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchTotalCmd {
+    pub text: String,
+    #[serde(default)]
+    pub cap: u32,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachCmd {
@@ -833,6 +845,14 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
             let c: SearchCmd =
                 serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
             j(app.search(c)?)
+        }
+        "search_total" => {
+            // §3.3 的后一半：回满时界面要说得出"还有多少"。给的是**带上界**的数 ——
+            // `cap` 到顶时界面说"还有 N 条以上"（口径见 `SearchTotalCmd` 的注释）。
+            let c: SearchTotalCmd = serde_json::from_value(args).map_err(|e| {
+                CmdError::of("bad_args", false).with(serde_json::json!({ "detail": e.to_string() }))
+            })?;
+            j(app.search_total(c)?)
         }
         "attach_file" => {
             let c: AttachCmd =
