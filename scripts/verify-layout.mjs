@@ -128,6 +128,8 @@ const FIXTURE_MARKS = [
   '满页夹具', '设备夹具',
   // 第 49 刀那条字号腿的夹具。
   '字号夹具',
+  // 第 50 批那条 toast 时限腿的夹具。
+  '时限夹具',
 ];
 for (const mark of FIXTURE_MARKS) await purgeByTitle(mark);
 
@@ -6543,6 +6545,74 @@ function contrastRatio(fg, bg) {
   await cmd('delete_note', { id: made.id }).catch(() => {});
   await cmd('purge_note', { id: made.id }).catch(() => {});
   notes.push(`     字号实测：基准 ${base.font}px → 1.6 档 ${big.font}px（×${ratio(big.font, base.font).toFixed(2)}）→ 0.85 档 ${small.font}px（×${ratio(small.font, base.font).toFixed(2)}）；1.6 档正文溢出 ${big.docOverX}px、编辑栏溢出 ${big.paneOverX}px`);
+}
+
+/**
+ * 57 两句"实现了没人守"的小承诺（完成度审计的对账里剩下最刺的两条）：
+ *  ① §3.3 空结果文案是**固定的两行**（「没有找到相关内容」/「换个词试试，中文两个字也能搜。」）——
+ *     i18n 里有字符串，可**没有任何腿断言过它真的画在屏幕上**；
+ *  ② §4.9 Toast「4.5s 自动消失」—— ㉖ 量过"只染边框 + 带「知道了」"，**没人量过它会自己走**。
+ *     计时按**宽窗**判（≤3s 时必须在场、≤8s 时必须不在），两条一起才钉得住"自动"这两个字：
+ *     只判"8s 内不在"，把 TTL 改成 100ms 也全绿。
+ */
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+
+  // ① 空结果两句
+  const box = p.locator('input[type="search"], #search-input').first();
+  await box.click();
+  await box.fill(`不存在的词${stamp}zzz`);
+  await p.waitForSelector('[data-testid="search-empty"]', { timeout: 8000 });
+  const emptyText = (await p.locator('[data-testid="search-empty"]').innerText()).replace(/\s+/g, ' ').trim();
+  check('57 空结果给的就是规范那两句，一字不差（「没有找到相关内容」+「换个词试试，中文两个字也能搜。」）',
+    emptyText.includes('没有找到相关内容') && emptyText.includes('换个词试试，中文两个字也能搜。'),
+    JSON.stringify({ emptyText }));
+  await box.fill('');
+
+  // ② Toast 自动消失：拿「移到最近删除」触发一条（与 ㉖ 同一条路）
+  const FIX = '时限夹具';
+  await purgeByTitle(FIX);
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: { v: 1, content: [{ id: 'blk000001', type: 'paragraph', content: [{ text: `${FIX}：待移走` }] }] },
+  });
+  await p.reload({ waitUntil: 'networkidle' });
+  await p.waitForSelector(`[data-testid="note-row-${made.id}"]`, { timeout: 15000 });
+  await p.click(`[data-testid="note-row-${made.id}"]`);
+  await p.waitForSelector('[data-testid="trash-note"]', { timeout: 8000 });
+  const t0 = Date.now();
+  await p.click('[data-testid="trash-note"]');
+  const hasToast = () => p.evaluate(() => Boolean(document.querySelector('.toast')));
+  let appeared = false;
+  for (let i = 0; i < 20 && !appeared; i++) {
+    await p.waitForTimeout(150);
+    appeared = await hasToast();
+  }
+  check('57 仪器自检：那条 toast 真的出现了（量不到"消失"的人，量的其实是空气）',
+    appeared === true, JSON.stringify({ appeared }));
+  await p.waitForTimeout(Math.max(0, 3000 - (Date.now() - t0)));
+  const at3s = await hasToast();
+  let goneAt = null;
+  for (let i = 0; i < 30; i++) {
+    if (!(await hasToast())) {
+      goneAt = Date.now() - t0;
+      break;
+    }
+    await p.waitForTimeout(200);
+  }
+  check('57 3 秒时那条 toast 还在（把 TTL 改成 100ms 的实现在这里红）', at3s === true, JSON.stringify({ at3s }));
+  check('57 8 秒内它自己走了（§4.9 的 4.5s 自动消失；"常驻不走"在这一条红）',
+    goneAt !== null && goneAt <= 8000, JSON.stringify({ goneAt }));
+  check('57 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
+  await ctx.close();
+  await cmd('delete_note', { id: made.id }).catch(() => {});
+  await cmd('purge_note', { id: made.id }).catch(() => {});
+  notes.push(`     §3.3/§4.9 两句实测：空结果两行 = 「${emptyText.slice(0, 18)}…」；toast 于 ${goneAt ?? '>8000'}ms 自行消失（3s 时在场）`);
 }
 
 /**
