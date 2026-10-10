@@ -124,6 +124,8 @@ const FIXTURE_MARKS = [
   '只读夹具', '常驻夹具', '拖排夹具', '滚动夹具', '状态夹具', '保存状态夹具',
   '置顶往返夹具', '通扫夹具', '键盘夹具', '附件账夹具', '弹窗夹具', '拖放夹具',
   '分档夹具', '改于夹具', '移到夹具', '附件夹具',
+  // 第 44/45 刀那两条腿的夹具：崩在半路也不许把残骸留成后面腿的现场（第 54 刀一次造 85 篇）。
+  '满页夹具', '设备夹具',
 ];
 for (const mark of FIXTURE_MARKS) await purgeByTitle(mark);
 
@@ -6290,7 +6292,7 @@ function contrastRatio(fg, bg) {
  */
 {
   const stamp = String(Date.now()).slice(-6);
-  const word = `满页词${stamp}`;
+  const word = `满页夹具${stamp}`;
   const ids = [];
   for (let i = 0; i < 85; i += 1) {
     const n = await cmd('create_note', {
@@ -6335,6 +6337,82 @@ function contrastRatio(fg, bg) {
   }
   await cmd('purge_note', { id: ids[0] }).catch(() => {});
   notes.push(`     搜索回满实测：「${word}」找到 80 条 · 还有 5 条 → 删一条 → 还有 4 条`);
+}
+
+/**
+ * 55 §6 第 12 格「设备身份」：编辑器文档头那一行要说清"这一篇是**哪台设备**改的"。
+ *
+ * 两向都量：本机写的那一篇读「本机改的」；把 `get_note` 的 `updatedDevice` 换成另一台（route 注入，
+ * 与腿 ⑨′ 同一手法）之后必须读成「另一台设备改的（短 id）」并把**全文**挂在 `title` 上。
+ * 没有注入这一臂，"永远写本机改的"那种实现也会绿。
+ */
+{
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: { v: 1, content: [{ id: `dv${Date.now()}`, type: 'paragraph', content: [{ text: '设备夹具 现场：这一篇是本机写的，量文档头那句是哪台设备改的。' }] }] },
+  });
+  const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await c.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 140)); });
+  const read = async () => {
+    await p.waitForSelector('[data-testid="editor-device"]', { timeout: 8000 });
+    return p.evaluate(() => {
+      const el = document.querySelector('[data-testid="editor-device"]');
+      return { text: (el?.textContent ?? '').trim(), title: el?.getAttribute('title') ?? null };
+    });
+  };
+
+  await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p.waitForSelector(`[data-testid="note-row-${made.id}"]`, { timeout: 15000 });
+  await p.click(`[data-testid="note-row-${made.id}"]`);
+  const mine = await read();
+  check('55 本机写的那一篇：那一格读「本机改的」（那条边真的通了）',
+    mine.text.includes('本机改的') && mine.title === null, JSON.stringify(mine));
+
+  // 对照臂：核心说这篇是**另一台**改的（route 注入，别的字段原样透传）。
+  // 形状照腿 ㊿ 那处**验过的**写法：`route.fetch()` → 读 text → `fulfill({status, contentType, body})`。
+  // 我第一版写成 `fulfill({ response: res, json: body })`，Playwright 抛
+  // `Route is already handled!` 把整条门禁崩在 739 条读数处 —— 注入这种活，抄验过的形状。
+  const OTHER = '01a12324-3465-76eb-8ff3-29e7ee5a33f2';
+  await p.route('**/cmd/get_note', async (route) => {
+    const res = await route.fetch();
+    const raw = await res.text();
+    let body = raw;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && 'updatedDevice' in parsed) {
+        parsed.updatedDevice = OTHER;
+        body = JSON.stringify(parsed);
+      }
+    } catch {
+      /* 不是 JSON 就原样透传 —— 这条腿只改那一格 */
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', body });
+  });
+  await p.reload({ waitUntil: 'networkidle' });
+  await p.waitForSelector(`[data-testid="note-row-${made.id}"]`, { timeout: 15000 });
+  await p.click(`[data-testid="note-row-${made.id}"]`);
+  const other = await read();
+  check('55 另一台设备改的：那一格改口，短 id 在话里、全文在 title 里',
+    other.text.includes('另一台设备改的') && other.text.includes('01a12324')
+    && other.title === OTHER, JSON.stringify(other));
+
+  // 撤掉注入（对照臂的反向）：回「本机改的」—— 证明上面那一条是注入造成的，不是恒真
+  await p.unroute('**/cmd/get_note');
+  await p.reload({ waitUntil: 'networkidle' });
+  await p.waitForSelector(`[data-testid="note-row-${made.id}"]`, { timeout: 15000 });
+  await p.click(`[data-testid="note-row-${made.id}"]`);
+  const back = await read();
+  check('55 撤掉注入之后回到「本机改的」（上面那条不是恒真）',
+    back.text.includes('本机改的'), JSON.stringify(back));
+
+  check('55 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
+  await p.close();
+  await c.close();
+  await cmd('delete_note', { id: made.id }).catch(() => {});
+  await cmd('purge_note', { id: made.id }).catch(() => {});
+  notes.push('     设备身份实测：本机写 → 「本机改的」；注入另一台 → 短 id + 全文在 title；撤掉 → 回本机');
 }
 
 /**

@@ -41,6 +41,7 @@ import {
 } from '../editor/model';
 import { useEditorStore } from '../stores/editor';
 import { formatModified } from '../util/format';
+import { deviceTag } from '../util/deviceLabel';
 import { attachmentCleanName, attachmentNameKey } from '../util/attachmentRows';
 import VersionHistory from './VersionHistory.vue';
 import { useSettingsStore } from '../stores/settings';
@@ -95,6 +96,12 @@ const activeColor = ref<string | null>(null);
 const charCount = computed(() => docCharCount(blocks.value));
 /** 设计稿那句 `改于 14:22`：读核心的 `updatedAt`。取不到就整条不画，不许编一个"刚刚"。 */
 const modifiedAt = computed(() => formatModified(store.noteUpdatedAt));
+/**
+ * §6 第 12 格「设备身份」：紧挨着"改于"那句说清**这一篇是哪台设备改的**。
+ * 来源两半都在手上：(a) 详情 DTO 刚补的 `updatedDevice`；(b) 本机 id 走 `stats.deviceId`
+ * （设置页那行「这台设备：…」用的就是它）。取不到任何一半时那一格整条不画 —— 见 `deviceTag`。
+ */
+const device = computed(() => deviceTag(store.noteUpdatedDevice, settings.stats?.deviceId));
 
 /** "/" 面板：查询串为 null 表示当前不是命令输入。选中项用键盘维护。 */
 const slashQ = ref<string | null>(null);
@@ -924,6 +931,14 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
         <span class="text-sm">{{ store.saveLabel }}</span>
       </span>
       <span v-if="modifiedAt" class="text-sm text-muted" data-testid="editor-modified">{{ t('editor.modifiedAt', { time: modifiedAt }) }}</span>
+      <!-- §6 第 12 格：这一篇是哪台设备改的。另一台设备时短 id 在话里、全文在 `title` 里
+           （只给短 id 会让"到底是哪台"核不了；只给全文这一行塞不下）。 -->
+      <span
+        v-if="device"
+        class="text-sm text-muted"
+        :title="device.kind === 'other' ? device.full : undefined"
+        data-testid="editor-device"
+      >{{ device.kind === 'this' ? t('editor.deviceThis') : t('editor.deviceOther', { id: device.short }) }}</span>
       <!-- §6「版本历史浏览」：紧挨着那行"改于"，因为那行本来就在说"这是哪一版"。 -->
       <VersionHistory v-if="store.noteId" :note-id="store.noteId" />
       <button v-if="!readOnly && currentBlock" type="button" class="btn btn--quiet text-sm" :title="t('editor.deleteBlock')" @click="onDeleteBlock">

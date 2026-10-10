@@ -596,6 +596,7 @@ impl App {
             color: n.color,
             rev: n.rev.get(),
             content_hash: n.content_hash,
+            updated_device: n.updated_device,
             created_at: n.created_at,
             updated_at: n.updated_at,
             deleted_at: n.deleted_at,
@@ -4590,6 +4591,15 @@ mod tests {
             .create_note(&EntityId::parse(&folder.id).unwrap(), doc("契约检查"))
             .unwrap();
         let detail = commands::j(&created).unwrap();
+        // §6 第 12 格「设备身份」：这一格不只是"键在" —— 值要是**这一台**的 id（`stats.deviceId`）。
+        // 写死的或另一台的值在这里红：界面那句"本机改的"正是拿这一格跟本机 id 比的。
+        let mine = app.stats().unwrap().device_id;
+        assert!(!mine.is_empty(), "stats 得先报得出这台设备的 id");
+        assert_eq!(
+            detail["updatedDevice"].as_str().unwrap_or_default(),
+            mine,
+            "详情 DTO 的 updatedDevice 必须是写这一行的那台设备"
+        );
         assert_eq!(
             sorted(keys(&detail)),
             sorted(
@@ -4607,6 +4617,9 @@ mod tests {
                     "color",
                     "rev",
                     "contentHash",
+                    // §6 第 12 格「设备身份」：这一次加的是**详情** DTO 上那一格
+                    // （列表 DTO 不加：列表行不画"哪台设备改的"，那是文档头那一行的活）。
+                    "updatedDevice",
                     "createdAt",
                     "updatedAt",
                     "deletedAt"

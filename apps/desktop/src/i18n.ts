@@ -76,6 +76,9 @@ const MESSAGES: Record<MessageKey, string> = {
   // 设计稿编辑器角上第三那句（`已存在本机` `412 字` `改于 14:22`）。时间由 `formatModified` 给，
   // 取不到时刻时**这一句整条不画** —— 所以这里不许出现"刚刚"这种可以自己编的默认值。
   'editor.modifiedAt': '改于 {time}',
+  // §6 第 12 格「设备身份」：紧挨着"改于"那句。另一台设备时带短 id（全文在 title 里）。
+  'editor.deviceThis': '本机改的',
+  'editor.deviceOther': '另一台设备改的（{id}）',
   'editor.saving': '正在保存',
   'editor.unsaved': '还有改动没存',
   'editor.readOnly': '只读',

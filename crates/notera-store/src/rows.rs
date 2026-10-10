@@ -12,9 +12,12 @@ use rusqlite::{params, Connection, Row};
 
 /// `notes` 的读取列清单（顺序与 `note_from_row` 严格对应）。
 /// 注意：列表投影走 [`LIST_COLS`]，那里**没有 `doc`**（DATA-MODEL §13）。
+///
+/// **加列要顺手改 `store.rs::load_cur_opt` 里那个 `rowid` 的索引**（它按位置读第 21/22 列）——
+/// 2026-10-10 加 `updated_device` 时那一位就从 21 挪到 22；漏改的话"当前行"会读到别的列上。
 pub(crate) const NOTE_COLS: &str = "id, folder_id, doc, doc_format, title, plain_text, summary, \
      char_count, block_count, has_attachment, pinned, color, rev, sync_rev, sync_hash, remote_rev, \
-     content_hash, created_at, updated_at, deleted_at, purged_at";
+     content_hash, created_at, updated_at, deleted_at, purged_at, updated_device";
 
 /// 列表投影：绝不 `SELECT doc`（性能约束，DATA-MODEL §13）。
 pub(crate) const LIST_COLS: &str = "n.id, n.folder_id, f.name, n.title, n.summary, n.char_count, \
@@ -103,6 +106,7 @@ pub(crate) fn note_from_row(row: &Row) -> rusqlite::Result<Note> {
         updated_at: row.get(18)?,
         deleted_at: row.get(19)?,
         purged_at: row.get(20)?,
+        updated_device: row.get(21)?,
     })
 }
 

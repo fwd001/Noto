@@ -1125,7 +1125,8 @@ impl Store {
         let row = tx.query_row(&sql, [id.as_str()], |r| {
             let doc_json: String = r.get(2)?;
             let note = rows::note_from_row(r)?;
-            let rowid: i64 = r.get(21)?;
+            // 按位置读：`NOTE_COLS` 加列时这一位要跟着挪（加 `updated_device` 那次 21 → 22）。
+            let rowid: i64 = r.get(22)?;
             Ok(CurNote {
                 note,
                 doc_json,

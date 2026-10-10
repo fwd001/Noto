@@ -31,6 +31,9 @@ pub struct NoteDto {
     pub color: Option<String>,
     pub rev: u64,
     pub content_hash: String,
+    /// §6 第 12 格「设备身份」：最后改这条记录的是哪台设备（`meta.device_id`）。
+    /// 表里一直有这一列，**从没读到 DTO 上** —— 界面那句"是哪台设备改的"就卡在没有来源。
+    pub updated_device: String,
     pub created_at: String,
     pub updated_at: String,
     pub deleted_at: Option<String>,

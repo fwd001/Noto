@@ -66,3 +66,52 @@ describe('编辑器里的"改于"（updatedAt 过桥）', () => {
     expect(editor.noteUpdatedAt).toBeNull();
   });
 });
+
+/**
+ * §6 第 12 格「设备身份」的前端那一半：`notes.updated_device` 到编辑器那一格。
+ * 与"改于"完全同形（同一份详情 DTO、同一处 hydrate、同一处保存回包），所以判据也同形 ——
+ * 唯一的差别是**缺位**那一支：核心没发这一格时回 `null`，界面那句整条不画。
+ */
+describe('编辑器里的"哪台设备改的"（updatedDevice 过桥）', () => {
+  it('读回来的那一篇：核心给的那一串要存下（原样，比较与格式化都在呈现层）', async () => {
+    const fixture = noteFixture({ id: 'n1', updatedDevice: '01a10000-0000-7000-8000-0000000000ab' });
+    stubLocalService({ get_note: () => fixture });
+    const editor = useEditorStore();
+    await editor.open('n1');
+    expect(editor.noteUpdatedDevice).toBe('01a10000-0000-7000-8000-0000000000ab');
+  });
+
+  it('保存之后要跟上新那一台（本机继续改，值仍是本机；核心换了谁写就换谁）', async () => {
+    const openAt = noteFixture({ id: 'n1', rev: 3, updatedDevice: 'dev-a' });
+    const saved = noteFixture({ id: 'n1', rev: 4, updatedDevice: 'dev-b' });
+    const service = stubLocalService({ get_note: () => openAt, edit_note: () => saved });
+    const editor = useEditorStore();
+    await editor.open('n1');
+    expect(editor.noteUpdatedDevice).toBe('dev-a');
+    editor.updateBlock({ ...editor.blocks[0], content: [{ text: '打完这一句就存' }] });
+    await editor.flush();
+    expect(service.callsOf('edit_note')).toHaveLength(1);
+    expect(editor.noteUpdatedDevice).toBe('dev-b');
+  });
+
+  it('核心没发这一格时是 null（界面那句整条不画），且**不许**拿空串冒充一台设备', async () => {
+    const noDev = (() => {
+      const value = noteFixture({ id: 'n1', rev: 4 }) as Record<string, unknown>;
+      delete value.updatedDevice; // 旧核心/旧桥的回包就是这一形状
+      return value;
+    })();
+    stubLocalService({ get_note: () => noDev, edit_note: () => noDev });
+    const editor = useEditorStore();
+    await editor.open('n1');
+    expect(editor.noteUpdatedDevice).toBeNull();
+  });
+
+  it('关掉这一篇必须清空，否则空编辑器会带着上一篇的设备', async () => {
+    stubLocalService({ get_note: () => noteFixture({ id: 'n1', updatedDevice: 'dev-a' }) });
+    const editor = useEditorStore();
+    await editor.open('n1');
+    expect(editor.noteUpdatedDevice).toBe('dev-a');
+    await editor.open(null);
+    expect(editor.noteUpdatedDevice).toBeNull();
+  });
+});

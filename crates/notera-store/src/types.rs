@@ -57,6 +57,11 @@ pub struct Note {
     pub updated_at: String,
     pub deleted_at: Option<String>,
     pub purged_at: Option<String>,
+    /// 最后改这一行的是哪台设备（`meta.device_id` 那一族的字符串）。
+    ///
+    /// 表里一直有这一列（每次写都落），但**从没读到 DTO 上** —— 界面那句"是哪台设备改的"
+    /// （规范 §6 第 12 格）就卡在"没有来源"上。2026-10-10 把它接到详情 DTO。
+    pub updated_device: String,
 }
 
 /// 列表投影（不含 `doc`/`plain_text`）。
